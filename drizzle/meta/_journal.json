@@ -1,0 +1,139 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1785772502062,
+      "tag": "0000_calm_vulcan",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1785774125352,
+      "tag": "0001_peaceful_blindfold",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785776367930,
+      "tag": "0002_worried_revanche",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1785781634083,
+      "tag": "0003_wandering_blob",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1785788003558,
+      "tag": "0004_tiresome_annihilus",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785797394316,
+      "tag": "0005_dusty_cobalt_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1787599887189,
+      "tag": "0006_fancy_tenebrous",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1787600319308,
+      "tag": "0007_chemical_ronan",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1787600488713,
+      "tag": "0008_early_chronomancer",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1787612706398,
+      "tag": "0009_parallel_rumiko_fujikawa",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1787673369790,
+      "tag": "0010_panoramic_kree",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1787699006924,
+      "tag": "0011_boring_odin",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1787699298618,
+      "tag": "0012_slimy_shinko_yamashiro",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1787700932019,
+      "tag": "0013_tidy_harrier",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1787702659610,
+      "tag": "0014_familiar_phil_sheldon",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1787704600773,
+      "tag": "0015_minor_ma_gnuci",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1787705445278,
+      "tag": "0016_square_union_jack",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1787754531322,
+      "tag": "0017_consolidate_profit_distribution_categories",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1787755470336,
+      "tag": "0018_slippery_riptide",
+      "breakpoints": true
+    }
+  ]
+}

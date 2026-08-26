@@ -1,0 +1,1 @@
+ALTER TABLE `imports` ADD `closing_balance_type` text;

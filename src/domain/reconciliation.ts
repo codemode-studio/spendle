@@ -1,0 +1,279 @@
+import { minorUnitsToMajor } from './currency'
+import { normalizeDescription } from './finance'
+
+export interface ReconciliationTransaction {
+  id: string
+  amountCents: number
+  currency: string
+  postedAt: string
+  description: string
+  accountId: string | null
+  creditCardId: string | null
+  counterpartyAccountId?: string | null
+  scopeType?: 'household' | 'person' | 'company_br' | 'company_us' | null
+}
+
+export interface ReconciliationSuggestion {
+  type:
+    | 'transfer'
+    | 'fx_transfer'
+    | 'card_payment'
+    | 'refund'
+    | 'profit_distribution'
+  transactionIds: [string, string]
+  confidence: number
+  reason: string
+  exchangeRateMicros?: number
+  autoConfirm?: boolean
+}
+
+export interface LearnedTransferRule {
+  pattern: string
+  accountId: string | null
+  counterpartyAccountId: string | null
+  direction: 'incoming' | 'outgoing' | null
+  categoryId: string
+}
+
+export function matchLearnedTransferRule(input: {
+  description: string
+  amountCents: number
+  sourceAccountId: string | null
+  rules: LearnedTransferRule[]
+}) {
+  if (!input.sourceAccountId) return null
+  const normalized = normalizeDescription(input.description)
+  const direction = input.amountCents < 0 ? 'outgoing' : 'incoming'
+  const rule = input.rules.find(
+    (candidate) =>
+      candidate.accountId === input.sourceAccountId &&
+      candidate.counterpartyAccountId !== null &&
+      candidate.counterpartyAccountId !== input.sourceAccountId &&
+      candidate.direction === direction &&
+      normalized.includes(candidate.pattern),
+  )
+  return rule
+    ? {
+        categoryId: rule.categoryId,
+        counterpartyAccountId: rule.counterpartyAccountId,
+      }
+    : null
+}
+
+type ScopeType = 'household' | 'person' | 'company_br' | 'company_us' | null
+
+export function detectOwnedTransferCategory(input: {
+  amountCents: number
+  description: string
+  raw?: unknown
+  sourceScopeName: string
+  sourceScopeType: ScopeType
+}) {
+  const rawValues =
+    input.raw && typeof input.raw === 'object' && !Array.isArray(input.raw)
+      ? Object.values(input.raw).filter(
+          (value): value is string | number =>
+            typeof value === 'string' || typeof value === 'number',
+        )
+      : []
+  const transactionText = normalizeDescription(
+    [input.description, ...rawValues].join(' '),
+  )
+  const transferLike =
+    /\b(?:pix|ted|doc|transferencia)\b.*\b(?:enviado|enviada|recebido|recebida|envio|recebimento)\b/.test(
+      transactionText,
+    )
+  if (!transferLike) return null
+
+  const counterparty = normalizeDescription(input.description)
+  const sourceScopeName = normalizeDescription(input.sourceScopeName)
+  if (counterparty.length < 8 || !sourceScopeName.includes(counterparty)) {
+    return null
+  }
+
+  const companySource =
+    input.sourceScopeType === 'company_br' ||
+    input.sourceScopeType === 'company_us'
+  if (companySource && input.amountCents < 0) {
+    return 'profit_distribution_income' as const
+  }
+  return 'transfer' as const
+}
+
+function daysBetween(left: string, right: string) {
+  const leftTime = new Date(`${left.slice(0, 10)}T12:00:00Z`).getTime()
+  const rightTime = new Date(`${right.slice(0, 10)}T12:00:00Z`).getTime()
+  return Math.abs(leftTime - rightTime) / 86_400_000
+}
+
+function cardPaymentDescription(value: string) {
+  return /pag(?:amento)?\s*(?:de\s*)?(?:fatura|cartao)|fatura\s*(?:paga|cartao)/i.test(
+    value,
+  )
+}
+
+function merchantDescription(value: string) {
+  return normalizeDescription(value)
+    .replace(/^(estorno|cancelamento|credito|reembolso)\s+/, '')
+    .replace(/\s+(estorno|cancelamento|credito|reembolso)$/, '')
+    .trim()
+}
+
+export function buildReconciliationSuggestions(
+  transactions: ReconciliationTransaction[],
+) {
+  const suggestions: ReconciliationSuggestion[] = []
+
+  for (let leftIndex = 0; leftIndex < transactions.length; leftIndex += 1) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < transactions.length;
+      rightIndex += 1
+    ) {
+      const left = transactions[leftIndex]
+      const right = transactions[rightIndex]
+      const days = daysBetween(left.postedAt, right.postedAt)
+      if (
+        days > 120 ||
+        Math.sign(left.amountCents) === Math.sign(right.amountCents)
+      ) {
+        continue
+      }
+
+      const sameAmount =
+        left.currency === right.currency &&
+        Math.abs(left.amountCents) === Math.abs(right.amountCents)
+      const differentTargets =
+        left.accountId !== right.accountId ||
+        left.creditCardId !== right.creditCardId
+
+      const transferSource = left.amountCents < 0 ? left : right
+      const transferDestination = left.amountCents < 0 ? right : left
+      const matchesLearnedAccount =
+        sameAmount &&
+        days <= 3 &&
+        Boolean(transferSource.accountId && transferDestination.accountId) &&
+        (transferSource.counterpartyAccountId ===
+          transferDestination.accountId ||
+          transferDestination.counterpartyAccountId ===
+            transferSource.accountId)
+
+      if (differentTargets && matchesLearnedAccount) {
+        suggestions.push({
+          type: 'transfer',
+          transactionIds: [left.id, right.id],
+          confidence: 100,
+          reason: 'Contas vinculadas por uma confirmação manual anterior.',
+          autoConfirm: true,
+        })
+        continue
+      }
+
+      if (
+        sameAmount &&
+        days <= 5 &&
+        differentTargets &&
+        (left.creditCardId || right.creditCardId) &&
+        (cardPaymentDescription(left.description) ||
+          cardPaymentDescription(right.description))
+      ) {
+        suggestions.push({
+          type: 'card_payment',
+          transactionIds: [left.id, right.id],
+          confidence: 96,
+          reason: 'Pagamento de fatura com valor correspondente.',
+        })
+        continue
+      }
+
+      if (
+        sameAmount &&
+        days <= 3 &&
+        differentTargets &&
+        left.currency === right.currency
+      ) {
+        const crossesBrazilianCompanyBoundary =
+          (left.scopeType === 'company_br') !==
+          (right.scopeType === 'company_br')
+        suggestions.push({
+          type: crossesBrazilianCompanyBoundary
+            ? 'profit_distribution'
+            : 'transfer',
+          transactionIds: [left.id, right.id],
+          confidence: crossesBrazilianCompanyBoundary
+            ? days === 0
+              ? 97
+              : 94
+            : days === 0
+              ? 98
+              : 92,
+          reason: crossesBrazilianCompanyBoundary
+            ? 'Saída PJ e entrada PF de mesmo valor, sugerida como distribuição de lucros.'
+            : 'Entradas e saídas de mesmo valor em contas diferentes.',
+        })
+        continue
+      }
+
+      if (days <= 3 && differentTargets && left.currency !== right.currency) {
+        const source = Math.abs(
+          minorUnitsToMajor(left.amountCents, left.currency),
+        )
+        const destination = Math.abs(
+          minorUnitsToMajor(right.amountCents, right.currency),
+        )
+        const rate = destination / Math.max(1, source)
+        const normalizedRate = rate < 1 ? 1 / rate : rate
+        if (normalizedRate >= 2 && normalizedRate <= 10) {
+          suggestions.push({
+            type: 'fx_transfer',
+            transactionIds: [left.id, right.id],
+            confidence: 82,
+            reason: 'Movimentações próximas em moedas diferentes.',
+            exchangeRateMicros: Math.round(normalizedRate * 1_000_000),
+          })
+          continue
+        }
+      }
+
+      const sameMerchant =
+        merchantDescription(left.description) ===
+        merchantDescription(right.description)
+      if (sameAmount && sameMerchant && days <= 120) {
+        suggestions.push({
+          type: 'refund',
+          transactionIds: [left.id, right.id],
+          confidence: days <= 30 ? 92 : 82,
+          reason: 'Crédito e débito do mesmo estabelecimento e valor.',
+        })
+      }
+    }
+  }
+
+  const priority: Record<ReconciliationSuggestion['type'], number> = {
+    card_payment: 0,
+    refund: 1,
+    fx_transfer: 2,
+    profit_distribution: 3,
+    transfer: 4,
+  }
+  const matchedIds = new Set<string>()
+  return suggestions
+    .sort(
+      (left, right) =>
+        priority[left.type] - priority[right.type] ||
+        right.confidence - left.confidence,
+    )
+    .filter((suggestion) => {
+      if (
+        suggestion.transactionIds.some((transactionId) =>
+          matchedIds.has(transactionId),
+        )
+      ) {
+        return false
+      }
+      suggestion.transactionIds.forEach((transactionId) =>
+        matchedIds.add(transactionId),
+      )
+      return true
+    })
+}

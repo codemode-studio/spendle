@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture review for financas-familia</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: "neutral",
+        securityLevel: "loose",
+        flowchart: { curve: "basis", htmlLabels: true },
+      });
+    </script>
+    <style>
+      :root { color-scheme: light; }
+      html { scroll-behavior: smooth; }
+      body { text-rendering: optimizeLegibility; }
+      .seam { border-style: dashed; }
+      .deep { background: linear-gradient(135deg, #0f172a, #1e293b); }
+      .diagram-grid { background-image: radial-gradient(#cbd5e1 0.65px, transparent 0.65px); background-size: 14px 14px; }
+      .leak-line { height: 2px; background: #dc2626; position: relative; }
+      .leak-line::after { content: ""; position: absolute; right: -1px; top: -4px; border-left: 7px solid #dc2626; border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
+      .mass-interface { background: #fee2e2; border: 1px solid #fca5a5; }
+      .mass-implementation { background: #e2e8f0; border: 1px solid #94a3b8; }
+      .mermaid svg { max-width: 100% !important; height: auto; }
+      @media print { .break-avoid { break-inside: avoid; } }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans">
+    <main class="mx-auto max-w-6xl space-y-12 px-5 py-10 sm:px-8 lg:px-10">
+      <header class="border-b border-slate-300 pb-8">
+        <div class="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
+          <div>
+            <p class="text-xs font-semibold uppercase tracking-[0.22em] text-indigo-700">Architecture review</p>
+            <h1 class="mt-2 font-serif text-4xl tracking-tight text-slate-950">financas-familia</h1>
+            <p class="mt-2 text-sm text-slate-600">26 ago 2026 · escopo por tamanho, acoplamento e ADR 001 · repositório ainda sem commits</p>
+          </div>
+          <div class="grid grid-cols-2 gap-x-5 gap-y-2 text-xs text-slate-600">
+            <span class="flex items-center gap-2"><i class="block size-3 border border-slate-500 bg-white"></i> module</span>
+            <span class="flex items-center gap-2"><i class="block h-0 w-5 border-t border-dashed border-slate-500"></i> seam</span>
+            <span class="flex items-center gap-2"><i class="block h-0 w-5 border-t-2 border-red-600"></i> leakage</span>
+            <span class="flex items-center gap-2"><i class="deep block size-3 border border-slate-950"></i> deep module</span>
+          </div>
+        </div>
+      </header>
+
+      <section id="candidates" class="space-y-12">
+        <article id="canonicalization" class="break-avoid rounded-2xl border border-slate-300 bg-white p-6 shadow-sm sm:p-8">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-700">01 · Top pick</p>
+              <h2 class="mt-2 font-serif text-3xl tracking-tight">Deepen Observação importada → Lançamento canônico</h2>
+            </div>
+            <div class="flex gap-2">
+              <span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Strong</span>
+              <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">in-process</span>
+            </div>
+          </div>
+          <div class="mt-5 rounded-lg bg-slate-50 p-4 font-mono text-xs leading-6 text-slate-700">
+            src/domain/import-audit.ts · src/features/finance/import.server.ts · src/db/index.server.ts · src/db/schema.ts · card-statement-control.integration.fixture.ts
+          </div>
+          <div class="mt-7 grid gap-5 lg:grid-cols-2">
+            <figure>
+              <figcaption class="mb-2 text-xs font-semibold uppercase tracking-wider text-red-700">Before · identity leaks</figcaption>
+              <div class="diagram-grid min-h-[330px] rounded-xl border border-red-200 bg-red-50/40 p-3">
+                <pre class="mermaid">
+flowchart TD
+  S[Stage import] --> D[Duplicate helper]
+  S --> M[Value matching]
+  P[PDF control] --> M
+  C[Commit import] --> D
+  C --> M
+  C --> E[Evidence writes]
+  R[Startup repair] --> D
+  R --> E
+  M -. identity rules .-> E
+  classDef leak stroke:#dc2626,stroke-width:2px,fill:#fff1f2;
+  class S,P,C,R,E leak;
+                </pre>
+              </div>
+            </figure>
+            <figure>
+              <figcaption class="mb-2 text-xs font-semibold uppercase tracking-wider text-emerald-700">After · one deep module</figcaption>
+              <div class="diagram-grid min-h-[330px] rounded-xl border border-emerald-200 bg-emerald-50/40 p-3">
+                <pre class="mermaid">
+flowchart TD
+  S[Stage] --> K
+  P[PDF control] --> K
+  C[Commit] --> K
+  R[Startup repair] --> K
+  K["Observação → Lançamento<br/>deep module"] --> O[Canonical outcome]
+  O --> E[Evidence + correction state]
+  classDef deep fill:#172033,color:#fff,stroke:#0f172a,stroke-width:4px;
+  class K deep;
+                </pre>
+              </div>
+            </figure>
+          </div>
+          <dl class="mt-7 grid gap-5 sm:grid-cols-2">
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Problem</dt><dd class="mt-1 text-sm leading-6">O module atual é shallow: sua interface calcula partes da identidade, mas a implementation e a persistência vazam por staging, commit, controle PDF e reparo inicial.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Solution</dt><dd class="mt-1 text-sm leading-6">Deepen esse module até que matching, multiplicidade, evidência e correção fiquem atrás da mesma seam, sem definir a interface concreta ainda.</dd></div>
+          </dl>
+          <ul class="mt-5 grid gap-2 text-sm sm:grid-cols-3">
+            <li class="rounded-md bg-slate-50 px-3 py-2">locality: identidade em um module</li>
+            <li class="rounded-md bg-slate-50 px-3 py-2">leverage: regra cobre cinco fluxos</li>
+            <li class="rounded-md bg-slate-50 px-3 py-2">interface vira test surface real</li>
+          </ul>
+        </article>
+
+        <article id="checkpoint-chain" class="break-avoid rounded-2xl border border-slate-300 bg-white p-6 shadow-sm sm:p-8">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-700">02</p>
+              <h2 class="mt-2 font-serif text-3xl tracking-tight">Deepen the Checkpoint de saldo chain</h2>
+            </div>
+            <div class="flex gap-2">
+              <span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Strong</span>
+              <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">in-process</span>
+            </div>
+          </div>
+          <div class="mt-5 rounded-lg bg-slate-50 p-4 font-mono text-xs leading-6 text-slate-700">
+            src/domain/balance-checkpoint.ts · src/features/finance/finance.server.ts · src/features/finance/import.server.ts · src/db/schema.ts · checkpoint-integrity.integration.fixture.ts
+          </div>
+          <div class="mt-7 grid gap-5 lg:grid-cols-2">
+            <figure>
+              <figcaption class="mb-2 text-xs font-semibold uppercase tracking-wider text-red-700">Before · 12 write blocks</figcaption>
+              <div class="relative min-h-[330px] overflow-hidden rounded-xl border border-red-200 bg-red-50/40 p-5">
+                <div class="grid h-[286px] grid-cols-[1fr_34px_1fr] items-center gap-2 text-center text-xs">
+                  <div class="space-y-3">
+                    <div class="rounded border border-slate-400 bg-white p-3">manual checkpoint</div>
+                    <div class="rounded border border-slate-400 bg-white p-3">import commit</div>
+                    <div class="rounded border border-slate-400 bg-white p-3">conflict replacement</div>
+                    <div class="rounded border border-slate-400 bg-white p-3">correction / exclusion</div>
+                  </div>
+                  <div class="space-y-12"><div class="leak-line"></div><div class="leak-line"></div><div class="leak-line"></div></div>
+                  <div class="space-y-3">
+                    <div class="rounded border border-red-300 bg-white p-3">checkpoint chain</div>
+                    <div class="rounded border border-red-300 bg-white p-3">cached balance</div>
+                    <div class="rounded border border-red-300 bg-white p-3">fatura state</div>
+                    <div class="rounded border border-red-300 bg-white p-3">transaction state</div>
+                  </div>
+                </div>
+              </div>
+            </figure>
+            <figure>
+              <figcaption class="mb-2 text-xs font-semibold uppercase tracking-wider text-emerald-700">After · state stays behind seam</figcaption>
+              <div class="flex min-h-[330px] items-center rounded-xl border border-emerald-200 bg-emerald-50/40 p-6">
+                <div class="w-full rounded-2xl border-4 border-slate-900 bg-slate-900 p-5 text-white shadow-xl">
+                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">deep module</p>
+                  <p class="mt-2 text-xl font-semibold">Checkpoint de saldo chain</p>
+                  <div class="mt-5 grid grid-cols-2 gap-3 text-xs text-slate-300">
+                    <span class="rounded border border-slate-600 p-3">conflict</span><span class="rounded border border-slate-600 p-3">invalidation</span>
+                    <span class="rounded border border-slate-600 p-3">latest anchor</span><span class="rounded border border-slate-600 p-3">derived state</span>
+                  </div>
+                  <div class="mt-5 border-t border-dashed border-emerald-400 pt-3 text-xs text-emerald-200">One interface becomes the test surface</div>
+                </div>
+              </div>
+            </figure>
+          </div>
+          <dl class="mt-7 grid gap-5 sm:grid-cols-2">
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Problem</dt><dd class="mt-1 text-sm leading-6">O module puro tem depth, mas a seam termina antes da implementation real: invalidação, âncora mais recente, saldo cacheado, ciclo de fatura e promoção de lançamentos.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Solution</dt><dd class="mt-1 text-sm leading-6">Deepen o module para absorver a cadeia persistida e seus efeitos derivados; a interface exata fica para a próxima exploração.</dd></div>
+          </dl>
+          <ul class="mt-5 grid gap-2 text-sm sm:grid-cols-3">
+            <li class="rounded-md bg-slate-50 px-3 py-2">locality: zero tolerance permanece junta</li>
+            <li class="rounded-md bg-slate-50 px-3 py-2">leverage: manual, import, correção</li>
+            <li class="rounded-md bg-slate-50 px-3 py-2">tests assert one durable chain</li>
+          </ul>
+        </article>
+
+        <article id="coverage" class="break-avoid rounded-2xl border border-slate-300 bg-white p-6 shadow-sm sm:p-8">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-700">03</p>
+              <h2 class="mt-2 font-serif text-3xl tracking-tight">Deepen the Cobertura lifecycle</h2>
+            </div>
+            <div class="flex gap-2">
+              <span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Strong</span>
+              <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">in-process</span>
+            </div>
+          </div>
+          <div class="mt-5 rounded-lg bg-slate-50 p-4 font-mono text-xs leading-6 text-slate-700">
+            src/domain/import-coverage.ts · src/features/finance/csv-statement.server.ts · src/features/finance/import.server.ts · src/features/finance/finance.server.ts · src/db/index.server.ts
+          </div>
+          <div class="mt-7 grid gap-5 lg:grid-cols-2">
+            <figure>
+              <figcaption class="mb-2 text-xs font-semibold uppercase tracking-wider text-red-700">Before · shallow math module</figcaption>
+              <div class="min-h-[330px] rounded-xl border border-red-200 bg-red-50/40 p-6">
+                <div class="mx-auto max-w-sm">
+                  <div class="mass-interface flex h-28 items-center justify-center rounded-t-lg px-4 text-center text-sm font-semibold text-red-900">interface: nine interval helpers</div>
+                  <div class="mass-implementation flex h-24 items-center justify-center rounded-b-lg px-4 text-center text-sm text-slate-700">implementation: interval math</div>
+                </div>
+                <div class="mx-auto mt-5 grid max-w-md grid-cols-3 gap-2 text-center text-xs">
+                  <span class="rounded border border-red-300 bg-white p-3">trust rules</span><span class="rounded border border-red-300 bg-white p-3">persistence</span><span class="rounded border border-red-300 bg-white p-3">cached gaps</span>
+                </div>
+                <p class="mt-4 text-center text-xs font-medium text-red-700">implementation leaks into four callers</p>
+              </div>
+            </figure>
+            <figure>
+              <figcaption class="mb-2 text-xs font-semibold uppercase tracking-wider text-emerald-700">After · provenance to summary</figcaption>
+              <div class="min-h-[330px] rounded-xl border border-emerald-200 bg-emerald-50/40 p-6">
+                <div class="mx-auto max-w-sm">
+                  <div class="flex h-14 items-center justify-center rounded-t-lg border border-emerald-400 bg-emerald-100 px-4 text-center text-sm font-semibold text-emerald-900">narrow interface</div>
+                  <div class="deep flex h-52 flex-col items-center justify-center rounded-b-lg px-6 text-center text-white">
+                    <p class="text-lg font-semibold">Cobertura deep module</p>
+                    <p class="mt-3 text-xs leading-5 text-slate-300">inference · confidence · confirmation · persistence · gaps · freshness</p>
+                  </div>
+                </div>
+              </div>
+            </figure>
+          </div>
+          <dl class="mt-7 grid gap-5 sm:grid-cols-2">
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Problem</dt><dd class="mt-1 text-sm leading-6">O Cobertura module é shallow: a interface expõe interval math, enquanto confiança, fontes aceitas, persistence e caches vazam pela seam em quatro módulos.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Solution</dt><dd class="mt-1 text-sm leading-6">Deepen o module até que Janela declarada, Atividade observada, Cobertura e Lacuna percorram uma implementation local, sem escolher a interface agora.</dd></div>
+          </dl>
+          <ul class="mt-5 grid gap-2 text-sm sm:grid-cols-3">
+            <li class="rounded-md bg-slate-50 px-3 py-2">locality: provenance stays with coverage</li>
+            <li class="rounded-md bg-slate-50 px-3 py-2">leverage: stage through startup repair</li>
+            <li class="rounded-md bg-slate-50 px-3 py-2">tests cover persisted summaries</li>
+          </ul>
+        </article>
+
+        <article id="statement-adapters" class="break-avoid rounded-2xl border border-slate-300 bg-white p-6 shadow-sm sm:p-8">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-700">04</p>
+              <h2 class="mt-2 font-serif text-3xl tracking-tight">Normalize three statement adapters</h2>
+            </div>
+            <div class="flex gap-2">
+              <span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Strong</span>
+              <span class="rounded-full bg-indigo-100 px-3 py-1 text-xs font-medium text-indigo-800">ports &amp; adapters</span>
+            </div>
+          </div>
+          <div class="mt-5 rounded-lg bg-slate-50 p-4 font-mono text-xs leading-6 text-slate-700">
+            src/features/finance/import.server.ts · csv-statement.server.ts · pdf-inspector.server.ts · import.test.ts · csv-statement.server.test.ts · pdf-inspector.server.test.ts
+          </div>
+          <div class="mt-7 grid gap-5 lg:grid-cols-2">
+            <figure>
+              <figcaption class="mb-2 text-xs font-semibold uppercase tracking-wider text-red-700">Before · 27 mutable fields</figcaption>
+              <div class="min-h-[330px] rounded-xl border border-red-200 bg-red-50/40 p-5">
+                <div class="grid grid-cols-3 gap-3 text-center text-xs">
+                  <div class="rounded border border-slate-400 bg-white p-4">OFX<br/><span class="text-slate-500">inline adapter</span></div>
+                  <div class="rounded border border-slate-400 bg-white p-4">CSV<br/><span class="text-slate-500">own result</span></div>
+                  <div class="rounded border border-slate-400 bg-white p-4">PDF<br/><span class="text-slate-500">own result</span></div>
+                </div>
+                <div class="mx-auto my-4 h-8 w-px bg-red-500"></div>
+                <div class="rounded-xl border-2 border-red-500 bg-white p-5 text-center">
+                  <p class="font-semibold text-red-900">stageImport</p>
+                  <p class="mt-2 text-xs leading-5 text-red-700">knows every adapter implementation<br/>maps 27 mutable fields</p>
+                </div>
+              </div>
+            </figure>
+            <figure>
+              <figcaption class="mb-2 text-xs font-semibold uppercase tracking-wider text-emerald-700">After · real adapter seam</figcaption>
+              <div class="min-h-[330px] rounded-xl border border-emerald-200 bg-emerald-50/40 p-5">
+                <div class="deep rounded-2xl border-4 border-slate-900 p-5 text-white">
+                  <p class="text-center text-sm font-semibold">Statement reading deep module</p>
+                  <div class="mt-4 grid grid-cols-3 gap-2 text-center text-xs text-slate-200">
+                    <div class="rounded border border-slate-600 p-4">OFX adapter</div>
+                    <div class="rounded border border-slate-600 p-4">CSV adapter</div>
+                    <div class="rounded border border-slate-600 p-4">PDF adapter</div>
+                  </div>
+                  <div class="seam mt-5 border-t border-emerald-400 pt-4 text-center text-xs text-emerald-200">one normalized seam</div>
+                </div>
+                <div class="mx-auto my-4 h-8 w-px bg-emerald-500"></div>
+                <div class="rounded border border-emerald-400 bg-white p-3 text-center text-xs font-semibold text-emerald-900">stageImport orchestrates only</div>
+              </div>
+            </figure>
+          </div>
+          <dl class="mt-7 grid gap-5 sm:grid-cols-2">
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Problem</dt><dd class="mt-1 text-sm leading-6">Three adapters make the seam real, but each exposes a different interface and forces stageImport to understand every implementation.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Solution</dt><dd class="mt-1 text-sm leading-6">Deepen statement reading so adapter diagnostics and normalization stay inside the module; defer the concrete interface until exploration.</dd></div>
+          </dl>
+          <ul class="mt-5 grid gap-2 text-sm sm:grid-cols-3">
+            <li class="rounded-md bg-slate-50 px-3 py-2">locality: format rules stay together</li>
+            <li class="rounded-md bg-slate-50 px-3 py-2">leverage: three adapters, one seam</li>
+            <li class="rounded-md bg-slate-50 px-3 py-2">tests hit normalized outcomes</li>
+          </ul>
+        </article>
+
+        <article id="reconciliation-refresh" class="break-avoid rounded-2xl border border-slate-300 bg-white p-6 shadow-sm sm:p-8">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-700">05</p>
+              <h2 class="mt-2 font-serif text-3xl tracking-tight">Deepen Reconciliation refresh</h2>
+            </div>
+            <div class="flex gap-2">
+              <span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">Worth exploring</span>
+              <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">local-substitutable</span>
+            </div>
+          </div>
+          <div class="mt-5 rounded-lg bg-slate-50 p-4 font-mono text-xs leading-6 text-slate-700">
+            src/domain/reconciliation.ts · src/features/finance/finance.server.ts · src/features/finance/import.server.ts · src/db/schema.ts
+          </div>
+          <div class="mt-7 grid gap-5 lg:grid-cols-2">
+            <figure>
+              <figcaption class="mb-2 text-xs font-semibold uppercase tracking-wider text-red-700">Before · durable, then maybe error</figcaption>
+              <div class="min-h-[330px] rounded-xl border border-red-200 bg-red-50/40 p-3">
+                <pre class="mermaid">
+sequenceDiagram
+  participant U as Import caller
+  participant I as Import module
+  participant D as Database
+  participant R as Finance module
+  U->>I: commit
+  I->>D: durable transaction
+  D-->>I: committed
+  I->>R: global reconciliation scan
+  R--xI: later failure
+  I--xU: request failed
+                </pre>
+              </div>
+            </figure>
+            <figure>
+              <figcaption class="mb-2 text-xs font-semibold uppercase tracking-wider text-emerald-700">After · explicit durable seam</figcaption>
+              <div class="min-h-[330px] rounded-xl border border-emerald-200 bg-emerald-50/40 p-3">
+                <pre class="mermaid">
+sequenceDiagram
+  participant U as Import caller
+  participant I as Import module
+  participant D as Database
+  participant R as Reconciliation module
+  U->>I: commit
+  I->>D: durable transaction
+  D-->>I: committed outcome
+  I-->>U: import outcome
+  I->>R: explicit refresh work
+  R->>D: scan + persist
+                </pre>
+              </div>
+            </figure>
+          </div>
+          <dl class="mt-7 grid gap-5 sm:grid-cols-2">
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Problem</dt><dd class="mt-1 text-sm leading-6">O deterministic module é shallow: seis callers ainda controlam scan global, invalidação, AI adapter e persistence, e a importação pode ficar durable antes de um erro tardio.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Solution</dt><dd class="mt-1 text-sm leading-6">Deepen o Reconciliation module e torne explícita a seam entre o resultado durable do import e o refresh, sem fechar a interface neste relatório.</dd></div>
+          </dl>
+          <ul class="mt-5 grid gap-2 text-sm sm:grid-cols-3">
+            <li class="rounded-md bg-slate-50 px-3 py-2">locality: refresh lifecycle stays together</li>
+            <li class="rounded-md bg-slate-50 px-3 py-2">leverage: six callers, one module</li>
+            <li class="rounded-md bg-slate-50 px-3 py-2">tests cover late failures</li>
+          </ul>
+        </article>
+
+        <article id="import-read" class="break-avoid rounded-2xl border border-slate-300 bg-white p-6 shadow-sm sm:p-8">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-700">06</p>
+              <h2 class="mt-2 font-serif text-3xl tracking-tight">Deepen the Import review read module</h2>
+            </div>
+            <div class="flex gap-2">
+              <span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">Worth exploring</span>
+              <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">in-process</span>
+            </div>
+          </div>
+          <div class="mt-5 rounded-lg bg-slate-50 p-4 font-mono text-xs leading-6 text-slate-700">
+            src/features/finance/finance.server.ts · src/features/finance/queries.ts · src/routes/importar.tsx · seven route modules
+          </div>
+          <div class="mt-7 grid gap-5 lg:grid-cols-2">
+            <figure>
+              <figcaption class="mb-2 text-xs font-semibold uppercase tracking-wider text-red-700">Before · workspace-wide interface</figcaption>
+              <div class="min-h-[330px] rounded-xl border border-red-200 bg-red-50/40 p-5">
+                <div class="mass-interface flex h-32 items-center justify-center rounded-t-xl px-5 text-center text-sm font-semibold text-red-900">interface: 27 tables · every finance concept</div>
+                <div class="mass-implementation flex h-40 items-center justify-center rounded-b-xl px-5 text-center text-sm text-slate-700">implementation: 701 lines<br/>joins + derivations + import review</div>
+                <div class="mt-4 flex justify-between text-[11px] text-red-700"><span>7 routes</span><span>11 global invalidations</span></div>
+              </div>
+            </figure>
+            <figure>
+              <figcaption class="mb-2 text-xs font-semibold uppercase tracking-wider text-emerald-700">After · focused depth</figcaption>
+              <div class="min-h-[330px] rounded-xl border border-emerald-200 bg-emerald-50/40 p-5">
+                <div class="grid h-[290px] grid-rows-[56px_1fr]">
+                  <div class="mx-auto flex w-2/3 items-center justify-center rounded-t-lg border border-emerald-400 bg-emerald-100 text-center text-sm font-semibold text-emerald-900">narrow interface</div>
+                  <div class="deep rounded-2xl border-4 border-slate-900 p-6 text-white">
+                    <p class="text-center text-lg font-semibold">Import review deep module</p>
+                    <div class="mt-5 grid grid-cols-2 gap-3 text-center text-xs text-slate-300"><span class="rounded border border-slate-600 p-3">review imports</span><span class="rounded border border-slate-600 p-3">match candidates</span><span class="rounded border border-slate-600 p-3">corrections</span><span class="rounded border border-slate-600 p-3">checkpoint conflicts</span></div>
+                  </div>
+                </div>
+              </div>
+            </figure>
+          </div>
+          <dl class="mt-7 grid gap-5 sm:grid-cols-2">
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Problem</dt><dd class="mt-1 text-sm leading-6">A interface de getFinanceSnapshot quase iguala toda a finance implementation: sete routes load the same 27-table result, while import review needs four top-level slices.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Solution</dt><dd class="mt-1 text-sm leading-6">Deepen a focused Import review read module so persistence joins stay behind its seam; keep the workspace-wide module only where its depth earns the broad interface.</dd></div>
+          </dl>
+          <ul class="mt-5 grid gap-2 text-sm sm:grid-cols-3">
+            <li class="rounded-md bg-slate-50 px-3 py-2">locality: review data stays together</li>
+            <li class="rounded-md bg-slate-50 px-3 py-2">leverage: smaller route test surface</li>
+            <li class="rounded-md bg-slate-50 px-3 py-2">interface stops spanning all finance</li>
+          </ul>
+        </article>
+      </section>
+
+      <section id="top-recommendation" class="rounded-2xl border-2 border-indigo-300 bg-indigo-950 p-8 text-white shadow-xl">
+        <p class="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-300">Top recommendation</p>
+        <a href="#canonicalization" class="mt-3 block font-serif text-3xl underline decoration-indigo-400 underline-offset-8">Deepen Observação importada → Lançamento canônico</a>
+        <p class="mt-5 max-w-3xl text-sm leading-6 text-indigo-100">É a seam central de Idempotência, Multiplicidade e Auditabilidade no ADR 001. Uma deep implementation remove matching duplicado do startup repair e transforma o fixture de 3.169 linhas em um teste de interface mais fiel.</p>
+      </section>
+    </main>
+  </body>
+</html>
