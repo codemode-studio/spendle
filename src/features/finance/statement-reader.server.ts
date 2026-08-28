@@ -39,7 +39,9 @@ export interface ParsedOfxStatement {
 
 export interface StatementReadResult {
   transactions: ParsedTransaction[]
-  parser: 'ofx' | 'csv' | 'pdf_inspector' | 'pdf_ai'
+  parser: 'ofx' | 'csv' | 'pdf_inspector' | 'pdf_local' | 'pdf_ai'
+  parserId: string | null
+  parserVersion: string | null
   documentKind: 'bank_statement' | 'card_statement' | 'unknown'
   sourceTransactionCount: number | null
   controls: {
@@ -308,7 +310,16 @@ const aiPdfOutputSchema = z.object({
   ),
 })
 
-async function parsePdfBufferWithAi(buffer: Buffer, filename: string) {
+export const pdfTransactionExtractionPrompt = `Extraia todas as transações deste extrato.
+Use somente a coluna que representa o valor de cada transação, normalmente chamada "Valor", "Valor da transação", "Crédito" ou "Débito".
+Nunca use a coluna "Saldo", "Saldo após a transação" ou outro saldo acumulado como amountCents.
+amountCents deve usar a menor unidade da moeda: centavos para BRL/USD e satoshis (8 casas) para BTC.
+Débitos devem ser negativos e créditos positivos.
+Quando existir um ID da operação, preserve-o em externalId.
+Preserve a descrição original sem resumir ou reescrever.
+Preserve a moeda original.`
+
+export async function parsePdfBufferWithAi(buffer: Buffer, filename: string) {
   const model = getConfiguredAiModel()
   if (!model) {
     throw new Error(
@@ -326,7 +337,7 @@ async function parsePdfBufferWithAi(buffer: Buffer, filename: string) {
         content: [
           {
             type: 'text',
-            text: 'Extraia todas as transações deste extrato. amountCents deve usar a menor unidade da moeda: centavos para BRL/USD e satoshis (8 casas) para BTC. Débitos devem ser negativos e créditos positivos. Preserve a moeda original.',
+            text: pdfTransactionExtractionPrompt,
           },
           {
             type: 'file',
@@ -342,6 +353,150 @@ async function parsePdfBufferWithAi(buffer: Buffer, filename: string) {
     ...transaction,
     externalId: transaction.externalId ?? undefined,
   }))
+}
+
+export interface PdfAiConfirmation {
+  status: 'agreement' | 'divergent'
+  deterministicTransactionCount: number
+  aiTransactionCount: number
+  missingFromAiCount: number
+  unexpectedFromAiCount: number
+  datesMatch: boolean
+  amountsMatch: boolean
+  dateAmountPairsMatch: boolean
+  descriptionsAndIdsMatch: boolean
+}
+
+function normalizeComparisonText(value: string) {
+  return value
+    .normalize('NFD')
+    .replaceAll(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replaceAll(/\s+/g, ' ')
+}
+
+function normalizeComparisonId(value: string | undefined) {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+function multisetDifferenceCount(left: string[], right: string[]) {
+  const remaining = new Map<string, number>()
+  for (const value of right) {
+    remaining.set(value, (remaining.get(value) ?? 0) + 1)
+  }
+
+  let difference = 0
+  for (const value of left) {
+    const count = remaining.get(value) ?? 0
+    if (!count) {
+      difference += 1
+      continue
+    }
+    if (count === 1) remaining.delete(value)
+    else remaining.set(value, count - 1)
+  }
+  return difference
+}
+
+function multisetsMatch(left: string[], right: string[]) {
+  return (
+    left.length === right.length && multisetDifferenceCount(left, right) === 0
+  )
+}
+
+function transactionDateAmountKey(transaction: ParsedTransaction) {
+  return [
+    transaction.postedAt,
+    transaction.amountCents,
+    transaction.currency.toUpperCase(),
+  ].join('\u0000')
+}
+
+function transactionEvidenceKey(transaction: ParsedTransaction) {
+  return [
+    normalizeComparisonText(transaction.description),
+    normalizeComparisonId(transaction.externalId),
+  ].join('\u0000')
+}
+
+function transactionComparisonKey(transaction: ParsedTransaction) {
+  return [
+    transactionDateAmountKey(transaction),
+    transactionEvidenceKey(transaction),
+  ].join('\u0000')
+}
+
+export function comparePdfExtractions(
+  deterministic: ParsedTransaction[],
+  ai: ParsedTransaction[],
+): PdfAiConfirmation {
+  const deterministicKeys = deterministic.map(transactionComparisonKey)
+  const aiKeys = ai.map(transactionComparisonKey)
+  const missingFromAiCount = multisetDifferenceCount(deterministicKeys, aiKeys)
+  const unexpectedFromAiCount = multisetDifferenceCount(
+    aiKeys,
+    deterministicKeys,
+  )
+  const datesMatch = multisetsMatch(
+    deterministic.map((transaction) => transaction.postedAt),
+    ai.map((transaction) => transaction.postedAt),
+  )
+  const amountsMatch = multisetsMatch(
+    deterministic.map(
+      (transaction) =>
+        `${transaction.amountCents}\u0000${transaction.currency.toUpperCase()}`,
+    ),
+    ai.map(
+      (transaction) =>
+        `${transaction.amountCents}\u0000${transaction.currency.toUpperCase()}`,
+    ),
+  )
+  const dateAmountPairsMatch = multisetsMatch(
+    deterministic.map(transactionDateAmountKey),
+    ai.map(transactionDateAmountKey),
+  )
+  const descriptionsAndIdsMatch = multisetsMatch(
+    deterministic.map(transactionEvidenceKey),
+    ai.map(transactionEvidenceKey),
+  )
+
+  return {
+    status:
+      missingFromAiCount === 0 && unexpectedFromAiCount === 0
+        ? 'agreement'
+        : 'divergent',
+    deterministicTransactionCount: deterministic.length,
+    aiTransactionCount: ai.length,
+    missingFromAiCount,
+    unexpectedFromAiCount,
+    datesMatch,
+    amountsMatch,
+    dateAmountPairsMatch,
+    descriptionsAndIdsMatch,
+  }
+}
+
+function describeAiDivergence(comparison: PdfAiConfirmation) {
+  const dimensions = [
+    comparison.deterministicTransactionCount === comparison.aiTransactionCount
+      ? null
+      : `contagem (${comparison.deterministicTransactionCount} local, ${comparison.aiTransactionCount} pela IA)`,
+    comparison.datesMatch ? null : 'datas',
+    comparison.amountsMatch ? null : 'valores ou moedas',
+    comparison.dateAmountPairsMatch ? null : 'associação entre data e valor',
+    comparison.descriptionsAndIdsMatch ? null : 'descrições ou IDs',
+  ].filter((dimension): dimension is string => Boolean(dimension))
+  if (!dimensions.length) {
+    dimensions.push('combinação dos campos por lançamento')
+  }
+
+  return `A confirmação por IA divergiu do parser determinístico em ${dimensions.join(', ')}. ${comparison.missingFromAiCount} lançamento(s) local(is) não tiveram correspondência e ${comparison.unexpectedFromAiCount} resultado(s) apareceram somente na IA. A importação ficou bloqueada para revisão.`
+}
+
+function appendBlockingReason(current: string | null, reason: string) {
+  return current ? `${current} ${reason}` : reason
 }
 
 function emptyDiagnostics(): StatementReadResult['diagnostics'] {
@@ -401,25 +556,37 @@ async function readPdfStatement(
     input.targetType,
     input.targetCurrency,
   )
-  let transactions: ParsedTransaction[] = inspection.transactions
+  const deterministicTransactions: ParsedTransaction[] = inspection.transactions
+  let transactions = deterministicTransactions
   let parser: StatementReadResult['parser'] = 'pdf_inspector'
-  const activityDates = transactions
-    .map((transaction) => transaction.postedAt)
-    .sort()
   const periodSource =
     inspection.controls.periodStart && inspection.controls.periodEnd
       ? ('metadata' as const)
       : ('activity' as const)
   const legacy = await parsePdfBufferLegacy(input.buffer).catch(() => [])
   const legacyNet = legacy.reduce((sum, item) => sum + item.amountCents, 0)
-  const inspectorNet = transactions.reduce(
+  const inspectorNet = deterministicTransactions.reduce(
     (sum, item) => sum + item.amountCents,
     0,
   )
   const disagreesWithLegacy =
     legacy.length > 0 &&
-    (legacy.length !== transactions.length || legacyNet !== inspectorNet)
+    (legacy.length !== deterministicTransactions.length ||
+      legacyNet !== inspectorNet)
   let blockingReason: string | null = null
+  let aiConfirmation:
+    | PdfAiConfirmation
+    | {
+        status: 'not_requested' | 'failed' | 'fallback_unverified'
+        deterministicTransactionCount: number
+        aiTransactionCount: number | null
+        error: string | null
+      } = {
+    status: 'not_requested',
+    deterministicTransactionCount: deterministicTransactions.length,
+    aiTransactionCount: null,
+    error: null,
+  }
 
   if (inspection.classification.pagesNeedingOcr.length) {
     blockingReason =
@@ -432,18 +599,75 @@ async function readPdfStatement(
       'O extrator posicional e o parser anterior discordam na contagem ou nos totais.'
   }
 
-  if (!transactions.length && input.aiConsent) {
+  if (
+    !input.aiConsent &&
+    deterministicTransactions.length === 0 &&
+    legacy.length > 0 &&
+    !inspection.classification.pagesNeedingOcr.length &&
+    !inspection.diagnostics.suspiciousTextLoss
+  ) {
+    transactions = legacy
+    parser = 'pdf_local'
+    blockingReason = null
+  }
+
+  if (input.aiConsent && deterministicTransactions.length) {
+    try {
+      const aiTransactions = await parsePdfBufferWithAi(
+        input.buffer,
+        input.filename,
+      )
+      aiConfirmation = comparePdfExtractions(
+        deterministicTransactions,
+        aiTransactions,
+      )
+      if (aiConfirmation.status === 'divergent') {
+        blockingReason = appendBlockingReason(
+          blockingReason,
+          describeAiDivergence(aiConfirmation),
+        )
+      }
+    } catch (error) {
+      aiConfirmation = {
+        status: 'failed',
+        deterministicTransactionCount: deterministicTransactions.length,
+        aiTransactionCount: null,
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Falha desconhecida na confirmação por IA.',
+      }
+      blockingReason = appendBlockingReason(
+        blockingReason,
+        'A confirmação por IA não pôde ser concluída. A importação ficou bloqueada para revisão.',
+      )
+    }
+  } else if (input.aiConsent) {
     transactions = await parsePdfBufferWithAi(input.buffer, input.filename)
     parser = 'pdf_ai'
-    blockingReason =
-      'A extração por IA não possui prova posicional completa e não pode ser consolidada automaticamente.'
+    aiConfirmation = {
+      status: 'fallback_unverified',
+      deterministicTransactionCount: 0,
+      aiTransactionCount: transactions.length,
+      error: null,
+    }
+    blockingReason = appendBlockingReason(
+      blockingReason,
+      'A extração por IA não possui prova posicional completa e não pode ser consolidada automaticamente.',
+    )
   }
+
+  const activityDates = transactions
+    .map((transaction) => transaction.postedAt)
+    .sort()
 
   return {
     transactions,
     parser,
+    parserId: inspection.diagnostics.layoutId,
+    parserVersion: inspection.diagnostics.layoutVersion,
     documentKind: inspection.identity.kind,
-    sourceTransactionCount: null,
+    sourceTransactionCount: inspection.sourceTransactionCount,
     controls: {
       openingBalanceCents: inspection.controls.openingBalanceCents,
       openingBalanceAt: inspection.controls.openingBalanceAt,
@@ -482,9 +706,10 @@ async function readPdfStatement(
         pagesWithColumns: inspection.classification.pagesWithColumns,
         legacyTransactionCount: legacy.length,
         legacyNetMovementCents: legacyNet,
-        inspectorTransactionCount: transactions.length,
+        inspectorTransactionCount: deterministicTransactions.length,
         inspectorNetMovementCents: inspectorNet,
         disagreesWithLegacy,
+        aiConfirmation,
       }),
       blockingReason,
     },
@@ -502,6 +727,8 @@ export async function readStatement(
     result = {
       transactions: statement.transactions,
       parser: 'ofx',
+      parserId: null,
+      parserVersion: null,
       documentKind:
         input.targetType === 'account' ? 'bank_statement' : 'card_statement',
       sourceTransactionCount: statement.sourceTransactionCount,
@@ -555,6 +782,8 @@ export async function readStatement(
     result = {
       transactions: statement.transactions,
       parser: 'csv',
+      parserId: null,
+      parserVersion: null,
       documentKind:
         input.targetType === 'account' ? 'bank_statement' : 'card_statement',
       sourceTransactionCount: statement.sourceTransactionCount,

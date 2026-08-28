@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseOfxAmount, readStatement } from './statement-reader.server'
+import {
+  parseOfxAmount,
+  pdfTransactionExtractionPrompt,
+  readStatement,
+} from './statement-reader.server'
 
 const baseInput = {
   targetType: 'account' as const,
@@ -12,6 +16,16 @@ const baseInput = {
 }
 
 describe('leitura normalizada de extratos', () => {
+  it('instrui a IA a separar valor da transação e saldo acumulado', () => {
+    expect(pdfTransactionExtractionPrompt).toContain(
+      'Nunca use a coluna "Saldo"',
+    )
+    expect(pdfTransactionExtractionPrompt).toContain('preserve-o em externalId')
+    expect(pdfTransactionExtractionPrompt).toContain(
+      'Preserve a descrição original',
+    )
+  })
+
   it('normaliza o adapter OFX sem expor o formato ao staging', async () => {
     const buffer = Buffer.from(
       'OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECURITY:NONE\nENCODING:USASCII\nCHARSET:1252\nCOMPRESSION:NONE\nOLDFILEUID:NONE\nNEWFILEUID:NONE\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><CURDEF>BRL<BANKTRANLIST><STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260803120000[-3:BRT]<TRNAMT>-10.00<FITID>ofx-1<NAME>Compra</STMTTRN></BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>',

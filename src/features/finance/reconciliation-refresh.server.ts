@@ -5,6 +5,7 @@ import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
 import { buildReconciliationSuggestions } from '#/domain/reconciliation'
 import { validateReconciliationsWithAi } from './ai.server'
+import { refreshRecurrenceSuggestions } from './recurrence-refresh.server'
 
 export async function refreshReconciliationSuggestions() {
   await ensureDatabase()
@@ -286,14 +287,17 @@ export async function refreshReconciliationSuggestions() {
 }
 
 export type ReconciliationRefreshResult =
-  | { status: 'refreshed'; inserted: number }
+  | { status: 'refreshed'; inserted: number; recurrenceSuggestions: number }
   | { status: 'deferred'; inserted: 0; message: string }
 
 export async function refreshReconciliationAfterCommit(): Promise<ReconciliationRefreshResult> {
   try {
+    const inserted = await refreshReconciliationSuggestions()
+    const recurrence = await refreshRecurrenceSuggestions()
     return {
       status: 'refreshed',
-      inserted: await refreshReconciliationSuggestions(),
+      inserted,
+      recurrenceSuggestions: recurrence.suggestionCount,
     }
   } catch (error) {
     const message =

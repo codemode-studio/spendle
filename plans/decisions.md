@@ -4,6 +4,11 @@
 
 - Interface em português; identificadores do código em inglês.
 - Um workspace familiar local, sem login no MVP.
+- A visão principal deve responder se a família está dentro do plano, onde
+  houve desvio e qual ação merece atenção agora. Patrimônio detalhado e o razão
+  ficam como aprofundamentos.
+- A visão padrão é familiar, com recortes por Donald e Dayane. Contas, cartões
+  e compromissos continuam atribuídos ao participante correto.
 - PF e PJ Brasil entram no MVP; empresa dos EUA e tributação ficam no backlog.
 - Contas e cartões são conceitos e áreas de navegação separados.
 
@@ -17,6 +22,19 @@
 - Faturamento PJ, transferências internas e pagamento de fatura não são renda/despesa familiar.
 - Transferências de PJ para PF no escopo atual são distribuições de lucro. As duas pontas são preservadas e a confirmação é manual.
 - Cada conta e cartão é um ledger separado. Cartões físicos e virtuais são instrumentos do mesmo ledger de fatura.
+- Compras parceladas em quatro ou mais vezes são despesas fixas temporárias.
+  Parcelamentos de duas ou três vezes continuam classificados como curtos. Essa
+  classificação não altera a categoria da compra nem cria uma recorrência.
+- A parcela realizada entra como gasto no mês. As parcelas restantes reduzem a
+  margem livre projetada dos meses futuros, sem reconhecer todo o saldo como
+  gasto no mês da compra.
+- A estratégia familiar mantém os quatro envelopes. Limites por categoria são
+  opcionais e devem ser usados nas categorias que a família quer controlar.
+- Vazamento financeiro é um conjunto de sinais explicáveis, não uma categoria
+  contábil nem um único score.
+- O mês-calendário é o período principal. Comparações durante o mês usam o mesmo
+  número de dias dos três meses anteriores, e compromissos usam projeção de 90
+  dias.
 - O saldo exibido como verificado precisa fechar exatamente contra um ponto de controle datado; a tolerância é zero.
 - Investimentos e cripto são contas normais com finalidade de investimento.
   Transferências internas registram aportes e retiradas; saldos informados

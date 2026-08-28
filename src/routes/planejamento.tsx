@@ -63,14 +63,20 @@ import {
   strategyPresets,
   toCents,
 } from '#/domain/finance'
+import { isAcceptedRecurrenceMatchStatus } from '#/domain/recurrence-matching'
 import {
   activateStrategyFn,
   addGoalContributionFn,
   closeCurrentBudgetFn,
+  confirmRecurrenceMatchFn,
   createRecurrenceFn,
   deleteRecurrenceFn,
+  refreshRecurrencesFn,
+  rejectRecurrenceMatchFn,
   saveGoalFn,
   setRecurrenceActiveFn,
+  skipRecurrenceOccurrenceFn,
+  unlinkRecurrenceMatchFn,
   updateRecurrenceFn,
   updateSettingsFn,
 } from '#/features/finance/finance.functions'
@@ -124,6 +130,11 @@ function PlanningPage() {
   const updateRecurrence = useServerFn(updateRecurrenceFn)
   const setRecurrenceActive = useServerFn(setRecurrenceActiveFn)
   const deleteRecurrence = useServerFn(deleteRecurrenceFn)
+  const refreshRecurrences = useServerFn(refreshRecurrencesFn)
+  const confirmRecurrenceMatch = useServerFn(confirmRecurrenceMatchFn)
+  const rejectRecurrenceMatch = useServerFn(rejectRecurrenceMatchFn)
+  const unlinkRecurrenceMatch = useServerFn(unlinkRecurrenceMatchFn)
+  const skipRecurrenceOccurrence = useServerFn(skipRecurrenceOccurrenceFn)
   const [selectedId, setSelectedId] = useState(data.dashboard.activeStrategy.id)
   const selected =
     data.strategies.find((strategy) => strategy.id === selectedId) ??
@@ -231,6 +242,50 @@ function PlanningPage() {
     },
     onError: showError,
   })
+  const refreshRecurrencesMutation = useMutation({
+    mutationFn: refreshRecurrences,
+    onSuccess: (result) => {
+      toast.success(
+        `${result.suggestionCount} correspondência(s) disponível(is) para revisão.`,
+      )
+      void invalidate()
+    },
+    onError: showError,
+  })
+  const confirmMatchMutation = useMutation({
+    mutationFn: confirmRecurrenceMatch,
+    onSuccess: () => {
+      toast.success('Pagamento conciliado com a recorrência.')
+      void invalidate()
+    },
+    onError: showError,
+  })
+  const rejectMatchMutation = useMutation({
+    mutationFn: rejectRecurrenceMatch,
+    onSuccess: () => {
+      toast.success(
+        'Correspondência rejeitada. O sistema vai considerar isso no histórico.',
+      )
+      void invalidate()
+    },
+    onError: showError,
+  })
+  const unlinkMatchMutation = useMutation({
+    mutationFn: unlinkRecurrenceMatch,
+    onSuccess: () => {
+      toast.success('Pagamento desvinculado.')
+      void invalidate()
+    },
+    onError: showError,
+  })
+  const skipOccurrenceMutation = useMutation({
+    mutationFn: skipRecurrenceOccurrence,
+    onSuccess: () => {
+      toast.success('Ocorrência ignorada.')
+      void invalidate()
+    },
+    onError: showError,
+  })
 
   function showError(error: unknown) {
     toast.error(
@@ -312,19 +367,28 @@ function PlanningPage() {
   function submitRecurrence(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    const [kind, id] = String(form.get('destination')).split(':')
+    const destinationMode = String(form.get('destinationMode')) as
+      'automatic' | 'fixed'
+    const [kind, id] = String(form.get('destination') || '').split(':')
     const destination =
       kind === 'account'
         ? data.accounts.find((account) => account.id === id)
         : data.cards.find((card) => card.id === id)
-    const currency = parseCurrency(destination?.currency ?? 'BRL')
+    const currency = parseCurrency(
+      destination?.currency ?? String(form.get('currency') || 'BRL'),
+    )
     const values = {
       name: String(form.get('name')),
+      groupName: String(form.get('groupName') || '') || undefined,
+      participantLabel: String(form.get('participantLabel') || '') || undefined,
       accountId: kind === 'account' ? id : undefined,
       creditCardId: kind === 'card' ? id : undefined,
-      categoryId: String(form.get('categoryId') || '') || undefined,
-      amountCents: toCents(String(form.get('amount')), currency),
+      categoryId: String(form.get('categoryId')),
+      amountCents: Math.abs(toCents(String(form.get('amount')), currency)),
       currency,
+      direction: String(form.get('direction')) as 'income' | 'expense',
+      amountMode: String(form.get('amountMode')) as 'fixed' | 'variable',
+      destinationMode,
       frequency: String(form.get('frequency')) as 'monthly' | 'yearly',
       nextDate: String(form.get('nextDate')),
     }
@@ -344,8 +408,7 @@ function PlanningPage() {
   const currentBudget = data.monthlyBudgets.find(
     (budget) => budget.month === data.dashboard.currentMonth,
   )
-  const pendingCount =
-    data.dashboard.reviewTransactionCount + data.dashboard.reconciliationCount
+  const pendingCount = data.dashboard.integrity.closingBlockerCount
   const editingRecurrence = data.recurrences.find(
     (item) => item.id === editingRecurrenceId,
   )
@@ -371,7 +434,7 @@ function PlanningPage() {
         <TabsList
           variant="line"
           aria-label="Áreas do planejamento"
-          className="h-9 w-full justify-start overflow-x-auto border-b px-0 pb-1"
+          className="h-9 w-full justify-start overflow-x-auto overflow-y-hidden border-b px-0 pb-1"
         >
           <TabsTrigger value="budget" className="min-w-28 flex-none px-4">
             Orçamento
@@ -424,7 +487,13 @@ function PlanningPage() {
         <TabsContent value="recurrences">
           <RecurrencesSection
             data={data}
-            pending={recurrenceStatusMutation.isPending}
+            pending={
+              recurrenceStatusMutation.isPending ||
+              confirmMatchMutation.isPending ||
+              rejectMatchMutation.isPending ||
+              unlinkMatchMutation.isPending ||
+              skipOccurrenceMutation.isPending
+            }
             openNew={() => {
               setEditingRecurrenceId(null)
               setRecurrenceOpen(true)
@@ -437,6 +506,19 @@ function PlanningPage() {
               recurrenceStatusMutation.mutate({ data: { id, active } })
             }
             requestDelete={setDeletingRecurrenceId}
+            refresh={() => refreshRecurrencesMutation.mutate({})}
+            confirmMatch={(matchId) =>
+              confirmMatchMutation.mutate({ data: { matchId } })
+            }
+            rejectMatch={(matchId) =>
+              rejectMatchMutation.mutate({ data: { matchId } })
+            }
+            unlinkMatch={(matchId) =>
+              unlinkMatchMutation.mutate({ data: { matchId } })
+            }
+            skipOccurrence={(occurrenceId) =>
+              skipOccurrenceMutation.mutate({ data: { occurrenceId } })
+            }
           />
         </TabsContent>
       </Tabs>
@@ -847,6 +929,11 @@ function RecurrencesSection({
   openEdit,
   toggleActive,
   requestDelete,
+  refresh,
+  confirmMatch,
+  rejectMatch,
+  unlinkMatch,
+  skipOccurrence,
 }: {
   data: Snapshot
   pending: boolean
@@ -854,24 +941,50 @@ function RecurrencesSection({
   openEdit: (id: string) => void
   toggleActive: (id: string, active: boolean) => void
   requestDelete: (id: string) => void
+  refresh: () => void
+  confirmMatch: (matchId: string) => void
+  rejectMatch: (matchId: string) => void
+  unlinkMatch: (matchId: string) => void
+  skipOccurrence: (occurrenceId: string) => void
 }) {
   const active = data.recurrences.filter((item) => item.active)
+  const missingConversionCount = active.filter(
+    (item) => item.amountCents !== 0 && item.baseAmountCents === null,
+  ).length
   const monthlyIncome = active.reduce(
     (sum, item) =>
       sum +
-      (item.amountCents > 0
-        ? item.amountCents / (item.frequency === 'yearly' ? 12 : 1)
+      (item.direction === 'income' && item.baseAmountCents !== null
+        ? item.baseAmountCents / (item.frequency === 'yearly' ? 12 : 1)
         : 0),
     0,
   )
   const monthlyExpense = active.reduce(
     (sum, item) =>
       sum +
-      (item.amountCents < 0
-        ? Math.abs(item.amountCents) / (item.frequency === 'yearly' ? 12 : 1)
+      (item.direction === 'expense' && item.baseAmountCents !== null
+        ? item.baseAmountCents / (item.frequency === 'yearly' ? 12 : 1)
         : 0),
     0,
   )
+  const groupedRecurrences = data.recurrenceGroups
+    .map((group) => ({
+      group,
+      items: data.recurrences.filter((item) => item.groupId === group.id),
+    }))
+    .filter(({ items }) => items.length > 0)
+  const groupedIds = new Set(
+    groupedRecurrences.flatMap(({ items }) => items.map((item) => item.id)),
+  )
+  const displayRows = [
+    ...groupedRecurrences.flatMap(({ group, items }) => [
+      { type: 'group' as const, group, items },
+      ...items.map((item) => ({ type: 'recurrence' as const, item })),
+    ]),
+    ...data.recurrences
+      .filter((item) => !groupedIds.has(item.id))
+      .map((item) => ({ type: 'recurrence' as const, item })),
+  ]
 
   return (
     <div className="grid gap-4">
@@ -895,21 +1008,69 @@ function RecurrencesSection({
           </strong>
         </Panel>
       </div>
+      {missingConversionCount > 0 && (
+        <p className="text-xs text-warning-foreground">
+          {missingConversionCount} recorrência(s) sem cotação para BRL não
+          entram nos totais mensais.
+        </p>
+      )}
       <Panel
         title="Receitas e despesas recorrentes"
         description="Compromissos previstos para os próximos meses."
         action={
           data.recurrences.length ? (
-            <Button onClick={openNew}>
-              <Plus data-icon="inline-start" />
-              Nova recorrência
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={refresh} disabled={pending}>
+                Buscar pagamentos
+              </Button>
+              <Button onClick={openNew}>
+                <Plus data-icon="inline-start" />
+                Nova recorrência
+              </Button>
+            </div>
           ) : undefined
         }
       >
         {data.recurrences.length ? (
           <div className="divide-y rounded-lg border">
-            {data.recurrences.map((item) => {
+            {displayRows.map((entry) => {
+              if (entry.type === 'group') {
+                const activeItems = entry.items.filter((item) => item.active)
+                const monthlyTotal = activeItems.reduce(
+                  (sum, item) =>
+                    sum +
+                    (item.baseAmountCents === null
+                      ? 0
+                      : item.baseAmountCents /
+                        (item.frequency === 'yearly' ? 12 : 1)),
+                  0,
+                )
+                const missingConversions = activeItems.filter(
+                  (item) =>
+                    item.amountCents !== 0 && item.baseAmountCents === null,
+                ).length
+                return (
+                  <div
+                    key={`group:${entry.group.id}`}
+                    className="flex flex-wrap items-center justify-between gap-2 bg-muted/40 px-4 py-3"
+                  >
+                    <div>
+                      <strong className="text-sm">{entry.group.name}</strong>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {entry.items.length}{' '}
+                        {entry.items.length === 1
+                          ? 'recorrência'
+                          : 'recorrências'}
+                      </p>
+                    </div>
+                    <span className="text-sm font-medium tabular-nums">
+                      {formatCurrency(monthlyTotal)}/mês
+                      {missingConversions > 0 && ' + valor sem cotação'}
+                    </span>
+                  </div>
+                )
+              }
+              const item = entry.item
               const account = data.accounts.find(
                 (candidate) => candidate.id === item.accountId,
               )
@@ -919,6 +1080,43 @@ function RecurrencesSection({
               const category = data.categories.find(
                 (candidate) => candidate.id === item.categoryId,
               )
+              const sortedOccurrences = [...item.occurrences].sort(
+                (left, right) =>
+                  right.expectedDate.localeCompare(left.expectedDate),
+              )
+              const today = new Date().toISOString().slice(0, 10)
+              const openOccurrences = sortedOccurrences.filter(
+                (candidate) => candidate.status === 'expected',
+              )
+              const occurrence =
+                openOccurrences.find(
+                  (candidate) => candidate.expectedDate <= today,
+                ) ??
+                [...openOccurrences]
+                  .reverse()
+                  .find((candidate) => candidate.expectedDate > today) ??
+                sortedOccurrences.at(0)
+              const acceptedHistory = sortedOccurrences.flatMap(
+                (candidateOccurrence) =>
+                  candidateOccurrence.matches
+                    .filter((match) =>
+                      isAcceptedRecurrenceMatchStatus(match.status),
+                    )
+                    .map((match) => ({
+                      match,
+                      occurrence: candidateOccurrence,
+                    })),
+              )
+              const latestAccepted = acceptedHistory.at(0)
+              const acceptedMatch = latestAccepted?.match
+              const suggestedMatch = item.active
+                ? occurrence?.matches
+                    .filter((match) => match.status === 'suggested')
+                    .sort((left, right) => right.score - left.score)[0]
+                : undefined
+              const displayName = item.groupId
+                ? item.participantLabel || item.name
+                : item.name
               return (
                 <div
                   key={item.id}
@@ -926,18 +1124,119 @@ function RecurrencesSection({
                 >
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <strong className="truncate text-sm">{item.name}</strong>
+                      <strong className="truncate text-sm">
+                        {displayName}
+                      </strong>
                       <StatusBadge tone={item.active ? 'success' : 'neutral'}>
                         {item.active ? 'Ativa' : 'Pausada'}
                       </StatusBadge>
+                      {!item.active ? null : suggestedMatch ? (
+                        <StatusBadge tone="warning">
+                          Candidato encontrado
+                        </StatusBadge>
+                      ) : occurrence?.status === 'expected' ? (
+                        occurrence.expectedDate < today ? (
+                          <StatusBadge tone="warning">Atrasada</StatusBadge>
+                        ) : (
+                          <StatusBadge tone="info">Pendente</StatusBadge>
+                        )
+                      ) : acceptedMatch ? (
+                        <StatusBadge tone="success">Realizada</StatusBadge>
+                      ) : (
+                        <StatusBadge tone="info">Pendente</StatusBadge>
+                      )}
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
+                      {item.groupId && item.name !== displayName
+                        ? `${item.name} · `
+                        : ''}
                       {formatInstrumentName(
                         account?.name ?? card?.name ?? 'Sem destino',
                       )}{' '}
                       · {category?.name ?? 'Sem categoria'} ·{' '}
                       {item.frequency === 'monthly' ? 'Mensal' : 'Anual'}
                     </p>
+                    {suggestedMatch?.transaction && (
+                      <div className="mt-3 rounded-md border bg-muted/30 p-3">
+                        <p className="text-sm">
+                          <strong>
+                            {suggestedMatch.transaction.description}
+                          </strong>{' '}
+                          ·{' '}
+                          {formatCurrency(
+                            Math.abs(suggestedMatch.transaction.amountCents),
+                            suggestedMatch.transaction.currency,
+                          )}
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Confiança {suggestedMatch.score}% ·{' '}
+                          {suggestedMatch.reason}
+                        </p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Button
+                            size="sm"
+                            disabled={pending}
+                            onClick={() => confirmMatch(suggestedMatch.id)}
+                          >
+                            Confirmar
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={pending}
+                            onClick={() => rejectMatch(suggestedMatch.id)}
+                          >
+                            Não corresponde
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    {acceptedMatch?.transaction && (
+                      <div className="mt-3 rounded-md border bg-muted/30 p-3 text-sm">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate">
+                            Último pagamento:{' '}
+                            {acceptedMatch.transaction.description} ·{' '}
+                            {formatCurrency(
+                              Math.abs(acceptedMatch.transaction.amountCents),
+                              acceptedMatch.transaction.currency,
+                            )}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={pending}
+                            onClick={() => unlinkMatch(acceptedMatch.id)}
+                          >
+                            Desvincular
+                          </Button>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {acceptedHistory.length} pagamento(s) confirmado(s) ·{' '}
+                          {new Date(
+                            `${latestAccepted?.occurrence.expectedDate}T12:00:00`,
+                          ).toLocaleDateString('pt-BR')}
+                          {' · '}
+                          Pago por{' '}
+                          {formatInstrumentName(
+                            acceptedMatch.transaction.account?.name ??
+                              acceptedMatch.transaction.creditCard?.name ??
+                              'destino não identificado',
+                          )}
+                        </p>
+                        {acceptedMatch.categoryConflict && (
+                          <p className="mt-2 text-xs text-warning-foreground">
+                            A categoria diverge da recorrência.{' '}
+                            <Link
+                              to="/transacoes"
+                              className="font-medium underline underline-offset-2"
+                            >
+                              Revisar transação
+                            </Link>
+                          </p>
+                        )}
+                      </div>
+                    )}
                     <p className="mt-1 text-xs text-muted-foreground">
                       Próxima:{' '}
                       {new Date(`${item.nextDate}T12:00:00`).toLocaleDateString(
@@ -948,11 +1247,12 @@ function RecurrencesSection({
                   <div className="flex flex-wrap items-center gap-2">
                     <strong
                       className={
-                        item.amountCents >= 0
+                        item.direction === 'income'
                           ? 'mr-2 tabular-nums text-success'
                           : 'mr-2 tabular-nums text-destructive'
                       }
                     >
+                      {item.direction === 'expense' ? '−' : '+'}
                       {formatCurrency(item.amountCents, item.currency)}
                     </strong>
                     <Button
@@ -962,6 +1262,18 @@ function RecurrencesSection({
                     >
                       <Pencil data-icon="inline-start" /> Editar
                     </Button>
+                    {item.active &&
+                      occurrence?.status === 'expected' &&
+                      !suggestedMatch && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={pending}
+                          onClick={() => skipOccurrence(occurrence.id)}
+                        >
+                          Ignorar ocorrência
+                        </Button>
+                      )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -1152,6 +1464,20 @@ function RecurrenceDialog({
     : recurrence?.creditCardId
       ? `card:${recurrence.creditCardId}`
       : ''
+  const recurrenceGroup = data.recurrenceGroups.find(
+    (group) => group.id === recurrence?.groupId,
+  )
+  const [direction, setDirection] = useState<'income' | 'expense'>(
+    recurrence?.direction ?? 'expense',
+  )
+  const [destinationMode, setDestinationMode] = useState<'automatic' | 'fixed'>(
+    recurrence?.destinationMode ?? 'automatic',
+  )
+  const categories = data.categories.filter((category) =>
+    direction === 'income'
+      ? category.bucket === 'income'
+      : category.bucket === 'essential' || category.bucket === 'lifestyle',
+  )
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -1176,6 +1502,65 @@ function RecurrenceDialog({
             </Field>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field>
+                <FieldLabel>Grupo</FieldLabel>
+                <Input
+                  name="groupName"
+                  list="recurrence-group-options"
+                  defaultValue={recurrenceGroup?.name}
+                  placeholder="Ex.: Academia"
+                />
+                <datalist id="recurrence-group-options">
+                  {data.recurrenceGroups.map((group) => (
+                    <option key={group.id} value={group.name} />
+                  ))}
+                </datalist>
+              </Field>
+              <Field>
+                <FieldLabel>Pessoa ou identificação</FieldLabel>
+                <Input
+                  name="participantLabel"
+                  defaultValue={recurrence?.participantLabel ?? ''}
+                  placeholder="Ex.: Donald, esposa ou família"
+                />
+              </Field>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field>
+                <FieldLabel>Tipo</FieldLabel>
+                <NativeSelect
+                  name="direction"
+                  className="w-full"
+                  value={direction}
+                  onChange={(event) =>
+                    setDirection(event.target.value as 'income' | 'expense')
+                  }
+                >
+                  <NativeSelectOption value="expense">
+                    Despesa
+                  </NativeSelectOption>
+                  <NativeSelectOption value="income">
+                    Receita
+                  </NativeSelectOption>
+                </NativeSelect>
+              </Field>
+              <Field>
+                <FieldLabel>Comportamento do valor</FieldLabel>
+                <NativeSelect
+                  name="amountMode"
+                  className="w-full"
+                  defaultValue={recurrence?.amountMode ?? 'fixed'}
+                >
+                  <NativeSelectOption value="fixed">
+                    Valor fixo
+                  </NativeSelectOption>
+                  <NativeSelectOption value="variable">
+                    Valor variável
+                  </NativeSelectOption>
+                </NativeSelect>
+              </Field>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field>
                 <FieldLabel>Valor</FieldLabel>
                 <Input
                   name="amount"
@@ -1187,7 +1572,8 @@ function RecurrenceDialog({
                         )
                       : ''
                   }
-                  placeholder="Use - para despesas"
+                  placeholder="0,00"
+                  min="0"
                   required
                 />
               </Field>
@@ -1205,42 +1591,77 @@ function RecurrenceDialog({
                 </NativeSelect>
               </Field>
             </div>
-            <Field>
-              <FieldLabel>Conta ou cartão</FieldLabel>
-              <NativeSelect
-                name="destination"
-                className="w-full"
-                defaultValue={destination}
-                required
-              >
-                <NativeSelectOption value="">Selecione</NativeSelectOption>
-                {data.accounts.map((account) => (
-                  <NativeSelectOption
-                    key={account.id}
-                    value={`account:${account.id}`}
-                  >
-                    Conta · {formatInstrumentName(account.name)}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field>
+                <FieldLabel>Identificação do destino</FieldLabel>
+                <NativeSelect
+                  name="destinationMode"
+                  className="w-full"
+                  value={destinationMode}
+                  onChange={(event) =>
+                    setDestinationMode(
+                      event.target.value as 'automatic' | 'fixed',
+                    )
+                  }
+                >
+                  <NativeSelectOption value="automatic">
+                    Automática pelo histórico
                   </NativeSelectOption>
-                ))}
-                {data.cards.map((card) => (
-                  <NativeSelectOption key={card.id} value={`card:${card.id}`}>
-                    Cartão · {formatInstrumentName(card.name)}
+                  <NativeSelectOption value="fixed">
+                    Conta fixa
                   </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </Field>
+                </NativeSelect>
+              </Field>
+              <Field>
+                <FieldLabel>Moeda</FieldLabel>
+                <NativeSelect
+                  name="currency"
+                  className="w-full"
+                  defaultValue={recurrence?.currency ?? 'BRL'}
+                  disabled={destinationMode === 'fixed'}
+                >
+                  <NativeSelectOption value="BRL">BRL</NativeSelectOption>
+                  <NativeSelectOption value="USD">USD</NativeSelectOption>
+                  <NativeSelectOption value="BTC">BTC</NativeSelectOption>
+                </NativeSelect>
+              </Field>
+            </div>
+            {destinationMode === 'fixed' && (
+              <Field>
+                <FieldLabel>Conta ou cartão</FieldLabel>
+                <NativeSelect
+                  name="destination"
+                  className="w-full"
+                  defaultValue={destination}
+                  required
+                >
+                  <NativeSelectOption value="">Selecione</NativeSelectOption>
+                  {data.accounts.map((account) => (
+                    <NativeSelectOption
+                      key={account.id}
+                      value={`account:${account.id}`}
+                    >
+                      Conta · {formatInstrumentName(account.name)}
+                    </NativeSelectOption>
+                  ))}
+                  {data.cards.map((card) => (
+                    <NativeSelectOption key={card.id} value={`card:${card.id}`}>
+                      Cartão · {formatInstrumentName(card.name)}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </Field>
+            )}
             <div className="grid gap-3 sm:grid-cols-2">
               <Field>
                 <FieldLabel>Categoria</FieldLabel>
                 <NativeSelect
                   name="categoryId"
                   className="w-full"
-                  defaultValue={recurrence?.categoryId ?? ''}
+                  defaultValue={recurrence?.categoryId ?? categories[0]?.id}
+                  required
                 >
-                  <NativeSelectOption value="">
-                    Sem categoria
-                  </NativeSelectOption>
-                  {data.categories.map((category) => (
+                  {categories.map((category) => (
                     <NativeSelectOption key={category.id} value={category.id}>
                       {category.name}
                     </NativeSelectOption>

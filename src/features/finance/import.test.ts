@@ -5,7 +5,7 @@ import {
   sameStatementValues,
 } from '#/domain/canonicalization'
 import {
-  isStaleIdenticalFileConflict,
+  shouldRetryIdenticalFileImport,
   resolveIdenticalFileUsage,
   shouldReviewStagedBatch,
 } from './import.server'
@@ -250,14 +250,25 @@ describe('reuso do arquivo original', () => {
     })
   })
 
-  it('identifica a revisão presa pelo falso conflito antigo', () => {
+  it('permite reprocessar uma revisão divergente no mesmo destino', () => {
     expect(
-      isStaleIdenticalFileConflict(
+      shouldRetryIdenticalFileImport(
         {
           status: 'review',
           validationStatus: 'divergent',
           validationMessage:
             'O mesmo arquivo já foi associado a outro destino. O lote foi bloqueado.',
+        },
+        false,
+      ),
+    ).toBe(true)
+    expect(
+      shouldRetryIdenticalFileImport(
+        {
+          status: 'review',
+          validationStatus: 'divergent',
+          validationMessage:
+            'A soma das compras e créditos não corresponde ao total da fatura.',
         },
         false,
       ),

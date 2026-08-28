@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useServerFn } from '@tanstack/react-start'
-import { CalendarCheck } from 'lucide-react'
+import { CalendarCheck, RefreshCw, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { Alert, AlertDescription, AlertTitle } from '#/components/ui/alert'
 import { Button } from '#/components/ui/button'
 import {
   Dialog,
@@ -22,7 +23,6 @@ import {
   FieldLabel,
 } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
-import { NativeSelect } from '#/components/ui/native-select'
 import { currencyFractionDigits, toCents } from '#/domain/finance'
 import { createManualBalanceCheckpointFn } from '#/features/finance/finance.functions'
 import { financeQueryKeys } from '#/features/finance/queries'
@@ -45,7 +45,17 @@ export function BalanceCheckpointDialog({
   const mutation = useMutation({
     mutationFn: createCheckpoint,
     onSuccess: (result) => {
-      toast.success(result.message)
+      if (targetType === 'account') {
+        if (result.differenceCents) {
+          toast.warning('Saldo atualizado. Há uma diferença no extrato.')
+        } else if (result.reviewState === 'verified') {
+          toast.success('Saldo atualizado e extrato conferido.')
+        } else {
+          toast.success('Saldo atualizado.')
+        }
+      } else {
+        toast.success(result.message)
+      }
       setOpen(false)
       setReplaceExisting(false)
       queryClient.invalidateQueries({ queryKey: financeQueryKeys.all })
@@ -76,11 +86,11 @@ export function BalanceCheckpointDialog({
         asOf: String(form.get('asOf')),
         periodStart:
           targetType === 'card' ? String(form.get('periodStart')) : undefined,
-        balanceType:
+        balanceType: targetType === 'card' ? 'card_statement' : 'posted',
+        note:
           targetType === 'card'
-            ? 'card_statement'
-            : (String(form.get('balanceType')) as 'posted' | 'available'),
-        note: String(form.get('note') || '') || undefined,
+            ? String(form.get('note') || '') || undefined
+            : undefined,
         replaceExisting,
       },
     })
@@ -97,26 +107,31 @@ export function BalanceCheckpointDialog({
       <DialogTrigger
         render={<Button type="button" variant="outline" size="sm" />}
       >
-        <CalendarCheck data-icon="inline-start" />
-        {targetType === 'account' ? 'Confirmar saldo' : 'Confirmar fatura'}
+        {targetType === 'account' ? (
+          <RefreshCw data-icon="inline-start" />
+        ) : (
+          <CalendarCheck data-icon="inline-start" />
+        )}
+        {targetType === 'account' ? 'Atualizar saldo' : 'Confirmar fatura'}
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <form onSubmit={submit} className="grid gap-4">
           <DialogHeader>
             <DialogTitle>
               {targetType === 'account'
-                ? 'Confirmar saldo datado'
+                ? 'Atualizar saldo'
                 : 'Confirmar fatura fechada'}
             </DialogTitle>
             <DialogDescription>
-              Informe exatamente o valor exibido em {targetName}. O sistema
-              compara com as movimentações e nunca cria ajuste automático.
+              {targetType === 'account'
+                ? `Informe o saldo exibido em ${targetName} e a data desse valor. O app confere os extratos disponíveis automaticamente.`
+                : `Informe exatamente o total exibido em ${targetName}. O app compara esse valor com os lançamentos da fatura.`}
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor={`checkpoint-balance-${targetId}`}>
-                {targetType === 'account' ? 'Saldo' : 'Total da fatura'}
+                {targetType === 'account' ? 'Saldo atual' : 'Total da fatura'}
               </FieldLabel>
               <Input
                 id={`checkpoint-balance-${targetId}`}
@@ -162,45 +177,30 @@ export function BalanceCheckpointDialog({
               <FieldDescription>
                 {targetType === 'card'
                   ? 'Use a data de fechamento mostrada na fatura.'
-                  : 'Use a data mostrada pelo banco junto ao saldo.'}
+                  : 'Use a data à qual o saldo se refere.'}
               </FieldDescription>
             </Field>
-            {targetType === 'account' ? (
+            {targetType === 'card' ? (
               <Field>
-                <FieldLabel htmlFor={`checkpoint-type-${targetId}`}>
-                  Tipo de saldo
+                <FieldLabel htmlFor={`checkpoint-note-${targetId}`}>
+                  Observação opcional
                 </FieldLabel>
-                <NativeSelect
-                  id={`checkpoint-type-${targetId}`}
-                  name="balanceType"
-                  className="w-full"
-                  defaultValue="posted"
-                >
-                  <option value="posted">Saldo contabilizado</option>
-                  <option value="available">Saldo disponível</option>
-                </NativeSelect>
-                <FieldDescription>
-                  O saldo disponível é guardado como referência, mas não valida
-                  o livro contábil.
-                </FieldDescription>
+                <Input
+                  id={`checkpoint-note-${targetId}`}
+                  name="note"
+                  maxLength={200}
+                />
               </Field>
             ) : null}
-            <Field>
-              <FieldLabel htmlFor={`checkpoint-note-${targetId}`}>
-                Observação opcional
-              </FieldLabel>
-              <Input
-                id={`checkpoint-note-${targetId}`}
-                name="note"
-                maxLength={200}
-              />
-            </Field>
           </FieldGroup>
           {replaceExisting ? (
-            <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-              Já existe outro valor nesta data. Ao substituir, esse ponto e as
-              conferências posteriores serão invalidados no histórico.
-            </p>
+            <Alert variant="destructive">
+              <TriangleAlert />
+              <AlertTitle>Já existe um saldo nessa data</AlertTitle>
+              <AlertDescription>
+                Ao substituir, o app recalculará as conferências posteriores.
+              </AlertDescription>
+            </Alert>
           ) : null}
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="outline" />}>
@@ -212,10 +212,14 @@ export function BalanceCheckpointDialog({
               disabled={mutation.isPending}
             >
               {mutation.isPending
-                ? 'Conferindo…'
-                : replaceExisting
-                  ? 'Substituir e conferir'
-                  : 'Registrar e conferir'}
+                ? 'Salvando…'
+                : targetType === 'account'
+                  ? replaceExisting
+                    ? 'Substituir saldo'
+                    : 'Salvar saldo'
+                  : replaceExisting
+                    ? 'Substituir e conferir'
+                    : 'Registrar e conferir'}
             </Button>
           </DialogFooter>
         </form>

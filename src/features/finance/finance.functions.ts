@@ -10,6 +10,7 @@ import {
   closeCurrentBudget,
   createAccount,
   createManualBalanceCheckpoint,
+  createManualTransaction,
   createCreditCard,
   createInstallment,
   linkStatementObservation,
@@ -38,6 +39,13 @@ import {
   stageImportBatch,
 } from './import.server'
 import { getImportReviewSnapshot } from './import-review-read.server'
+import {
+  confirmRecurrenceMatch,
+  refreshRecurrenceSuggestions,
+  rejectRecurrenceMatch,
+  skipRecurrenceOccurrence,
+  unlinkRecurrenceMatch,
+} from './recurrence-refresh.server'
 
 const isoDateSchema = z
   .string()
@@ -125,6 +133,22 @@ export const createManualBalanceCheckpointFn = createServerFn({
       }),
   )
   .handler(({ data }) => createManualBalanceCheckpoint(data))
+
+export const createManualTransactionFn = createServerFn({ method: 'POST' })
+  .validator(
+    z.object({
+      targetType: z.enum(['account', 'card']),
+      targetId: z.string().min(1),
+      postedAt: isoDateSchema,
+      description: z.string().trim().min(2).max(200),
+      direction: z.enum(['inflow', 'outflow']),
+      amountCents: z.number().int().positive(),
+      categoryId: z.string().min(1).optional(),
+      counterpartyAccountId: z.string().min(1).optional(),
+      notes: z.string().trim().max(200).optional(),
+    }),
+  )
+  .handler(({ data }) => createManualTransaction(data))
 
 export const resolveTransactionCorrectionFn = createServerFn({ method: 'POST' })
   .validator(
@@ -259,16 +283,42 @@ export const setReconciliationStatusFn = createServerFn({ method: 'POST' })
   )
   .handler(({ data }) => setReconciliationStatus(data))
 
-const recurrenceInputSchema = z.object({
-  name: z.string().trim().min(2).max(100),
-  accountId: z.string().optional(),
-  creditCardId: z.string().optional(),
-  categoryId: z.string().optional(),
-  amountCents: z.number().int(),
-  currency: currencySchema,
-  frequency: z.enum(['monthly', 'yearly']),
-  nextDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-})
+const recurrenceInputSchema = z
+  .object({
+    name: z.string().trim().min(2).max(100),
+    groupName: z.string().trim().max(80).optional(),
+    participantLabel: z.string().trim().max(80).optional(),
+    accountId: z.string().optional(),
+    creditCardId: z.string().optional(),
+    categoryId: z.string().min(1),
+    amountCents: z.number().int().positive(),
+    currency: currencySchema,
+    direction: z.enum(['income', 'expense']),
+    amountMode: z.enum(['fixed', 'variable']),
+    destinationMode: z.enum(['automatic', 'fixed']),
+    frequency: z.enum(['monthly', 'yearly']),
+    nextDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  })
+  .superRefine((value, context) => {
+    if (value.accountId && value.creditCardId) {
+      context.addIssue({
+        code: 'custom',
+        path: ['accountId'],
+        message: 'Informe somente uma conta ou um cartão.',
+      })
+    }
+    if (
+      value.destinationMode === 'fixed' &&
+      Number(Boolean(value.accountId)) + Number(Boolean(value.creditCardId)) !==
+        1
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['accountId'],
+        message: 'Escolha uma conta ou cartão para o destino fixo.',
+      })
+    }
+  })
 
 export const createRecurrenceFn = createServerFn({ method: 'POST' })
   .validator(recurrenceInputSchema)
@@ -290,6 +340,26 @@ export const setRecurrenceActiveFn = createServerFn({ method: 'POST' })
 export const deleteRecurrenceFn = createServerFn({ method: 'POST' })
   .validator(z.object({ id: z.string().min(1) }))
   .handler(({ data }) => deleteRecurrence(data.id))
+
+export const refreshRecurrencesFn = createServerFn({ method: 'POST' }).handler(
+  () => refreshRecurrenceSuggestions(),
+)
+
+export const confirmRecurrenceMatchFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ matchId: z.string().min(1) }))
+  .handler(({ data }) => confirmRecurrenceMatch(data.matchId))
+
+export const rejectRecurrenceMatchFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ matchId: z.string().min(1) }))
+  .handler(({ data }) => rejectRecurrenceMatch(data.matchId))
+
+export const unlinkRecurrenceMatchFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ matchId: z.string().min(1) }))
+  .handler(({ data }) => unlinkRecurrenceMatch(data.matchId))
+
+export const skipRecurrenceOccurrenceFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ occurrenceId: z.string().min(1) }))
+  .handler(({ data }) => skipRecurrenceOccurrence(data.occurrenceId))
 
 export const createInstallmentFn = createServerFn({ method: 'POST' })
   .validator(

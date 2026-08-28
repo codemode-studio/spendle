@@ -62,6 +62,30 @@ describe('reconciliação', () => {
     })
   })
 
+  it('não auto-confirma como transferência uma relação aprendida entre PJ e PF', () => {
+    const suggestions = buildReconciliationSuggestions([
+      {
+        ...base,
+        accountId: 'inter-pj',
+        counterpartyAccountId: 'inter-pf',
+        scopeType: 'company_br',
+      },
+      {
+        ...base,
+        id: 'two',
+        amountCents: 100_000,
+        accountId: 'inter-pf',
+        scopeType: 'person',
+      },
+    ])
+
+    expect(suggestions[0]).toMatchObject({
+      type: 'profit_distribution',
+      confidence: 97,
+      autoConfirm: false,
+    })
+  })
+
   it('reconhece Pix da PJ para o próprio titular antes da entrada PF existir', () => {
     expect(
       detectOwnedTransferCategory({

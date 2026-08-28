@@ -106,7 +106,7 @@ export function resolveIdenticalFileUsage(
   }
 }
 
-export function isStaleIdenticalFileConflict(
+export function shouldRetryIdenticalFileImport(
   item: Pick<
     typeof schema.imports.$inferSelect,
     'status' | 'validationStatus' | 'validationMessage'
@@ -116,8 +116,7 @@ export function isStaleIdenticalFileConflict(
   return (
     !usedByAnotherDestination &&
     item.status === 'review' &&
-    item.validationStatus === 'divergent' &&
-    item.validationMessage === IDENTICAL_FILE_CONFLICT_MESSAGE
+    item.validationStatus === 'divergent'
   )
 }
 
@@ -253,7 +252,7 @@ export async function stageImport(input: {
       )
       if (
         !reusableImport ||
-        !isStaleIdenticalFileConflict(
+        !shouldRetryIdenticalFileImport(
           reusableImport,
           usage.usedByAnotherDestination,
         )

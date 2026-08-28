@@ -8,6 +8,7 @@ import {
 import type { TextItem } from '@firecrawl/pdf-inspector'
 
 import { parseCurrency, toMinorUnits } from '#/domain/currency'
+import { selectPdfStatementParser } from './pdf-parsers/registry.server'
 
 export interface SourceBounds {
   page: number
@@ -18,6 +19,7 @@ export interface SourceBounds {
 }
 
 export interface PdfParsedTransaction {
+  externalId?: string
   postedAt: string
   description: string
   amountCents: number
@@ -62,6 +64,7 @@ export interface PdfDocumentIdentity {
 
 export interface PdfInspectionResult {
   transactions: PdfParsedTransaction[]
+  sourceTransactionCount: number | null
   controls: PdfControlData
   identity: PdfDocumentIdentity
   markdown: string
@@ -77,6 +80,8 @@ export interface PdfInspectionResult {
     pagesWithColumns: number[]
   }
   diagnostics: {
+    layoutId: string | null
+    layoutVersion: string | null
     rawTextLength: number
     positionedTextLength: number
     markdownTextLength: number
@@ -93,7 +98,6 @@ interface PositionedLine {
 
 const amountPattern =
   /(?:(?:R\$|US\$|BTC|₿)\s*)?[-−]?\(?(?:\d{1,3}(?:\.\d{3})*|\d+)[,.]\d{2,8}\)?(?:\s*(?:C|D|CR|DB))?/gi
-const datePattern = /\b(\d{4}-\d{2}-\d{2}|\d{2}[/.-]\d{2}(?:[/.-]\d{2,4})?)\b/
 
 function normalizeWhitespace(value: string) {
   return value.replace(/\s+/g, ' ').trim()
@@ -165,10 +169,11 @@ export function groupPositionedTextIntoLines(items: TextItem[]) {
 
 export function parseLocalizedMoney(value: string, currency = 'BRL') {
   const normalized = value.toUpperCase().replace(/\s+/g, '')
+  const numericToken = normalized.replace(/^(?:R\$|US\$|BTC|₿)/, '')
   const debit =
-    normalized.startsWith('-') ||
-    normalized.startsWith('−') ||
-    normalized.startsWith('(') ||
+    numericToken.startsWith('-') ||
+    numericToken.startsWith('−') ||
+    numericToken.startsWith('(') ||
     /(?:D|DB)$/.test(normalized)
   const credit = /(?:C|CR)$/.test(normalized)
   let cents: number
@@ -184,32 +189,6 @@ export function parseLocalizedMoney(value: string, currency = 'BRL') {
     cents: debit ? -Math.abs(cents) : Math.abs(cents),
     explicit: debit || credit,
   }
-}
-
-function toIsoDate(
-  value: string,
-  periodStart: string | null,
-  periodEnd: string | null,
-) {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
-  const [day, month, rawYear] = value.split(/[/.-]/)
-  if (rawYear) {
-    const year = rawYear.length === 2 ? `20${rawYear}` : rawYear
-    return `${year}-${month}-${day}`
-  }
-
-  const referenceYear = Number((periodEnd ?? periodStart)?.slice(0, 4))
-  const years = Number.isFinite(referenceYear)
-    ? [referenceYear - 1, referenceYear, referenceYear + 1]
-    : [new Date().getUTCFullYear()]
-  const candidates = years.map((year) => `${year}-${month}-${day}`)
-  if (periodStart && periodEnd) {
-    const inside = candidates.find(
-      (candidate) => candidate >= periodStart && candidate <= periodEnd,
-    )
-    if (inside) return inside
-  }
-  return candidates[Math.min(1, candidates.length - 1)]
 }
 
 function extractFullDates(text: string) {
@@ -237,9 +216,13 @@ function extractPeriod(text: string) {
   }
 }
 
-function amountFromControlLine(text: string, currency: string) {
+function amountFromControlLine(
+  text: string,
+  currency: string,
+  position: 'first' | 'last' = 'last',
+) {
   const matches = [...text.matchAll(amountPattern)]
-  const parsed = matches.at(-1)?.[0]
+  const parsed = (position === 'first' ? matches.at(0) : matches.at(-1))?.[0]
   return parsed ? (parseLocalizedMoney(parsed, currency)?.cents ?? null) : null
 }
 
@@ -247,107 +230,120 @@ function findControlLine(lines: PositionedLine[], pattern: RegExp) {
   return lines.find((line) => pattern.test(line.text))?.text ?? null
 }
 
-function detectIdentity(
+function mostFrequentLastFour(matches: IterableIterator<RegExpMatchArray>) {
+  const counts = new Map<string, number>()
+  for (const match of matches) {
+    const value = match[1]
+    counts.set(value, (counts.get(value) ?? 0) + 1)
+  }
+  return [...counts.entries()].sort(
+    ([leftValue, leftCount], [rightValue, rightCount]) =>
+      rightCount - leftCount || leftValue.localeCompare(rightValue),
+  )[0]?.[0]
+}
+
+export function detectIdentity(
   text: string,
   defaultCurrency = 'BRL',
+  confirmedProfile?: Pick<PdfDocumentIdentity, 'institution' | 'kind'>,
 ): PdfDocumentIdentity {
   const normalized = text.toLocaleLowerCase('pt-BR')
-  const institution = normalized.includes('mercado pago')
-    ? 'Mercado Pago'
-    : /banco inter|inter bank|inter black/.test(normalized)
-      ? 'Inter'
-      : /nubank|nu pagamentos|ultravioleta/.test(normalized)
-        ? 'Nubank'
-        : /btg pactual/.test(normalized)
-          ? 'BTG'
-          : null
+  const institutionScores = [
+    {
+      institution: 'Mercado Pago',
+      score:
+        (/mercado pago institui[cç][aã]o de pagamento/.test(normalized)
+          ? 5
+          : 0) +
+        (/mercadopago\.com\.br/.test(normalized) ? 5 : 0) +
+        (/detalhe dos movimentos/.test(normalized) &&
+        /id da opera[cç][aã]o/.test(normalized)
+          ? 3
+          : 0) +
+        (/mercado pago/.test(normalized) ? 1 : 0),
+    },
+    {
+      institution: 'Nubank',
+      score:
+        (/nu financeira s\.a\.|nu pagamentos s\.a\./.test(normalized) ? 5 : 0) +
+        (/nubank\.com\.br/.test(normalized) ? 5 : 0) +
+        (/\bnubank\b|ultravioleta/.test(normalized) ? 1 : 0),
+    },
+    {
+      institution: 'Inter',
+      score:
+        (/banco inter s\.a\.|inter bank/.test(normalized) ? 5 : 0) +
+        (/bancointer\.com\.br|inter\.co/.test(normalized) ? 5 : 0) +
+        (/\bbanco inter\b|inter black/.test(normalized) ? 1 : 0),
+    },
+    {
+      institution: 'BTG',
+      score:
+        (/banco btg pactual s\.a\./.test(normalized) ? 5 : 0) +
+        (/btgpactual\.com/.test(normalized) ? 5 : 0) +
+        (/\bbtg pactual\b/.test(normalized) ? 1 : 0),
+    },
+  ].sort((left, right) => right.score - left.score)
+  const institution =
+    confirmedProfile?.institution ??
+    (institutionScores[0].score >= 3 &&
+    institutionScores[0].score > institutionScores[1].score
+      ? institutionScores[0].institution
+      : null)
+  const cardScore = [
+    /total (?:da )?fatura/i,
+    /valor (?:total|da fatura)/i,
+    /limite (?:total|dispon[ií]vel)/i,
+    /melhor dia/i,
+    /data de vencimento/i,
+  ].filter((pattern) => pattern.test(text)).length
+  const accountScore = [
+    /extrato de conta/i,
+    /saldo (?:anterior|inicial|final|dispon[ií]vel)/i,
+    /total de entradas/i,
+    /total de sa[ií]das/i,
+    /movimenta[cç][oõ]es/i,
+  ].filter((pattern) => pattern.test(text)).length
   const kind =
-    /fatura|vencimento|limite (?:total|dispon[ií]vel)|melhor dia/i.test(text)
+    confirmedProfile?.kind ??
+    (cardScore >= 2 && cardScore > accountScore
       ? 'card_statement'
-      : /extrato|saldo (?:anterior|inicial|final|dispon[ií]vel)/i.test(text)
+      : accountScore >= 1
         ? 'bank_statement'
-        : 'unknown'
-  const lastFour = text.match(
-    /(?:conta|cart[aã]o|final|terminado em|n[úu]mero)[^\d\n]{0,18}(?:\*{0,8}|x{0,8})(\d{4})\b/i,
-  )?.[1]
+        : 'unknown')
+  const rawIdentifier =
+    institution === 'Nubank' && kind === 'card_statement'
+      ? mostFrequentLastFour(text.matchAll(/[•*]{4}\s*(\d{4})\b/g))
+      : institution === 'Nubank'
+        ? text.match(/(?:cpf\s+)?ag[eê]ncia\s+conta\s+(\d(?:[\d.-]*\d)?)/i)?.[1]
+        : institution === 'Inter' && kind === 'card_statement'
+          ? mostFrequentLastFour(text.matchAll(/\b\d{4}\*{4}(\d{4})\b/g))
+          : institution === 'Mercado Pago'
+            ? text.match(
+                /cpf\/cnpj:\s*\d+\s+\d+\s+(\d+)\s+ag[eê]ncia:\s*conta:/i,
+              )?.[1]
+            : text.match(
+                /(?:conta|cart[aã]o|final|terminado em|n[úu]mero)[^\d\n]{0,18}(?:\*{0,8}|x{0,8})(\d{4})\b/i,
+              )?.[1]
+  const identifierDigits = rawIdentifier?.replace(/\D/g, '') ?? ''
   return {
     kind,
     institution,
-    lastFour: lastFour ?? null,
-    currency: /\bBTC\b|₿|bitcoin/i.test(text)
-      ? 'BTC'
-      : /\bUSD\b|US\$|d[oó]lar/i.test(text)
-        ? 'USD'
-        : parseCurrency(defaultCurrency),
+    lastFour: identifierDigits.length >= 4 ? identifierDigits.slice(-4) : null,
+    currency: (() => {
+      const occurrences = [
+        { currency: 'BRL', count: text.match(/R\$/g)?.length ?? 0 },
+        { currency: 'USD', count: text.match(/US\$|\bUSD\b/g)?.length ?? 0 },
+        {
+          currency: 'BTC',
+          count: text.match(/(?:\bBTC\b|₿)\s*[-−]?[\d.,]+/gi)?.length ?? 0,
+        },
+      ].sort((left, right) => right.count - left.count)
+      return occurrences[0].count > 0
+        ? occurrences[0].currency
+        : parseCurrency(defaultCurrency)
+    })(),
   }
-}
-
-function inferAmountSign(
-  parsed: { cents: number; explicit: boolean },
-  description: string,
-  targetType: 'account' | 'card',
-) {
-  if (parsed.explicit) return parsed.cents
-  const normalized = description.toLocaleLowerCase('pt-BR')
-  if (
-    /estorno|reembolso|cr[eé]dito|recebido|dep[oó]sito|rendimento|resgate/.test(
-      normalized,
-    )
-  ) {
-    return Math.abs(parsed.cents)
-  }
-  if (targetType === 'card') return -Math.abs(parsed.cents)
-  if (
-    /compra|pagamento|pix enviado|transfer[eê]ncia enviada|saque|tarifa|d[eé]bito/.test(
-      normalized,
-    )
-  ) {
-    return -Math.abs(parsed.cents)
-  }
-  return null
-}
-
-export function parsePositionedTransactions(input: {
-  lines: PositionedLine[]
-  targetType: 'account' | 'card'
-  currency: string
-  periodStart: string | null
-  periodEnd: string | null
-}) {
-  const transactions: PdfParsedTransaction[] = []
-  for (const line of input.lines) {
-    const dateMatch = line.text.match(datePattern)
-    if (!dateMatch || dateMatch.index === undefined) continue
-    const amountMatches = [...line.text.matchAll(amountPattern)]
-    const amountMatch = amountMatches.at(-1)
-    if (!amountMatch) continue
-    if (amountMatch.index <= dateMatch.index + dateMatch[0].length) continue
-    const parsedAmount = parseLocalizedMoney(amountMatch[0], input.currency)
-    if (!parsedAmount) continue
-    const description = normalizeWhitespace(
-      line.text.slice(dateMatch.index + dateMatch[0].length, amountMatch.index),
-    ).replace(/^[|:;–—-]+|[|:;–—-]+$/g, '')
-    if (
-      !description ||
-      /saldo (?:anterior|inicial|final)|total da fatura/i.test(description)
-    ) {
-      continue
-    }
-    const amountCents = inferAmountSign(
-      parsedAmount,
-      description,
-      input.targetType,
-    )
-    if (amountCents === null) continue
-    transactions.push({
-      postedAt: toIsoDate(dateMatch[1], input.periodStart, input.periodEnd),
-      description,
-      amountCents,
-      currency: input.currency,
-      raw: { line: line.text, bounds: line.bounds },
-    })
-  }
-  return transactions
 }
 
 export async function inspectPdfStatement(
@@ -367,8 +363,40 @@ export async function inspectPdfStatement(
     .join('\n\n<!-- page -->\n\n')
   const lines = groupPositionedTextIntoLines(positionedItems)
   const joinedLines = lines.map((line) => line.text).join('\n')
-  const identity = detectIdentity(`${rawText}\n${joinedLines}`, defaultCurrency)
-  const period = extractPeriod(`${rawText}\n${markdown}`)
+  const documentText = `${rawText}\n${joinedLines}`
+  const candidateIdentity = detectIdentity(documentText, defaultCurrency)
+  const statementParser = selectPdfStatementParser({
+    text: documentText,
+    lines,
+    currency: candidateIdentity.currency,
+    institution: null,
+    kind: 'unknown',
+  })
+  const identity = statementParser
+    ? detectIdentity(documentText, defaultCurrency, {
+        institution: statementParser.institution,
+        kind: statementParser.kind,
+      })
+    : {
+        kind: 'unknown' as const,
+        institution: null,
+        lastFour: null,
+        currency: candidateIdentity.currency,
+      }
+  const parserResult = statementParser?.parse({
+    text: documentText,
+    lines,
+    currency: identity.currency,
+    institution: identity.institution,
+    kind: identity.kind,
+  })
+  const layoutId = statementParser?.id ?? null
+  const period = parserResult
+    ? {
+        periodStart: parserResult.controls.periodStart,
+        periodEnd: parserResult.controls.periodEnd,
+      }
+    : extractPeriod(`${rawText}\n${markdown}`)
 
   const openingLine = findControlLine(
     lines,
@@ -393,19 +421,13 @@ export async function inspectPdfStatement(
   const parsedClosingBalance = closingLine
     ? amountFromControlLine(closingLine, identity.currency)
     : null
-  const transactions = parsePositionedTransactions({
-    lines,
-    targetType,
-    currency: identity.currency,
-    periodStart: period.periodStart,
-    periodEnd: period.periodEnd,
-  })
+  const transactions = parserResult?.transactions ?? []
   const transactionDates = transactions
     .map((transaction) => transaction.postedAt)
     .sort()
   const periodStart = period.periodStart ?? transactionDates.at(0) ?? null
   const periodEnd = period.periodEnd ?? transactionDates.at(-1) ?? null
-  const balanceAsOf =
+  const fallbackBalanceAsOf =
     extractFullDates(closingLine ?? '').at(-1) ?? periodEnd ?? dueDate
 
   const rawTextLength = rawText.replace(/\s+/g, '').length
@@ -423,25 +445,32 @@ export async function inspectPdfStatement(
 
   return {
     transactions,
-    controls: {
-      openingBalanceCents: openingLine
-        ? amountFromControlLine(openingLine, identity.currency)
-        : null,
-      openingBalanceAt: openingLine
-        ? (extractFullDates(openingLine).at(-1) ?? periodStart)
-        : null,
-      closingBalanceCents:
-        parsedClosingBalance === null
-          ? null
-          : targetType === 'card'
-            ? Math.abs(parsedClosingBalance)
-            : parsedClosingBalance,
-      closingBalanceType,
-      balanceAsOf,
-      periodStart,
-      periodEnd,
-      dueDate,
-    },
+    sourceTransactionCount: parserResult?.sourceTransactionCount ?? null,
+    controls: parserResult
+      ? {
+          ...parserResult.controls,
+          periodStart,
+          periodEnd,
+        }
+      : {
+          openingBalanceCents: openingLine
+            ? amountFromControlLine(openingLine, identity.currency, 'first')
+            : null,
+          openingBalanceAt: openingLine
+            ? (extractFullDates(openingLine).at(-1) ?? periodStart)
+            : null,
+          closingBalanceCents:
+            parsedClosingBalance === null
+              ? null
+              : targetType === 'card'
+                ? Math.abs(parsedClosingBalance)
+                : parsedClosingBalance,
+          closingBalanceType,
+          balanceAsOf: fallbackBalanceAsOf,
+          periodStart,
+          periodEnd,
+          dueDate,
+        },
     identity,
     markdown,
     positionedItems,
@@ -456,6 +485,8 @@ export async function inspectPdfStatement(
       pagesWithColumns: pages.pagesWithColumns,
     },
     diagnostics: {
+      layoutId,
+      layoutVersion: statementParser?.version ?? null,
       rawTextLength,
       positionedTextLength,
       markdownTextLength,

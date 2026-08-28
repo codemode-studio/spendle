@@ -18,6 +18,8 @@ export interface CardInstallmentPlan {
   firstChargeDate: string
 }
 
+export type InstallmentCommitmentType = 'short_installment' | 'temporary_fixed'
+
 export interface CardStatementSummary {
   dueDate: string
   closingDate: string
@@ -94,6 +96,12 @@ export function parseInstallmentDescription(description: string) {
     totalInstallments,
     cleanDescription: cleanDescription || description,
   }
+}
+
+export function classifyInstallmentCommitment(
+  totalInstallments: number,
+): InstallmentCommitmentType {
+  return totalInstallments > 3 ? 'temporary_fixed' : 'short_installment'
 }
 
 export function projectRemainingInstallments(plan: CardInstallmentPlan) {

@@ -65,6 +65,18 @@ const bucketLabels = {
   reserve: 'Reserva',
 } as const
 
+const integrityLabels = {
+  uncategorized_confirmed: 'transações confirmadas sem categoria',
+  pending_transaction: 'transações pendentes',
+  missing_base_conversion: 'valores sem conversão para BRL',
+  missing_balance_conversion: 'saldos sem conversão para BRL',
+  review_import: 'importações em revisão',
+  suggested_reconciliation: 'conciliações para revisar',
+  overdue_recurrence: 'recorrências atrasadas',
+  recurrence_category_conflict: 'conflitos de categoria em recorrências',
+  unverified_balance: 'saldos sem verificação recente',
+} as const
+
 function getCurrentMonth() {
   return new Date().toISOString().slice(0, 7)
 }
@@ -193,9 +205,9 @@ function Dashboard() {
 
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <MetricCard
-          label="Patrimônio em BRL"
+          label="Patrimônio atual em BRL"
           value={formatCurrency(dashboard.netWorthCents)}
-          detail={`${data.accounts.length} conta${data.accounts.length === 1 ? '' : 's'} acompanhada${data.accounts.length === 1 ? '' : 's'}`}
+          detail="Contas familiares menos faturas em aberto"
           icon={Landmark}
           tone="positive"
         />
@@ -218,22 +230,30 @@ function Dashboard() {
           }
         />
         <Link
-          to="/importar"
-          search={{ view: 'review' }}
+          to="/transacoes"
           className="rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <MetricCard
             className="h-full transition-colors hover:bg-muted/40"
             label="Pendências"
-            value={String(
-              dashboard.reviewTransactionCount + dashboard.reconciliationCount,
-            )}
-            detail={`${dashboard.reviewTransactionCount} lançamentos em ${dashboard.reviewImportCount} lote${dashboard.reviewImportCount === 1 ? '' : 's'} · ${dashboard.reconciliationCount} conciliações`}
+            value={String(dashboard.integrity.totalCount)}
+            detail={`${dashboard.integrity.issues.length} tipo${dashboard.integrity.issues.length === 1 ? '' : 's'} de revisão`}
             icon={ReceiptText}
-            tone={dashboard.reviewTransactionCount ? 'warning' : 'default'}
+            tone={dashboard.integrity.partial ? 'warning' : 'default'}
           />
         </Link>
       </div>
+
+      {dashboard.integrity.partial && (
+        <Alert className="mt-4">
+          <AlertDescription>
+            <strong>Os números estão parciais.</strong>{' '}
+            {dashboard.integrity.issues
+              .map((issue) => `${issue.count} ${integrityLabels[issue.code]}`)
+              .join(' · ')}
+          </AlertDescription>
+        </Alert>
+      )}
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.8fr)_minmax(280px,1fr)]">
         <Panel
@@ -258,6 +278,7 @@ function Dashboard() {
             ).map((bucket) => {
               const target = dashboard.budgetTargets[bucket]
               const actual = dashboard.budgetActual[bucket]
+              const projected = dashboard.budgetProjected[bucket]
               const bps = dashboard.effectiveAllocation[bucket]
               return (
                 <div key={bucket}>
@@ -266,10 +287,17 @@ function Dashboard() {
                       {bucketLabels[bucket]} · {percentFromBps(bps)}
                     </strong>
                     <span className="text-xs text-muted-foreground tabular-nums">
-                      {formatCurrency(actual)} de {formatCurrency(target)}
+                      Realizado {formatCurrency(actual)} de{' '}
+                      {formatCurrency(target)}
                     </span>
                   </div>
                   <ProgressBar value={actual} max={target} />
+                  {projected > 0 && (
+                    <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+                      Ainda previsto nas recorrências:{' '}
+                      {formatCurrency(projected)}
+                    </p>
+                  )}
                 </div>
               )
             })}

@@ -18,6 +18,7 @@ import { toast } from 'sonner'
 
 import { EmptyState, PageHeader, Panel, StatusBadge } from '#/components/ui'
 import { CategorySelect } from '#/components/category-select'
+import { ManualTransactionDialog } from '#/components/manual-transaction-dialog'
 import { TransferAccountSelect } from '#/components/transfer-account-select'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
@@ -156,23 +157,31 @@ function TransactionsPage() {
       <PageHeader
         eyebrow="Conciliação"
         title="Transações"
-        description="Consulte lançamentos, categorias e conciliações."
+        description="Registre e consulte lançamentos, categorias e conciliações."
         actions={
-          uncategorizedCount > 0 ? (
-            <Button
-              onClick={() => aiCategorizationMutation.mutate({})}
-              disabled={aiCategorizationMutation.isPending}
-            >
-              {aiCategorizationMutation.isPending ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <Sparkles data-icon="inline-start" />
-              )}
-              {aiCategorizationMutation.isPending
-                ? 'Categorizando…'
-                : `Categorizar com IA (${uncategorizedCount})`}
-            </Button>
-          ) : undefined
+          <div className="flex flex-wrap gap-2">
+            <ManualTransactionDialog
+              accounts={data.accounts}
+              cards={data.cards}
+              categories={data.categories}
+            />
+            {uncategorizedCount > 0 ? (
+              <Button
+                variant="outline"
+                onClick={() => aiCategorizationMutation.mutate({})}
+                disabled={aiCategorizationMutation.isPending}
+              >
+                {aiCategorizationMutation.isPending ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <Sparkles data-icon="inline-start" />
+                )}
+                {aiCategorizationMutation.isPending
+                  ? 'Categorizando…'
+                  : `Categorizar com IA (${uncategorizedCount})`}
+              </Button>
+            ) : null}
+          </div>
         }
       />
       {!hasTransactions ? (
@@ -187,7 +196,7 @@ function TransactionsPage() {
             description={
               data.dashboard.reviewTransactionCount
                 ? 'Revise e consolide o lote importado para ver os lançamentos aqui.'
-                : 'Importe um extrato para começar.'
+                : 'Importe um extrato ou use Nova transação para registrar um lançamento manual.'
             }
             action={
               <Button

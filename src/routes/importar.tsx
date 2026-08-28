@@ -1345,7 +1345,7 @@ function getImportAuditGuidance(item: ImportItem) {
         'Revise as categorias e as transferências abaixo.',
         'Clique em Consolidar para incluir as transações.',
         item.accountId
-          ? 'Depois, use Confirmar saldo na página Contas para registrar um saldo bancário datado.'
+          ? 'Depois, use Atualizar saldo na página Contas para informar o valor exibido pelo banco.'
           : 'Quando a fatura fechar, use Confirmar fatura na página Cartões.',
       ],
     }

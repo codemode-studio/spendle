@@ -157,7 +157,7 @@ export async function recordManualBalanceCheckpoint(input: {
   })
   if (checkpointAtDate.status === 'conflict' && !input.replaceExisting) {
     throw new Error(
-      'Já existe outro saldo ativo deste tipo para a mesma data. Confirme a substituição para invalidar o ponto anterior e as conferências posteriores.',
+      'Já existe outro saldo para esta data. Confirme a substituição para salvar o novo valor.',
     )
   }
   if (checkpointAtDate.status === 'identical') {

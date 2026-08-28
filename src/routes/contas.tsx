@@ -37,6 +37,7 @@ import {
 } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
 import { NativeSelect } from '#/components/ui/native-select'
+import { Separator } from '#/components/ui/separator'
 import {
   currencyOptions,
   formatCurrency,
@@ -286,50 +287,59 @@ function AccountsPage() {
                           </StatusBadge>
                           <span>{account.currency}</span>
                         </div>
-                        <div className="mt-4 grid gap-2 border-t pt-4 text-xs text-muted-foreground">
+                        <Separator className="mt-4" />
+                        <div className="mt-4 grid gap-2 text-xs text-muted-foreground">
                           <div className="flex items-center justify-between gap-3">
-                            <span>Atualizada até</span>
-                            <StatusBadge
-                              tone={
-                                account.coverage.freshness.status === 'current'
-                                  ? 'success'
-                                  : account.coverage.freshness.status ===
-                                      'recommended'
-                                    ? 'warning'
-                                    : 'neutral'
-                              }
-                            >
-                              {account.coverage.latestCoverageEnd
-                                ? formatDate(account.coverage.latestCoverageEnd)
-                                : 'Sem cobertura'}
-                            </StatusBadge>
-                          </div>
-                          <div className="flex items-center justify-between gap-3">
-                            <span>Saldo conferido em</span>
+                            <span>
+                              {account.latestCheckpoint
+                                ? 'Saldo atualizado em'
+                                : 'Saldo'}
+                            </span>
                             <span className="font-medium text-foreground">
-                              {account.latestVerifiedCheckpoint
-                                ? formatDate(
-                                    account.latestVerifiedCheckpoint.asOf,
-                                  )
-                                : 'Ainda não'}
+                              {account.latestCheckpoint
+                                ? formatDate(account.latestCheckpoint.asOf)
+                                : 'Ainda não atualizado'}
                             </span>
                           </div>
-                          {account.unverifiedDays > 0 ? (
-                            <p>
-                              {account.unverifiedDays}{' '}
-                              {account.unverifiedDays === 1
-                                ? 'dia coberto ainda não foi conferido'
-                                : 'dias cobertos ainda não foram conferidos'}{' '}
-                              por dois saldos compatíveis.
-                            </p>
+                          {account.coverage.latestCoverageEnd ? (
+                            <div className="flex items-center justify-between gap-3">
+                              <span>Extratos importados até</span>
+                              <StatusBadge
+                                tone={
+                                  account.coverage.freshness.status ===
+                                  'current'
+                                    ? 'success'
+                                    : account.coverage.freshness.status ===
+                                        'recommended'
+                                      ? 'warning'
+                                      : 'neutral'
+                                }
+                              >
+                                {formatDate(account.coverage.latestCoverageEnd)}
+                              </StatusBadge>
+                            </div>
                           ) : null}
-                          {account.latestCheckpoint &&
-                          account.latestCheckpoint.reviewState ===
-                            'observed' ? (
-                            <p>
-                              Saldo registrado em{' '}
-                              {formatDate(account.latestCheckpoint.asOf)}; falta
-                              outro ponto compatível para reconciliar o período.
+                          {account.latestVerifiedCheckpoint ? (
+                            <div className="flex items-center justify-between gap-3">
+                              <span>Última conferência</span>
+                              <StatusBadge tone="success">
+                                Extrato conferido em{' '}
+                                {formatDate(
+                                  account.latestVerifiedCheckpoint.asOf,
+                                )}
+                              </StatusBadge>
+                            </div>
+                          ) : null}
+                          {account.latestCheckpoint?.differenceCents ? (
+                            <p className="text-warning">
+                              O saldo informado difere em{' '}
+                              {formatCurrency(
+                                Math.abs(
+                                  account.latestCheckpoint.differenceCents,
+                                ),
+                                account.currency,
+                              )}{' '}
+                              das movimentações registradas.
                             </p>
                           ) : null}
                           {account.coverage.gaps.length ? (

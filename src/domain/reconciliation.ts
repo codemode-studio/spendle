@@ -158,13 +158,20 @@ export function buildReconciliationSuggestions(
           transferDestination.counterpartyAccountId ===
             transferSource.accountId)
 
+      const crossesBrazilianCompanyBoundary =
+        (left.scopeType === 'company_br') !== (right.scopeType === 'company_br')
+
       if (differentTargets && matchesLearnedAccount) {
         suggestions.push({
-          type: 'transfer',
+          type: crossesBrazilianCompanyBoundary
+            ? 'profit_distribution'
+            : 'transfer',
           transactionIds: [left.id, right.id],
-          confidence: 100,
-          reason: 'Contas vinculadas por uma confirmação manual anterior.',
-          autoConfirm: true,
+          confidence: crossesBrazilianCompanyBoundary ? 97 : 100,
+          reason: crossesBrazilianCompanyBoundary
+            ? 'Contas PJ e PF já relacionadas; a natureza da distribuição ainda precisa ser confirmada.'
+            : 'Contas vinculadas por uma confirmação manual anterior.',
+          autoConfirm: !crossesBrazilianCompanyBoundary,
         })
         continue
       }
@@ -192,9 +199,6 @@ export function buildReconciliationSuggestions(
         differentTargets &&
         left.currency === right.currency
       ) {
-        const crossesBrazilianCompanyBoundary =
-          (left.scopeType === 'company_br') !==
-          (right.scopeType === 'company_br')
         suggestions.push({
           type: crossesBrazilianCompanyBoundary
             ? 'profit_distribution'

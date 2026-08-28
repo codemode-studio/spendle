@@ -33,6 +33,12 @@ lançamento se torna definitivo.
 Data em que a instituição efetivou o lançamento no razão. É a data principal
 para reconciliação, preservando a data de autorização como metadado.
 
+## Despesa fixa temporária
+
+Compra parcelada em quatro ou mais vezes. Ela compromete um valor mensal fixo,
+mas termina na última parcela. Não é uma recorrência: o número de cobranças já
+foi contratado e o app projeta somente as parcelas restantes.
+
 ## Fatura aberta
 
 Ciclo de cartão ainda sujeito a novos lançamentos e correções. Seus dados são
@@ -69,6 +75,12 @@ transações em certos dias não constitui lacuna.
 Representação única usada pelo razão e pelos relatórios. Pode estar apoiada por
 várias observações importadas.
 
+## Margem livre projetada
+
+Parte da renda futura que ainda não está comprometida por despesas recorrentes,
+parcelas contratadas, metas e outros compromissos conhecidos. É uma projeção e
+não um saldo bancário.
+
 ## Multiplicidade
 
 Quantidade de ocorrências legítimas com os mesmos atributos. Deduplicação deve
@@ -100,3 +112,9 @@ referência adequada para reconciliar um razão de transações postadas.
 Movimentação entre dois instrumentos pertencentes ao mesmo conjunto financeiro.
 As duas pontas permanecem em seus respectivos ledgers, são vinculadas e não
 viram receita nem despesa.
+
+## Vazamento financeiro
+
+Sinal explicável de que um gasto merece investigação, como aumento contra o
+histórico, estouro de limite, cobrança esquecida ou acúmulo de compromissos. Não
+é uma categoria contábil e não implica que a despesa seja inútil.

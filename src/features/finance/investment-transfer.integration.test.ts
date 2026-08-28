@@ -35,7 +35,9 @@ describe('transferências para investimentos', () => {
     const account = await finance.createAccount({
       name: 'Carteira de teste',
       institutionName: 'Corretora',
-      ownershipScopeId: initialSnapshot.scopes[0].id,
+      ownershipScopeId: initialSnapshot.scopes.find(
+        (scope) => scope.type === 'household',
+      )!.id,
       kind: 'investment' as const,
       purpose: 'investment' as const,
       currency: 'BRL',

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  classifyInstallmentCommitment,
   parseInstallmentDescription,
   projectRemainingInstallments,
   resolveCardCycle,
@@ -50,6 +51,12 @@ describe('ciclo de cartão', () => {
         postedAt: '2026-10-31',
       },
     ])
+  })
+
+  it('trata parcelamentos acima de 3x como despesa fixa temporária', () => {
+    expect(classifyInstallmentCommitment(3)).toBe('short_installment')
+    expect(classifyInstallmentCommitment(4)).toBe('temporary_fixed')
+    expect(classifyInstallmentCommitment(12)).toBe('temporary_fixed')
   })
 
   it('desconta estorno e exclui pagamento de fatura', () => {

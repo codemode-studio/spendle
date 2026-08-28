@@ -309,7 +309,7 @@ await assert.rejects(
       asOf: '2026-08-31',
       balanceType: 'posted',
     }),
-  /Já existe outro saldo ativo/,
+  /Já existe outro saldo para esta data/,
 )
 const repeatedManual = await createManualBalanceCheckpoint({
   targetType: 'account',

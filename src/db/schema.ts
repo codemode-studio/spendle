@@ -123,6 +123,9 @@ export const categories = sqliteTable('categories', {
       'excluded',
     ],
   }).notNull(),
+  incomeBaseEligible: integer('income_base_eligible', { mode: 'boolean' })
+    .notNull()
+    .default(false),
   color: text('color').notNull().default('#64748b'),
   icon: text('icon'),
   active: integer('active', { mode: 'boolean' }).notNull().default(true),
@@ -665,19 +668,153 @@ export const exchangeRates = sqliteTable(
   ],
 )
 
-export const recurrences = sqliteTable('recurrences', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  accountId: text('account_id').references(() => accounts.id),
-  creditCardId: text('credit_card_id').references(() => creditCards.id),
-  categoryId: text('category_id').references(() => categories.id),
-  amountCents: integer('amount_cents').notNull(),
-  currency: text('currency').notNull().default('BRL'),
-  frequency: text('frequency', { enum: ['monthly', 'yearly'] }).notNull(),
-  nextDate: text('next_date').notNull(),
-  active: integer('active', { mode: 'boolean' }).notNull().default(true),
-  createdAt,
-})
+export const recurrenceGroups = sqliteTable(
+  'recurrence_groups',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    normalizedName: text('normalized_name').notNull(),
+    createdAt,
+  },
+  (table) => [
+    uniqueIndex('recurrence_group_normalized_name_idx').on(
+      table.normalizedName,
+    ),
+  ],
+)
+
+export const recurrences = sqliteTable(
+  'recurrences',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    groupId: text('group_id').references(() => recurrenceGroups.id, {
+      onDelete: 'set null',
+    }),
+    participantLabel: text('participant_label'),
+    accountId: text('account_id').references(() => accounts.id),
+    creditCardId: text('credit_card_id').references(() => creditCards.id),
+    categoryId: text('category_id').references(() => categories.id),
+    amountCents: integer('amount_cents').notNull(),
+    currency: text('currency').notNull().default('BRL'),
+    direction: text('direction', { enum: ['income', 'expense'] })
+      .notNull()
+      .default('expense'),
+    amountMode: text('amount_mode', { enum: ['fixed', 'variable'] })
+      .notNull()
+      .default('fixed'),
+    destinationMode: text('destination_mode', {
+      enum: ['automatic', 'fixed'],
+    })
+      .notNull()
+      .default('automatic'),
+    frequency: text('frequency', { enum: ['monthly', 'yearly'] }).notNull(),
+    startsOn: text('starts_on').notNull().default('1970-01-01'),
+    scheduleAnchor: text('schedule_anchor').notNull().default('1970-01-01'),
+    nextDate: text('next_date').notNull(),
+    dateToleranceDays: integer('date_tolerance_days').notNull().default(15),
+    amountToleranceBps: integer('amount_tolerance_bps').notNull().default(500),
+    autoMatchEnabled: integer('auto_match_enabled', { mode: 'boolean' })
+      .notNull()
+      .default(true),
+    minimumConfirmations: integer('minimum_confirmations').notNull().default(3),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    createdAt,
+  },
+  (table) => [
+    check(
+      'recurrences_destination_mode_check',
+      sql`(${table.accountId} is null or ${table.creditCardId} is null) and (${table.destinationMode} != 'fixed' or ((${table.accountId} is not null) != (${table.creditCardId} is not null)))`,
+    ),
+  ],
+)
+
+export const recurrenceOccurrences = sqliteTable(
+  'recurrence_occurrences',
+  {
+    id: text('id').primaryKey(),
+    recurrenceId: text('recurrence_id')
+      .notNull()
+      .references(() => recurrences.id, { onDelete: 'cascade' }),
+    expectedDate: text('expected_date').notNull(),
+    expectedAmountCents: integer('expected_amount_cents').notNull(),
+    currency: text('currency').notNull(),
+    direction: text('direction', { enum: ['income', 'expense'] }).notNull(),
+    categoryId: text('category_id')
+      .notNull()
+      .references(() => categories.id),
+    status: text('status', {
+      enum: ['expected', 'matched', 'skipped', 'cancelled'],
+    })
+      .notNull()
+      .default('expected'),
+    resolvedAt: integer('resolved_at', { mode: 'timestamp' }),
+    createdAt,
+  },
+  (table) => [
+    uniqueIndex('recurrence_occurrence_unique_idx').on(
+      table.recurrenceId,
+      table.expectedDate,
+    ),
+    index('recurrence_occurrence_date_status_idx').on(
+      table.expectedDate,
+      table.status,
+    ),
+  ],
+)
+
+export const recurrenceMatches = sqliteTable(
+  'recurrence_matches',
+  {
+    id: text('id').primaryKey(),
+    occurrenceId: text('occurrence_id')
+      .notNull()
+      .references(() => recurrenceOccurrences.id, { onDelete: 'cascade' }),
+    transactionId: text('transaction_id')
+      .notNull()
+      .references(() => transactions.id, { onDelete: 'cascade' }),
+    status: text('status', {
+      enum: [
+        'suggested',
+        'confirmed',
+        'rejected',
+        'auto_confirmed',
+        'unlinked',
+      ],
+    })
+      .notNull()
+      .default('suggested'),
+    score: integer('score').notNull(),
+    reason: text('reason').notNull(),
+    evidenceJson: text('evidence_json').notNull().default('{}'),
+    previousCategoryId: text('previous_category_id').references(
+      () => categories.id,
+    ),
+    categoryAppliedByMatch: integer('category_applied_by_match', {
+      mode: 'boolean',
+    })
+      .notNull()
+      .default(false),
+    categoryConflict: integer('category_conflict', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    confirmedAt: integer('confirmed_at', { mode: 'timestamp' }),
+    resolvedAt: integer('resolved_at', { mode: 'timestamp' }),
+    createdAt,
+  },
+  (table) => [
+    uniqueIndex('recurrence_match_pair_idx').on(
+      table.occurrenceId,
+      table.transactionId,
+    ),
+    uniqueIndex('recurrence_match_accepted_occurrence_idx')
+      .on(table.occurrenceId)
+      .where(sql`${table.status} in ('confirmed', 'auto_confirmed')`),
+    uniqueIndex('recurrence_match_accepted_transaction_idx')
+      .on(table.transactionId)
+      .where(sql`${table.status} in ('confirmed', 'auto_confirmed')`),
+  ],
+)
 
 export const installmentPlans = sqliteTable(
   'installment_plans',
@@ -729,6 +866,7 @@ export const monthlyBudgets = sqliteTable(
       .notNull()
       .references(() => budgetStrategies.id),
     baseIncomeCents: integer('base_income_cents').notNull(),
+    eligibleIncomeCents: integer('eligible_income_cents'),
     essentialBps: integer('essential_bps').notNull(),
     lifestyleBps: integer('lifestyle_bps').notNull(),
     investmentBps: integer('investment_bps').notNull(),
@@ -739,6 +877,7 @@ export const monthlyBudgets = sqliteTable(
       .notNull()
       .default(false),
     closed: integer('closed', { mode: 'boolean' }).notNull().default(false),
+    closedAt: integer('closed_at', { mode: 'timestamp' }),
     createdAt,
   },
   (table) => [uniqueIndex('monthly_budget_month_idx').on(table.month)],

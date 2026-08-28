@@ -5,10 +5,15 @@ import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
 import { convertMinorUnitsAtRate } from '#/domain/currency'
 import { statementValueSignature } from '#/domain/canonicalization'
-import { summarizeCardStatements } from '#/domain/credit-card'
+import {
+  classifyInstallmentCommitment,
+  summarizeCardStatements,
+} from '#/domain/credit-card'
+import { buildFinancialSummary } from '#/domain/financial-summary'
 import {
   allocationAmount,
   calculateConservativeBase,
+  normalizeDescription,
   resolveEffectiveAllocation,
   strategyAllocationSchema,
 } from '#/domain/finance'
@@ -18,6 +23,10 @@ import {
   countCoveredDaysAfter,
 } from '#/domain/import-coverage'
 import {
+  isAcceptedRecurrenceMatchStatus,
+  pendingTransactionCoversRecurrence,
+} from '#/domain/recurrence-matching'
+import {
   categorizeTransactionsWithAi,
   filterConfidentAiSuggestions,
 } from './ai.server'
@@ -26,11 +35,15 @@ import {
   recordManualBalanceCheckpoint,
   refreshStatementAnchor,
 } from './checkpoint-chain.server'
-import { linkCanonicalObservation } from './canonicalization.server'
+import {
+  linkCanonicalObservation,
+  transactionFingerprint,
+} from './canonicalization.server'
 import {
   refreshReconciliationAfterCommit,
   refreshReconciliationSuggestions,
 } from './reconciliation-refresh.server'
+import { refreshRecurrenceSuggestions } from './recurrence-refresh.server'
 
 export async function getFinanceSnapshot(selectedMonth?: string) {
   await ensureDatabase()
@@ -55,7 +68,12 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
     coverageRows,
     correctionRows,
     cardStatementCycleRows,
+    recurrenceGroupRows,
     recurrenceRows,
+    recurrenceOccurrenceRows,
+    recurrenceMatchRows,
+    transactionSplitRows,
+    exchangeRateRows,
     installmentRows,
     settingsRows,
   ] = await Promise.all([
@@ -111,7 +129,21 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
       .select()
       .from(schema.cardStatementCycles)
       .orderBy(desc(schema.cardStatementCycles.periodEnd)),
+    db
+      .select()
+      .from(schema.recurrenceGroups)
+      .orderBy(schema.recurrenceGroups.name),
     db.select().from(schema.recurrences).orderBy(schema.recurrences.nextDate),
+    db
+      .select()
+      .from(schema.recurrenceOccurrences)
+      .orderBy(desc(schema.recurrenceOccurrences.expectedDate)),
+    db.select().from(schema.recurrenceMatches),
+    db.select().from(schema.transactionSplits),
+    db
+      .select()
+      .from(schema.exchangeRates)
+      .orderBy(desc(schema.exchangeRates.date)),
     db
       .select()
       .from(schema.installmentPlans)
@@ -289,57 +321,28 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
   })
 
   const currentMonth = selectedMonth ?? referenceDate.slice(0, 7)
-  const familyTransactions = transactions.filter((transaction) => {
-    const ownershipScopeId =
-      transaction.account?.ownershipScopeId ??
-      transaction.creditCard?.ownershipScopeId
-    const scopeType = ownershipScopeId
-      ? scopeById.get(ownershipScopeId)?.type
-      : undefined
-    return (
-      transaction.status !== 'excluded' &&
-      scopeType !== 'company_br' &&
-      scopeType !== 'company_us'
-    )
-  })
-  const currentFamilyTransactions = familyTransactions.filter((transaction) =>
-    transaction.postedAt.startsWith(currentMonth),
-  )
-  const currentIncomeCents = currentFamilyTransactions
-    .filter(
-      (transaction) =>
-        transaction.amountCents > 0 &&
-        transaction.category?.bucket === 'income',
-    )
-    .reduce((sum, transaction) => sum + transaction.amountCents, 0)
-  const currentExpenseCents = Math.abs(
-    currentFamilyTransactions
-      .filter((transaction) =>
-        ['essential', 'lifestyle'].includes(transaction.category?.bucket ?? ''),
-      )
-      .reduce(
-        (sum, transaction) => sum + Math.min(0, transaction.amountCents),
-        0,
-      ),
-  )
-
-  const incomeByMonth = new Map<string, number>()
-  for (const transaction of familyTransactions) {
-    if (
-      transaction.amountCents > 0 &&
-      transaction.category?.bucket === 'income'
-    ) {
-      const month = transaction.postedAt.slice(0, 7)
-      incomeByMonth.set(
-        month,
-        (incomeByMonth.get(month) ?? 0) + transaction.amountCents,
-      )
+  const amountInBaseCurrency = (transaction: (typeof transactions)[number]) => {
+    if (transaction.currency === settings.baseCurrency) {
+      return transaction.amountCents
     }
+    if (
+      transaction.baseCurrency === settings.baseCurrency &&
+      transaction.baseAmountCents !== null
+    ) {
+      return transaction.baseAmountCents
+    }
+    return null
   }
-  const closedIncomes = [...incomeByMonth.entries()]
-    .filter(([month]) => month < currentMonth)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([, amount]) => amount)
+  const closedIncomes = monthlyBudgetRows
+    .filter(
+      (budget) =>
+        budget.closed &&
+        budget.month < currentMonth &&
+        budget.eligibleIncomeCents !== null,
+    )
+    .sort((left, right) => right.month.localeCompare(left.month))
+    .slice(0, 3)
+    .map((budget) => budget.eligibleIncomeCents!)
 
   const calculatedBaseIncomeCents = calculateConservativeBase(
     settings.monthlyIncomeTargetCents,
@@ -395,28 +398,309 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
         settings.keepReserveContributions,
       )
 
-  const budgetActual = {
-    essential: currentFamilyTransactions
-      .filter((transaction) => transaction.category?.bucket === 'essential')
-      .reduce(
-        (sum, transaction) =>
-          sum + Math.abs(Math.min(0, transaction.amountCents)),
-        0,
-      ),
-    lifestyle: currentFamilyTransactions
-      .filter((transaction) => transaction.category?.bucket === 'lifestyle')
-      .reduce(
-        (sum, transaction) =>
-          sum + Math.abs(Math.min(0, transaction.amountCents)),
-        0,
-      ),
-    investment: currentFamilyTransactions
-      .filter((transaction) => transaction.category?.bucket === 'investment')
-      .reduce((sum, transaction) => sum + Math.abs(transaction.amountCents), 0),
-    reserve: currentFamilyTransactions
-      .filter((transaction) => transaction.category?.bucket === 'reserve')
-      .reduce((sum, transaction) => sum + Math.abs(transaction.amountCents), 0),
+  const convertToBaseCurrency = (value: number, currency: string) => {
+    if (currency === settings.baseCurrency) return value
+    const directRate = exchangeRateRows.find(
+      (rate) =>
+        rate.fromCurrency === currency &&
+        rate.toCurrency === settings.baseCurrency,
+    )
+    if (directRate) {
+      return convertMinorUnitsAtRate(
+        value,
+        currency,
+        settings.baseCurrency,
+        directRate.rateMicros,
+      )
+    }
+    const inverseRate = exchangeRateRows.find(
+      (rate) =>
+        rate.fromCurrency === settings.baseCurrency &&
+        rate.toCurrency === currency,
+    )
+    return inverseRate
+      ? convertMinorUnitsAtRate(
+          value,
+          currency,
+          settings.baseCurrency,
+          Math.round(1_000_000_000_000 / inverseRate.rateMicros),
+        )
+      : null
   }
+  let netWorthCents = 0
+  let missingBalanceConversionCount = 0
+  for (const account of accounts) {
+    if (
+      account.scope?.type === 'company_br' ||
+      account.scope?.type === 'company_us'
+    ) {
+      continue
+    }
+    const converted = convertToBaseCurrency(
+      account.balanceCents,
+      account.currency,
+    )
+    if (converted === null) {
+      if (account.balanceCents !== 0) missingBalanceConversionCount += 1
+    } else {
+      netWorthCents += converted
+    }
+  }
+  for (const card of cards) {
+    if (
+      card.scope?.type === 'company_br' ||
+      card.scope?.type === 'company_us'
+    ) {
+      continue
+    }
+    const converted = convertToBaseCurrency(
+      card.outstandingCents,
+      card.currency,
+    )
+    if (converted === null) {
+      if (card.outstandingCents !== 0) missingBalanceConversionCount += 1
+    } else {
+      netWorthCents -= converted
+    }
+  }
+
+  const acceptedRecurrenceMatches = recurrenceMatchRows.filter((match) =>
+    isAcceptedRecurrenceMatchStatus(match.status),
+  )
+  let missingRecurrenceConversionCount = 0
+  const recurrenceActuals = acceptedRecurrenceMatches.flatMap((match) => {
+    const occurrence = recurrenceOccurrenceRows.find(
+      (item) => item.id === match.occurrenceId,
+    )
+    const transaction = transactions.find(
+      (item) => item.id === match.transactionId,
+    )
+    const category = occurrence
+      ? categoriesById.get(occurrence.categoryId)
+      : undefined
+    const amountCents = transaction ? amountInBaseCurrency(transaction) : null
+    const ownershipScopeId =
+      transaction?.account?.ownershipScopeId ??
+      transaction?.creditCard?.ownershipScopeId
+    const scopeType = ownershipScopeId
+      ? scopeById.get(ownershipScopeId)?.type
+      : null
+    const companyTransaction =
+      scopeType === 'company_br' || scopeType === 'company_us'
+    if (
+      transaction?.postedAt.startsWith(currentMonth) &&
+      companyTransaction &&
+      amountCents === null &&
+      (category?.bucket === 'essential' || category?.bucket === 'lifestyle')
+    ) {
+      missingRecurrenceConversionCount += 1
+    }
+    if (
+      !transaction ||
+      amountCents === null ||
+      (category?.bucket !== 'essential' && category?.bucket !== 'lifestyle')
+    ) {
+      return []
+    }
+    return [
+      {
+        transactionId: transaction.id,
+        amountCents: Math.abs(amountCents),
+        bucket: category.bucket,
+        categoryConflict: match.categoryConflict,
+      },
+    ]
+  })
+  const reconciliationsForSummary = reconciliationRows.map((group) => ({
+    type: group.type,
+    status: group.status,
+    transactionIds: reconciliationLinkRows
+      .filter((link) => link.groupId === group.id)
+      .map((link) => link.transactionId),
+  }))
+  const projectedPendingTransactionIds = new Set<string>()
+  const projectedPendingByOccurrenceId = new Map<
+    string,
+    (typeof transactions)[number]
+  >()
+  const pendingFamilyTransactions = transactions.filter((transaction) => {
+    const ownershipScopeId =
+      transaction.account?.ownershipScopeId ??
+      transaction.creditCard?.ownershipScopeId
+    const scopeType = ownershipScopeId
+      ? scopeById.get(ownershipScopeId)?.type
+      : null
+    return (
+      transaction.status === 'pending' &&
+      scopeType !== 'company_br' &&
+      scopeType !== 'company_us'
+    )
+  })
+  for (const occurrence of recurrenceOccurrenceRows
+    .filter(
+      (item) =>
+        item.status === 'expected' &&
+        item.expectedDate.startsWith(currentMonth),
+    )
+    .sort((left, right) =>
+      left.expectedDate.localeCompare(right.expectedDate),
+    )) {
+    const recurrence = recurrenceRows.find(
+      (item) => item.id === occurrence.recurrenceId,
+    )
+    if (!recurrence?.active) continue
+    const pendingMatch = pendingFamilyTransactions.find(
+      (transaction) =>
+        !projectedPendingTransactionIds.has(transaction.id) &&
+        pendingTransactionCoversRecurrence({
+          recurrenceName: recurrence.name,
+          categoryId: occurrence.categoryId,
+          rule: {
+            expectedDate: occurrence.expectedDate,
+            expectedAmountCents: occurrence.expectedAmountCents,
+            currency: occurrence.currency,
+            direction: occurrence.direction,
+            amountMode: recurrence.amountMode,
+            destinationMode: recurrence.destinationMode,
+            accountId: recurrence.accountId,
+            creditCardId: recurrence.creditCardId,
+            dateToleranceDays: recurrence.dateToleranceDays,
+            amountToleranceBps: recurrence.amountToleranceBps,
+            autoMatchEnabled: recurrence.autoMatchEnabled,
+            minimumConfirmations: recurrence.minimumConfirmations,
+          },
+          transaction: {
+            id: transaction.id,
+            postedAt: transaction.postedAt,
+            amountCents: transaction.amountCents,
+            currency: transaction.currency,
+            description: transaction.description,
+            status: transaction.status,
+            accountId: transaction.accountId,
+            creditCardId: transaction.creditCardId,
+            categoryId: transaction.categoryId,
+          },
+        }),
+    )
+    if (pendingMatch) {
+      projectedPendingTransactionIds.add(pendingMatch.id)
+      projectedPendingByOccurrenceId.set(occurrence.id, pendingMatch)
+    }
+  }
+  const projectedRecurrenceAmountByOccurrenceId = new Map<string, number>()
+  let missingRecurrenceProjectionConversionCount = 0
+  for (const occurrence of recurrenceOccurrenceRows) {
+    const recurrence = recurrenceRows.find(
+      (item) => item.id === occurrence.recurrenceId,
+    )
+    const category = categoriesById.get(occurrence.categoryId)
+    if (
+      !recurrence?.active ||
+      occurrence.status !== 'expected' ||
+      !occurrence.expectedDate.startsWith(currentMonth) ||
+      (category?.bucket !== 'essential' && category?.bucket !== 'lifestyle')
+    ) {
+      continue
+    }
+    const pendingTransaction = projectedPendingByOccurrenceId.get(occurrence.id)
+    const converted = convertToBaseCurrency(
+      pendingTransaction
+        ? Math.abs(pendingTransaction.amountCents)
+        : occurrence.expectedAmountCents,
+      occurrence.currency,
+    )
+    if (converted === null) {
+      // Projeções usam a cotação mais recente. O valor-base persistido continua
+      // autoritativo para o realizado, mas não substitui uma cotação projetiva.
+      const genericSummaryCountsMissingConversion = Boolean(
+        pendingTransaction?.postedAt.startsWith(currentMonth) &&
+        amountInBaseCurrency(pendingTransaction) === null,
+      )
+      if (!genericSummaryCountsMissingConversion) {
+        missingRecurrenceProjectionConversionCount += 1
+      }
+      continue
+    }
+    projectedRecurrenceAmountByOccurrenceId.set(occurrence.id, converted)
+  }
+  const financialSummary = buildFinancialSummary({
+    month: currentMonth,
+    transactions: transactions.map((transaction) => {
+      const ownershipScopeId =
+        transaction.account?.ownershipScopeId ??
+        transaction.creditCard?.ownershipScopeId
+      return {
+        id: transaction.id,
+        postedAt: transaction.postedAt,
+        amountCents: amountInBaseCurrency(transaction),
+        status: transaction.status,
+        categoryId: transaction.categoryId,
+        bucket: transaction.category?.bucket ?? null,
+        incomeBaseEligible: transaction.category?.incomeBaseEligible ?? false,
+        scopeType: ownershipScopeId
+          ? (scopeById.get(ownershipScopeId)?.type ?? null)
+          : null,
+        accountPurpose: transaction.account?.purpose ?? null,
+      }
+    }),
+    splits: transactionSplitRows.flatMap((split) => {
+      const transaction = transactions.find(
+        (item) => item.id === split.transactionId,
+      )
+      const category = categoriesById.get(split.categoryId)
+      if (!transaction || !category) return []
+      const baseAmount = amountInBaseCurrency(transaction)
+      if (baseAmount === null) return []
+      const ratio =
+        transaction.amountCents === 0 ? 1 : baseAmount / transaction.amountCents
+      return [
+        {
+          transactionId: split.transactionId,
+          amountCents: Math.round(split.amountCents * ratio),
+          bucket: category.bucket,
+        },
+      ]
+    }),
+    reconciliations: reconciliationsForSummary,
+    recurrenceActuals,
+    recurrenceCandidateTransactionIds: [
+      ...recurrenceMatchRows
+        .filter((match) => match.status === 'suggested')
+        .map((match) => match.transactionId),
+      ...projectedPendingTransactionIds,
+    ],
+    netWorthCents,
+    missingBalanceConversionCount,
+    missingRecurrenceConversionCount:
+      missingRecurrenceConversionCount +
+      missingRecurrenceProjectionConversionCount,
+    reviewImportCount: importRows.filter((item) => item.status === 'review')
+      .length,
+    overdueRecurrenceCount: recurrenceOccurrenceRows.filter(
+      (occurrence) =>
+        occurrence.status === 'expected' &&
+        occurrence.expectedDate < referenceDate &&
+        recurrenceRows.some(
+          (recurrence) =>
+            recurrence.id === occurrence.recurrenceId && recurrence.active,
+        ),
+    ).length,
+    unverifiedBalanceCount:
+      accounts.filter(
+        (account) =>
+          account.scope?.type !== 'company_br' &&
+          account.scope?.type !== 'company_us' &&
+          account.unverifiedDays > 0,
+      ).length +
+      cards.filter(
+        (card) =>
+          card.scope?.type !== 'company_br' &&
+          card.scope?.type !== 'company_us' &&
+          card.unverifiedDays > 0,
+      ).length,
+  })
+
+  const budgetActual = financialSummary.budgetActual
 
   const budgetTargets = {
     essential: allocationAmount(baseIncomeCents, effectiveAllocation.essential),
@@ -428,13 +712,27 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
     reserve: allocationAmount(baseIncomeCents, effectiveAllocation.reserve),
   }
 
-  const netWorthCents = accounts.reduce(
-    (sum, account) =>
-      account.currency === settings.baseCurrency
-        ? sum + account.balanceCents
-        : sum,
-    0,
+  const budgetProjected = recurrenceOccurrenceRows.reduce(
+    (result, occurrence) => {
+      const category = categoriesById.get(occurrence.categoryId)
+      const recurrence = recurrenceRows.find(
+        (item) => item.id === occurrence.recurrenceId,
+      )
+      if (
+        recurrence?.active &&
+        occurrence.status === 'expected' &&
+        occurrence.expectedDate.startsWith(currentMonth) &&
+        (category?.bucket === 'essential' || category?.bucket === 'lifestyle')
+      ) {
+        result[category.bucket] +=
+          projectedRecurrenceAmountByOccurrenceId.get(occurrence.id) ?? 0
+      }
+      return result
+    },
+    { essential: 0, lifestyle: 0, investment: 0, reserve: 0 },
   )
+  budgetProjected.essential += financialSummary.budgetPending.essential
+  budgetProjected.lifestyle += financialSummary.budgetPending.lifestyle
 
   return {
     scopes,
@@ -471,14 +769,38 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
           (transaction) => transaction.id === correction.transactionId,
         ) ?? null,
     })),
-    recurrences: recurrenceRows,
-    installmentPlans: installmentRows,
+    recurrenceGroups: recurrenceGroupRows,
+    recurrences: recurrenceRows.map((recurrence) => ({
+      ...recurrence,
+      baseAmountCents: convertToBaseCurrency(
+        recurrence.amountCents,
+        recurrence.currency,
+      ),
+      occurrences: recurrenceOccurrenceRows
+        .filter((occurrence) => occurrence.recurrenceId === recurrence.id)
+        .map((occurrence) => ({
+          ...occurrence,
+          matches: recurrenceMatchRows
+            .filter((match) => match.occurrenceId === occurrence.id)
+            .map((match) => ({
+              ...match,
+              transaction:
+                transactions.find(
+                  (transaction) => transaction.id === match.transactionId,
+                ) ?? null,
+            })),
+        })),
+    })),
+    installmentPlans: installmentRows.map((plan) => ({
+      ...plan,
+      commitmentType: classifyInstallmentCommitment(plan.totalInstallments),
+    })),
     settings,
     dashboard: {
       currentMonth,
-      netWorthCents,
-      currentIncomeCents,
-      currentExpenseCents,
+      netWorthCents: financialSummary.netWorthCents,
+      currentIncomeCents: financialSummary.currentIncomeCents,
+      currentExpenseCents: financialSummary.currentExpenseCents,
       reviewTransactionCount: stagedRows.filter(
         (staged) =>
           importRows.find((item) => item.id === staged.importId)?.status ===
@@ -494,7 +816,9 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
       originalAllocation,
       effectiveAllocation,
       budgetActual,
+      budgetProjected,
       budgetTargets,
+      integrity: financialSummary.integrity,
       reserve: {
         currentCents: reserveCurrentCents,
         targetCents: derivedReserveTarget,
@@ -563,6 +887,159 @@ export async function createManualBalanceCheckpoint(
   const reconciliationRefresh = await refreshReconciliationAfterCommit()
   return { ...result, reconciliationRefresh }
 }
+
+export async function createManualTransaction(input: {
+  targetType: 'account' | 'card'
+  targetId: string
+  postedAt: string
+  description: string
+  direction: 'inflow' | 'outflow'
+  amountCents: number
+  categoryId?: string
+  counterpartyAccountId?: string
+  notes?: string
+}) {
+  await ensureDatabase()
+  if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) {
+    throw new Error('Informe um valor maior que zero.')
+  }
+
+  const description = input.description.trim()
+  if (description.length < 2 || description.length > 200) {
+    throw new Error('Informe uma descrição entre 2 e 200 caracteres.')
+  }
+
+  const targetRows =
+    input.targetType === 'account'
+      ? await db
+          .select({
+            currency: schema.accounts.currency,
+            active: schema.accounts.active,
+          })
+          .from(schema.accounts)
+          .where(eq(schema.accounts.id, input.targetId))
+          .limit(1)
+      : await db
+          .select({
+            currency: schema.creditCards.currency,
+            active: schema.creditCards.active,
+          })
+          .from(schema.creditCards)
+          .where(eq(schema.creditCards.id, input.targetId))
+          .limit(1)
+  const target = targetRows.at(0)
+  if (!target?.active) throw new Error('Conta ou cartão não encontrado.')
+
+  const categoryId = input.categoryId ?? 'uncategorized'
+  const category = (
+    await db
+      .select({ active: schema.categories.active })
+      .from(schema.categories)
+      .where(eq(schema.categories.id, categoryId))
+      .limit(1)
+  ).at(0)
+  if (!category?.active) throw new Error('Categoria não encontrada.')
+
+  let counterpartyAccountId: string | null = null
+  if (categoryId === 'transfer') {
+    if (input.targetType !== 'account') {
+      throw new Error('Transferências manuais precisam partir de uma conta.')
+    }
+    if (!input.counterpartyAccountId) {
+      throw new Error('Selecione a outra conta da transferência.')
+    }
+    if (input.counterpartyAccountId === input.targetId) {
+      throw new Error('A outra ponta deve usar uma conta diferente.')
+    }
+    const counterparty = (
+      await db
+        .select({ active: schema.accounts.active })
+        .from(schema.accounts)
+        .where(eq(schema.accounts.id, input.counterpartyAccountId))
+        .limit(1)
+    ).at(0)
+    if (!counterparty?.active) {
+      throw new Error('A outra conta da transferência não foi encontrada.')
+    }
+    counterpartyAccountId = input.counterpartyAccountId
+  } else if (input.counterpartyAccountId) {
+    throw new Error(
+      'A outra conta só pode ser informada em uma transferência interna.',
+    )
+  }
+
+  const amountCents =
+    input.direction === 'inflow' ? input.amountCents : -input.amountCents
+  const id = randomUUID()
+  const normalizedDescription = normalizeDescription(description)
+  const notes = input.notes?.trim() || null
+  const transactionResult = db.transaction((transaction) => {
+    transaction
+      .insert(schema.transactions)
+      .values({
+        id,
+        importId: null,
+        accountId: input.targetType === 'account' ? input.targetId : null,
+        creditCardId: input.targetType === 'card' ? input.targetId : null,
+        categoryId,
+        counterpartyAccountId,
+        externalId: null,
+        sourceKey: `manual:${id}`,
+        fingerprint: transactionFingerprint({
+          postedAt: input.postedAt,
+          amountCents,
+          description,
+          currency: target.currency,
+        }),
+        postedAt: input.postedAt,
+        description,
+        normalizedDescription,
+        amountCents,
+        currency: target.currency,
+        baseAmountCents: target.currency === 'BRL' ? amountCents : null,
+        baseCurrency: 'BRL',
+        exchangeRateMicros: target.currency === 'BRL' ? 1_000_000 : null,
+        status: 'confirmed',
+        notes,
+      })
+      .run()
+
+    const checkpointUpdate = invalidateCheckpointChain(transaction, {
+      targetType: input.targetType,
+      targetId: input.targetId,
+      from: input.postedAt,
+      reason: `Reaberto pelo lançamento manual ${id}.`,
+    })
+    refreshStatementAnchor(transaction, {
+      targetType: input.targetType,
+      targetId: input.targetId,
+      balanceType: input.targetType === 'account' ? 'posted' : 'card_statement',
+    })
+    if (input.targetType === 'card') {
+      transaction
+        .update(schema.cardStatementCycles)
+        .set({ status: 'closed' })
+        .where(
+          and(
+            eq(schema.cardStatementCycles.creditCardId, input.targetId),
+            gte(schema.cardStatementCycles.periodEnd, input.postedAt),
+          ),
+        )
+        .run()
+    }
+    return { reopenedCheckpoints: checkpointUpdate.changes }
+  })
+
+  const reconciliationRefresh = await refreshReconciliationAfterCommit()
+  return {
+    id,
+    amountCents,
+    currency: target.currency,
+    ...transactionResult,
+    reconciliationRefresh,
+  }
+}
+
 async function refreshStatementResolutionState(importId: string) {
   const importRows = await db
     .select()
@@ -1409,11 +1886,70 @@ export async function updateTransactionCategory(input: {
     if (!counterparty[0]) throw new Error('Conta relacionada inválida.')
   }
 
+  const sourceAccount = source.accountId
+    ? await db
+        .select({ scopeId: schema.accounts.ownershipScopeId })
+        .from(schema.accounts)
+        .where(eq(schema.accounts.id, source.accountId))
+        .limit(1)
+    : []
+  const sourceCard = source.creditCardId
+    ? await db
+        .select({ scopeId: schema.creditCards.ownershipScopeId })
+        .from(schema.creditCards)
+        .where(eq(schema.creditCards.id, source.creditCardId))
+        .limit(1)
+    : []
+  const sourceScopeId = sourceAccount[0]?.scopeId ?? sourceCard[0]?.scopeId
+  const sourceScope = sourceScopeId
+    ? await db
+        .select({ type: schema.ownershipScopes.type })
+        .from(schema.ownershipScopes)
+        .where(eq(schema.ownershipScopes.id, sourceScopeId))
+        .limit(1)
+    : []
+  const companyTransaction =
+    sourceScope[0]?.type === 'company_br' ||
+    sourceScope[0]?.type === 'company_us'
+
+  const recurrenceMatches = await db
+    .select()
+    .from(schema.recurrenceMatches)
+    .where(eq(schema.recurrenceMatches.transactionId, input.transactionId))
+  const acceptedRecurrenceMatches = recurrenceMatches.filter((match) =>
+    isAcceptedRecurrenceMatchStatus(match.status),
+  )
+  const matchedOccurrences = acceptedRecurrenceMatches.length
+    ? await db
+        .select()
+        .from(schema.recurrenceOccurrences)
+        .where(
+          inArray(
+            schema.recurrenceOccurrences.id,
+            acceptedRecurrenceMatches.map((match) => match.occurrenceId),
+          ),
+        )
+    : []
+
   db.transaction((tx) => {
     tx.update(schema.transactions)
       .set({ categoryId: input.categoryId, counterpartyAccountId })
       .where(eq(schema.transactions.id, input.transactionId))
       .run()
+    for (const match of acceptedRecurrenceMatches) {
+      const occurrence = matchedOccurrences.find(
+        (item) => item.id === match.occurrenceId,
+      )
+      if (occurrence) {
+        tx.update(schema.recurrenceMatches)
+          .set({
+            categoryConflict:
+              !companyTransaction && occurrence.categoryId !== input.categoryId,
+          })
+          .where(eq(schema.recurrenceMatches.id, match.id))
+          .run()
+      }
+    }
     if (counterpartyAccountId && source.accountId) {
       const direction = source.amountCents < 0 ? 'outgoing' : 'incoming'
       tx.insert(schema.categorizationRules)
@@ -1700,30 +2236,62 @@ export async function setReconciliationStatus(input: {
       .where(eq(schema.reconciliationGroups.id, input.groupId))
       .run()
   })
+  await refreshRecurrenceSuggestions()
   return { success: true }
 }
 
 type RecurrenceInput = {
   name: string
+  groupName?: string
+  participantLabel?: string
   accountId?: string
   creditCardId?: string
-  categoryId?: string
+  categoryId: string
   amountCents: number
   currency: string
+  direction: 'income' | 'expense'
+  amountMode: 'fixed' | 'variable'
+  destinationMode: 'automatic' | 'fixed'
   frequency: 'monthly' | 'yearly'
   nextDate: string
 }
 
+async function resolveRecurrenceGroupId(groupName?: string) {
+  const name = groupName?.trim()
+  if (!name) return null
+
+  const normalizedName = normalizeDescription(name)
+  await db
+    .insert(schema.recurrenceGroups)
+    .values({ id: randomUUID(), name, normalizedName })
+    .onConflictDoNothing({ target: schema.recurrenceGroups.normalizedName })
+
+  const group = await db
+    .select({ id: schema.recurrenceGroups.id })
+    .from(schema.recurrenceGroups)
+    .where(eq(schema.recurrenceGroups.normalizedName, normalizedName))
+    .limit(1)
+  if (!group[0]) throw new Error('Não foi possível criar o grupo.')
+  return group[0].id
+}
+
 export async function createRecurrence(input: RecurrenceInput) {
   await ensureDatabase()
+  const { groupName, participantLabel, ...values } = input
+  const groupId = await resolveRecurrenceGroupId(groupName)
   const row = {
     id: randomUUID(),
-    ...input,
+    ...values,
+    groupId,
+    participantLabel: groupId ? participantLabel?.trim() || null : null,
     accountId: input.accountId || null,
     creditCardId: input.creditCardId || null,
-    categoryId: input.categoryId || null,
+    amountCents: Math.abs(input.amountCents),
+    startsOn: input.nextDate,
+    scheduleAnchor: input.nextDate,
   }
   await db.insert(schema.recurrences).values(row)
+  await refreshRecurrenceSuggestions()
   return row
 }
 
@@ -1731,16 +2299,51 @@ export async function updateRecurrence(
   input: RecurrenceInput & { id: string },
 ) {
   await ensureDatabase()
-  const { id, ...values } = input
+  const { id, groupName, participantLabel, ...values } = input
+  const groupId = await resolveRecurrenceGroupId(groupName)
+  const expectedOccurrences = await db
+    .select({ id: schema.recurrenceOccurrences.id })
+    .from(schema.recurrenceOccurrences)
+    .where(
+      and(
+        eq(schema.recurrenceOccurrences.recurrenceId, id),
+        eq(schema.recurrenceOccurrences.status, 'expected'),
+      ),
+    )
+  if (expectedOccurrences.length) {
+    db.transaction((transaction) => {
+      for (const occurrence of expectedOccurrences) {
+        transaction
+          .update(schema.recurrenceMatches)
+          .set({ status: 'rejected', resolvedAt: new Date() })
+          .where(
+            and(
+              eq(schema.recurrenceMatches.occurrenceId, occurrence.id),
+              eq(schema.recurrenceMatches.status, 'suggested'),
+            ),
+          )
+          .run()
+        transaction
+          .delete(schema.recurrenceOccurrences)
+          .where(eq(schema.recurrenceOccurrences.id, occurrence.id))
+          .run()
+      }
+    })
+  }
   await db
     .update(schema.recurrences)
     .set({
       ...values,
+      groupId,
+      participantLabel: groupId ? participantLabel?.trim() || null : null,
       accountId: values.accountId || null,
       creditCardId: values.creditCardId || null,
-      categoryId: values.categoryId || null,
+      amountCents: Math.abs(values.amountCents),
+      startsOn: values.nextDate,
+      scheduleAnchor: values.nextDate,
     })
     .where(eq(schema.recurrences.id, id))
+  await refreshRecurrenceSuggestions()
   return { id }
 }
 
@@ -1753,11 +2356,31 @@ export async function setRecurrenceActive(input: {
     .update(schema.recurrences)
     .set({ active: input.active })
     .where(eq(schema.recurrences.id, input.id))
+  if (input.active) await refreshRecurrenceSuggestions()
   return input
 }
 
 export async function deleteRecurrence(id: string) {
   await ensureDatabase()
+  const occurrences = await db
+    .select({ id: schema.recurrenceOccurrences.id })
+    .from(schema.recurrenceOccurrences)
+    .where(eq(schema.recurrenceOccurrences.recurrenceId, id))
+  const matches = occurrences.length
+    ? await db.select().from(schema.recurrenceMatches)
+    : []
+  if (
+    matches.some(
+      (match) =>
+        occurrences.some(
+          (occurrence) => occurrence.id === match.occurrenceId,
+        ) && isAcceptedRecurrenceMatchStatus(match.status),
+    )
+  ) {
+    throw new Error(
+      'Desvincule os pagamentos confirmados antes de excluir a recorrência.',
+    )
+  }
   await db.delete(schema.recurrences).where(eq(schema.recurrences.id, id))
   return { id }
 }
@@ -1788,9 +2411,7 @@ export async function closeCurrentBudget() {
   await ensureDatabase()
   const snapshot = await getFinanceSnapshot()
   const month = snapshot.dashboard.currentMonth
-  const pendingCount =
-    snapshot.dashboard.reviewTransactionCount +
-    snapshot.dashboard.reconciliationCount
+  const pendingCount = snapshot.dashboard.integrity.closingBlockerCount
   if (pendingCount > 0) {
     throw new Error(
       `Revise as ${pendingCount} pendências antes de fechar o mês.`,
@@ -1813,6 +2434,7 @@ export async function closeCurrentBudget() {
       month,
       strategyId: strategy.id,
       baseIncomeCents: snapshot.dashboard.baseIncomeCents,
+      eligibleIncomeCents: snapshot.dashboard.currentIncomeCents,
       essentialBps: original.essential,
       lifestyleBps: original.lifestyle,
       investmentBps: original.investment,
@@ -1821,10 +2443,15 @@ export async function closeCurrentBudget() {
       effectiveReserveBps: effective.reserve,
       reserveRedirected: snapshot.dashboard.reserve.redirected,
       closed: true,
+      closedAt: new Date(),
     })
     .onConflictDoUpdate({
       target: schema.monthlyBudgets.month,
-      set: { closed: true },
+      set: {
+        closed: true,
+        closedAt: new Date(),
+        eligibleIncomeCents: snapshot.dashboard.currentIncomeCents,
+      },
     })
   return { month, alreadyClosed: false }
 }

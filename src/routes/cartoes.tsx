@@ -587,6 +587,7 @@ function CardsPage() {
                 <TableHead>Descrição</TableHead>
                 <TableHead>Cartão</TableHead>
                 <TableHead>Progresso</TableHead>
+                <TableHead>Tipo</TableHead>
                 <TableHead>Origem</TableHead>
                 <TableHead>Parcela</TableHead>
               </TableRow>
@@ -603,6 +604,19 @@ function CardsPage() {
                   </TableCell>
                   <TableCell>
                     {plan.currentInstallment}/{plan.totalInstallments}
+                  </TableCell>
+                  <TableCell>
+                    <StatusBadge
+                      tone={
+                        plan.commitmentType === 'temporary_fixed'
+                          ? 'warning'
+                          : 'neutral'
+                      }
+                    >
+                      {plan.commitmentType === 'temporary_fixed'
+                        ? 'Fixa temporária'
+                        : 'Parcelamento curto'}
+                    </StatusBadge>
                   </TableCell>
                   <TableCell>
                     <StatusBadge tone={plan.autoDetected ? 'info' : 'neutral'}>
