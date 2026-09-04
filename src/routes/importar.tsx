@@ -78,6 +78,11 @@ import {
 } from '#/features/finance/finance.functions'
 import type { getImportReviewSnapshotFn } from '#/features/finance/finance.functions'
 import {
+  getImportBalanceReviewCopy,
+  importCoverageProvenanceCopy,
+  importReviewGuidanceCopy,
+} from '#/features/finance/import-review-guidance'
+import {
   importReviewOptions,
   invalidateFinance,
 } from '#/features/finance/queries'
@@ -509,8 +514,7 @@ function ImportPage() {
                           item.target?.name ?? 'Destino removido',
                         )}{' '}
                         · {item.staged.length} lançamentos ·{' '}
-                        {item.staged.filter((row) => row.duplicate).length}{' '}
-                        duplicidades
+                        {item.duplicateCount} duplicidades
                       </p>
                       {item.warning ? (
                         <p className="mt-1 text-xs text-destructive">
@@ -567,17 +571,17 @@ function ImportPage() {
                         disabled={
                           commitMutation.isPending ||
                           item.validationStatus === 'divergent' ||
-                          needsCoverageConfirmation(item) ||
-                          hasIncompleteTransfer(item) ||
+                          item.needsCoverageConfirmation ||
+                          item.hasIncompleteTransfer ||
                           (item.validationStatus === 'warning' &&
                             !confirmedReviews.has(item.id))
                         }
                         title={
                           item.validationStatus === 'divergent'
                             ? 'Resolva a divergência antes de consolidar.'
-                            : needsCoverageConfirmation(item)
+                            : item.needsCoverageConfirmation
                               ? 'Confirme o período exportado antes de consolidar.'
-                              : hasIncompleteTransfer(item)
+                              : item.hasIncompleteTransfer
                                 ? 'Selecione a conta relacionada em todas as transferências.'
                                 : item.validationStatus === 'warning' &&
                                     !confirmedReviews.has(item.id)
@@ -681,19 +685,48 @@ function ImportPage() {
                     </Alert>
                   ) : null}
 
-                  {item.validationStatus === 'divergent' &&
-                  item.parser === 'pdf_inspector' &&
-                  item.statementMatchCandidates.some(({ candidates }) =>
-                    candidates.some(
-                      (candidate) =>
-                        !item.staged.some(
-                          (row) =>
-                            row.postedAt === candidate.postedAt &&
-                            row.amountCents === candidate.amountCents &&
-                            row.currency === candidate.currency,
-                        ),
-                    ),
-                  ) ? (
+                  {item.statementBlockedRows.length ? (
+                    <Alert variant="destructive" className="mb-4">
+                      <AlertTriangle />
+                      <AlertTitle>
+                        Esta diferença de moeda não pode ser vinculada
+                      </AlertTitle>
+                      <AlertDescription className="flex flex-col gap-3">
+                        <p>
+                          O PDF e o lançamento atual usam o mesmo identificador,
+                          mas registram moedas diferentes. Rejeite o lote,
+                          corrija a origem dos dados e importe a fatura novamente.
+                        </p>
+                        {item.statementBlockedRows.map(
+                          ({ observation, transaction }) => (
+                            <div
+                              key={observation.id}
+                              className="rounded-lg border border-destructive/30 bg-background p-3 text-sm"
+                            >
+                              <div>
+                                No PDF: {observation.postedAt} ·{' '}
+                                {observation.description} ·{' '}
+                                {formatCurrency(
+                                  observation.amountCents,
+                                  observation.currency,
+                                )}
+                              </div>
+                              <div className="mt-1">
+                                Lançamento atual: {transaction.postedAt} ·{' '}
+                                {transaction.description} ·{' '}
+                                {formatCurrency(
+                                  transaction.amountCents,
+                                  transaction.currency,
+                                )}
+                              </div>
+                            </div>
+                          ),
+                        )}
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
+
+                  {item.statementDifferenceRows.length ? (
                     <Alert className="mb-4">
                       <FileSearch />
                       <AlertTitle>Vincule as diferenças da fatura</AlertTitle>
@@ -704,63 +737,51 @@ function ImportPage() {
                           lançamento pendente correspondente; a alteração ficará
                           registrada na auditoria.
                         </p>
-                        {item.statementMatchCandidates.map((group) => {
-                          const observation = item.staged.find(
-                            (row) => row.id === group.stagedTransactionId,
-                          )
-                          if (!observation) return null
-                          const candidates = group.candidates.filter(
-                            (candidate) =>
-                              !(
-                                candidate.postedAt === observation.postedAt &&
-                                candidate.amountCents ===
-                                  observation.amountCents &&
-                                candidate.currency === observation.currency
-                              ),
-                          )
-                          if (!candidates.length) return null
-                          return (
-                            <div
-                              key={group.stagedTransactionId}
-                              className="rounded-lg border bg-background p-3"
-                            >
-                              <div className="text-sm font-medium">
-                                No PDF: {observation.postedAt} ·{' '}
-                                {observation.description} ·{' '}
-                                {formatCurrency(
-                                  observation.amountCents,
-                                  observation.currency,
-                                )}
+                        {item.statementDifferenceRows.map(
+                          ({ observation, candidates }) => {
+                            return (
+                              <div
+                                key={observation.id}
+                                className="rounded-lg border bg-background p-3"
+                              >
+                                <div className="text-sm font-medium">
+                                  No PDF: {observation.postedAt} ·{' '}
+                                  {observation.description} ·{' '}
+                                  {formatCurrency(
+                                    observation.amountCents,
+                                    observation.currency,
+                                  )}
+                                </div>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {candidates.slice(0, 5).map((candidate) => (
+                                    <Button
+                                      key={candidate.id}
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={statementLinkMutation.isPending}
+                                      onClick={() =>
+                                        statementLinkMutation.mutate({
+                                          data: {
+                                            stagedTransactionId: observation.id,
+                                            transactionId: candidate.id,
+                                          },
+                                        })
+                                      }
+                                    >
+                                      Vincular a {candidate.postedAt} ·{' '}
+                                      {candidate.description} ·{' '}
+                                      {formatCurrency(
+                                        candidate.amountCents,
+                                        candidate.currency,
+                                      )}
+                                    </Button>
+                                  ))}
+                                </div>
                               </div>
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                {candidates.slice(0, 5).map((candidate) => (
-                                  <Button
-                                    key={candidate.id}
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    disabled={statementLinkMutation.isPending}
-                                    onClick={() =>
-                                      statementLinkMutation.mutate({
-                                        data: {
-                                          stagedTransactionId: observation.id,
-                                          transactionId: candidate.id,
-                                        },
-                                      })
-                                    }
-                                  >
-                                    Vincular a {candidate.postedAt} ·{' '}
-                                    {candidate.description} ·{' '}
-                                    {formatCurrency(
-                                      candidate.amountCents,
-                                      candidate.currency,
-                                    )}
-                                  </Button>
-                                ))}
-                              </div>
-                            </div>
-                          )
-                        })}
+                            )
+                          },
+                        )}
                       </AlertDescription>
                     </Alert>
                   ) : null}
@@ -1101,19 +1122,6 @@ type ImportItem = Awaited<
   ReturnType<typeof getImportReviewSnapshotFn>
 >['imports'][number]
 
-function hasIncompleteTransfer(item: ImportItem) {
-  return item.staged.some(
-    (row) =>
-      !row.duplicate &&
-      row.suggestedCategoryId === 'transfer' &&
-      !row.counterpartyAccountId,
-  )
-}
-
-function needsCoverageConfirmation(item: ImportItem) {
-  return item.periodSource === 'activity' || item.periodSource === 'unknown'
-}
-
 function ImportCoverageConfirmation({ item }: { item: ImportItem }) {
   const queryClient = useQueryClient()
   const confirmCoverage = useServerFn(confirmImportCoverageFn)
@@ -1131,9 +1139,7 @@ function ImportCoverageConfirmation({ item }: { item: ImportItem }) {
       ),
   })
 
-  if (item.periodSource !== 'activity' && item.periodSource !== 'unknown') {
-    return null
-  }
+  if (!item.needsCoverageConfirmation) return null
 
   return (
     <Alert>
@@ -1198,8 +1204,6 @@ function ImportAuditReport({
 }) {
   const currency =
     item.target?.currency ?? item.detectedCurrency ?? item.staged[0]?.currency
-  const duplicateCount = item.staged.filter((row) => row.duplicate).length
-  const newCount = item.staged.length - duplicateCount
   const guidance = getImportAuditGuidance(item)
   const Icon =
     item.validationStatus === 'reconciled' ||
@@ -1219,7 +1223,7 @@ function ImportAuditReport({
     },
     {
       title: 'Inclusão',
-      value: `${newCount} novos · ${duplicateCount} duplicados`,
+      value: `${item.newCount} novos · ${item.duplicateCount} duplicados`,
       description: item.invalidTransactionCount
         ? `${item.invalidTransactionCount} não interpretados.`
         : 'Nenhum lançamento perdido.',
@@ -1232,23 +1236,7 @@ function ImportAuditReport({
     {
       title: 'Cobertura e saldo',
       value: formatImportPeriod(item.periodStart, item.periodEnd),
-      description: `${
-        item.periodSource === 'filename'
-          ? 'Período identificado no nome do arquivo. '
-          : item.periodSource === 'metadata'
-            ? 'Período informado pelo banco. '
-            : item.periodSource === 'user'
-              ? 'Período confirmado por você. '
-              : 'Somente dias com movimentação; não prova cobertura completa. '
-      }${
-        item.balanceDifferenceCents === null
-          ? item.closingBalanceCents === null
-            ? item.accountId
-              ? 'Saldo final não informado.'
-              : 'Total da fatura não informado.'
-            : 'Sem saldo anterior compatível.'
-          : `Diferença de saldo: ${formatCurrency(item.balanceDifferenceCents, currency)}.`
-      }`,
+      description: `${importCoverageProvenanceCopy[item.coverageProvenance.source]}${getImportBalanceReviewCopy(item.balanceReview, currency)}`,
     },
   ]
 
@@ -1312,124 +1300,46 @@ function ImportAuditReport({
 }
 
 function getImportAuditGuidance(item: ImportItem) {
-  const targetKind = item.accountId ? 'conta' : 'cartão'
-  const sourceKind =
-    item.parser === 'csv' ? 'CSV' : item.parser === 'ofx' ? 'OFX' : 'arquivo'
-  const targetName = formatInstrumentName(
-    item.target?.name ?? 'destino removido',
-  )
-  const period = formatImportPeriod(item.periodStart, item.periodEnd)
   const currency =
     item.target?.currency ?? item.detectedCurrency ?? item.staged[0]?.currency
-  const totals = `${formatCurrency(item.totalCreditsCents, currency)} em créditos e ${formatCurrency(item.totalDebitsCents, currency)} em débitos`
-
-  if (item.validationStatus === 'reconciled') {
-    return {
-      title: 'Conferência automática concluída',
-      explanation:
-        item.validationMessage ??
-        'A contagem, as movimentações e os saldos conferem.',
-      steps: [
-        'Revise as categorias dos lançamentos abaixo.',
-        'Clique em Consolidar para incluir as transações nos relatórios.',
-      ],
-    }
+  const context = {
+    targetName: formatInstrumentName(item.target?.name ?? 'destino removido'),
+    period: formatImportPeriod(item.periodStart, item.periodEnd),
+    totals: `${formatCurrency(item.totalCreditsCents, currency)} em créditos e ${formatCurrency(item.totalDebitsCents, currency)} em débitos`,
+    currency,
   }
 
-  if (item.validationStatus === 'imported') {
-    return {
-      title: 'Arquivo lido com sucesso',
-      explanation:
-        item.validationMessage ??
-        'Os lançamentos foram lidos e podem ser consolidados. Este arquivo não fornece sozinho um saldo reconciliado.',
-      steps: [
-        'Revise as categorias e as transferências abaixo.',
-        'Clique em Consolidar para incluir as transações.',
-        item.accountId
-          ? 'Depois, use Atualizar saldo na página Contas para informar o valor exibido pelo banco.'
-          : 'Quando a fatura fechar, use Confirmar fatura na página Cartões.',
-      ],
-    }
-  }
-
-  if (item.validationStatus === 'warning') {
-    const explanation =
-      item.closingBalanceCents === null
-        ? item.accountId
-          ? `Os ${item.parsedTransactionCount} lançamentos foram lidos, mas este ${sourceKind} não informa o saldo final. Sem esse valor, o sistema não consegue provar que as movimentações fecham o saldo da conta.`
-          : `Os ${item.parsedTransactionCount} lançamentos foram lidos, mas este ${sourceKind} não informa o total da fatura. Sem esse valor, o sistema não consegue conferir as compras e os créditos.`
-        : item.sourceTransactionCount === null
-          ? `O arquivo informa um saldo final, mas não traz uma contagem confiável dos lançamentos. Por isso, a conferência precisa ser manual.`
-          : `Os ${item.parsedTransactionCount} lançamentos foram lidos, mas ainda não existe um saldo anterior compatível para conferir o saldo final deste período.`
-
-    return {
-      title: 'Confira estes dados antes de consolidar',
-      explanation,
-      steps: [
-        `Confirme que o arquivo pertence à ${targetKind} ${targetName}.`,
-        `Compare com o extrato original: período ${period}, ${item.parsedTransactionCount} lançamentos, ${totals}.`,
-        'Se estiver correto, marque a confirmação abaixo e consolide. Se algo não conferir, rejeite o lote e envie o extrato correto.',
-      ],
-    }
-  }
-
-  const hasBalanceDifference = item.balanceDifferenceCents !== null
-  const hasUnreadTransactions = item.invalidTransactionCount > 0
-  const isDestinationConflict = Boolean(
-    item.warning?.includes('arquivo idêntico') ||
-    item.validationMessage?.includes('outro destino'),
-  )
-  const hasPendingCorrection = item.corrections.some(
-    (correction) => correction.status === 'pending',
-  )
-  const hasStatementCandidates = item.statementMatchCandidates.some(
-    ({ candidates }) => candidates.length > 0,
-  )
-  const hasMissingStatementTransactions =
-    item.statementMissingCandidates.length > 0
-
-  return {
-    title: 'Este lote não pode ser consolidado',
-    explanation:
-      item.validationMessage ??
-      'A auditoria encontrou uma divergência que precisa ser corrigida.',
-    steps: hasPendingCorrection
-      ? [
-          'Compare a nova observação com o lançamento atual.',
-          'Aceite a correção ou mantenha o original usando as ações abaixo.',
-          'Se aceitar, confira novamente os saldos posteriores indicados pelo app.',
-        ]
-      : isDestinationConflict
-        ? [
-            `Confirme se ${targetName} é o destino correto para este arquivo.`,
-            'Rejeite este lote. Depois, crie um novo lote e escolha a conta ou o cartão correto.',
-          ]
-        : hasMissingStatementTransactions
-          ? [
-              'Confira as autorizações listadas em “não constam na fatura”.',
-              'Se foram canceladas ou expiraram, confirme a ausência. O app preservará essa decisão na auditoria.',
-              'Depois, revise as categorias restantes e clique em Consolidar.',
-            ]
-          : hasStatementCandidates
-            ? [
-                'Compare as linhas do PDF com os lançamentos pendentes sugeridos abaixo.',
-                'Clique em Vincular no par correto. A data, a descrição ou o valor do lançamento serão atualizados com auditoria.',
-                'Depois que todas as diferenças forem resolvidas, revise as categorias e clique em Consolidar.',
-              ]
-            : hasUnreadTransactions
-              ? [
-                  'Rejeite este lote e exporte o extrato novamente. Prefira OFX ou CSV.',
-                  'Envie o novo arquivo e confira se todos os lançamentos foram lidos.',
-                ]
-              : hasBalanceDifference
-                ? [
-                    `Confira se o arquivo pertence à ${targetKind} ${targetName}.`,
-                    `O saldo difere em ${formatCurrency(Math.abs(item.balanceDifferenceCents!), currency)}. Rejeite o lote e obtenha um novo extrato antes de tentar novamente.`,
-                  ]
-                : [
-                    'Rejeite este lote e confira se selecionou a conta ou o cartão correto.',
-                    'Exporte o extrato novamente, prefira OFX ou CSV, e crie um novo lote.',
-                  ],
+  switch (item.guidance.kind) {
+    case 'ready':
+      return importReviewGuidanceCopy.ready(item.guidance)
+    case 'needs_balance':
+      return importReviewGuidanceCopy.needs_balance(item.guidance, context)
+    case 'needs_manual_review':
+      return importReviewGuidanceCopy.needs_manual_review(
+        item.guidance,
+        context,
+      )
+    case 'pending_correction':
+      return importReviewGuidanceCopy.pending_correction(item.guidance)
+    case 'identical_file':
+      return importReviewGuidanceCopy.identical_file(item.guidance, context)
+    case 'destination_conflict':
+      return importReviewGuidanceCopy.destination_conflict(
+        item.guidance,
+        context,
+      )
+    case 'missing_statement_transactions':
+      return importReviewGuidanceCopy.missing_statement_transactions(
+        item.guidance,
+      )
+    case 'statement_match_candidates':
+      return importReviewGuidanceCopy.statement_match_candidates(item.guidance)
+    case 'invalid_rows':
+      return importReviewGuidanceCopy.invalid_rows(item.guidance)
+    case 'balance_mismatch':
+      return importReviewGuidanceCopy.balance_mismatch(item.guidance, context)
+    case 'blocked':
+      return importReviewGuidanceCopy.blocked(item.guidance)
   }
 }
 

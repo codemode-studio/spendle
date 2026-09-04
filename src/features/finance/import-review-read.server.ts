@@ -2,7 +2,22 @@ import { desc } from 'drizzle-orm'
 
 import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
-import { statementValueSignature } from '#/domain/canonicalization'
+import {
+  findTransactionsAbsentFromStatement,
+  matchOptionalStatementValues,
+  statementLinkIsCompatible,
+  statementValueSignature,
+} from '#/domain/canonicalization'
+import {
+  classifyImportReviewGuidance,
+  effectiveValidationReason,
+  getImportBalanceReview,
+  getImportCoverageProvenance,
+  isHardImportReviewReason,
+  resolveImportReviewReason,
+} from '#/domain/import-audit'
+import { hasImportDestinationConflict } from './import-guards.server'
+import { effectiveImportReviewValidationMessage } from './import-review-guidance'
 
 function previousDate(value: string) {
   const date = new Date(`${value}T12:00:00Z`)
@@ -15,7 +30,9 @@ export async function getImportReviewSnapshot() {
   const [
     accounts,
     cards,
+    cardInstruments,
     categories,
+    institutions,
     importRows,
     sourceFiles,
     stagedRows,
@@ -26,7 +43,9 @@ export async function getImportReviewSnapshot() {
   ] = await Promise.all([
     db.select().from(schema.accounts).orderBy(schema.accounts.name),
     db.select().from(schema.creditCards).orderBy(schema.creditCards.name),
+    db.select().from(schema.creditCardInstruments),
     db.select().from(schema.categories).orderBy(schema.categories.name),
+    db.select().from(schema.institutions),
     db.select().from(schema.imports).orderBy(desc(schema.imports.createdAt)),
     db.select().from(schema.sourceFiles),
     db
@@ -53,6 +72,7 @@ export async function getImportReviewSnapshot() {
   const sourceFileById = new Map(sourceFiles.map((item) => [item.id, item]))
   const accountById = new Map(accounts.map((item) => [item.id, item]))
   const cardById = new Map(cards.map((item) => [item.id, item]))
+  const institutionById = new Map(institutions.map((item) => [item.id, item]))
 
   const statementMissingCandidates = (
     importRow: (typeof importRows)[number],
@@ -66,15 +86,8 @@ export async function getImportReviewSnapshot() {
     ) {
       return []
     }
-    const stagedCounts = new Map<string, number>()
-    for (const staged of stagedRows.filter(
-      (item) => item.importId === importRow.id,
-    )) {
-      const signature = statementValueSignature(staged)
-      stagedCounts.set(signature, (stagedCounts.get(signature) ?? 0) + 1)
-    }
-    const missing: typeof transactionRows = []
-    for (const transaction of transactionRows
+    const staged = stagedRows.filter((item) => item.importId === importRow.id)
+    const pending = transactionRows
       .filter(
         (item) =>
           item.creditCardId === importRow.creditCardId &&
@@ -82,13 +95,13 @@ export async function getImportReviewSnapshot() {
           item.postedAt >= importRow.periodStart! &&
           item.postedAt <= importRow.periodEnd!,
       )
-      .sort((left, right) => left.id.localeCompare(right.id))) {
-      const signature = statementValueSignature(transaction)
-      const available = stagedCounts.get(signature) ?? 0
-      if (available > 0) stagedCounts.set(signature, available - 1)
-      else missing.push(transaction)
-    }
-    return missing.map((transaction) => ({
+      .sort((left, right) => left.id.localeCompare(right.id))
+    const unmatchedTransactions = findTransactionsAbsentFromStatement(
+      staged,
+      pending,
+    )
+
+    return unmatchedTransactions.map((transaction) => ({
       id: transaction.id,
       postedAt: transaction.postedAt,
       description: transaction.description,
@@ -97,91 +110,230 @@ export async function getImportReviewSnapshot() {
     }))
   }
 
+  const statementReviewRows = (
+    importRow: (typeof importRows)[number],
+    staged: typeof stagedRows,
+  ) => {
+    if (
+      importRow.parser !== 'pdf_inspector' ||
+      !importRow.creditCardId ||
+      importRow.status !== 'review' ||
+      importRow.validationStatus !== 'divergent'
+    ) {
+      return { differenceRows: [], blockedRows: [] }
+    }
+
+    const eligibleTransactions = transactionRows.filter(
+      (transaction) =>
+        transaction.creditCardId === importRow.creditCardId &&
+        transaction.importId !== importRow.id &&
+        (!importRow.periodStart ||
+          transaction.postedAt >= importRow.periodStart) &&
+        (!importRow.periodEnd || transaction.postedAt <= importRow.periodEnd),
+    )
+    const { changed, unmatched, unmatchedTransactions } =
+      matchOptionalStatementValues(staged, eligibleTransactions)
+
+    const candidateFor = (transaction: (typeof transactionRows)[number]) => ({
+      id: transaction.id,
+      postedAt: transaction.postedAt,
+      description: transaction.description,
+      amountCents: transaction.amountCents,
+      currency: transaction.currency,
+      status: transaction.status,
+    })
+    const isReservedForAnotherObservation = (
+      transaction: (typeof transactionRows)[number],
+      observation: (typeof stagedRows)[number],
+    ) =>
+      correctionRows.some(
+        (correction) =>
+          correction.transactionId === transaction.id &&
+          correction.status !== 'rejected' &&
+          staged.some(
+            (reservedStaged) =>
+              reservedStaged.id === correction.stagedTransactionId &&
+              reservedStaged.id !== observation.id,
+          ),
+      )
+
+    // Only offer changed pairs the link action can accept: same currency.
+    const changedRows = changed.flatMap(({ observation, transaction }) =>
+      isReservedForAnotherObservation(transaction, observation) ||
+      transaction.currency !== observation.currency
+        ? []
+        : [
+            {
+              observation: {
+                id: observation.id,
+                postedAt: observation.postedAt,
+                description: observation.description,
+                amountCents: observation.amountCents,
+                currency: observation.currency,
+              },
+              candidates: [candidateFor(transaction)],
+            },
+          ],
+    )
+    const blockedRows = changed.flatMap(({ observation, transaction }) =>
+      transaction.currency === observation.currency
+        ? []
+        : [
+            {
+              reason: 'currency_mismatch' as const,
+              linkable: false as const,
+              observation: {
+                id: observation.id,
+                postedAt: observation.postedAt,
+                description: observation.description,
+                amountCents: observation.amountCents,
+                currency: observation.currency,
+              },
+              transaction: candidateFor(transaction),
+            },
+          ],
+    )
+
+    const changedObservationIds = new Set(
+      changed.map(({ observation }) => observation.id),
+    )
+
+    const unmatchedRows = unmatched.flatMap((observation) => {
+      if (changedObservationIds.has(observation.id)) return []
+      const observationSignature = statementValueSignature(observation)
+      const candidates = unmatchedTransactions
+        .filter(
+          (transaction) =>
+            // Excluded transactions are linkable only through the same-id
+            // restoration path, which the `changed` pass already handles.
+            transaction.status !== 'excluded' &&
+            transaction.currency === observation.currency &&
+            statementLinkIsCompatible(
+              observation,
+              transaction,
+              staged,
+              eligibleTransactions,
+            ) &&
+            statementValueSignature(transaction) !== observationSignature &&
+            !isReservedForAnotherObservation(transaction, observation),
+        )
+        .sort((left, right) => {
+          const leftSameId =
+            observation.externalId && left.externalId === observation.externalId
+              ? 0
+              : 1
+          const rightSameId =
+            observation.externalId &&
+            right.externalId === observation.externalId
+              ? 0
+              : 1
+          const leftExact = left.amountCents === observation.amountCents ? 0 : 1
+          const rightExact =
+            right.amountCents === observation.amountCents ? 0 : 1
+          return (
+            leftSameId - rightSameId ||
+            leftExact - rightExact ||
+            left.postedAt.localeCompare(right.postedAt)
+          )
+        })
+        .map(candidateFor)
+
+      return candidates.length
+        ? [
+            {
+              observation: {
+                id: observation.id,
+                postedAt: observation.postedAt,
+                description: observation.description,
+                amountCents: observation.amountCents,
+                currency: observation.currency,
+              },
+              candidates,
+            },
+          ]
+        : []
+    })
+
+    return {
+      differenceRows: [...changedRows, ...unmatchedRows],
+      blockedRows,
+    }
+  }
+
   return {
     accounts,
     cards,
     categories,
-    imports: importRows.map((importRow) => ({
-      ...importRow,
-      sourceFile: sourceFileById.get(importRow.sourceFileId) ?? null,
-      target:
-        (importRow.accountId
-          ? accountById.get(importRow.accountId)
-          : importRow.creditCardId
-            ? cardById.get(importRow.creditCardId)
-            : null) ?? null,
-      staged: stagedRows.filter((staged) => staged.importId === importRow.id),
-      corrections: correctionRows.filter((correction) =>
-        stagedRows.some(
-          (staged) =>
-            staged.importId === importRow.id &&
-            staged.id === correction.stagedTransactionId,
-        ),
-      ),
-      statementMatchCandidates:
-        importRow.parser === 'pdf_inspector' &&
-        importRow.creditCardId &&
-        importRow.status === 'review'
-          ? stagedRows
-              .filter((staged) => staged.importId === importRow.id)
-              .map((staged) => ({
-                stagedTransactionId: staged.id,
-                candidates: transactionRows
-                  .filter(
-                    (transaction) =>
-                      transaction.creditCardId === importRow.creditCardId &&
-                      transaction.importId !== importRow.id &&
-                      transaction.status !== 'excluded' &&
-                      transaction.currency === staged.currency &&
-                      !correctionRows.some(
-                        (correction) =>
-                          correction.transactionId === transaction.id &&
-                          correction.status !== 'rejected' &&
-                          stagedRows.some(
-                            (reservedStaged) =>
-                              reservedStaged.id ===
-                                correction.stagedTransactionId &&
-                              reservedStaged.importId === importRow.id &&
-                              reservedStaged.id !== staged.id,
-                          ),
-                      ) &&
-                      (!importRow.periodStart ||
-                        transaction.postedAt >= importRow.periodStart) &&
-                      (!importRow.periodEnd ||
-                        transaction.postedAt <= importRow.periodEnd),
-                  )
-                  .sort((left, right) => {
-                    const leftExact =
-                      left.amountCents === staged.amountCents ? 0 : 1
-                    const rightExact =
-                      right.amountCents === staged.amountCents ? 0 : 1
-                    return (
-                      leftExact - rightExact ||
-                      left.postedAt.localeCompare(right.postedAt)
-                    )
-                  })
-                  .map((transaction) => ({
-                    id: transaction.id,
-                    postedAt: transaction.postedAt,
-                    description: transaction.description,
-                    amountCents: transaction.amountCents,
-                    currency: transaction.currency,
-                    status: transaction.status,
-                  })),
-              }))
-          : [],
-      statementMissingCandidates: statementMissingCandidates(importRow),
-      statementExclusions: statementExclusionRows
-        .filter((exclusion) => exclusion.importId === importRow.id)
-        .map((exclusion) => ({
-          ...exclusion,
-          transaction:
-            transactionRows.find(
-              (transaction) => transaction.id === exclusion.transactionId,
-            ) ?? null,
-        })),
-      conflictingCheckpoint:
-        importRow.status !== 'review'
+    imports: importRows.map((importRow) => {
+      const staged = stagedRows.filter((item) => item.importId === importRow.id)
+      const corrections = correctionRows.filter((correction) =>
+        staged.some((item) => item.id === correction.stagedTransactionId),
+      )
+      const targetAccount = importRow.accountId
+        ? accountById.get(importRow.accountId)
+        : null
+      const targetCard = importRow.creditCardId
+        ? cardById.get(importRow.creditCardId)
+        : null
+      const target = targetAccount ?? targetCard ?? null
+      const targetInstitution = target?.institutionId
+        ? institutionById.get(target.institutionId)
+        : null
+      const targetIdentifiers = targetAccount
+        ? [targetAccount.externalId]
+        : targetCard
+          ? [
+              targetCard.lastFour,
+              ...cardInstruments
+                .filter((item) => item.creditCardId === targetCard.id)
+                .map((item) => item.lastFour),
+            ]
+          : []
+      const hasDestinationConflict = hasImportDestinationConflict(importRow, {
+        targetIdentifiers,
+        targetInstitutionName: targetInstitution?.name ?? null,
+      })
+      const effectiveReasonCode = effectiveValidationReason({
+        ...importRow,
+        hasDestinationConflict,
+      })
+      const effectiveValidationMessage = effectiveImportReviewValidationMessage(
+        {
+          persistedReason: importRow.validationReason,
+          effectiveReason: effectiveReasonCode,
+          persistedMessage: importRow.validationMessage,
+        },
+      )
+      const hasEffectiveDestinationConflict =
+        effectiveReasonCode === 'identical_file' ||
+        effectiveReasonCode === 'destination_conflict'
+      const effectiveValidationStatus = hasEffectiveDestinationConflict
+        ? ('divergent' as const)
+        : importRow.validationStatus
+      const remediationAvailable =
+        !isHardImportReviewReason(effectiveReasonCode)
+      const statementRows = remediationAvailable
+        ? statementReviewRows(importRow, staged)
+        : { differenceRows: [], blockedRows: [] }
+      const differenceRows = statementRows.differenceRows
+      const blockedRows = statementRows.blockedRows
+      const missingStatementTransactions = remediationAvailable
+        ? statementMissingCandidates(importRow)
+        : []
+      const conflictReasonCode = hasEffectiveDestinationConflict
+        ? effectiveReasonCode
+        : null
+      const duplicateCount = staged.filter((item) => item.duplicate).length
+      const coverageProvenance = getImportCoverageProvenance({
+        source: importRow.periodSource,
+        periodStart: importRow.periodStart,
+        periodEnd: importRow.periodEnd,
+      })
+      const targetType = importRow.accountId
+        ? ('account' as const)
+        : ('card' as const)
+      const conflictingCheckpoint =
+        !remediationAvailable || importRow.status !== 'review'
           ? null
           : (checkpointRows.find(
               (checkpoint) =>
@@ -220,7 +372,80 @@ export async function getImportReviewSnapshot() {
                     checkpoint.balanceCents !== importRow.openingBalanceCents,
                 ) ??
                 null)
-              : null)),
-    })),
+              : null))
+      const guidanceInput = {
+        targetType,
+        parser: importRow.parser,
+        validationStatus: effectiveValidationStatus,
+        validationMessage: effectiveValidationMessage,
+        parsedTransactionCount: importRow.parsedTransactionCount,
+        sourceTransactionCount: importRow.sourceTransactionCount,
+        closingBalanceCents: importRow.closingBalanceCents,
+        balanceDifferenceCents: importRow.balanceDifferenceCents,
+        invalidTransactionCount: importRow.invalidTransactionCount,
+        conflictReasonCode,
+        hasPendingCorrection: corrections.some(
+          (correction) => correction.status === 'pending',
+        ),
+        hasStatementMatchCandidates: differenceRows.length > 0,
+        hasStatementCurrencyMismatch: blockedRows.length > 0,
+        hasMissingStatementTransactions:
+          missingStatementTransactions.length > 0,
+        hasBalanceConflict: Boolean(conflictingCheckpoint),
+      }
+      const derivedReason = classifyImportReviewGuidance({
+        ...guidanceInput,
+        reasonCode: null,
+      }).kind
+      const reasonCode = resolveImportReviewReason({
+        stored: effectiveReasonCode,
+        derived: derivedReason,
+      })
+      const guidance = classifyImportReviewGuidance({
+        ...guidanceInput,
+        reasonCode,
+      })
+
+      return {
+        ...importRow,
+        validationStatus: effectiveValidationStatus,
+        validationReason: effectiveReasonCode,
+        validationMessage: effectiveValidationMessage,
+        sourceFile: sourceFileById.get(importRow.sourceFileId) ?? null,
+        target,
+        staged,
+        corrections,
+        reasonCode,
+        guidance,
+        needsCoverageConfirmation: !coverageProvenance.reliable,
+        hasIncompleteTransfer: staged.some(
+          (item) =>
+            !item.duplicate &&
+            item.suggestedCategoryId === 'transfer' &&
+            !item.counterpartyAccountId,
+        ),
+        coverageProvenance,
+        balanceReview: getImportBalanceReview({
+          targetType,
+          closingBalanceCents: importRow.closingBalanceCents,
+          balanceDifferenceCents: importRow.balanceDifferenceCents,
+        }),
+        duplicateCount,
+        newCount: staged.length - duplicateCount,
+        statementDifferenceRows: differenceRows,
+        statementBlockedRows: blockedRows,
+        statementMissingCandidates: missingStatementTransactions,
+        statementExclusions: statementExclusionRows
+          .filter((exclusion) => exclusion.importId === importRow.id)
+          .map((exclusion) => ({
+            ...exclusion,
+            transaction:
+              transactionRows.find(
+                (transaction) => transaction.id === exclusion.transactionId,
+              ) ?? null,
+          })),
+        conflictingCheckpoint,
+      }
+    }),
   }
 }

@@ -218,6 +218,20 @@
       "when": 1787849200000,
       "tag": "0030_reclassify_delivery_transactions",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1788528430708,
+      "tag": "0031_stormy_spencer_smythe",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1788534036000,
+      "tag": "0032_backfill_import_validation_reason",
+      "breakpoints": true
     }
   ]
 }

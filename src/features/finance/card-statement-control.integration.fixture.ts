@@ -2392,7 +2392,11 @@ export async function runCardStatementControlFixture() {
     ),
   )
   assert.equal(returnedImport[0].status, 'evidence')
-  assert.equal(priorStatementAfterReturn[0].validationStatus, 'warning')
+  assert.equal(priorStatementAfterReturn[0].validationStatus, 'divergent')
+  assert.equal(
+    priorStatementAfterReturn[0].validationReason,
+    'missing_statement_transactions',
+  )
 
   await db.insert(schema.importBatches).values({
     id: 'batch-missing-auth-returned-pdf',

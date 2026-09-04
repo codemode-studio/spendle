@@ -9,6 +9,8 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core'
 
+import type { ImportAuditReasonCode } from '../domain/import-audit'
+
 const createdAt = integer('created_at', { mode: 'timestamp' })
   .notNull()
   .default(sql`(unixepoch())`)
@@ -240,6 +242,7 @@ export const imports = sqliteTable(
     })
       .notNull()
       .default('warning'),
+    validationReason: text('validation_reason').$type<ImportAuditReasonCode>(),
     validationMessage: text('validation_message'),
     status: text('status', {
       enum: ['review', 'committed', 'evidence', 'rejected', 'failed'],

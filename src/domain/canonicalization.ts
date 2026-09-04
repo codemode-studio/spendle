@@ -12,6 +12,57 @@ export interface StatementValue {
   externalId?: string | null
 }
 
+export function statementIdentitiesCompatible(
+  observation: Pick<StatementValue, 'externalId'>,
+  transaction: Pick<StatementValue, 'externalId'>,
+) {
+  const observationExternalId = observation.externalId ?? null
+  const transactionExternalId = transaction.externalId ?? null
+  return (
+    observationExternalId === null ||
+    transactionExternalId === null ||
+    observationExternalId === transactionExternalId
+  )
+}
+
+export function statementLinkIsCompatible(
+  observation: Pick<StatementValue, 'externalId'>,
+  transaction: Pick<StatementValue, 'externalId'> & { id?: string },
+  stagedObservations: ReadonlyArray<Pick<StatementValue, 'externalId'>>,
+  ledgerTransactions: ReadonlyArray<
+    Pick<StatementValue, 'externalId'> & { id?: string }
+  > = [],
+) {
+  if (!statementIdentitiesCompatible(observation, transaction)) return false
+
+  // An ID-less observation cannot take a transaction whose id is claimed by
+  // another row of the same statement.
+  if (
+    !observation.externalId &&
+    transaction.externalId &&
+    stagedObservations.some(
+      (candidate) => candidate.externalId === transaction.externalId,
+    )
+  ) {
+    return false
+  }
+
+  // An identified observation cannot take an ID-less transaction when another
+  // canonical transaction already owns that id (ADR 001: identity first).
+  if (
+    observation.externalId &&
+    !transaction.externalId &&
+    ledgerTransactions.some(
+      (candidate) =>
+        candidate.externalId === observation.externalId &&
+        candidate.id !== transaction.id,
+    )
+  ) {
+    return false
+  }
+  return true
+}
+
 export function identifyDuplicateReasons(
   incoming: CanonicalIdentity[],
   existing: CanonicalIdentity[],
@@ -68,12 +119,10 @@ function statementIdentityMatches(
   observation: StatementValue,
   transaction: StatementValue,
 ) {
-  if (observation.externalId && transaction.externalId) {
-    return observation.externalId === transaction.externalId
-  }
   return (
+    statementIdentitiesCompatible(observation, transaction) &&
     statementValueSignature(observation) ===
-    statementValueSignature(transaction)
+      statementValueSignature(transaction)
   )
 }
 
@@ -131,22 +180,94 @@ export function matchOptionalStatementValues<
   TTransaction extends StatementValue,
 >(observations: TObservation[], transactions: TTransaction[]) {
   const available = [...transactions]
-  const matches: Array<{
+  type StatementPair = {
     observation: TObservation
     transaction: TTransaction
-  }> = []
-  const unmatched: TObservation[] = []
-  for (const observation of observations) {
-    const index = available.findIndex((transaction) =>
-      statementIdentityMatches(observation, transaction),
-    )
-    if (index < 0) unmatched.push(observation)
-    else {
-      matches.push({ observation, transaction: available[index] })
-      available.splice(index, 1)
-    }
   }
-  return { matches, unmatched }
+  const matchesByObservation: Array<StatementPair | null> = observations.map(
+    () => null,
+  )
+  const changedByObservation: Array<StatementPair | null> = observations.map(
+    () => null,
+  )
+
+  for (const [observationIndex, observation] of observations.entries()) {
+    if (!observation.externalId) continue
+    const sameIdIndex = available.findIndex(
+      (transaction) => transaction.externalId === observation.externalId,
+    )
+    if (sameIdIndex < 0) continue
+    const pair = {
+      observation,
+      transaction: available[sameIdIndex],
+    }
+    if (
+      statementValueSignature(pair.observation) ===
+      statementValueSignature(pair.transaction)
+    ) {
+      matchesByObservation[observationIndex] = pair
+    } else {
+      changedByObservation[observationIndex] = pair
+    }
+    available.splice(sameIdIndex, 1)
+  }
+
+  for (const [observationIndex, observation] of observations.entries()) {
+    if (
+      matchesByObservation[observationIndex] ||
+      changedByObservation[observationIndex]
+    ) {
+      continue
+    }
+    const observationSignature = statementValueSignature(observation)
+    // Value fallback only when at least one side has no external id: two rows
+    // with different bank identifiers are different facts even if the values
+    // coincide (ADR 001, multiplicidade).
+    const valueIndex = available.findIndex(
+      (transaction) =>
+        statementValueSignature(transaction) === observationSignature &&
+        statementIdentitiesCompatible(observation, transaction),
+    )
+    if (valueIndex < 0) continue
+    matchesByObservation[observationIndex] = {
+      observation,
+      transaction: available[valueIndex],
+    }
+    available.splice(valueIndex, 1)
+  }
+
+  const matches = matchesByObservation.filter(
+    (match): match is NonNullable<typeof match> => match !== null,
+  )
+  const changed = changedByObservation.filter(
+    (match): match is NonNullable<typeof match> => match !== null,
+  )
+  const unmatched = observations.filter(
+    (_, index) => matchesByObservation[index] === null,
+  )
+  const matchedTransactions = new Set(
+    matches.map(({ transaction }) => transaction),
+  )
+  const unmatchedTransactions = transactions.filter(
+    (transaction) => !matchedTransactions.has(transaction),
+  )
+  return { matches, changed, unmatched, unmatchedTransactions }
+}
+
+export function findTransactionsAbsentFromStatement<
+  TObservation extends StatementValue,
+  TTransaction extends StatementValue,
+>(observations: TObservation[], transactions: TTransaction[]) {
+  const { changed, unmatchedTransactions } = matchOptionalStatementValues(
+    observations,
+    transactions,
+  )
+  const changedTransactions = new Set(
+    changed.map(({ transaction }) => transaction),
+  )
+  return unmatchedTransactions.filter(
+    (transaction) => !changedTransactions.has(transaction),
+  )
 }
 
 export function resolveCanonicalAssignments<

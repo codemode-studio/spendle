@@ -9,6 +9,7 @@ import {
   toMinorUnits,
 } from '#/domain/currency'
 import { inferCoverageFromLearnedTemplates } from '#/domain/import-coverage'
+import { DESTINATION_CONFLICT_MESSAGE } from '#/domain/import-audit'
 import { getConfiguredAiModel } from './ai.server'
 import { parseCsvStatement } from './csv-statement.server'
 import { inspectPdfStatement } from './pdf-inspector.server'
@@ -77,9 +78,14 @@ export interface StatementReadResult {
   }
 }
 
+export type StatementReadErrorKind =
+  | 'identity_mismatch'
+  | 'extraction_blocked'
+
 export class StatementReadError extends Error {
   constructor(
     message: string,
+    readonly kind: StatementReadErrorKind,
     readonly result: StatementReadResult | null = null,
   ) {
     super(message)
@@ -524,8 +530,10 @@ function assertStatementIdentity(
     !targetInstitution.includes(detectedInstitution) &&
     !detectedInstitution.includes(targetInstitution)
   ) {
-    throw new Error(
+    throw new StatementReadError(
       `O documento parece ser de ${result.identity.institution}, mas o destino selecionado é ${input.targetInstitution}.`,
+      'identity_mismatch',
+      result,
     )
   }
   if (
@@ -533,8 +541,10 @@ function assertStatementIdentity(
       result.documentKind === 'card_statement') ||
     (input.targetType === 'card' && result.documentKind === 'bank_statement')
   ) {
-    throw new Error(
-      'O tipo de documento não corresponde ao destino selecionado.',
+    throw new StatementReadError(
+      DESTINATION_CONFLICT_MESSAGE,
+      'identity_mismatch',
+      result,
     )
   }
   if (
@@ -542,8 +552,10 @@ function assertStatementIdentity(
     input.targetIdentifiers.some(Boolean) &&
     !matchesDocumentLastFour(result.identity.lastFour, input.targetIdentifiers)
   ) {
-    throw new Error(
+    throw new StatementReadError(
       `O documento termina em •${result.identity.lastFour}, diferente do destino selecionado.`,
+      'identity_mismatch',
+      result,
     )
   }
 }
@@ -835,10 +847,12 @@ export async function readStatement(
       )
     }
   } catch (error) {
+    if (error instanceof StatementReadError) throw error
     throw new StatementReadError(
       error instanceof Error
         ? error.message
         : 'Falha ao interpretar o arquivo.',
+      'extraction_blocked',
       result,
     )
   }

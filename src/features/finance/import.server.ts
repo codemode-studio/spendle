@@ -19,8 +19,12 @@ import { convertMinorUnitsAtRate } from '#/domain/currency'
 import { normalizeDescription } from '#/domain/finance'
 import {
   canCommitImportAudit,
+  effectiveValidationReason,
   evaluateImportAudit,
+  IDENTICAL_FILE_CONFLICT_MESSAGE,
   identifyDuplicateReasons,
+  isHardImportReviewReason,
+  nextValidationState,
   summarizeImport,
 } from '#/domain/import-audit'
 import {
@@ -47,17 +51,31 @@ import {
   setCoverageInterval,
 } from './coverage-lifecycle.server'
 import {
+  assertImportBatchActionable,
+  assertImportActionable,
+  flagLiveBatchDestinationConflicts,
+} from './import-guards.server'
+import {
   matchesDocumentLastFour,
   normalizeLastFour,
   readStatement,
   StatementReadError,
 } from './statement-reader.server'
 import { refreshReconciliationAfterCommit } from './reconciliation-refresh.server'
+import { refreshStatementResolutionState } from './finance.server'
+import {
+  findRestoredExclusionOwnerImportIds,
+  reopenRestoredExclusionOwners,
+} from './statement-exclusions.server'
 import type { StatementReadResult } from './statement-reader.server'
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024
-const IDENTICAL_FILE_CONFLICT_MESSAGE =
-  'O mesmo arquivo já foi associado a outro destino. O lote foi bloqueado.'
+const IDENTICAL_FILE_CONFLICT = {
+  reasonCode: 'identical_file' as const,
+  message: IDENTICAL_FILE_CONFLICT_MESSAGE,
+  warning:
+    'Este arquivo idêntico já foi usado em outro destino. Confirme a conta ou o cartão antes de consolidar.',
+}
 const SAME_BATCH_PARTIAL_CSV_WARNING =
   'O PDF definitivo contém movimentações posteriores ao CSV e será a fonte canônica deste período.'
 const SAME_BATCH_EXACT_PDF_WARNING =
@@ -382,6 +400,10 @@ export async function stageImport(input: {
       error instanceof StatementReadError ? error.result : statement
     const message =
       error instanceof Error ? error.message : 'Falha ao interpretar o arquivo.'
+    const validationReason =
+      error instanceof StatementReadError && error.kind === 'identity_mismatch'
+        ? ('destination_conflict' as const)
+        : ('blocked' as const)
     await db.insert(schema.imports).values({
       id: importId,
       sourceFileId,
@@ -405,6 +427,7 @@ export async function stageImport(input: {
         failedStatement?.diagnostics.extractionDiagnosticsJson ?? null,
       status: 'failed',
       validationStatus: 'divergent',
+      validationReason,
       validationMessage: message,
       aiConsent: input.aiConsent,
       warning: message,
@@ -694,6 +717,7 @@ export async function stageImport(input: {
   })
   const audit = extractionBlockingReason
     ? {
+        reasonCode: 'blocked' as const,
         status: 'divergent' as const,
         expectedBalanceCents: evaluatedAudit.expectedBalanceCents,
         balanceDifferenceCents: evaluatedAudit.balanceDifferenceCents,
@@ -702,14 +726,13 @@ export async function stageImport(input: {
     : identicalFileUsedElsewhere
       ? {
           ...evaluatedAudit,
+          reasonCode: IDENTICAL_FILE_CONFLICT.reasonCode,
           status: 'divergent' as const,
-          message: IDENTICAL_FILE_CONFLICT_MESSAGE,
+          message: IDENTICAL_FILE_CONFLICT.message,
         }
       : evaluatedAudit
   const warnings = [
-    identicalFileUsedElsewhere
-      ? 'Este arquivo idêntico já foi usado em outro destino. Confirme a conta ou o cartão antes de consolidar.'
-      : null,
+    identicalFileUsedElsewhere ? IDENTICAL_FILE_CONFLICT.warning : null,
     aiWarning,
   ].filter(Boolean)
 
@@ -750,6 +773,7 @@ export async function stageImport(input: {
         expectedBalanceCents: audit.expectedBalanceCents,
         balanceDifferenceCents: audit.balanceDifferenceCents,
         validationStatus: audit.status,
+        validationReason: audit.reasonCode,
         validationMessage: audit.message,
         aiConsent: input.aiConsent,
         warning: warnings.join(' ') || null,
@@ -831,12 +855,18 @@ export async function reconcileCsvWithPdfControl(input: {
     current.push(row)
     stagedByImport.set(row.importId, current)
   }
+  const liveConflictIds = await flagLiveBatchDestinationConflicts(importRows, {
+    targetType: input.targetType,
+    targetId: input.targetId,
+  })
 
   const pdfControls = importRows.filter(
     (item) =>
+      !liveConflictIds.has(item.id) &&
       item.parser === 'pdf_inspector' &&
       item.status === 'review' &&
       item.validationStatus !== 'divergent' &&
+      !isHardImportReviewReason(effectiveValidationReason(item)) &&
       item.closingBalanceCents !== null &&
       item.closingBalanceType !== 'available' &&
       item.balanceAsOf !== null,
@@ -875,7 +905,11 @@ export async function reconcileCsvWithPdfControl(input: {
       : []
 
   for (const csvImport of importRows.filter(
-    (item) => item.parser === 'csv' && item.status === 'review',
+    (item) =>
+      !liveConflictIds.has(item.id) &&
+      item.parser === 'csv' &&
+      item.status === 'review' &&
+      !isHardImportReviewReason(effectiveValidationReason(item)),
   )) {
     const csvStaged = stagedByImport.get(csvImport.id) ?? []
     const pdfControl = pdfControls.find((candidate) =>
@@ -937,8 +971,14 @@ export async function reconcileCsvWithPdfControl(input: {
           .update(schema.imports)
           .set({
             dependsOnImportId: dependencyId,
-            validationStatus: 'reconciled',
-            validationMessage: `Aguardando a consolidação do ${documentLabel} definitivo. Depois disso, este CSV parcial será preservado como evidência dos lançamentos já vistos.`,
+            ...nextValidationState({
+              current: csvImport,
+              evaluated: {
+                validationStatus: 'reconciled',
+                validationReason: audit.reasonCode,
+                validationMessage: `Aguardando a consolidação do ${documentLabel} definitivo. Depois disso, este CSV parcial será preservado como evidência dos lançamentos já vistos.`,
+              },
+            }),
             warning: SAME_BATCH_PARTIAL_CSV_WARNING,
           })
           .where(eq(schema.imports.id, csvImport.id))
@@ -946,8 +986,14 @@ export async function reconcileCsvWithPdfControl(input: {
         transaction
           .update(schema.imports)
           .set({
-            validationStatus: 'reconciled',
-            validationMessage: `${documentLabel === 'fatura' ? 'Fatura definitiva reconciliada' : 'Extrato definitivo reconciliado'}. O documento inclui os lançamentos do CSV parcial e as movimentações ocorridas depois da última exportação.`,
+            ...nextValidationState({
+              current: partialPdf,
+              evaluated: {
+                validationStatus: 'reconciled',
+                validationReason: audit.reasonCode,
+                validationMessage: `${documentLabel === 'fatura' ? 'Fatura definitiva reconciliada' : 'Extrato definitivo reconciliado'}. O documento inclui os lançamentos do CSV parcial e as movimentações ocorridas depois da última exportação.`,
+              },
+            }),
             expectedBalanceCents: audit.expectedBalanceCents,
             balanceDifferenceCents: audit.balanceDifferenceCents,
             warning:
@@ -1012,8 +1058,14 @@ export async function reconcileCsvWithPdfControl(input: {
           statementDueDate: pdfControl.statementDueDate,
           expectedBalanceCents: audit.expectedBalanceCents,
           balanceDifferenceCents: audit.balanceDifferenceCents,
-          validationStatus: audit.status,
-          validationMessage: `${audit.message} Valores conferidos contra o PDF enviado no mesmo lote.`,
+          ...nextValidationState({
+            current: csvImport,
+            evaluated: {
+              validationStatus: audit.status,
+              validationReason: audit.reasonCode,
+              validationMessage: `${audit.message} Valores conferidos contra o PDF enviado no mesmo lote.`,
+            },
+          }),
           warning:
             'O CSV é a fonte canônica dos lançamentos; o PDF foi preservado como evidência de controle.',
         })
@@ -1097,11 +1149,17 @@ export async function reconcileCsvWithPdfControl(input: {
       if (checkpointAtDate.status === 'conflict') {
         await db
           .update(schema.imports)
-          .set({
-            validationStatus: 'divergent',
-            validationMessage:
-              'Já existe outro saldo contábil ativo para esta conta na mesma data. Invalide o ponto anterior antes de consolidar este extrato.',
-          })
+          .set(
+            nextValidationState({
+              current: pdfControl,
+              evaluated: {
+                validationStatus: 'divergent',
+                validationReason: 'balance_mismatch',
+                validationMessage:
+                  'Já existe outro saldo contábil ativo para esta conta na mesma data. Invalide o ponto anterior antes de consolidar este extrato.',
+              },
+            }),
+          )
           .where(eq(schema.imports.id, pdfControl.id))
         continue
       }
@@ -1127,10 +1185,12 @@ export async function reconcileCsvWithPdfControl(input: {
           resolution.unmatched,
           excludedInPeriod,
         )
-        resolution = {
-          matches: [...resolution.matches, ...restored.matches],
-          unmatched: restored.unmatched,
-        }
+        resolution = restored.changed.length
+          ? null
+          : {
+              matches: [...resolution.matches, ...restored.matches],
+              unmatched: restored.unmatched,
+            }
       }
       const existingMovementCents = account?.balanceAt
         ? priorTransactions
@@ -1181,12 +1241,18 @@ export async function reconcileCsvWithPdfControl(input: {
       if (!resolution || audit.status === 'divergent') {
         await db
           .update(schema.imports)
-          .set({
-            validationStatus: 'divergent',
-            validationMessage: resolution
-              ? audit.message
-              : 'Já existem lançamentos desta conta no período, mas o PDF não corresponde exatamente a eles em data, valor e moeda. A importação foi bloqueada para evitar duplicidades.',
-          })
+          .set(
+            nextValidationState({
+              current: pdfControl,
+              evaluated: {
+                validationStatus: 'divergent',
+                validationReason: resolution ? audit.reasonCode : 'blocked',
+                validationMessage: resolution
+                  ? audit.message
+                  : 'Já existem lançamentos desta conta no período, mas o PDF não corresponde exatamente a eles em data, valor e moeda. A importação foi bloqueada para evitar duplicidades.',
+              },
+            }),
+          )
           .where(eq(schema.imports.id, pdfControl.id))
         continue
       }
@@ -1211,8 +1277,14 @@ export async function reconcileCsvWithPdfControl(input: {
           transaction
             .update(schema.imports)
             .set({
-              validationStatus: audit.status,
-              validationMessage: `PDF conferido: ${assignments.length} lançamento(s) já existente(s) foram reconhecidos. Revise os ${resolution.unmatched.length} lançamento(s) novos antes de consolidar.`,
+              ...nextValidationState({
+                current: pdfControl,
+                evaluated: {
+                  validationStatus: audit.status,
+                  validationReason: audit.reasonCode,
+                  validationMessage: `PDF conferido: ${assignments.length} lançamento(s) já existente(s) foram reconhecidos. Revise os ${resolution.unmatched.length} lançamento(s) novos antes de consolidar.`,
+                },
+              }),
               expectedBalanceCents: audit.expectedBalanceCents,
               balanceDifferenceCents: audit.balanceDifferenceCents,
               warning:
@@ -1276,44 +1348,13 @@ export async function reconcileCsvWithPdfControl(input: {
           const restoredIds = restoredAssignments.map(
             ({ transaction: matched }) => matched.id,
           )
-          const activeExclusions = transaction
-            .select()
-            .from(schema.statementExclusions)
-            .where(
-              and(
-                inArray(schema.statementExclusions.transactionId, restoredIds),
-                sql`${schema.statementExclusions.reversedAt} is null`,
-              ),
-            )
-            .all()
-          if (activeExclusions.length) {
-            transaction
-              .update(schema.statementExclusions)
-              .set({
-                reversedAt: new Date(),
-                reason: sql`${schema.statementExclusions.reason} || ' Reaberta automaticamente porque um extrato posterior comprovou a movimentação.'`,
-              })
-              .where(
-                inArray(
-                  schema.statementExclusions.id,
-                  activeExclusions.map((exclusion) => exclusion.id),
-                ),
-              )
-              .run()
-            transaction
-              .update(schema.imports)
-              .set({
-                validationStatus: 'warning',
-                validationMessage:
-                  'Uma movimentação antes excluída apareceu em um extrato posterior. Os saldos seguintes foram reabertos para conferência.',
-              })
-              .where(
-                inArray(schema.imports.id, [
-                  ...new Set(activeExclusions.map((item) => item.importId)),
-                ]),
-              )
-              .run()
-          }
+          reopenRestoredExclusionOwners(transaction, {
+            transactionIds: restoredIds,
+            exclusionReasonSuffix:
+              'Reaberta automaticamente porque um extrato posterior comprovou a movimentação.',
+            validationMessage:
+              'Uma movimentação antes excluída apareceu em um extrato posterior. Os saldos seguintes foram reabertos para conferência.',
+          })
           transaction
             .update(schema.transactions)
             .set({ status: 'confirmed' })
@@ -1418,10 +1459,16 @@ export async function reconcileCsvWithPdfControl(input: {
           .set({
             status: createdFromPdf.length ? 'committed' : 'evidence',
             committedAt: new Date(),
-            validationStatus: audit.status,
-            validationMessage: createdFromPdf.length
-              ? `${audit.message} ${assignments.length} lançamento(s) existente(s) foram ligados e ${createdFromPdf.length} novo(s) foram incluídos uma única vez.`
-              : `${audit.message} O PDF foi ligado aos lançamentos já existentes e não criou duplicidades.`,
+            ...nextValidationState({
+              current: pdfControl,
+              evaluated: {
+                validationStatus: audit.status,
+                validationReason: audit.reasonCode,
+                validationMessage: createdFromPdf.length
+                  ? `${audit.message} ${assignments.length} lançamento(s) existente(s) foram ligados e ${createdFromPdf.length} novo(s) foram incluídos uma única vez.`
+                  : `${audit.message} O PDF foi ligado aos lançamentos já existentes e não criou duplicidades.`,
+              },
+            }),
             expectedBalanceCents: audit.expectedBalanceCents,
             balanceDifferenceCents: audit.balanceDifferenceCents,
             warning: createdFromPdf.length
@@ -1504,11 +1551,17 @@ export async function reconcileCsvWithPdfControl(input: {
     if (checkpointAtDate.status === 'conflict') {
       await db
         .update(schema.imports)
-        .set({
-          validationStatus: 'divergent',
-          validationMessage:
-            'Já existe outro total de fatura ativo para este cartão na mesma data. Invalide o ponto anterior antes de consolidar.',
-        })
+        .set(
+          nextValidationState({
+            current: pdfControl,
+            evaluated: {
+              validationStatus: 'divergent',
+              validationReason: 'balance_mismatch',
+              validationMessage:
+                'Já existe outro total de fatura ativo para este cartão na mesma data. Invalide o ponto anterior antes de consolidar.',
+            },
+          }),
+        )
         .where(eq(schema.imports.id, pdfControl.id))
       continue
     }
@@ -1534,11 +1587,24 @@ export async function reconcileCsvWithPdfControl(input: {
         resolution.unmatched,
         excludedInPeriod,
       )
-      resolution = {
-        matches: [...resolution.matches, ...restored.matches],
-        unmatched: restored.unmatched,
-      }
+      resolution = restored.changed.length
+        ? null
+        : {
+            matches: [...resolution.matches, ...restored.matches],
+            unmatched: restored.unmatched,
+          }
     }
+    const unresolvedStatementValues = resolution
+      ? null
+      : matchOptionalStatementValues(pdfStaged, canonicalInPeriod)
+    const unresolvedStatementReason = unresolvedStatementValues?.unmatched
+      .length
+      ? ('statement_match_candidates' as const)
+      : unresolvedStatementValues?.unmatchedTransactions.some(
+            (transaction) => transaction.status === 'pending',
+          )
+        ? ('missing_statement_transactions' as const)
+        : ('statement_match_candidates' as const)
     const audit = evaluateImportAudit({
       targetType: 'card',
       sourceTransactionCount: pdfControl.sourceTransactionCount,
@@ -1561,11 +1627,19 @@ export async function reconcileCsvWithPdfControl(input: {
     if (!resolution || audit.status !== 'reconciled') {
       await db
         .update(schema.imports)
-        .set({
-          validationStatus: 'divergent',
-          validationMessage:
-            'Já existem lançamentos deste cartão no período, mas eles não correspondem exatamente ao PDF definitivo. Compare as diferenças, corrija o período ou rejeite esta importação; nada novo será consolidado enquanto houver ambiguidade.',
-        })
+        .set(
+          nextValidationState({
+            current: pdfControl,
+            evaluated: {
+              validationStatus: 'divergent',
+              validationReason: resolution
+                ? audit.reasonCode
+                : unresolvedStatementReason,
+              validationMessage:
+                'Já existem lançamentos deste cartão no período, mas eles não correspondem exatamente ao PDF definitivo. Compare as diferenças, corrija o período ou rejeite esta importação; nada novo será consolidado enquanto houver ambiguidade.',
+            },
+          }),
+        )
         .where(eq(schema.imports.id, pdfControl.id))
       continue
     }
@@ -1590,8 +1664,14 @@ export async function reconcileCsvWithPdfControl(input: {
         transaction
           .update(schema.imports)
           .set({
-            validationStatus: 'reconciled',
-            validationMessage: `Fatura conferida: ${assignments.length} lançamento(s) já importado(s) foram reconhecidos. Revise os ${resolution.unmatched.length} lançamento(s) novos antes de consolidar.`,
+            ...nextValidationState({
+              current: pdfControl,
+              evaluated: {
+                validationStatus: 'reconciled',
+                validationReason: audit.reasonCode,
+                validationMessage: `Fatura conferida: ${assignments.length} lançamento(s) já importado(s) foram reconhecidos. Revise os ${resolution.unmatched.length} lançamento(s) novos antes de consolidar.`,
+              },
+            }),
             expectedBalanceCents: audit.expectedBalanceCents,
             balanceDifferenceCents: audit.balanceDifferenceCents,
             warning:
@@ -1671,44 +1751,13 @@ export async function reconcileCsvWithPdfControl(input: {
         const restoredIds = restoredAssignments.map(
           ({ transaction: matched }) => matched.id,
         )
-        const activeExclusions = transaction
-          .select()
-          .from(schema.statementExclusions)
-          .where(
-            and(
-              inArray(schema.statementExclusions.transactionId, restoredIds),
-              sql`${schema.statementExclusions.reversedAt} is null`,
-            ),
-          )
-          .all()
-        if (activeExclusions.length) {
-          transaction
-            .update(schema.statementExclusions)
-            .set({
-              reversedAt: new Date(),
-              reason: sql`${schema.statementExclusions.reason} || ' Reaberta automaticamente porque uma fatura posterior comprovou a movimentação.'`,
-            })
-            .where(
-              inArray(
-                schema.statementExclusions.id,
-                activeExclusions.map((exclusion) => exclusion.id),
-              ),
-            )
-            .run()
-          transaction
-            .update(schema.imports)
-            .set({
-              validationStatus: 'warning',
-              validationMessage:
-                'Uma movimentação antes marcada como autorização ausente apareceu em uma fatura posterior. O fechamento foi reaberto para conferência.',
-            })
-            .where(
-              inArray(schema.imports.id, [
-                ...new Set(activeExclusions.map((item) => item.importId)),
-              ]),
-            )
-            .run()
-        }
+        reopenRestoredExclusionOwners(transaction, {
+          transactionIds: restoredIds,
+          exclusionReasonSuffix:
+            'Reaberta automaticamente porque uma fatura posterior comprovou a movimentação.',
+          validationMessage:
+            'Uma movimentação antes marcada como autorização ausente apareceu em uma fatura posterior. O fechamento foi reaberto para conferência.',
+        })
         transaction
           .update(schema.transactions)
           .set({ status: 'confirmed' })
@@ -1844,12 +1893,18 @@ export async function reconcileCsvWithPdfControl(input: {
         .set({
           status: createdFromPdf.length ? 'committed' : 'evidence',
           committedAt: new Date(),
-          validationStatus: 'reconciled',
-          validationMessage: createdFromPdf.length
-            ? `PDF definitivo conferido: ${assignments.length} lançamento(s) já existente(s) foram ligados e ${createdFromPdf.length} lançamento(s) do fechamento foram incluídos uma única vez.`
-            : confirmedPending
-              ? 'PDF definitivo conferido contra os lançamentos já importados. Os pendentes foram confirmados sem duplicação.'
-              : 'PDF definitivo repetido conferido contra os lançamentos já consolidados e preservado como evidência adicional.',
+          ...nextValidationState({
+            current: pdfControl,
+            evaluated: {
+              validationStatus: 'reconciled',
+              validationReason: audit.reasonCode,
+              validationMessage: createdFromPdf.length
+                ? `PDF definitivo conferido: ${assignments.length} lançamento(s) já existente(s) foram ligados e ${createdFromPdf.length} lançamento(s) do fechamento foram incluídos uma única vez.`
+                : confirmedPending
+                  ? 'PDF definitivo conferido contra os lançamentos já importados. Os pendentes foram confirmados sem duplicação.'
+                  : 'PDF definitivo repetido conferido contra os lançamentos já consolidados e preservado como evidência adicional.',
+            },
+          }),
           expectedBalanceCents: audit.expectedBalanceCents,
           balanceDifferenceCents: audit.balanceDifferenceCents,
           warning: createdFromPdf.length
@@ -1869,15 +1924,27 @@ export async function reconcileCsvWithPdfControl(input: {
         )
       }
       for (const matchedImportId of matchedImportIds) {
+        const matchedImport = transaction
+          .select()
+          .from(schema.imports)
+          .where(eq(schema.imports.id, matchedImportId))
+          .get()
+        if (!matchedImport) continue
         transaction
           .update(schema.imports)
           .set({
             closingBalanceCents: pdfControl.closingBalanceCents,
             balanceAsOf: pdfControl.balanceAsOf,
             statementDueDate: pdfControl.statementDueDate,
-            validationStatus: 'reconciled',
-            validationMessage:
-              'Fatura encerrada pelo PDF definitivo importado posteriormente; os lançamentos do CSV foram preservados e confirmados.',
+            ...nextValidationState({
+              current: matchedImport,
+              evaluated: {
+                validationStatus: 'reconciled',
+                validationReason: audit.reasonCode,
+                validationMessage:
+                  'Fatura encerrada pelo PDF definitivo importado posteriormente; os lançamentos do CSV foram preservados e confirmados.',
+              },
+            }),
             expectedBalanceCents: audit.expectedBalanceCents,
             balanceDifferenceCents: audit.balanceDifferenceCents,
           })
@@ -2109,6 +2176,15 @@ async function linkBatchEvidence(batchId: string) {
         sql`${schema.transactionEvidence.id} is null`,
       ),
     )
+  const firstImport = observations.at(0)?.import
+  if (!firstImport) return
+  const liveConflictIds = await flagLiveBatchDestinationConflicts(
+    observations.map((row) => row.import),
+    {
+      targetType: firstImport.accountId ? 'account' : 'card',
+      targetId: firstImport.accountId ?? firstImport.creditCardId!,
+    },
+  )
   const assigned = new Set<string>()
   const externalTransactions = await db
     .select({
@@ -2131,6 +2207,12 @@ async function linkBatchEvidence(batchId: string) {
     }),
   )
   for (const row of observations) {
+    if (
+      liveConflictIds.has(row.import.id) ||
+      isHardImportReviewReason(effectiveValidationReason(row.import))
+    ) {
+      continue
+    }
     const isControlledPartialCsv =
       row.import.parser === 'csv' &&
       row.import.validationStatus === 'reconciled' &&
@@ -2229,7 +2311,10 @@ async function finishImportBatchIfComplete(batchId: string) {
   await refreshImportBatchCoverage({ batchId, mode: 'completed' })
 }
 
-async function finalizeImportAfterCommit(batchId: string | null) {
+async function finalizeImportAfterCommit(
+  batchId: string | null,
+  importId: string,
+) {
   const batchEvidence = await runPostCommitStep(
     batchId ? () => linkBatchEvidence(batchId) : null,
   )
@@ -2237,13 +2322,40 @@ async function finalizeImportAfterCommit(batchId: string | null) {
     batchId ? () => finishImportBatchIfComplete(batchId) : null,
   )
   const reconciliation = await refreshReconciliationAfterCommit()
+  const statementOwners = await runPostCommitStep(async () => {
+    const finalizedImportIds = batchId
+      ? (
+          await db
+            .select({ id: schema.imports.id })
+            .from(schema.imports)
+            .where(eq(schema.imports.batchId, batchId))
+        ).map((item) => item.id)
+      : [importId]
+    const restoredOwnerIds = await findRestoredExclusionOwnerImportIds(
+      finalizedImportIds,
+    )
+    if (restoredOwnerIds.length) {
+      await Promise.all(
+        restoredOwnerIds.map((ownerImportId) =>
+          refreshStatementResolutionState(ownerImportId),
+        ),
+      )
+    }
+  })
   const status =
     batchEvidence.status === 'deferred' ||
     batchCoverage.status === 'deferred' ||
-    reconciliation.status === 'deferred'
+    reconciliation.status === 'deferred' ||
+    statementOwners.status === 'deferred'
       ? ('deferred' as const)
       : ('completed' as const)
-  return { status, batchEvidence, batchCoverage, reconciliation }
+  return {
+    status,
+    batchEvidence,
+    batchCoverage,
+    reconciliation,
+    statementOwners,
+  }
 }
 
 async function matchStructuredImportToTrustedControls(
@@ -2373,7 +2485,16 @@ async function matchStructuredImportToTrustedControls(
         'O lançamento pertence a mais de um ciclo reconciliado. Revise os períodos das faturas antes de consolidar este CSV.'
       await db
         .update(schema.imports)
-        .set({ validationStatus: 'divergent', validationMessage: message })
+        .set(
+          nextValidationState({
+            current: importRow,
+            evaluated: {
+              validationStatus: 'divergent',
+              validationReason: 'blocked',
+              validationMessage: message,
+            },
+          }),
+        )
         .where(eq(schema.imports.id, importRow.id))
       throw new Error(message)
     }
@@ -2429,7 +2550,16 @@ async function matchStructuredImportToTrustedControls(
       const message = `O arquivo estruturado contém o lançamento "${observation.description}" dentro de um período já controlado por PDF, mas não existe uma linha idêntica em data, valor e moeda. Revise ou rejeite o arquivo; nenhuma duplicidade foi criada.`
       await db
         .update(schema.imports)
-        .set({ validationStatus: 'divergent', validationMessage: message })
+        .set(
+          nextValidationState({
+            current: importRow,
+            evaluated: {
+              validationStatus: 'divergent',
+              validationReason: 'blocked',
+              validationMessage: message,
+            },
+          }),
+        )
         .where(eq(schema.imports.id, importRow.id))
       throw new Error(message)
     }
@@ -2458,6 +2588,7 @@ export async function commitImport(
   if (importRow.status === 'committed' || importRow.status === 'evidence') {
     return { committed: 0, reused: true }
   }
+  await assertImportActionable(importRow, 'commit')
   if (importRow.status !== 'review') {
     throw new Error('Somente lotes em revisão podem ser consolidados.')
   }
@@ -2579,6 +2710,21 @@ export async function commitImport(
     importRow = { ...importRow, ...refreshedControls }
   }
 
+  if (importRow.batchId) {
+    const batchMembers = await db
+      .select()
+      .from(schema.imports)
+      .where(eq(schema.imports.batchId, importRow.batchId))
+    await assertImportBatchActionable(
+      batchMembers,
+      {
+        targetType: importRow.accountId ? 'account' : 'card',
+        targetId: importRow.accountId ?? importRow.creditCardId!,
+      },
+      'commit',
+    )
+  }
+
   if (importRow.validationStatus === 'divergent') {
     throw new Error(
       importRow.validationMessage ||
@@ -2628,7 +2774,10 @@ export async function commitImport(
       .limit(1)
     importRow = refreshed[0]
     if (importRow.status === 'committed' || importRow.status === 'evidence') {
-      const postCommit = await finalizeImportAfterCommit(importRow.batchId)
+      const postCommit = await finalizeImportAfterCommit(
+        importRow.batchId,
+        importId,
+      )
       const created = await db
         .select({ count: sql<number>`count(*)` })
         .from(schema.transactions)
@@ -2764,11 +2913,17 @@ export async function commitImport(
         .onConflictDoNothing()
       await db
         .update(schema.imports)
-        .set({
-          validationStatus: 'divergent',
-          validationMessage:
-            'O banco reenviou uma transação identificada com dados diferentes. A correção ficou pendente de revisão; o lançamento atual não foi alterado.',
-        })
+        .set(
+          nextValidationState({
+            current: importRow,
+            evaluated: {
+              validationStatus: 'divergent',
+              validationReason: 'pending_correction',
+              validationMessage:
+                'O banco reenviou uma transação identificada com dados diferentes. A correção ficou pendente de revisão; o lançamento atual não foi alterado.',
+            },
+          }),
+        )
         .where(eq(schema.imports.id, importId))
       throw new Error(
         'O banco reenviou uma transação com dados diferentes. Revise a correção pendente; nada foi alterado no histórico.',
@@ -2866,8 +3021,14 @@ export async function commitImport(
     await db
       .update(schema.imports)
       .set({
-        validationStatus: audit.status,
-        validationMessage: audit.message,
+        ...nextValidationState({
+          current: importRow,
+          evaluated: {
+            validationStatus: audit.status,
+            validationReason: audit.reasonCode,
+            validationMessage: audit.message,
+          },
+        }),
         expectedBalanceCents: audit.expectedBalanceCents,
         balanceDifferenceCents: audit.balanceDifferenceCents,
       })
@@ -2909,7 +3070,16 @@ export async function commitImport(
       'Já existe outro saldo ativo deste tipo para a mesma data. Invalide o ponto anterior antes de consolidar este arquivo.'
     await db
       .update(schema.imports)
-      .set({ validationStatus: 'divergent', validationMessage: message })
+      .set(
+        nextValidationState({
+          current: importRow,
+          evaluated: {
+            validationStatus: 'divergent',
+            validationReason: 'balance_mismatch',
+            validationMessage: message,
+          },
+        }),
+      )
       .where(eq(schema.imports.id, importId))
     throw new Error(message)
   }
@@ -2927,6 +3097,7 @@ export async function commitImport(
           (candidate) =>
             candidate.parser === 'pdf_inspector' &&
             candidate.status === 'review' &&
+            !isHardImportReviewReason(effectiveValidationReason(candidate)) &&
             candidate.dependsOnImportId === importId &&
             candidate.closingBalanceCents === importRow.closingBalanceCents &&
             candidate.balanceAsOf === importRow.balanceAsOf,
@@ -2949,6 +3120,7 @@ export async function commitImport(
       ).filter(
         (candidate) =>
           candidate.status === 'review' &&
+          !isHardImportReviewReason(effectiveValidationReason(candidate)) &&
           candidate.dependsOnImportId === importId,
       )
     : []
@@ -3188,47 +3360,13 @@ export async function commitImport(
         .map((item) => item.postedAt)
         .sort()
         .at(0)!
-      const activeExclusions = transaction
-        .select()
-        .from(schema.statementExclusions)
-        .where(
-          and(
-            inArray(
-              schema.statementExclusions.transactionId,
-              restoredTransactionIds,
-            ),
-            sql`${schema.statementExclusions.reversedAt} is null`,
-          ),
-        )
-        .all()
-      if (activeExclusions.length) {
-        transaction
-          .update(schema.statementExclusions)
-          .set({
-            reversedAt: new Date(),
-            reason: sql`${schema.statementExclusions.reason} || ' Reaberta automaticamente porque uma importação posterior comprovou a movimentação.'`,
-          })
-          .where(
-            inArray(
-              schema.statementExclusions.id,
-              activeExclusions.map((exclusion) => exclusion.id),
-            ),
-          )
-          .run()
-        transaction
-          .update(schema.imports)
-          .set({
-            validationStatus: 'warning',
-            validationMessage:
-              'Uma movimentação antes marcada como autorização ausente apareceu em uma importação posterior. O fechamento e os saldos seguintes foram reabertos para conferência.',
-          })
-          .where(
-            inArray(schema.imports.id, [
-              ...new Set(activeExclusions.map((item) => item.importId)),
-            ]),
-          )
-          .run()
-      }
+      reopenRestoredExclusionOwners(transaction, {
+        transactionIds: restoredTransactionIds,
+        exclusionReasonSuffix:
+          'Reaberta automaticamente porque uma importação posterior comprovou a movimentação.',
+        validationMessage:
+          'Uma movimentação antes marcada como autorização ausente apareceu em uma importação posterior. O fechamento e os saldos seguintes foram reabertos para conferência.',
+      })
       transaction
         .update(schema.transactions)
         .set({
@@ -3443,8 +3581,14 @@ export async function commitImport(
       .set({
         status: prepared.length ? 'committed' : 'evidence',
         committedAt: new Date(),
-        validationStatus: audit.status,
-        validationMessage: audit.message,
+        ...nextValidationState({
+          current: importRow,
+          evaluated: {
+            validationStatus: audit.status,
+            validationReason: audit.reasonCode,
+            validationMessage: audit.message,
+          },
+        }),
         expectedBalanceCents: audit.expectedBalanceCents,
         balanceDifferenceCents: audit.balanceDifferenceCents,
       })
@@ -3578,7 +3722,7 @@ export async function commitImport(
         .run()
     }
   })
-  const postCommit = await finalizeImportAfterCommit(importRow.batchId)
+  const postCommit = await finalizeImportAfterCommit(importRow.batchId, importId)
   return {
     committed: prepared.length,
     reused: false,
@@ -3589,16 +3733,17 @@ export async function commitImport(
 export async function retryImportFinalization(importId: string) {
   await ensureDatabase()
   const importRow = await db
-    .select({ status: schema.imports.status, batchId: schema.imports.batchId })
+    .select()
     .from(schema.imports)
     .where(eq(schema.imports.id, importId))
     .limit(1)
   const current = importRow.at(0)
   if (!current) throw new Error('Importação não encontrada.')
+  await assertImportActionable(current, 'retry_finalization')
   if (current.status !== 'committed' && current.status !== 'evidence') {
     throw new Error('A importação ainda não foi consolidada.')
   }
-  return finalizeImportAfterCommit(current.batchId)
+  return finalizeImportAfterCommit(current.batchId, importId)
 }
 
 export async function rejectImport(importId: string) {
@@ -3643,14 +3788,25 @@ export async function rejectImport(importId: string) {
         .set({
           dependsOnImportId: null,
           warning: null,
-          validationStatus:
-            sibling.parser === 'pdf_inspector'
-              ? sibling.validationStatus
-              : 'imported',
-          validationMessage:
-            sibling.parser === 'pdf_inspector'
-              ? 'O arquivo principal foi rejeitado. Este PDF agora pode ser revisado e consolidado sozinho.'
-              : 'O arquivo principal foi rejeitado. Este arquivo estruturado agora pode ser revisado e consolidado sozinho.',
+          ...nextValidationState({
+            current: sibling,
+            evaluated: {
+              validationStatus:
+                sibling.parser === 'pdf_inspector'
+                  ? sibling.validationStatus
+                  : 'imported',
+              validationReason:
+                sibling.parser === 'pdf_inspector'
+                  ? sibling.validationReason
+                  : sibling.closingBalanceCents === null
+                    ? 'needs_balance'
+                    : 'ready',
+              validationMessage:
+                sibling.parser === 'pdf_inspector'
+                  ? 'O arquivo principal foi rejeitado. Este PDF agora pode ser revisado e consolidado sozinho.'
+                  : 'O arquivo principal foi rejeitado. Este arquivo estruturado agora pode ser revisado e consolidado sozinho.',
+            },
+          }),
         })
         .where(
           and(
@@ -3673,6 +3829,15 @@ export async function rejectImport(importId: string) {
 }
 
 export async function replaceConflictingCheckpoint(importId: string) {
+  await ensureDatabase()
+  const importRows = await db
+    .select()
+    .from(schema.imports)
+    .where(eq(schema.imports.id, importId))
+    .limit(1)
+  const importRow = importRows.at(0)
+  if (!importRow) throw new Error('Importação não encontrada.')
+  await assertImportActionable(importRow, 'replace_checkpoint')
   const result = await replaceCheckpointChainForImport(importId)
   const reconciliationRefresh = await refreshReconciliationAfterCommit()
   return { ...result, reconciliationRefresh }
@@ -3682,6 +3847,15 @@ export async function confirmImportCoverage(input: {
   periodStart: string
   periodEnd: string
 }) {
+  await ensureDatabase()
+  const importRows = await db
+    .select()
+    .from(schema.imports)
+    .where(eq(schema.imports.id, input.importId))
+    .limit(1)
+  const importRow = importRows.at(0)
+  if (!importRow) throw new Error('Importação não encontrada.')
+  await assertImportActionable(importRow, 'confirm_coverage')
   const confirmation = await confirmCoveragePeriod(input)
   await reconcileCsvWithPdfControl({
     importIds: confirmation.relatedImportIds,

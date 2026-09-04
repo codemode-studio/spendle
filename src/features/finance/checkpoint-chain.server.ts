@@ -8,6 +8,11 @@ import {
   evaluateCheckpoint,
 } from '#/domain/balance-checkpoint'
 import { formatCurrency } from '#/domain/currency'
+import {
+  effectiveValidationReason,
+  isHardImportReviewReason,
+  nextValidationState,
+} from '#/domain/import-audit'
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
@@ -182,6 +187,19 @@ export async function recordManualBalanceCheckpoint(input: {
   const replacedCheckpointIds = replacedCheckpoints.map(
     (checkpoint) => checkpoint.id,
   )
+  const replacedImportIds = [
+    ...new Set(
+      replacedCheckpoints.flatMap((checkpoint) =>
+        checkpoint.importId ? [checkpoint.importId] : [],
+      ),
+    ),
+  ]
+  const replacedImports = replacedImportIds.length
+    ? await db
+        .select()
+        .from(schema.imports)
+        .where(inArray(schema.imports.id, replacedImportIds))
+    : []
   const previous = checkpoints
     .filter((checkpoint) => !replacedCheckpointIds.includes(checkpoint.id))
     .find(
@@ -267,18 +285,21 @@ export async function recordManualBalanceCheckpoint(input: {
         })
         .where(inArray(schema.balanceCheckpoints.id, replacedCheckpointIds))
         .run()
-      const affectedImportIds = replacedCheckpoints.flatMap((checkpoint) =>
-        checkpoint.importId ? [checkpoint.importId] : [],
-      )
-      if (affectedImportIds.length) {
+      for (const affectedImport of replacedImports) {
         transaction
           .update(schema.imports)
-          .set({
-            validationStatus: 'warning',
-            validationMessage:
-              'O ponto de controle deste documento foi substituído manualmente. Os saldos posteriores precisam ser conferidos novamente.',
-          })
-          .where(inArray(schema.imports.id, affectedImportIds))
+          .set(
+            nextValidationState({
+              current: affectedImport,
+              evaluated: {
+                validationStatus: 'warning',
+                validationReason: 'needs_manual_review',
+                validationMessage:
+                  'O ponto de controle deste documento foi substituído manualmente. Os saldos posteriores precisam ser conferidos novamente.',
+              },
+            }),
+          )
+          .where(eq(schema.imports.id, affectedImport.id))
           .run()
       }
     }
@@ -423,6 +444,11 @@ export async function replaceCheckpointChainForImport(importId: string) {
       'Esta importação não possui um saldo conflitante revisável.',
     )
   }
+  if (isHardImportReviewReason(effectiveValidationReason(importRow))) {
+    throw new Error(
+      'Esta importação possui um bloqueio obrigatório e não pode substituir pontos de controle.',
+    )
+  }
   const balanceType = importRow.creditCardId
     ? ('card_statement' as const)
     : importRow.closingBalanceType === 'available'
@@ -491,6 +517,19 @@ export async function replaceCheckpointChainForImport(importId: string) {
     )
   })
   const affectedIds = affected.map((checkpoint) => checkpoint.id)
+  const affectedImportIds = [
+    ...new Set(
+      affected.flatMap((checkpoint) =>
+        checkpoint.importId ? [checkpoint.importId] : [],
+      ),
+    ),
+  ]
+  const affectedImports = affectedImportIds.length
+    ? await db
+        .select()
+        .from(schema.imports)
+        .where(inArray(schema.imports.id, affectedImportIds))
+    : []
 
   db.transaction((transaction) => {
     transaction
@@ -503,27 +542,36 @@ export async function replaceCheckpointChainForImport(importId: string) {
       })
       .where(inArray(schema.balanceCheckpoints.id, affectedIds))
       .run()
-    const affectedImportIds = affected.flatMap((checkpoint) =>
-      checkpoint.importId ? [checkpoint.importId] : [],
-    )
-    if (affectedImportIds.length) {
+    for (const affectedImport of affectedImports) {
       transaction
         .update(schema.imports)
-        .set({
-          validationStatus: 'warning',
-          validationMessage:
-            'O ponto de controle deste documento foi substituído por uma correção explícita. Os saldos posteriores precisam ser conferidos novamente.',
-        })
-        .where(inArray(schema.imports.id, affectedImportIds))
+        .set(
+          nextValidationState({
+            current: affectedImport,
+            evaluated: {
+              validationStatus: 'warning',
+              validationReason: 'needs_manual_review',
+              validationMessage:
+                'O ponto de controle deste documento foi substituído por uma correção explícita. Os saldos posteriores precisam ser conferidos novamente.',
+            },
+          }),
+        )
+        .where(eq(schema.imports.id, affectedImport.id))
         .run()
     }
     transaction
       .update(schema.imports)
-      .set({
-        validationStatus: 'imported',
-        validationMessage:
-          'O saldo anterior foi invalidado com registro de auditoria. Revise este arquivo e consolide para criar o novo ponto de controle.',
-      })
+      .set(
+        nextValidationState({
+          current: importRow,
+          evaluated: {
+            validationStatus: 'imported',
+            validationReason: 'ready',
+            validationMessage:
+              'O saldo anterior foi invalidado com registro de auditoria. Revise este arquivo e consolide para criar o novo ponto de controle.',
+          },
+        }),
+      )
       .where(eq(schema.imports.id, importId))
       .run()
     if (
