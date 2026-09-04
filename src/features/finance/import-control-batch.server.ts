@@ -7,9 +7,8 @@ import {
   sameStatementValues,
 } from '#/domain/canonicalization'
 import {
-  effectiveValidationReason,
   evaluateImportAudit,
-  isHardImportReviewReason,
+  getEffectiveImportValidationState,
   nextValidationState,
 } from '#/domain/import-audit'
 
@@ -67,7 +66,7 @@ export async function reconcileSameBatchControls(input: {
       !liveConflictIds.has(item.id) &&
       item.parser === 'csv' &&
       item.status === 'review' &&
-      !isHardImportReviewReason(effectiveValidationReason(item)),
+      getEffectiveImportValidationState(item).remediation.links,
   )) {
     const csvStaged = stagedByImport.get(csvImport.id) ?? []
     const pdfControl = pdfControls.find((candidate) =>

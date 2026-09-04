@@ -9,8 +9,7 @@ import {
 } from '#/domain/balance-checkpoint'
 import { formatCurrency } from '#/domain/currency'
 import {
-  effectiveValidationReason,
-  isHardImportReviewReason,
+  getEffectiveImportValidationState,
   nextValidationState,
 } from '#/domain/import-audit'
 import { assertIsoDate } from '#/domain/period'
@@ -660,7 +659,10 @@ export async function replaceCheckpointChainForImport(importId: string) {
       'Esta importação não possui um saldo conflitante revisável.',
     )
   }
-  if (isHardImportReviewReason(effectiveValidationReason(importRow))) {
+  if (
+    !getEffectiveImportValidationState(importRow).remediation
+      .checkpointReplacement
+  ) {
     throw new Error(
       'Esta importação possui um bloqueio obrigatório e não pode substituir pontos de controle.',
     )

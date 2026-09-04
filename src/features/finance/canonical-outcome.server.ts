@@ -15,8 +15,7 @@ import type {
   CanonicalOutcomeAssignment,
 } from '#/domain/canonicalization'
 import {
-  effectiveValidationReason,
-  isHardImportReviewReason,
+  getEffectiveImportValidationState,
   nextValidationState,
 } from '#/domain/import-audit'
 import { linkCanonicalObservation } from './canonicalization.server'
@@ -34,7 +33,7 @@ import {
   hasReliableCoverage,
   setCoverageInterval,
 } from './coverage-lifecycle.server'
-import { flagLiveBatchDestinationConflicts } from './import-guards.server'
+import { loadEffectiveImportValidationStates } from './import-guards.server'
 import { reopenRestoredExclusionOwners } from './statement-exclusions.server'
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
@@ -421,7 +420,7 @@ function resolveDependentEvidence(
         .filter(
           (candidate) =>
             candidate.status === 'review' &&
-            !isHardImportReviewReason(effectiveValidationReason(candidate)) &&
+            getEffectiveImportValidationState(candidate).remediation.links &&
             candidate.dependsOnImportId === importRow.id,
         )
     : []
@@ -912,15 +911,15 @@ export async function recoverBatchEvidence(batchId: string) {
   )
   const firstImport = importRows.at(0)
   if (!firstImport) return
-  const conflictIds = await flagLiveBatchDestinationConflicts(importRows, {
-    targetType: firstImport.accountId ? 'account' : 'card',
-    targetId: firstImport.accountId ?? firstImport.creditCardId!,
-  })
+  const validationStates = await loadEffectiveImportValidationStates(
+    importRows,
+    {
+      targetType: firstImport.accountId ? 'account' : 'card',
+      targetId: firstImport.accountId ?? firstImport.creditCardId!,
+    },
+  )
   for (const importRow of importRows) {
-    if (
-      conflictIds.has(importRow.id) ||
-      isHardImportReviewReason(effectiveValidationReason(importRow))
-    ) {
+    if (!validationStates.get(importRow.id)?.remediation.links) {
       continue
     }
     db.transaction((transaction) => {

@@ -10,15 +10,11 @@ import {
 } from '#/domain/canonicalization'
 import {
   classifyImportReviewGuidance,
-  effectiveValidationReason,
+  getEffectiveImportValidationState,
   getImportBalanceReview,
   getImportCoverageProvenance,
-  isHardImportReviewReason,
-  resolveImportReviewReason,
 } from '#/domain/import-audit'
 import { hasReliableCoverage } from './coverage-lifecycle.server'
-import { hasImportDestinationConflict } from './import-guards.server'
-import { effectiveImportReviewValidationMessage } from './import-review-guidance'
 
 function previousDate(value: string) {
   const date = new Date(`${value}T12:00:00Z`)
@@ -290,40 +286,12 @@ export async function getImportReviewSnapshot() {
                 .map((item) => item.lastFour),
             ]
           : []
-      const hasDestinationConflict = hasImportDestinationConflict(importRow, {
+      const destination = {
         targetIdentifiers,
         targetInstitutionName: targetInstitution?.name ?? null,
-      })
-      const effectiveReasonCode = effectiveValidationReason({
-        ...importRow,
-        hasDestinationConflict,
-      })
-      const effectiveValidationMessage = effectiveImportReviewValidationMessage(
-        {
-          persistedReason: importRow.validationReason,
-          effectiveReason: effectiveReasonCode,
-          persistedMessage: importRow.validationMessage,
-        },
-      )
-      const hasEffectiveDestinationConflict =
-        effectiveReasonCode === 'identical_file' ||
-        effectiveReasonCode === 'destination_conflict'
-      const effectiveValidationStatus = hasEffectiveDestinationConflict
-        ? ('divergent' as const)
-        : importRow.validationStatus
-      const remediationAvailable =
-        !isHardImportReviewReason(effectiveReasonCode)
-      const statementRows = remediationAvailable
-        ? statementReviewRows(importRow, staged)
-        : { differenceRows: [], blockedRows: [] }
-      const differenceRows = statementRows.differenceRows
-      const blockedRows = statementRows.blockedRows
-      const missingStatementTransactions = remediationAvailable
-        ? statementMissingCandidates(importRow)
-        : []
-      const conflictReasonCode = hasEffectiveDestinationConflict
-        ? effectiveReasonCode
-        : null
+      }
+      const statementRows = statementReviewRows(importRow, staged)
+      const missingStatementTransactions = statementMissingCandidates(importRow)
       const duplicateCount = staged.filter((item) => item.duplicate).length
       const coverageProvenance = getImportCoverageProvenance({
         source: importRow.periodSource,
@@ -333,8 +301,8 @@ export async function getImportReviewSnapshot() {
       const targetType = importRow.accountId
         ? ('account' as const)
         : ('card' as const)
-      const conflictingCheckpoint =
-        !remediationAvailable || importRow.status !== 'review'
+      const checkpointCandidate =
+        importRow.status !== 'review'
           ? null
           : (checkpointRows.find(
               (checkpoint) =>
@@ -374,17 +342,43 @@ export async function getImportReviewSnapshot() {
                 ) ??
                 null)
               : null))
-      const guidanceInput = {
+      const effectiveValidation = getEffectiveImportValidationState(importRow, {
+        destination,
+        hasPendingCorrection: corrections.some(
+          (correction) => correction.status === 'pending',
+        ),
+        hasStatementMatchCandidates: statementRows.differenceRows.length > 0,
+        hasStatementCurrencyMismatch: statementRows.blockedRows.length > 0,
+        hasMissingStatementTransactions:
+          missingStatementTransactions.length > 0,
+        hasBalanceConflict: Boolean(checkpointCandidate),
+      })
+      const differenceRows = effectiveValidation.remediation.links
+        ? statementRows.differenceRows
+        : []
+      const blockedRows = effectiveValidation.remediation.links
+        ? statementRows.blockedRows
+        : []
+      const visibleMissingStatementTransactions = effectiveValidation
+        .remediation.exclusions
+        ? missingStatementTransactions
+        : []
+      const conflictingCheckpoint = effectiveValidation.remediation
+        .checkpointReplacement
+        ? checkpointCandidate
+        : null
+      const guidance = classifyImportReviewGuidance({
         targetType,
         parser: importRow.parser,
-        validationStatus: effectiveValidationStatus,
-        validationMessage: effectiveValidationMessage,
+        validationStatus: effectiveValidation.status,
+        reasonCode: effectiveValidation.reason,
+        validationMessage: effectiveValidation.message,
         parsedTransactionCount: importRow.parsedTransactionCount,
         sourceTransactionCount: importRow.sourceTransactionCount,
         closingBalanceCents: importRow.closingBalanceCents,
         balanceDifferenceCents: importRow.balanceDifferenceCents,
         invalidTransactionCount: importRow.invalidTransactionCount,
-        conflictReasonCode,
+        conflictReasonCode: null,
         hasPendingCorrection: corrections.some(
           (correction) => correction.status === 'pending',
         ),
@@ -392,31 +386,19 @@ export async function getImportReviewSnapshot() {
         hasStatementCurrencyMismatch: blockedRows.length > 0,
         hasMissingStatementTransactions:
           missingStatementTransactions.length > 0,
-        hasBalanceConflict: Boolean(conflictingCheckpoint),
-      }
-      const derivedReason = classifyImportReviewGuidance({
-        ...guidanceInput,
-        reasonCode: null,
-      }).kind
-      const reasonCode = resolveImportReviewReason({
-        stored: effectiveReasonCode,
-        derived: derivedReason,
-      })
-      const guidance = classifyImportReviewGuidance({
-        ...guidanceInput,
-        reasonCode,
+        hasBalanceConflict: Boolean(checkpointCandidate),
       })
 
       return {
         ...importRow,
-        validationStatus: effectiveValidationStatus,
-        validationReason: effectiveReasonCode,
-        validationMessage: effectiveValidationMessage,
+        validationStatus: effectiveValidation.status,
+        validationReason: effectiveValidation.reason,
+        validationMessage: effectiveValidation.message,
         sourceFile: sourceFileById.get(importRow.sourceFileId) ?? null,
         target,
         staged,
         corrections,
-        reasonCode,
+        reasonCode: effectiveValidation.reason,
         guidance,
         needsCoverageConfirmation: !hasReliableCoverage({
           periodStart: importRow.periodStart,
@@ -439,7 +421,7 @@ export async function getImportReviewSnapshot() {
         newCount: staged.length - duplicateCount,
         statementDifferenceRows: differenceRows,
         statementBlockedRows: blockedRows,
-        statementMissingCandidates: missingStatementTransactions,
+        statementMissingCandidates: visibleMissingStatementTransactions,
         statementExclusions: statementExclusionRows
           .filter((exclusion) => exclusion.importId === importRow.id)
           .map((exclusion) => ({

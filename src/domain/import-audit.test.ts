@@ -11,6 +11,7 @@ import {
   nextValidationState,
   resolveImportReviewReason,
   summarizeImport,
+  hasImportDestinationConflict,
 } from './import-audit'
 import type {
   ImportAuditReasonCode,
@@ -631,5 +632,25 @@ describe('auditoria de importação', () => {
       message:
         'Todos os lançamentos foram lidos. O arquivo não informa saldo final; confirme um saldo datado na conta para iniciar a reconciliação.',
     })
+  })
+})
+
+describe('hasImportDestinationConflict', () => {
+  it('treats an unmatchable detected identifier as a conflict, like the original guard', () => {
+    expect(
+      hasImportDestinationConflict(
+        { detectedInstitution: null, detectedLastFour: '12' },
+        { targetInstitutionName: null, targetIdentifiers: ['1234'] },
+      ),
+    ).toBe(true)
+  })
+
+  it('does not conflict when the detected last four matches a target identifier', () => {
+    expect(
+      hasImportDestinationConflict(
+        { detectedInstitution: null, detectedLastFour: '•••• 1234' },
+        { targetInstitutionName: null, targetIdentifiers: ['xx1234'] },
+      ),
+    ).toBe(false)
   })
 })

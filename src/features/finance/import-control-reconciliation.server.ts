@@ -9,14 +9,9 @@ import {
   matchStatementValueSubset,
 } from '#/domain/canonicalization'
 import { convertMinorUnitsAtRate } from '#/domain/currency'
-import {
-  effectiveValidationReason,
-  evaluateImportAudit,
-  isHardImportReviewReason,
-  nextValidationState,
-} from '#/domain/import-audit'
+import { evaluateImportAudit, nextValidationState } from '#/domain/import-audit'
 import { fetchPtax } from './currency.server'
-import { flagLiveBatchDestinationConflicts } from './import-guards.server'
+import { loadEffectiveImportValidationStates } from './import-guards.server'
 import { reconcileSameBatchControls } from './import-control-batch.server'
 import { reconcileAccountPdfControls } from './import-control-account.server'
 import { applyCardPdfOutcome } from './import-control-card-apply.server'
@@ -46,10 +41,18 @@ export async function reconcileCsvWithPdfControl(input: ReconcileInput) {
     current.push(row)
     stagedByImport.set(row.importId, current)
   }
-  const liveConflictIds = await flagLiveBatchDestinationConflicts(importRows, {
-    targetType: input.targetType,
-    targetId: input.targetId,
-  })
+  const validationStates = await loadEffectiveImportValidationStates(
+    importRows,
+    {
+      targetType: input.targetType,
+      targetId: input.targetId,
+    },
+  )
+  const liveConflictIds = new Set(
+    importRows.flatMap((item) =>
+      validationStates.get(item.id)?.remediation.links ? [] : [item.id],
+    ),
+  )
 
   const pdfControls = importRows.filter(
     (item) =>
@@ -57,7 +60,7 @@ export async function reconcileCsvWithPdfControl(input: ReconcileInput) {
       item.parser === 'pdf_inspector' &&
       item.status === 'review' &&
       item.validationStatus !== 'divergent' &&
-      !isHardImportReviewReason(effectiveValidationReason(item)) &&
+      validationStates.get(item.id)?.remediation.links &&
       item.closingBalanceCents !== null &&
       item.closingBalanceType !== 'available' &&
       item.balanceAsOf !== null,

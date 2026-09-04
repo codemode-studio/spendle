@@ -61,7 +61,7 @@ export function reopenRestoredExclusionOwners(
           },
         }),
       })
-      .where(inArray(schema.imports.id, [affectedImport.id]))
+      .where(eq(schema.imports.id, affectedImport.id))
       .run()
   }
   return affectedImportIds
@@ -100,9 +100,7 @@ export async function findRestoredExclusionOwnerImportIds(
   return [
     ...new Set(
       rows.flatMap((row) =>
-        row.ownerImportId === row.restoringImportId
-          ? []
-          : [row.ownerImportId],
+        row.ownerImportId === row.restoringImportId ? [] : [row.ownerImportId],
       ),
     ),
   ]

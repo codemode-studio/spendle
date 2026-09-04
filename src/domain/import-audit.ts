@@ -1,16 +1,13 @@
-export interface ImportAuditTransaction {
+import { formatCurrency } from './currency'
+
+interface ImportAuditTransaction {
   amountCents: number
   postedAt: string
 }
 
-export {
-  identifyDuplicateReasons,
-  type CanonicalIdentity as ImportIdentity,
-  type DuplicateReason,
-} from './canonicalization'
+export { identifyDuplicateReasons } from './canonicalization'
 
-export type ImportAuditStatus =
-  'imported' | 'reconciled' | 'warning' | 'divergent'
+type ImportAuditStatus = 'imported' | 'reconciled' | 'warning' | 'divergent'
 
 export const IDENTICAL_FILE_CONFLICT_MESSAGE =
   'O mesmo arquivo já foi associado a outro destino. O lote foi bloqueado.'
@@ -36,17 +33,12 @@ const HARD_IMPORT_REVIEW_REASONS = [
   'destination_conflict',
 ] as const
 
-export type HardImportReviewReason = (typeof HARD_IMPORT_REVIEW_REASONS)[number]
+type HardImportReviewReason = (typeof HARD_IMPORT_REVIEW_REASONS)[number]
 
-export function isHardImportReviewReason(
+function isHardImportReviewReason(
   reason: ImportAuditReasonCode | null,
 ): reason is HardImportReviewReason {
-  return (
-    reason !== null &&
-    (
-      HARD_IMPORT_REVIEW_REASONS as ReadonlyArray<ImportAuditReasonCode>
-    ).includes(reason)
-  )
+  return HARD_IMPORT_REVIEW_REASONS.includes(reason as HardImportReviewReason)
 }
 
 interface ImportValidationReasonRow {
@@ -58,20 +50,83 @@ interface ImportValidationReasonRow {
   accountId?: string | null
   creditCardId?: string | null
   documentKind?: 'bank_statement' | 'card_statement' | 'unknown'
+  detectedInstitution?: string | null
+  detectedLastFour?: string | null
   invalidTransactionCount?: number
   balanceDifferenceCents?: number | null
   pagesNeedingOcrJson?: string | null
   extractionDiagnosticsJson?: string | null
-  hasDestinationConflict?: boolean
+  parsedTransactionCount?: number
+  sourceTransactionCount?: number | null
+  closingBalanceCents?: number | null
 }
 
-export function effectiveValidationReason(
+interface ImportDestinationMetadata {
+  targetIdentifiers: Array<string | null | undefined>
+  targetInstitutionName: string | null
+}
+
+interface LiveImportValidationFacts {
+  destination?: ImportDestinationMetadata
+  hasDestinationConflict?: boolean
+  hasPendingCorrection?: boolean
+  hasStatementMatchCandidates?: boolean
+  hasStatementCurrencyMismatch?: boolean
+  hasMissingStatementTransactions?: boolean
+  hasBalanceConflict?: boolean
+  manualReviewConfirmed?: boolean
+}
+
+function normalizeLastFour(value: string | null | undefined) {
+  const digits = value?.replace(/\D/g, '') ?? ''
+  return digits.length >= 4 ? digits.slice(-4) : null
+}
+
+export function hasImportDestinationConflict(
+  importRow: Pick<
+    ImportValidationReasonRow,
+    'detectedInstitution' | 'detectedLastFour'
+  >,
+  metadata: ImportDestinationMetadata,
+) {
+  const detectedInstitution = importRow.detectedInstitution?.toLowerCase()
+  const targetInstitution = metadata.targetInstitutionName?.toLowerCase()
+  const detectedLastFour = normalizeLastFour(importRow.detectedLastFour)
+  // Same semantics as the original guard: any non-empty detected value is
+  // checked, and a value that cannot normalise to four digits never matches.
+  const lastFourMatchesTarget = Boolean(
+    detectedLastFour &&
+    metadata.targetIdentifiers.some(
+      (identifier) => normalizeLastFour(identifier) === detectedLastFour,
+    ),
+  )
+
+  return Boolean(
+    (importRow.detectedLastFour &&
+      metadata.targetIdentifiers.some(Boolean) &&
+      !lastFourMatchesTarget) ||
+    (detectedInstitution &&
+      targetInstitution &&
+      !targetInstitution.includes(detectedInstitution) &&
+      !detectedInstitution.includes(targetInstitution)),
+  )
+}
+
+function preferImportReviewReason(
+  stored: ImportAuditReasonCode | null,
+  derived: ImportAuditReasonCode,
+) {
+  return isHardImportReviewReason(stored) ? stored : derived
+}
+
+function effectivePersistedValidationReason(
   row: ImportValidationReasonRow,
+  hasDestinationConflict = false,
 ): ImportAuditReasonCode | null {
   const liveHardReason =
     row.validationMessage === IDENTICAL_FILE_CONFLICT_MESSAGE
       ? ('identical_file' as const)
-      : row.hasDestinationConflict ||
+      : hasDestinationConflict ||
           (row.accountId !== null &&
             row.accountId !== undefined &&
             row.documentKind === 'card_statement') ||
@@ -85,10 +140,7 @@ export function effectiveValidationReason(
         ? ('destination_conflict' as const)
         : null
   if (liveHardReason) {
-    return resolveImportReviewReason({
-      stored: row.validationReason,
-      derived: liveHardReason,
-    })
+    return preferImportReviewReason(row.validationReason, liveHardReason)
   }
   if (row.validationReason !== null) return row.validationReason
   if (row.validationStatus !== 'divergent') return null
@@ -132,25 +184,121 @@ export function effectiveValidationReason(
   return null
 }
 
-interface ImportValidationState extends ImportValidationReasonRow {
-  validationStatus: ImportAuditStatus
-  validationReason: ImportAuditReasonCode | null
-  validationMessage: string | null
+function validationMessageForReason(input: {
+  persistedReason: ImportAuditReasonCode | null
+  effectiveReason: ImportAuditReasonCode | null
+  persistedMessage: string | null
+}) {
+  if (input.effectiveReason === input.persistedReason) {
+    return input.persistedMessage
+  }
+  const fallback: Partial<Record<ImportAuditReasonCode, string>> = {
+    identical_file: IDENTICAL_FILE_CONFLICT_MESSAGE,
+    destination_conflict: DESTINATION_CONFLICT_MESSAGE,
+    blocked: 'A auditoria encontrou uma divergência que precisa ser corrigida.',
+  }
+  return (
+    (input.effectiveReason && fallback[input.effectiveReason]) ??
+    input.persistedMessage
+  )
 }
 
-export function nextValidationState<T extends ImportValidationState>(input: {
-  current: ImportValidationState
-  evaluated: T
-}): T {
-  const currentReason = effectiveValidationReason(input.current)
-  if (!isHardImportReviewReason(currentReason)) {
+function statusIsCommittable(
+  status: ImportAuditStatus,
+  manualReviewConfirmed: boolean,
+) {
+  return (
+    status === 'imported' ||
+    status === 'reconciled' ||
+    (status === 'warning' && manualReviewConfirmed)
+  )
+}
+
+export function getEffectiveImportValidationState(
+  row: ImportValidationReasonRow,
+  live: LiveImportValidationFacts = {},
+) {
+  const hasDestinationConflict =
+    live.hasDestinationConflict ??
+    (live.destination
+      ? hasImportDestinationConflict(row, live.destination)
+      : false)
+  const persistedReason = effectivePersistedValidationReason(
+    row,
+    hasDestinationConflict,
+  )
+  const hasEffectiveDestinationConflict =
+    persistedReason === 'identical_file' ||
+    persistedReason === 'destination_conflict'
+  const status = hasEffectiveDestinationConflict
+    ? ('divergent' as const)
+    : row.validationStatus
+  const message = validationMessageForReason({
+    persistedReason: row.validationReason,
+    effectiveReason: persistedReason,
+    persistedMessage: row.validationMessage,
+  })
+  const targetType = row.accountId ? ('account' as const) : ('card' as const)
+  const derivedReason = classifyImportReviewGuidance({
+    targetType,
+    parser: row.parser ?? 'pdf_local',
+    validationStatus: status,
+    reasonCode: null,
+    validationMessage: message,
+    parsedTransactionCount: row.parsedTransactionCount ?? 0,
+    sourceTransactionCount: row.sourceTransactionCount ?? null,
+    closingBalanceCents: row.closingBalanceCents ?? null,
+    balanceDifferenceCents: row.balanceDifferenceCents ?? null,
+    invalidTransactionCount: row.invalidTransactionCount ?? 0,
+    conflictReasonCode: hasEffectiveDestinationConflict
+      ? persistedReason
+      : null,
+    hasPendingCorrection: live.hasPendingCorrection ?? false,
+    hasStatementMatchCandidates: live.hasStatementMatchCandidates ?? false,
+    hasStatementCurrencyMismatch: live.hasStatementCurrencyMismatch ?? false,
+    hasMissingStatementTransactions:
+      live.hasMissingStatementTransactions ?? false,
+    hasBalanceConflict: live.hasBalanceConflict ?? false,
+  }).kind
+  const reason = preferImportReviewReason(persistedReason, derivedReason)
+  const remediationAvailable = !isHardImportReviewReason(persistedReason)
+
+  return {
+    status,
+    reason,
+    message,
+    committable:
+      !isHardImportReviewReason(reason) &&
+      statusIsCommittable(status, live.manualReviewConfirmed ?? false),
+    remediation: {
+      links: remediationAvailable,
+      exclusions: remediationAvailable,
+      checkpointReplacement: remediationAvailable,
+    },
+  }
+}
+
+export function effectiveValidationReason(
+  row: ImportValidationReasonRow & { hasDestinationConflict?: boolean },
+): ImportAuditReasonCode | null {
+  return effectivePersistedValidationReason(
+    row,
+    row.hasDestinationConflict ?? false,
+  )
+}
+
+export function nextValidationState<
+  T extends ImportValidationReasonRow,
+>(input: { current: ImportValidationReasonRow; evaluated: T }): T {
+  const current = getEffectiveImportValidationState(input.current)
+  if (current.remediation.links) {
     return input.evaluated
   }
 
   return {
     ...input.evaluated,
     validationStatus: 'divergent',
-    validationReason: currentReason,
+    validationReason: current.reason,
     validationMessage: input.current.validationMessage,
   }
 }
@@ -163,7 +311,7 @@ interface ImportReviewGuidanceBase {
   message: string | null
 }
 
-export type ImportReviewGuidance = ImportReviewGuidanceBase &
+type ImportReviewGuidance = ImportReviewGuidanceBase &
   (
     | {
         kind: 'ready'
@@ -213,7 +361,33 @@ export function resolveImportReviewReason(input: {
   stored: ImportAuditReasonCode | null
   derived: ImportAuditReasonCode
 }): ImportAuditReasonCode {
-  return isHardImportReviewReason(input.stored) ? input.stored : input.derived
+  return preferImportReviewReason(input.stored, input.derived)
+}
+
+function derivedImportReviewReason(
+  input: ImportReviewGuidanceInput,
+): ImportAuditReasonCode {
+  if (input.validationStatus === 'reconciled') return 'ready'
+  if (input.validationStatus === 'imported') {
+    return input.closingBalanceCents === null ? 'needs_balance' : 'ready'
+  }
+  if (input.validationStatus === 'warning') {
+    return input.closingBalanceCents === null
+      ? 'needs_balance'
+      : 'needs_manual_review'
+  }
+  if (input.hasPendingCorrection) return 'pending_correction'
+  if (input.conflictReasonCode) return input.conflictReasonCode
+  if (input.invalidTransactionCount > 0) return 'invalid_rows'
+  if (input.hasStatementCurrencyMismatch) return 'blocked'
+  if (input.hasMissingStatementTransactions) {
+    return 'missing_statement_transactions'
+  }
+  if (input.hasStatementMatchCandidates) return 'statement_match_candidates'
+  if (input.hasBalanceConflict || input.balanceDifferenceCents !== null) {
+    return 'balance_mismatch'
+  }
+  return 'blocked'
 }
 
 export function classifyImportReviewGuidance(
@@ -223,143 +397,242 @@ export function classifyImportReviewGuidance(
     targetType: input.targetType,
     message: input.validationMessage,
   }
-  const sourceType =
-    input.parser === 'csv'
-      ? ('csv' as const)
-      : input.parser === 'ofx'
-        ? ('ofx' as const)
-        : ('file' as const)
-
-  if (input.reasonCode) {
-    switch (input.reasonCode) {
-      case 'ready':
-        return {
-          ...base,
-          kind: 'ready',
-          mode:
-            input.validationStatus === 'reconciled' ? 'reconciled' : 'imported',
-        }
-      case 'needs_balance':
-        return {
-          ...base,
-          kind: 'needs_balance',
-          mode:
-            input.validationStatus === 'warning' ? 'manual_review' : 'imported',
-          sourceType,
-          parsedTransactionCount: input.parsedTransactionCount,
-        }
-      case 'needs_manual_review':
-        return {
-          ...base,
-          kind: 'needs_manual_review',
-          reason:
-            input.sourceTransactionCount === null
-              ? 'unreliable_count'
-              : 'missing_anchor',
-          parsedTransactionCount: input.parsedTransactionCount,
-        }
-      case 'invalid_rows':
-        return {
-          ...base,
-          kind: 'invalid_rows',
-          invalidTransactionCount: input.invalidTransactionCount,
-        }
-      case 'balance_mismatch':
-        return {
-          ...base,
-          kind: 'balance_mismatch',
-          balanceDifferenceCents: input.balanceDifferenceCents,
-        }
-      case 'pending_correction':
-      case 'identical_file':
-      case 'destination_conflict':
-      case 'missing_statement_transactions':
-      case 'statement_match_candidates':
-        return { ...base, kind: input.reasonCode }
-      case 'blocked':
-        return {
-          ...base,
-          kind: 'blocked',
-          reason: input.hasStatementCurrencyMismatch
-            ? 'currency_mismatch'
-            : 'generic',
-        }
-    }
-  }
-
-  if (input.validationStatus === 'reconciled') {
-    return { ...base, kind: 'ready', mode: 'reconciled' }
-  }
-
-  if (input.validationStatus === 'imported') {
-    return input.closingBalanceCents === null
-      ? {
-          ...base,
-          kind: 'needs_balance',
-          mode: 'imported',
-          sourceType,
-          parsedTransactionCount: input.parsedTransactionCount,
-        }
-      : { ...base, kind: 'ready', mode: 'imported' }
-  }
-
-  if (input.validationStatus === 'warning') {
-    if (input.closingBalanceCents === null) {
+  const reason = input.reasonCode ?? derivedImportReviewReason(input)
+  switch (reason) {
+    case 'ready':
       return {
         ...base,
-        kind: 'needs_balance',
-        mode: 'manual_review',
-        sourceType,
+        kind: reason,
+        mode:
+          input.validationStatus === 'reconciled' ? 'reconciled' : 'imported',
+      }
+    case 'needs_balance':
+      return {
+        ...base,
+        kind: reason,
+        mode:
+          input.validationStatus === 'warning' ? 'manual_review' : 'imported',
+        sourceType:
+          input.parser === 'csv'
+            ? 'csv'
+            : input.parser === 'ofx'
+              ? 'ofx'
+              : 'file',
         parsedTransactionCount: input.parsedTransactionCount,
       }
-    }
-    return {
-      ...base,
-      kind: 'needs_manual_review',
-      reason:
-        input.sourceTransactionCount === null
-          ? 'unreliable_count'
-          : 'missing_anchor',
-      parsedTransactionCount: input.parsedTransactionCount,
-    }
+    case 'needs_manual_review':
+      return {
+        ...base,
+        kind: reason,
+        reason:
+          input.sourceTransactionCount === null
+            ? 'unreliable_count'
+            : 'missing_anchor',
+        parsedTransactionCount: input.parsedTransactionCount,
+      }
+    case 'invalid_rows':
+      return {
+        ...base,
+        kind: reason,
+        invalidTransactionCount: input.invalidTransactionCount,
+      }
+    case 'balance_mismatch':
+      return {
+        ...base,
+        kind: reason,
+        balanceDifferenceCents: input.balanceDifferenceCents,
+      }
+    case 'blocked':
+      return {
+        ...base,
+        kind: reason,
+        reason: input.hasStatementCurrencyMismatch
+          ? 'currency_mismatch'
+          : 'generic',
+      }
+    default:
+      return { ...base, kind: reason }
   }
-
-  if (input.hasPendingCorrection) {
-    return { ...base, kind: 'pending_correction' }
-  }
-  if (input.conflictReasonCode) {
-    return { ...base, kind: input.conflictReasonCode }
-  }
-  if (input.invalidTransactionCount > 0) {
-    return {
-      ...base,
-      kind: 'invalid_rows',
-      invalidTransactionCount: input.invalidTransactionCount,
-    }
-  }
-  if (input.hasStatementCurrencyMismatch) {
-    return { ...base, kind: 'blocked', reason: 'currency_mismatch' }
-  }
-  if (input.hasMissingStatementTransactions) {
-    return { ...base, kind: 'missing_statement_transactions' }
-  }
-  if (input.hasStatementMatchCandidates) {
-    return { ...base, kind: 'statement_match_candidates' }
-  }
-  if (input.hasBalanceConflict || input.balanceDifferenceCents !== null) {
-    return {
-      ...base,
-      kind: 'balance_mismatch',
-      balanceDifferenceCents: input.balanceDifferenceCents,
-    }
-  }
-  return { ...base, kind: 'blocked', reason: 'generic' }
 }
 
-export type ImportCoverageSource =
+interface ImportReviewGuidanceCopy {
+  title: string
+  explanation: string
+  steps: string[]
+}
+
+interface ImportReviewGuidanceCopyContext {
+  targetName: string
+  period: string
+  totals: string
+  currency?: string
+}
+
+type GuidanceKind = ImportReviewGuidance['kind']
+type GuidanceFor<TKind extends GuidanceKind> = Extract<
+  ImportReviewGuidance,
+  { kind: TKind }
+>
+type GuidanceCopyFactories = {
+  [Kind in GuidanceKind]: (
+    guidance: GuidanceFor<Kind>,
+    context: ImportReviewGuidanceCopyContext,
+  ) => ImportReviewGuidanceCopy
+}
+
+function importedGuidance(
+  guidance: Pick<ImportReviewGuidance, 'message' | 'targetType'>,
+): ImportReviewGuidanceCopy {
+  return {
+    title: 'Arquivo lido com sucesso',
+    explanation:
+      guidance.message ??
+      'Os lançamentos foram lidos e podem ser consolidados. Este arquivo não fornece sozinho um saldo reconciliado.',
+    steps: [
+      'Revise as categorias e as transferências abaixo.',
+      'Clique em Consolidar para incluir as transações.',
+      guidance.targetType === 'account'
+        ? 'Depois, use Atualizar saldo na página Contas para informar o valor exibido pelo banco.'
+        : 'Quando a fatura fechar, use Confirmar fatura na página Cartões.',
+    ],
+  }
+}
+
+function manualReviewSteps(
+  guidance: Pick<ImportReviewGuidance, 'targetType'> & {
+    parsedTransactionCount: number
+  },
+  context: ImportReviewGuidanceCopyContext,
+) {
+  const targetKind = guidance.targetType === 'account' ? 'conta' : 'cartão'
+  return [
+    `Confirme que o arquivo pertence à ${targetKind} ${context.targetName}.`,
+    `Compare com o extrato original: período ${context.period}, ${guidance.parsedTransactionCount} lançamentos, ${context.totals}.`,
+    'Se estiver correto, marque a confirmação abaixo e consolide. Se algo não conferir, rejeite o lote e envie o extrato correto.',
+  ]
+}
+
+function blockedGuidance(
+  message: string | null,
+  steps: string[],
+): ImportReviewGuidanceCopy {
+  return {
+    title: 'Este lote não pode ser consolidado',
+    explanation:
+      message ??
+      'A auditoria encontrou uma divergência que precisa ser corrigida.',
+    steps,
+  }
+}
+
+export const importReviewGuidanceCopy = {
+  ready: (guidance) =>
+    guidance.mode === 'imported'
+      ? importedGuidance(guidance)
+      : {
+          title: 'Conferência automática concluída',
+          explanation:
+            guidance.message ??
+            'A contagem, as movimentações e os saldos conferem.',
+          steps: [
+            'Revise as categorias dos lançamentos abaixo.',
+            'Clique em Consolidar para incluir as transações nos relatórios.',
+          ],
+        },
+  needs_balance: (guidance, context) => {
+    if (guidance.mode === 'imported') return importedGuidance(guidance)
+    const sourceKind =
+      guidance.sourceType === 'csv'
+        ? 'CSV'
+        : guidance.sourceType === 'ofx'
+          ? 'OFX'
+          : 'arquivo'
+    return {
+      title: 'Confira estes dados antes de consolidar',
+      explanation:
+        guidance.targetType === 'account'
+          ? `Os ${guidance.parsedTransactionCount} lançamentos foram lidos, mas este ${sourceKind} não informa o saldo final. Sem esse valor, o sistema não consegue provar que as movimentações fecham o saldo da conta.`
+          : `Os ${guidance.parsedTransactionCount} lançamentos foram lidos, mas este ${sourceKind} não informa o total da fatura. Sem esse valor, o sistema não consegue conferir as compras e os créditos.`,
+      steps: manualReviewSteps(guidance, context),
+    }
+  },
+  needs_manual_review: (guidance, context) => ({
+    title: 'Confira estes dados antes de consolidar',
+    explanation:
+      guidance.reason === 'unreliable_count'
+        ? 'O arquivo informa um saldo final, mas não traz uma contagem confiável dos lançamentos. Por isso, a conferência precisa ser manual.'
+        : `Os ${guidance.parsedTransactionCount} lançamentos foram lidos, mas ainda não existe um saldo anterior compatível para conferir o saldo final deste período.`,
+    steps: manualReviewSteps(guidance, context),
+  }),
+  pending_correction: (guidance) =>
+    blockedGuidance(guidance.message, [
+      'Compare a nova observação com o lançamento atual.',
+      'Aceite a correção ou mantenha o original usando as ações abaixo.',
+      'Se aceitar, confira novamente os saldos posteriores indicados pelo app.',
+    ]),
+  identical_file: (guidance, context) =>
+    blockedGuidance(guidance.message, [
+      `Confirme se ${context.targetName} é o destino correto para este arquivo.`,
+      'Rejeite este lote. Depois, crie um novo lote e escolha a conta ou o cartão correto.',
+    ]),
+  destination_conflict: (guidance, context) =>
+    blockedGuidance(guidance.message, [
+      `Confirme se ${context.targetName} é o destino correto para este arquivo.`,
+      'Rejeite este lote. Depois, crie um novo lote e escolha a conta ou o cartão correto.',
+    ]),
+  missing_statement_transactions: (guidance) =>
+    blockedGuidance(guidance.message, [
+      'Confira as autorizações listadas em “não constam na fatura”.',
+      'Se foram canceladas ou expiraram, confirme a ausência. O app preservará essa decisão na auditoria.',
+      'Depois, revise as categorias restantes e clique em Consolidar.',
+    ]),
+  statement_match_candidates: (guidance) =>
+    blockedGuidance(guidance.message, [
+      'Compare as linhas do PDF com os lançamentos pendentes sugeridos abaixo.',
+      'Clique em Vincular no par correto. A data, a descrição ou o valor do lançamento serão atualizados com auditoria.',
+      'Depois que todas as diferenças forem resolvidas, revise as categorias e clique em Consolidar.',
+    ]),
+  invalid_rows: (guidance) =>
+    blockedGuidance(guidance.message, [
+      'Rejeite este lote e exporte o extrato novamente. Prefira OFX ou CSV.',
+      'Envie o novo arquivo e confira se todos os lançamentos foram lidos.',
+    ]),
+  balance_mismatch: (guidance, context) => {
+    const targetKind = guidance.targetType === 'account' ? 'conta' : 'cartão'
+    return blockedGuidance(guidance.message, [
+      `Confira se o arquivo pertence à ${targetKind} ${context.targetName}.`,
+      guidance.balanceDifferenceCents === null
+        ? 'Os saldos não conferem. Rejeite o lote e obtenha um novo extrato antes de tentar novamente.'
+        : `O saldo difere em ${formatCurrency(Math.abs(guidance.balanceDifferenceCents), context.currency)}. Rejeite o lote e obtenha um novo extrato antes de tentar novamente.`,
+    ])
+  },
+  blocked: (guidance) =>
+    guidance.reason === 'currency_mismatch'
+      ? blockedGuidance(
+          'Uma linha da fatura e o lançamento com o mesmo identificador estão em moedas diferentes.',
+          [
+            'Rejeite este lote e confira a moeda do arquivo e do cartão.',
+            'Corrija a origem dos dados e importe a fatura novamente.',
+          ],
+        )
+      : blockedGuidance(guidance.message, [
+          'Rejeite este lote e confira se selecionou a conta ou o cartão correto.',
+          'Exporte o extrato novamente, prefira OFX ou CSV, e crie um novo lote.',
+        ]),
+} satisfies GuidanceCopyFactories
+
+export function effectiveImportReviewValidationMessage(input: {
+  persistedReason: ImportAuditReasonCode | null
+  effectiveReason: ImportAuditReasonCode | null
+  persistedMessage: string | null
+}) {
+  return validationMessageForReason(input)
+}
+
+type ImportCoverageSource =
   'metadata' | 'filename' | 'user' | 'activity' | 'unknown'
 
-export interface ImportCoverageProvenance {
+interface ImportCoverageProvenance {
   source: ImportCoverageSource
   evidence: 'declared_period' | 'activity_only'
   reliable: boolean
@@ -384,7 +657,18 @@ export function getImportCoverageProvenance(input: {
   }
 }
 
-export type ImportBalanceReview =
+export const importCoverageProvenanceCopy: Record<
+  ImportCoverageSource,
+  string
+> = {
+  filename: 'Período identificado no nome do arquivo. ',
+  metadata: 'Período informado pelo banco. ',
+  user: 'Período confirmado por você. ',
+  activity: 'Somente dias com movimentação; não prova cobertura completa. ',
+  unknown: 'Somente dias com movimentação; não prova cobertura completa. ',
+}
+
+type ImportBalanceReview =
   | { kind: 'difference'; differenceCents: number }
   | { kind: 'missing'; targetType: ImportTargetType }
   | { kind: 'missing_anchor' }
@@ -404,6 +688,22 @@ export function getImportBalanceReview(input: {
     return { kind: 'missing', targetType: input.targetType }
   }
   return { kind: 'missing_anchor' }
+}
+
+export function getImportBalanceReviewCopy(
+  balanceReview: ImportBalanceReview,
+  currency?: string,
+) {
+  switch (balanceReview.kind) {
+    case 'difference':
+      return `Diferença de saldo: ${formatCurrency(balanceReview.differenceCents, currency)}.`
+    case 'missing':
+      return balanceReview.targetType === 'account'
+        ? 'Saldo final não informado.'
+        : 'Total da fatura não informado.'
+    case 'missing_anchor':
+      return 'Sem saldo anterior compatível.'
+  }
 }
 
 export function summarizeImport(
@@ -656,9 +956,5 @@ export function canCommitImportAudit(
   status: ImportAuditStatus,
   manualReviewConfirmed: boolean,
 ) {
-  return (
-    status === 'imported' ||
-    status === 'reconciled' ||
-    (status === 'warning' && manualReviewConfirmed)
-  )
+  return statusIsCommittable(status, manualReviewConfirmed)
 }

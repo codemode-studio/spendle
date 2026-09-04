@@ -9,8 +9,7 @@ import { parseInstallmentDescription } from '#/domain/credit-card'
 import { classifyCheckpointAtDate } from '#/domain/balance-checkpoint'
 import { convertMinorUnitsAtRate } from '#/domain/currency'
 import {
-  effectiveValidationReason,
-  isHardImportReviewReason,
+  getEffectiveImportValidationState,
   nextValidationState,
 } from '#/domain/import-audit'
 import { runPostCommitStep } from '#/domain/post-commit'
@@ -29,10 +28,7 @@ import {
   refreshImportBatchCoverage,
 } from './coverage-lifecycle.server'
 import { fetchPtax } from './currency.server'
-import {
-  assertImportBatchActionable,
-  assertImportActionable,
-} from './import-guards.server'
+import { assertImportActionable } from './import-guards.server'
 import {
   matchesDocumentLastFour,
   normalizeLastFour,
@@ -334,14 +330,10 @@ export async function commitImport(
         .from(schema.imports)
         .where(eq(schema.imports.batchId, importRow.batchId))
     ).map((member) => (member.id === importId ? importRow : member))
-    await assertImportBatchActionable(
-      batchMembers,
-      {
-        targetType: importRow.accountId ? 'account' : 'card',
-        targetId: importRow.accountId ?? importRow.creditCardId!,
-      },
-      'commit',
-    )
+    await assertImportActionable(batchMembers, 'commit', {
+      targetType: importRow.accountId ? 'account' : 'card',
+      targetId: importRow.accountId ?? importRow.creditCardId!,
+    })
   }
 
   if (importRow.validationStatus === 'divergent') {
@@ -492,7 +484,8 @@ export async function commitImport(
           (candidate) =>
             candidate.parser === 'pdf_inspector' &&
             candidate.status === 'review' &&
-            !isHardImportReviewReason(effectiveValidationReason(candidate)) &&
+            getEffectiveImportValidationState(candidate).remediation
+              .checkpointReplacement &&
             candidate.dependsOnImportId === importId &&
             candidate.closingBalanceCents === importRow.closingBalanceCents &&
             candidate.balanceAsOf === importRow.balanceAsOf,
