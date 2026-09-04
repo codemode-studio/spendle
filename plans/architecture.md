@@ -56,6 +56,9 @@ de leitura puro usado para escolher a ocorrência atual e descrever seu estado.
 módulos de produto não importam esses arquivos; chamam server functions ou o
 modelo de leitura.
 
+`src/features/planning` reúne as derivações puras e as seções de apresentação
+do planejamento, enquanto a rota carrega o read model e compõe essas seções.
+
 ## Lançamento (read model)
 
 `src/domain/ledger.ts` transforma o snapshot financeiro em
