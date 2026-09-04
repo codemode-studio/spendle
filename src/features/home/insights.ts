@@ -21,9 +21,10 @@ import {
   trailingPeriod,
 } from '#/domain/period'
 import type { Period } from '#/domain/period'
-import type { getFinanceSnapshotFn } from '#/features/finance/finance.functions'
-
-export type FinanceSnapshot = Awaited<ReturnType<typeof getFinanceSnapshotFn>>
+import type {
+  DashboardSnapshot,
+  FinanceSnapshot,
+} from '#/features/finance/snapshot.types'
 
 const ALLOCATION_BUCKETS = new Set(['investment', 'reserve'])
 
@@ -433,12 +434,12 @@ export interface HomeView {
   cashTodayCents: number
   commitments30: Array<Commitment>
   netWorthCents: number
-  reserve: FinanceSnapshot['dashboard']['reserve']
+  reserve: DashboardSnapshot['reserve']
   /** Meses de gasto cobertos por caixa + reserva. */
   runwayMonths: number | null
   /** Data do lançamento mais recente da família (ou null sem dados). */
   latestPostedAt: string | null
-  integrity: FinanceSnapshot['dashboard']['integrity']
+  integrity: DashboardSnapshot['integrity']
 }
 
 export function buildHomeView(

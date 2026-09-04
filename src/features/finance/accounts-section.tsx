@@ -36,21 +36,44 @@ import {
 } from '#/domain/currency'
 import { formatInstrumentName } from '#/domain/finance'
 import { formatShortDate as formatDate } from '#/domain/period'
-import type { getFinanceSnapshotFn } from '#/features/finance/finance.functions'
 import {
   createAccountFn,
   updateAccountFn,
 } from '#/features/finance/finance.functions'
 import { InstrumentCard } from '#/features/finance/instrument-card'
 import {
-  financeQueryKeys,
   financeSnapshotOptions,
+  invalidateFinance,
 } from '#/features/finance/queries'
+import type {
+  AccountSnapshot,
+  FinanceSnapshot,
+} from '#/features/finance/snapshot.types'
 
-type FinanceSnapshot = Awaited<ReturnType<typeof getFinanceSnapshotFn>>
-type AccountSnapshot = FinanceSnapshot['accounts'][number]
 type AccountKind = AccountSnapshot['kind']
 type AccountPurpose = AccountSnapshot['purpose']
+type AccountStatusSnapshot = Pick<
+  AccountSnapshot,
+  | 'coverage'
+  | 'currency'
+  | 'latestCheckpoint'
+  | 'latestVerifiedCheckpoint'
+  | 'purpose'
+>
+type AccountFormSnapshot = Pick<
+  AccountSnapshot,
+  | 'currency'
+  | 'id'
+  | 'institution'
+  | 'kind'
+  | 'name'
+  | 'ownershipScopeId'
+  | 'purpose'
+>
+type OwnershipScopeOption = Pick<
+  FinanceSnapshot['scopes'][number],
+  'id' | 'name'
+>
 
 export function AccountsSection() {
   const { data } = useSuspenseQuery(financeSnapshotOptions())
@@ -61,8 +84,7 @@ export function AccountsSection() {
   const [addOpen, setAddOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const editing = data.accounts.find((account) => account.id === editingId)
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: financeQueryKeys.all })
+  const invalidate = () => invalidateFinance(queryClient, 'ledger')
   const fail = (fallback: string) => (reason: unknown) => {
     const message = reason instanceof Error ? reason.message : fallback
     setError(message)
@@ -284,7 +306,7 @@ export function AccountsSection() {
   )
 }
 
-function AccountStatus({ account }: { account: AccountSnapshot }) {
+function AccountStatus({ account }: { account: AccountStatusSnapshot }) {
   const coverageEnd = account.coverage.latestCoverageEnd
   const verifiedAt = account.latestVerifiedCheckpoint?.asOf ?? null
   const freshness = account.coverage.freshness.status
@@ -330,8 +352,8 @@ function AccountFormFields({
   scopes,
   account,
 }: {
-  scopes: FinanceSnapshot['scopes']
-  account?: AccountSnapshot
+  scopes: ReadonlyArray<OwnershipScopeOption>
+  account?: AccountFormSnapshot
 }) {
   const prefix = account ? `account-${account.id}` : 'account-new'
   return (
@@ -429,11 +451,13 @@ function readAccountForm(form: FormData) {
   }
 }
 
-function isInvestment(account: AccountSnapshot) {
+function isInvestment(account: Pick<AccountSnapshot, 'kind' | 'purpose'>) {
   return account.kind === 'investment' || account.purpose === 'investment'
 }
 
-function sumByCurrency(accounts: AccountSnapshot[]) {
+function sumByCurrency(
+  accounts: ReadonlyArray<Pick<AccountSnapshot, 'balanceCents' | 'currency'>>,
+) {
   const totals = new Map<string, number>()
   for (const account of accounts) {
     totals.set(

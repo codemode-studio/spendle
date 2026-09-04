@@ -47,19 +47,47 @@ import {
 } from '#/domain/currency'
 import { formatInstrumentName } from '#/domain/finance'
 import { formatMonthLong, formatShortDate as formatDate } from '#/domain/period'
-import type { getFinanceSnapshotFn } from '#/features/finance/finance.functions'
 import {
   createCreditCardFn,
   updateCreditCardFn,
 } from '#/features/finance/finance.functions'
 import { InstrumentCard } from '#/features/finance/instrument-card'
 import {
-  financeQueryKeys,
   financeSnapshotOptions,
+  invalidateFinance,
 } from '#/features/finance/queries'
+import type {
+  CardSnapshot,
+  FinanceSnapshot,
+} from '#/features/finance/snapshot.types'
 
-type FinanceSnapshot = Awaited<ReturnType<typeof getFinanceSnapshotFn>>
-type CardSnapshot = FinanceSnapshot['cards'][number]
+type CardStatusSnapshot = Pick<
+  CardSnapshot,
+  | 'coverage'
+  | 'latestCheckpoint'
+  | 'latestVerifiedCheckpoint'
+  | 'unverifiedDays'
+>
+type CardFormSnapshot = Pick<
+  CardSnapshot,
+  | 'closingDay'
+  | 'currency'
+  | 'dueDay'
+  | 'id'
+  | 'institution'
+  | 'lastFour'
+  | 'limitCents'
+  | 'name'
+  | 'ownershipScopeId'
+>
+type OwnershipScopeOption = Pick<
+  FinanceSnapshot['scopes'][number],
+  'id' | 'name'
+>
+type StatementCardSnapshot = Pick<
+  CardSnapshot,
+  'currency' | 'id' | 'name' | 'upcomingStatements'
+>
 
 export function CardsSection() {
   const { data } = useSuspenseQuery(financeSnapshotOptions())
@@ -72,8 +100,7 @@ export function CardsSection() {
   const editing = data.cards.find((card) => card.id === editingId)
   const cardById = new Map(data.cards.map((card) => [card.id, card]))
   const statementMonths = groupStatementsByMonth(data.cards)
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: financeQueryKeys.all })
+  const invalidate = () => invalidateFinance(queryClient, 'ledger')
   const fail = (fallback: string) => (reason: unknown) => {
     const message = reason instanceof Error ? reason.message : fallback
     setError(message)
@@ -390,7 +417,7 @@ export function CardsSection() {
   )
 }
 
-function CardStatus({ card }: { card: CardSnapshot }) {
+function CardStatus({ card }: { card: CardStatusSnapshot }) {
   const coverageEnd = card.coverage.latestCoverageEnd
   const verifiedAt = card.latestVerifiedCheckpoint?.asOf ?? null
   const freshness = card.coverage.freshness.status
@@ -435,8 +462,8 @@ function CardFormFields({
   scopes,
   card,
 }: {
-  scopes: FinanceSnapshot['scopes']
-  card?: CardSnapshot
+  scopes: ReadonlyArray<OwnershipScopeOption>
+  card?: CardFormSnapshot
 }) {
   const prefix = card ? `card-${card.id}` : 'card-new'
   return (
@@ -580,7 +607,7 @@ function describeStatementItems(statement: CardStatementSummary) {
 }
 
 /** Achata as faturas de todos os cartões, ordena por vencimento e agrupa por mês. */
-function groupStatementsByMonth(cards: CardSnapshot[]) {
+function groupStatementsByMonth(cards: ReadonlyArray<StatementCardSnapshot>) {
   const rows = cards
     .flatMap((card) =>
       card.upcomingStatements.map((statement) => ({ card, statement })),

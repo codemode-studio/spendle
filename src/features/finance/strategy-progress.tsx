@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Info } from 'lucide-react'
 
-import { ProgressBar, StatusBadge } from '#/components/ui'
+import { StatusBadge } from '#/components/ui'
 import { Skeleton } from '#/components/ui/skeleton'
 import {
   Tooltip,
@@ -92,18 +92,15 @@ export function StrategyProgressView({
           {overallLabel[progress.overall]}
         </StatusBadge>
         <span className="text-muted-foreground">
+          {progress.dayOfMonth !== null &&
+            `Dia ${progress.dayOfMonth} de ${progress.daysInMonth} · `}
+          {dashboard.activeStrategy.name}
+          {' · gastos '}
           <span className="font-medium text-foreground tabular-nums">
             {formatCurrency(progress.spending.actualCents)}
           </span>
-          {' de '}
-          <span className="tabular-nums">
-            {formatCurrency(progress.spending.targetCents)}
-          </span>
           {progress.spending.targetCents > 0 &&
-            ` (${Math.round(spendingRatio * 100)}%)`}
-          {progress.dayOfMonth !== null &&
-            ` · dia ${progress.dayOfMonth} de ${progress.daysInMonth}`}
-          {` · ${dashboard.activeStrategy.name}`}
+            ` (${Math.round(spendingRatio * 100)}% de ${formatCurrency(progress.spending.targetCents)})`}
         </span>
         <Tooltip>
           <TooltipTrigger
@@ -121,95 +118,125 @@ export function StrategyProgressView({
           </TooltipContent>
         </Tooltip>
       </div>
-      <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-4">
-        {progress.buckets.map((item) => (
-          <BucketRow key={item.bucket} item={item} elapsed={progress.elapsed} />
-        ))}
+      <div className="@container">
+        <div className="grid @md:grid-cols-2 @3xl:grid-cols-4">
+          {progress.buckets.map((item, index) => (
+            <BucketRow
+              key={item.bucket}
+              item={item}
+              index={index}
+              elapsed={progress.elapsed}
+            />
+          ))}
+        </div>
       </div>
     </div>
   )
 }
 
+// Posição na grade: 2 colunas a partir de @md, 4 a partir de @3xl. As bordas
+// e o recuo lateral seguem a posição, sem depender de seletores nth-child.
+const bucketCellClasses = [
+  '@md:border-r @md:pr-5',
+  '@md:pl-5 @3xl:border-r @3xl:pr-5',
+  '@md:border-r @md:pr-5 @3xl:pl-5',
+  '@md:pl-5',
+]
+
 function BucketRow({
   item,
+  index,
   elapsed,
 }: {
   item: StrategyBucketProgress
+  index: number
   elapsed: number
 }) {
-  const detail =
-    item.kind === 'spending'
-      ? item.remainingCents >= 0
-        ? item.projectedCents > item.actualCents
-          ? `Sobram ${formatCurrency(item.remainingCents)} · previsão ${formatCurrency(item.projectedCents)}`
-          : `Sobram ${formatCurrency(item.remainingCents)}`
-        : `Passou ${formatCurrency(-item.remainingCents)}`
-      : item.status === 'done'
-        ? item.targetCents > 0
-          ? 'Aporte feito'
-          : 'Sem meta'
-        : `Faltam ${formatCurrency(item.remainingCents)}`
+  const percent =
+    item.targetCents > 0
+      ? Math.round((item.actualCents / item.targetCents) * 100)
+      : null
+  const fillShare = Math.min(1, item.ratio)
   const projectedShare =
     item.kind === 'spending' && item.targetCents > 0
       ? Math.min(1, item.projectedCents / item.targetCents)
       : 0
+  const fillColor =
+    item.status === 'over' || item.status === 'behind'
+      ? 'bg-destructive'
+      : item.status === 'attention'
+        ? 'bg-warning'
+        : item.status === 'done'
+          ? 'bg-success'
+          : 'bg-primary'
+  const headline =
+    item.kind === 'spending'
+      ? item.remainingCents >= 0
+        ? `Sobram ${formatCurrency(item.remainingCents)}`
+        : `Passou ${formatCurrency(-item.remainingCents)}`
+      : item.status === 'done'
+        ? item.targetCents > 0
+          ? 'Aporte do mês feito'
+          : 'Sem meta neste mês'
+        : `Faltam ${formatCurrency(item.remainingCents)}`
+  const projection =
+    item.kind === 'spending' && item.projectedCents > item.actualCents
+      ? `Previsão do mês: ${formatCurrency(item.projectedCents)}`
+      : null
+
   return (
-    <div className="min-w-0">
-      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-        <span className="flex items-center gap-2 text-sm">
-          <span className="font-medium">{item.label}</span>
-          {item.status !== 'on_track' && (
-            <StatusBadge tone={statusTone[item.status]}>
-              {bucketStatusLabels[item.status]}
-            </StatusBadge>
-          )}
-        </span>
-        <span className="shrink-0 text-sm tabular-nums">
-          <span className="font-medium">
-            {formatCurrency(item.actualCents)}
-          </span>
-          <span className="text-muted-foreground">
-            {' '}
-            de {formatCurrency(item.targetCents)}
-          </span>
-        </span>
+    <div
+      className={cn(
+        'flex min-w-0 flex-col border-b py-4 last:border-b-0 @md:border-b-0 @md:py-1',
+        bucketCellClasses[index] ?? '',
+      )}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <span className="min-w-0 text-sm font-medium">{item.label}</span>
+        <StatusBadge className="shrink-0" tone={statusTone[item.status]}>
+          {bucketStatusLabels[item.status]}
+        </StatusBadge>
       </div>
-      <div className="relative mt-2">
-        {projectedShare > 0 && (
-          <span
-            aria-hidden="true"
-            className="absolute top-1/2 left-0 h-1 -translate-y-1/2 rounded-full bg-foreground/15"
-            style={{ width: `${projectedShare * 100}%` }}
-          />
-        )}
-        <ProgressBar
-          value={item.actualCents}
-          max={item.targetCents}
-          className={cn(
-            'relative',
-            item.status === 'over' || item.status === 'behind'
-              ? '[&_[data-slot=progress-indicator]]:bg-destructive'
-              : item.status === 'attention'
-                ? '[&_[data-slot=progress-indicator]]:bg-warning'
-                : item.status === 'done'
-                  ? '[&_[data-slot=progress-indicator]]:bg-success'
-                  : undefined,
-            '[&_[data-slot=progress-track]]:bg-transparent',
+      <p className="mt-2 text-xl font-semibold tracking-tight tabular-nums">
+        {formatCurrency(item.actualCents)}
+      </p>
+      <p className="text-xs text-muted-foreground tabular-nums">
+        de {formatCurrency(item.targetCents)}
+        {percent !== null && ` · ${percent}%`}
+      </p>
+      <div className="relative mt-3 h-3">
+        <div
+          role="progressbar"
+          aria-label={`${item.label}: ${percent ?? 0}% da meta`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.min(100, Math.max(0, percent ?? 0))}
+          className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 overflow-hidden rounded-full bg-muted"
+        >
+          {projectedShare > fillShare && (
+            <div
+              className="absolute inset-y-0 left-0 rounded-full bg-foreground/15"
+              style={{ width: `${projectedShare * 100}%` }}
+            />
           )}
-        />
-        <span
-          aria-hidden="true"
-          className="absolute inset-x-0 top-1/2 -z-10 h-1 -translate-y-1/2 rounded-full bg-muted"
-        />
+          <div
+            className={cn('absolute inset-y-0 left-0 rounded-full', fillColor)}
+            style={{ width: `${fillShare * 100}%` }}
+          />
+        </div>
         {item.kind === 'spending' && elapsed > 0 && elapsed < 1 && (
           <span
             aria-hidden="true"
-            className="absolute top-1/2 h-2.5 w-px -translate-y-1/2 bg-foreground/50"
-            style={{ left: `${elapsed * 100}%` }}
+            title="Ponto do mês em que estamos"
+            className="absolute inset-y-0 w-0.5 rounded-full bg-foreground/60"
+            style={{ left: `calc(${elapsed * 100}% - 1px)` }}
           />
         )}
       </div>
-      <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+      <p className="mt-3 text-sm">{headline}</p>
+      {projection && (
+        <p className="text-xs text-muted-foreground">{projection}</p>
+      )}
     </div>
   )
 }

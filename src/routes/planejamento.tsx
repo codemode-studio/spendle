@@ -112,33 +112,33 @@ import {
   updateRecurrenceFn,
   updateSettingsFn,
 } from '#/features/finance/finance.functions'
-import type {
-  detectRecurrencesFn,
-  getFinanceSnapshotFn,
-} from '#/features/finance/finance.functions'
+import type { detectRecurrencesFn } from '#/features/finance/finance.functions'
 import {
   StrategyHistory,
   StrategyProgressView,
 } from '#/features/finance/strategy-progress'
 import { cn } from '#/lib/utils'
 import {
-  financeQueryKeys,
   financeSnapshotOptions,
+  invalidateFinance,
   recurrenceDetectionOptions,
   recurrenceLinkCandidatesOptions,
 } from '#/features/finance/queries'
+import type {
+  FinanceSnapshot,
+  RecurrenceSnapshot,
+} from '#/features/finance/snapshot.types'
 
-type Snapshot = Awaited<ReturnType<typeof getFinanceSnapshotFn>>
 type DetectedRecurrence = Awaited<
   ReturnType<typeof detectRecurrencesFn>
 >[number]
 type DisplayRow =
   | {
       type: 'group'
-      group: Snapshot['recurrenceGroups'][number]
-      items: Snapshot['recurrences']
+      group: FinanceSnapshot['recurrenceGroups'][number]
+      items: FinanceSnapshot['recurrences']
     }
-  | { type: 'recurrence'; item: Snapshot['recurrences'][number] }
+  | { type: 'recurrence'; item: RecurrenceSnapshot }
 type Allocation = Record<
   'essential' | 'lifestyle' | 'investment' | 'reserve',
   number
@@ -220,14 +220,16 @@ function PlanningPage() {
   const [deletingRecurrenceId, setDeletingRecurrenceId] = useState<
     string | null
   >(null)
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: financeQueryKeys.all })
+  const invalidateStrategy = () => invalidateFinance(queryClient, 'strategy')
+  const invalidateBudgetClose = () =>
+    invalidateFinance(queryClient, 'budgetClose')
+  const invalidateLedger = () => invalidateFinance(queryClient, 'ledger')
 
   const strategyMutation = useMutation({
     mutationFn: activateStrategy,
     onSuccess: () => {
       toast.success('Estratégia atualizada.')
-      void invalidate()
+      void invalidateStrategy()
     },
     onError: showError,
   })
@@ -235,7 +237,7 @@ function PlanningPage() {
     mutationFn: updateSettings,
     onSuccess: () => {
       toast.success('Planejamento atualizado.')
-      void invalidate()
+      void invalidateStrategy()
     },
     onError: showError,
   })
@@ -244,7 +246,7 @@ function PlanningPage() {
     onSuccess: () => {
       toast.success('Meta salva.')
       setGoalOpen(false)
-      void invalidate()
+      void invalidateStrategy()
     },
     onError: showError,
   })
@@ -253,7 +255,7 @@ function PlanningPage() {
     onSuccess: () => {
       toast.success('Aporte registrado.')
       setContributionOpen(false)
-      void invalidate()
+      void invalidateStrategy()
     },
     onError: showError,
   })
@@ -265,7 +267,7 @@ function PlanningPage() {
           ? `${formatMonth(result.month, { capitalize: true })} já estava fechado.`
           : `${formatMonth(result.month, { capitalize: true })} foi fechado.`,
       )
-      void invalidate()
+      void invalidateBudgetClose()
     },
     onError: showError,
   })
@@ -274,7 +276,7 @@ function PlanningPage() {
     onSuccess: () => {
       toast.success('Recorrência criada.')
       closeRecurrenceDialog()
-      void invalidate()
+      void invalidateLedger()
     },
     onError: showError,
   })
@@ -283,7 +285,7 @@ function PlanningPage() {
     onSuccess: () => {
       toast.success('Recorrência atualizada.')
       closeRecurrenceDialog()
-      void invalidate()
+      void invalidateLedger()
     },
     onError: showError,
   })
@@ -295,7 +297,7 @@ function PlanningPage() {
           ? 'Recorrência retomada.'
           : 'Recorrência pausada.',
       )
-      void invalidate()
+      void invalidateLedger()
     },
     onError: showError,
   })
@@ -304,7 +306,7 @@ function PlanningPage() {
     onSuccess: () => {
       toast.success('Recorrência excluída.')
       setDeletingRecurrenceId(null)
-      void invalidate()
+      void invalidateLedger()
     },
     onError: showError,
   })
@@ -318,7 +320,7 @@ function PlanningPage() {
           : null,
       ].filter(Boolean)
       toast.success(`${parts.join(' · ')}.`)
-      void invalidate()
+      void invalidateLedger()
     },
     onError: showError,
   })
@@ -326,7 +328,7 @@ function PlanningPage() {
     mutationFn: confirmRecurrenceMatch,
     onSuccess: () => {
       toast.success('Pagamento conciliado com a recorrência.')
-      void invalidate()
+      void invalidateLedger()
     },
     onError: showError,
   })
@@ -336,7 +338,7 @@ function PlanningPage() {
       toast.success(
         'Correspondência rejeitada. O sistema vai considerar isso no histórico.',
       )
-      void invalidate()
+      void invalidateLedger()
     },
     onError: showError,
   })
@@ -344,7 +346,7 @@ function PlanningPage() {
     mutationFn: unlinkRecurrenceMatch,
     onSuccess: () => {
       toast.success('Pagamento desvinculado.')
-      void invalidate()
+      void invalidateLedger()
     },
     onError: showError,
   })
@@ -352,7 +354,7 @@ function PlanningPage() {
     mutationFn: skipRecurrenceOccurrence,
     onSuccess: () => {
       toast.success('Ocorrência ignorada.')
-      void invalidate()
+      void invalidateLedger()
     },
     onError: showError,
   })
@@ -364,7 +366,7 @@ function PlanningPage() {
           ? 'Pagamento vinculado e conciliado.'
           : `${result.linked} lançamentos vinculados ao período.`,
       )
-      void invalidate()
+      void invalidateLedger()
     },
     onError: showError,
   })
@@ -372,7 +374,7 @@ function PlanningPage() {
     mutationFn: completeRecurrenceOccurrence,
     onSuccess: () => {
       toast.success('Período concluído com o total real.')
-      void invalidate()
+      void invalidateLedger()
     },
     onError: showError,
   })
@@ -701,7 +703,7 @@ function BudgetSection({
   settingsPending,
   closePending,
 }: {
-  data: Snapshot
+  data: FinanceSnapshot
   selectedId: string
   allocation: Allocation
   totalBps: number
@@ -926,7 +928,7 @@ function GoalsSection({
   openGoal,
   openContribution,
 }: {
-  data: Snapshot
+  data: FinanceSnapshot
   submitReserve: (event: React.FormEvent<HTMLFormElement>) => void
   settingsPending: boolean
   openGoal: () => void
@@ -1048,7 +1050,7 @@ function RecurrencesSection({
   linkOccurrence,
   completeOccurrence,
 }: {
-  data: Snapshot
+  data: FinanceSnapshot
   pending: boolean
   openNew: () => void
   openEdit: (id: string) => void
@@ -1577,7 +1579,7 @@ function LinkPaymentDialog({
   onOpenChange,
   onLink,
 }: {
-  recurrence: Snapshot['recurrences'][number] | null
+  recurrence: RecurrenceSnapshot | null
   pending: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -1839,7 +1841,7 @@ function ContributionDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  data: Snapshot
+  data: FinanceSnapshot
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
   pending: boolean
 }) {
@@ -1906,8 +1908,8 @@ function RecurrenceDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  data: Snapshot
-  recurrence: Snapshot['recurrences'][number] | undefined
+  data: FinanceSnapshot
+  recurrence: RecurrenceSnapshot | undefined
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
   pending: boolean
 }) {
@@ -2163,13 +2165,12 @@ function RecurrenceDialog({
 
 // ─── Detecção de recorrências ────────────────────────────────────────────────
 
-function DetectedRecurrencesPanel({ data }: { data: Snapshot }) {
+function DetectedRecurrencesPanel({ data }: { data: FinanceSnapshot }) {
   const queryClient = useQueryClient()
   const detection = useQuery(recurrenceDetectionOptions())
   const approve = useServerFn(approveDetectedRecurrenceFn)
   const ignore = useServerFn(ignoreDetectedRecurrenceFn)
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: financeQueryKeys.all })
+  const invalidate = () => invalidateFinance(queryClient, 'ledger')
   const approveMutation = useMutation({
     mutationFn: approve,
     onSuccess: (result) => {
@@ -2241,7 +2242,7 @@ function DetectedRecurrenceCard({
   onIgnore,
 }: {
   candidate: DetectedRecurrence
-  data: Snapshot
+  data: FinanceSnapshot
   pending: boolean
   onApprove: (input: {
     name: string
@@ -2427,7 +2428,7 @@ function AggregateOccurrenceBlock({
   completeOccurrence,
   openLink,
 }: {
-  occurrence: Snapshot['recurrences'][number]['occurrences'][number]
+  occurrence: RecurrenceSnapshot['occurrences'][number]
   currency: string
   pending: boolean
   confirmMatch: (matchId: string) => void

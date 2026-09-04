@@ -33,7 +33,7 @@ import {
   toMinorUnits as toCents,
 } from '#/domain/currency'
 import { createManualBalanceCheckpointFn } from '#/features/finance/finance.functions'
-import { financeQueryKeys } from '#/features/finance/queries'
+import { invalidateFinance } from '#/features/finance/queries'
 
 export function BalanceCheckpointDialog({
   targetType,
@@ -72,7 +72,7 @@ export function BalanceCheckpointDialog({
       }
       setOpen(false)
       setReplaceExisting(false)
-      queryClient.invalidateQueries({ queryKey: financeQueryKeys.all })
+      void invalidateFinance(queryClient, 'ledger')
     },
     onError: (reason) => {
       if (

@@ -38,7 +38,7 @@ import {
 } from '#/domain/currency'
 import { formatInstrumentName } from '#/domain/finance'
 import { createManualTransactionFn } from '#/features/finance/finance.functions'
-import { financeQueryKeys } from '#/features/finance/queries'
+import { invalidateFinance } from '#/features/finance/queries'
 
 interface AccountOption {
   id: string
@@ -116,7 +116,7 @@ export function ManualTransactionDialog({
       }
       setOpen(false)
       resetForm()
-      void queryClient.invalidateQueries({ queryKey: financeQueryKeys.all })
+      void invalidateFinance(queryClient, 'ledger')
     },
     onError: (reason) => {
       toast.error(

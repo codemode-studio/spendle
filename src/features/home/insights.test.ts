@@ -11,7 +11,7 @@ import {
   topMerchants,
   upcomingCommitments,
 } from './insights'
-import type { FinanceSnapshot } from './insights'
+import type { FinanceSnapshot } from '#/features/finance/snapshot.types'
 
 function snapshotWithMonthlyRecurrence() {
   const today = '2026-09-04'

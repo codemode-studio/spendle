@@ -30,6 +30,7 @@ import {
   todayIso,
 } from '#/domain/period'
 import { StrategyProgressView } from '#/features/finance/strategy-progress'
+import type { FinanceSnapshot } from '#/features/finance/snapshot.types'
 import { cn } from '#/lib/utils'
 import {
   askFinanceQuestionFn,
@@ -38,7 +39,7 @@ import {
 import type { FortnightAnalysis } from './analysis.server'
 import { CashChart, CategoryBar } from './charts'
 import { buildHomeView, buildInsights, projectCash } from './insights'
-import type { FinanceSnapshot, HomeView, Insight } from './insights'
+import type { HomeView, Insight } from './insights'
 
 // ─── Página ──────────────────────────────────────────────────────────────────
 

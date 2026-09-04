@@ -78,8 +78,8 @@ import {
 } from '#/features/finance/finance.functions'
 import type { getImportReviewSnapshotFn } from '#/features/finance/finance.functions'
 import {
-  financeQueryKeys,
   importReviewOptions,
+  invalidateFinance,
 } from '#/features/finance/queries'
 import { cn } from '#/lib/utils'
 
@@ -120,15 +120,7 @@ function ImportPage() {
   const [confirmedReviews, setConfirmedReviews] = useState<Set<string>>(
     () => new Set(),
   )
-  const invalidate = async () => {
-    await queryClient.invalidateQueries({
-      queryKey: financeQueryKeys.importReview(),
-    })
-    await queryClient.invalidateQueries({
-      queryKey: financeQueryKeys.snapshots(),
-      refetchType: 'none',
-    })
-  }
+  const invalidateImport = () => invalidateFinance(queryClient, 'ledger')
 
   const stageMutation = useMutation({
     mutationFn: stageImport,
@@ -148,7 +140,7 @@ function ImportPage() {
             ? 'Fatura conferida e consolidada automaticamente, sem duplicar lançamentos.'
             : 'Arquivo já importado. Nenhuma transação nova foi criada.',
       )
-      await invalidate()
+      await invalidateImport()
       setSelectedTarget('')
       setSelectedFiles([])
       setAiConsent(false)
@@ -181,7 +173,7 @@ function ImportPage() {
                     } else {
                       toast.warning('Algumas atualizações continuam pendentes.')
                     }
-                    await invalidate()
+                    await invalidateImport()
                   })
                   .catch((error) =>
                     toast.error(
@@ -195,10 +187,10 @@ function ImportPage() {
           },
         )
       }
-      await invalidate()
+      await invalidateImport()
     },
     onError: (error) => {
-      invalidate()
+      void invalidateImport()
       toast.error(
         error instanceof Error ? error.message : 'Falha ao consolidar.',
       )
@@ -208,7 +200,7 @@ function ImportPage() {
     mutationFn: rejectImport,
     onSuccess: () => {
       toast.success('Lote rejeitado.')
-      invalidate()
+      void invalidateImport()
     },
   })
   const replaceCheckpointMutation = useMutation({
@@ -222,7 +214,7 @@ function ImportPage() {
           'Os checkpoints foram atualizados, mas a reconciliação derivada ficou pendente.',
         )
       }
-      invalidate()
+      void invalidateImport()
     },
     onError: (error) =>
       toast.error(
@@ -233,7 +225,8 @@ function ImportPage() {
   })
   const categoryMutation = useMutation({
     mutationFn: updateStagedCategory,
-    onSuccess: () => invalidate(),
+    onSuccess: () =>
+      invalidateFinance(queryClient, 'stagedTransactionCategory'),
     onError: (error) =>
       toast.error(
         error instanceof Error ? error.message : 'Falha ao alterar categoria.',
@@ -247,7 +240,7 @@ function ImportPage() {
           ? 'Correção aplicada. Os saldos posteriores precisam ser conferidos novamente.'
           : 'Correção rejeitada. O lançamento original foi preservado.',
       )
-      invalidate()
+      void invalidateImport()
     },
     onError: (error) =>
       toast.error(
@@ -260,7 +253,7 @@ function ImportPage() {
       toast.success(
         'Lançamento vinculado. Confira a correção e consolide a fatura.',
       )
-      invalidate()
+      void invalidateImport()
     },
     onError: (error) =>
       toast.error(
@@ -277,7 +270,7 @@ function ImportPage() {
           ? 'Autorização marcada como ausente da fatura.'
           : 'Exclusão desfeita. A diferença voltou para revisão.',
       )
-      invalidate()
+      void invalidateImport()
       if (variables.data.action === 'restore') {
         setHistoryOpen(false)
         void navigate({ search: { view: 'review' } })
@@ -1128,7 +1121,7 @@ function ImportCoverageConfirmation({ item }: { item: ImportItem }) {
     mutationFn: confirmCoverage,
     onSuccess: () => {
       toast.success('Período de cobertura confirmado.')
-      queryClient.invalidateQueries({ queryKey: financeQueryKeys.all })
+      void invalidateFinance(queryClient, 'ledger')
     },
     onError: (error) =>
       toast.error(

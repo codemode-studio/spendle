@@ -61,8 +61,9 @@ import {
   updateTransactionCategoryFn,
 } from '#/features/finance/finance.functions'
 import {
-  financeQueryKeys,
   financeSnapshotOptions,
+  invalidateFinance,
+  patchTransactionCategory,
 } from '#/features/finance/queries'
 import { groupCategoryOptions } from '#/domain/categories'
 import { cn } from '#/lib/utils'
@@ -130,42 +131,20 @@ function TransactionsPage() {
     Number(target !== 'all') +
     Number(categoryFilter !== 'all') +
     Number(minCents !== null || maxCents !== null)
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: financeQueryKeys.all })
-  const snapshotKey = financeQueryKeys.snapshot()
+  const invalidate = () => invalidateFinance(queryClient, 'ledger')
   const categoryMutation = useMutation({
     mutationFn: updateCategory,
     // Atualização otimista: a linha muda na hora, sem travar as outras.
     onMutate: async (variables) => {
-      await queryClient.cancelQueries({ queryKey: snapshotKey })
-      const previous = queryClient.getQueryData<typeof data>(snapshotKey)
-      queryClient.setQueryData<typeof data>(snapshotKey, (old) =>
-        old
-          ? {
-              ...old,
-              transactions: old.transactions.map((transaction) =>
-                transaction.id === variables.data.transactionId
-                  ? {
-                      ...transaction,
-                      categoryId: variables.data.categoryId,
-                      category:
-                        old.categories.find(
-                          (category) =>
-                            category.id === variables.data.categoryId,
-                        ) ?? transaction.category,
-                    }
-                  : transaction,
-              ),
-            }
-          : old,
-      )
-      return { previous }
+      const rollback = await patchTransactionCategory(queryClient, {
+        transactionId: variables.data.transactionId,
+        categoryId: variables.data.categoryId,
+      })
+      return { rollback }
     },
     onSuccess: () => invalidate(),
     onError: (error, _variables, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(snapshotKey, context.previous)
-      }
+      context?.rollback()
       toast.error(error instanceof Error ? error.message : 'Erro ao atualizar.')
     },
   })

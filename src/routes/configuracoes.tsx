@@ -52,8 +52,8 @@ import {
   updateSettingsFn,
 } from '#/features/finance/finance.functions'
 import {
-  financeQueryKeys,
   financeSnapshotOptions,
+  invalidateFinance,
 } from '#/features/finance/queries'
 
 const settingsTabs = ['geral', 'contas', 'cartoes'] as const
@@ -131,15 +131,13 @@ function GeneralSettings() {
   const [scopeDialogOpen, setScopeDialogOpen] = useState(false)
   const [clearDialogOpen, setClearDialogOpen] = useState(false)
   const [clearConfirmation, setClearConfirmation] = useState('')
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: financeQueryKeys.all })
 
   const scopeMutation = useMutation({
     mutationFn: createScope,
     onSuccess: () => {
       toast.success('Pessoa ou empresa adicionada.')
       setScopeDialogOpen(false)
-      invalidate()
+      void invalidateFinance(queryClient, 'ownershipScope')
     },
     onError: (error) =>
       toast.error(
@@ -150,7 +148,7 @@ function GeneralSettings() {
     mutationFn: updateSettings,
     onSuccess: () => {
       toast.success('Preferências de IA salvas.')
-      invalidate()
+      void invalidateFinance(queryClient, 'aiConsent')
     },
     onError: (error) =>
       toast.error(
@@ -165,7 +163,7 @@ function GeneralSettings() {
       )
       setClearConfirmation('')
       setClearDialogOpen(false)
-      invalidate()
+      void invalidateFinance(queryClient, 'ledger')
     },
     onError: (error) =>
       toast.error(
