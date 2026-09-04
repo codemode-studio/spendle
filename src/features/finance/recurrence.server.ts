@@ -17,7 +17,7 @@ import type {
   RecurrenceLearning,
   RecurrenceTransactionInput,
 } from '#/domain/recurrence-matching'
-import { daysBetween, todayIso } from '#/domain/period'
+import { assertIsoDate, daysBetween, todayIso } from '#/domain/period'
 import {
   addRecurrencePeriod,
   aggregateWindow,
@@ -51,6 +51,44 @@ export type RecurrenceInput = {
   destinationMode: 'automatic' | 'fixed'
   frequency: 'monthly' | 'yearly'
   nextDate: string
+}
+
+export type InvalidRecurrenceDestinationCode =
+  'multiple_destinations' | 'fixed_destination_required'
+
+const recurrenceDestinationMessages: Record<
+  InvalidRecurrenceDestinationCode,
+  string
+> = {
+  multiple_destinations: 'Informe somente uma conta ou um cartão.',
+  fixed_destination_required:
+    'Escolha uma conta ou cartão para o destino fixo.',
+}
+
+export class InvalidRecurrenceDestinationError extends Error {
+  readonly code: InvalidRecurrenceDestinationCode
+
+  constructor(code: InvalidRecurrenceDestinationCode) {
+    super(recurrenceDestinationMessages[code])
+    this.name = 'InvalidRecurrenceDestinationError'
+    this.code = code
+  }
+}
+
+export function assertRecurrenceDestination(
+  input: Pick<
+    RecurrenceInput,
+    'accountId' | 'creditCardId' | 'destinationMode'
+  >,
+) {
+  const destinationCount =
+    Number(Boolean(input.accountId)) + Number(Boolean(input.creditCardId))
+  if (destinationCount > 1) {
+    throw new InvalidRecurrenceDestinationError('multiple_destinations')
+  }
+  if (input.destinationMode === 'fixed' && destinationCount !== 1) {
+    throw new InvalidRecurrenceDestinationError('fixed_destination_required')
+  }
 }
 
 type CreateRecurrenceInput = RecurrenceInput & {
@@ -936,6 +974,7 @@ export async function refreshRecurrences(options: { today?: string } = {}) {
 }
 
 export async function createRecurrence(input: CreateRecurrenceInput) {
+  assertRecurrenceDestination(input)
   await ensureDatabase()
   const { groupName, participantLabel, startsOn, scheduleAnchor, ...values } =
     input
@@ -958,6 +997,7 @@ export async function createRecurrence(input: CreateRecurrenceInput) {
 }
 
 export async function updateRecurrence(id: string, input: RecurrenceInput) {
+  assertRecurrenceDestination(input)
   await ensureDatabase()
   const current = await db
     .select()
@@ -1288,6 +1328,7 @@ export async function listLinkCandidates(input: {
   occurrenceId: string
   today?: string
 }): Promise<LinkCandidate[]> {
+  if (input.today) assertIsoDate(input.today)
   await ensureDatabase()
   const occurrence = await db
     .select()

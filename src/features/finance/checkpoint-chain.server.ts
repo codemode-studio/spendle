@@ -13,12 +13,50 @@ import {
   isHardImportReviewReason,
   nextValidationState,
 } from '#/domain/import-audit'
+import { assertIsoDate } from '#/domain/period'
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
 export interface CheckpointTarget {
   targetType: 'account' | 'card'
   targetId: string
+}
+
+export type InvalidManualBalanceCheckpointCode =
+  'card_period_start_required' | 'period_start_after_as_of'
+
+const manualBalanceCheckpointMessages: Record<
+  InvalidManualBalanceCheckpointCode,
+  string
+> = {
+  card_period_start_required: 'Informe o início do ciclo da fatura.',
+  period_start_after_as_of:
+    'O início do ciclo deve ser anterior ao fechamento.',
+}
+
+export class InvalidManualBalanceCheckpointError extends Error {
+  readonly code: InvalidManualBalanceCheckpointCode
+
+  constructor(code: InvalidManualBalanceCheckpointCode) {
+    super(manualBalanceCheckpointMessages[code])
+    this.name = 'InvalidManualBalanceCheckpointError'
+    this.code = code
+  }
+}
+
+export function assertManualBalanceCheckpoint(input: {
+  targetType: 'account' | 'card'
+  asOf: string
+  periodStart?: string
+}) {
+  assertIsoDate(input.asOf)
+  if (input.periodStart) assertIsoDate(input.periodStart)
+  if (input.targetType === 'card' && !input.periodStart) {
+    throw new InvalidManualBalanceCheckpointError('card_period_start_required')
+  }
+  if (input.periodStart && input.periodStart > input.asOf) {
+    throw new InvalidManualBalanceCheckpointError('period_start_after_as_of')
+  }
 }
 
 function previousDate(value: string) {
@@ -122,6 +160,7 @@ export async function recordManualBalanceCheckpoint(input: {
   note?: string
   replaceExisting?: boolean
 }) {
+  assertManualBalanceCheckpoint(input)
   await ensureDatabase()
   const targetRows =
     input.targetType === 'account'
@@ -143,12 +182,6 @@ export async function recordManualBalanceCheckpoint(input: {
           .limit(1)
   const target = targetRows.at(0)
   if (!target) throw new Error('Conta ou cartão não encontrado.')
-  if (input.targetType === 'card' && !input.periodStart) {
-    throw new Error('Informe o início do ciclo da fatura.')
-  }
-  if (input.periodStart && input.periodStart > input.asOf) {
-    throw new Error('O início do ciclo deve ser anterior ao fechamento.')
-  }
 
   const checkpoints = await db
     .select()

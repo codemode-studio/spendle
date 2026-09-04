@@ -32,6 +32,7 @@ import {
   matchLearnedTransferRule,
 } from '#/domain/reconciliation'
 import { runPostCommitStep } from '#/domain/post-commit'
+import { assertIsoDate } from '#/domain/period'
 import { parseCsvStatement } from './csv-statement.server'
 import { categorizeTransactionsWithAi } from './ai.server'
 import {
@@ -78,6 +79,64 @@ const IDENTICAL_FILE_CONFLICT = {
 }
 const SAME_BATCH_PARTIAL_CSV_WARNING =
   'O PDF definitivo contém movimentações posteriores ao CSV e será a fonte canônica deste período.'
+
+export type StageImportBatchInput = {
+  files: File[]
+  targetType: 'account' | 'card'
+  targetId: string
+  aiConsent: boolean
+}
+
+export type InvalidStageImportFormDataCode =
+  'files_required' | 'invalid_target_type' | 'target_required'
+
+const stageImportFormDataMessages: Record<
+  InvalidStageImportFormDataCode,
+  string
+> = {
+  files_required: 'Selecione pelo menos um arquivo.',
+  invalid_target_type: 'Destino inválido.',
+  target_required: 'Selecione uma conta ou cartão.',
+}
+
+export class InvalidStageImportFormDataError extends Error {
+  readonly code: InvalidStageImportFormDataCode
+
+  constructor(code: InvalidStageImportFormDataCode) {
+    super(stageImportFormDataMessages[code])
+    this.name = 'InvalidStageImportFormDataError'
+    this.code = code
+  }
+}
+
+export function parseStageImportFormData(
+  data: FormData,
+): StageImportBatchInput {
+  const files = [...data.getAll('files'), ...data.getAll('file')].filter(
+    (file): file is File => file instanceof File && file.size > 0,
+  )
+  const targetType = data.get('targetType')
+  const targetId = data.get('targetId')
+  if (!files.length) {
+    throw new InvalidStageImportFormDataError('files_required')
+  }
+  if (targetType !== 'account' && targetType !== 'card') {
+    throw new InvalidStageImportFormDataError('invalid_target_type')
+  }
+  if (typeof targetId !== 'string' || !targetId) {
+    throw new InvalidStageImportFormDataError('target_required')
+  }
+  return {
+    files,
+    targetType,
+    targetId,
+    aiConsent: data.get('aiConsent') === 'true',
+  }
+}
+
+export function stageImportFormData(data: FormData) {
+  return stageImportBatch(parseStageImportFormData(data))
+}
 const SAME_BATCH_EXACT_PDF_WARNING =
   'Este PDF será preservado como evidência quando o arquivo estruturado equivalente for consolidado.'
 
@@ -2037,12 +2096,7 @@ export async function reconcileCsvWithPdfControl(input: {
   }
 }
 
-export async function stageImportBatch(input: {
-  files: File[]
-  targetType: 'account' | 'card'
-  targetId: string
-  aiConsent: boolean
-}) {
+export async function stageImportBatch(input: StageImportBatchInput) {
   await ensureDatabase()
   if (!input.files.length) throw new Error('Selecione pelo menos um arquivo.')
   if (input.files.length > 24) {
@@ -3847,6 +3901,8 @@ export async function confirmImportCoverage(input: {
   periodStart: string
   periodEnd: string
 }) {
+  assertIsoDate(input.periodStart)
+  assertIsoDate(input.periodEnd)
   await ensureDatabase()
   const importRows = await db
     .select()

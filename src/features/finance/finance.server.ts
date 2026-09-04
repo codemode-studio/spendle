@@ -24,6 +24,7 @@ import {
   strategyAllocationSchema,
 } from '#/domain/finance'
 import { evaluateImportAudit, nextValidationState } from '#/domain/import-audit'
+import { assertIsoDate } from '#/domain/period'
 import {
   buildCoverageView,
   countCoveredDaysAfter,
@@ -906,6 +907,7 @@ export async function createManualTransaction(input: {
   counterpartyAccountId?: string
   notes?: string
 }) {
+  assertIsoDate(input.postedAt)
   await ensureDatabase()
   if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) {
     throw new Error('Informe um valor maior que zero.')

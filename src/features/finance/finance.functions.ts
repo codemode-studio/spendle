@@ -34,9 +34,10 @@ import {
   rejectImport,
   replaceConflictingCheckpoint,
   retryImportFinalization,
-  stageImportBatch,
+  stageImportFormData,
 } from './import.server'
 import { getImportReviewSnapshot } from './import-review-read.server'
+import { serverInput } from './input-errors.server'
 import {
   approveDetectedRecurrence,
   completeOccurrence as completeRecurrenceOccurrence,
@@ -58,13 +59,6 @@ import {
 const isoDateSchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Informe uma data válida.')
-  .refine((value) => {
-    const parsed = new Date(`${value}T12:00:00Z`)
-    return (
-      !Number.isNaN(parsed.getTime()) &&
-      parsed.toISOString().slice(0, 10) === value
-    )
-  }, 'Informe uma data válida.')
 
 export const getFinanceSnapshotFn = createServerFn({ method: 'GET' })
   .validator(
@@ -117,35 +111,18 @@ export const createManualBalanceCheckpointFn = createServerFn({
   method: 'POST',
 })
   .validator(
-    z
-      .object({
-        targetType: z.enum(['account', 'card']),
-        targetId: z.string().min(1),
-        balanceCents: z.number().int(),
-        asOf: isoDateSchema,
-        periodStart: isoDateSchema.optional(),
-        balanceType: z.enum(['posted', 'available', 'card_statement']),
-        note: z.string().trim().max(200).optional(),
-        replaceExisting: z.boolean().default(false),
-      })
-      .superRefine((value, context) => {
-        if (value.targetType === 'card' && !value.periodStart) {
-          context.addIssue({
-            code: 'custom',
-            path: ['periodStart'],
-            message: 'Informe o início do ciclo da fatura.',
-          })
-        }
-        if (value.periodStart && value.periodStart > value.asOf) {
-          context.addIssue({
-            code: 'custom',
-            path: ['periodStart'],
-            message: 'O início do ciclo deve ser anterior ao fechamento.',
-          })
-        }
-      }),
+    z.object({
+      targetType: z.enum(['account', 'card']),
+      targetId: z.string().min(1),
+      balanceCents: z.number().int(),
+      asOf: isoDateSchema,
+      periodStart: isoDateSchema.optional(),
+      balanceType: z.enum(['posted', 'available', 'card_statement']),
+      note: z.string().trim().max(200).optional(),
+      replaceExisting: z.boolean().default(false),
+    }),
   )
-  .handler(({ data }) => createManualBalanceCheckpoint(data))
+  .handler(({ data }) => serverInput(() => createManualBalanceCheckpoint(data)))
 
 export const createManualTransactionFn = createServerFn({ method: 'POST' })
   .validator(
@@ -161,7 +138,7 @@ export const createManualTransactionFn = createServerFn({ method: 'POST' })
       notes: z.string().trim().max(200).optional(),
     }),
   )
-  .handler(({ data }) => createManualTransaction(data))
+  .handler(({ data }) => serverInput(() => createManualTransaction(data)))
 
 export const resolveTransactionCorrectionFn = createServerFn({ method: 'POST' })
   .validator(
@@ -296,53 +273,32 @@ export const setReconciliationStatusFn = createServerFn({ method: 'POST' })
   )
   .handler(({ data }) => setReconciliationStatus(data))
 
-const recurrenceInputSchema = z
-  .object({
-    name: z.string().trim().min(2).max(100),
-    groupName: z.string().trim().max(80).optional(),
-    participantLabel: z.string().trim().max(80).optional(),
-    accountId: z.string().optional(),
-    creditCardId: z.string().optional(),
-    categoryId: z.string().min(1),
-    amountCents: z.number().int().positive(),
-    currency: currencySchema,
-    direction: z.enum(['income', 'expense']),
-    amountMode: z.enum(['fixed', 'variable']),
-    matchMode: z.enum(['single', 'aggregate']).default('single'),
-    destinationMode: z.enum(['automatic', 'fixed']),
-    frequency: z.enum(['monthly', 'yearly']),
-    nextDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  })
-  .superRefine((value, context) => {
-    if (value.accountId && value.creditCardId) {
-      context.addIssue({
-        code: 'custom',
-        path: ['accountId'],
-        message: 'Informe somente uma conta ou um cartão.',
-      })
-    }
-    if (
-      value.destinationMode === 'fixed' &&
-      Number(Boolean(value.accountId)) + Number(Boolean(value.creditCardId)) !==
-        1
-    ) {
-      context.addIssue({
-        code: 'custom',
-        path: ['accountId'],
-        message: 'Escolha uma conta ou cartão para o destino fixo.',
-      })
-    }
-  })
+const recurrenceInputSchema = z.object({
+  name: z.string().trim().min(2).max(100),
+  groupName: z.string().trim().max(80).optional(),
+  participantLabel: z.string().trim().max(80).optional(),
+  accountId: z.string().optional(),
+  creditCardId: z.string().optional(),
+  categoryId: z.string().min(1),
+  amountCents: z.number().int().positive(),
+  currency: currencySchema,
+  direction: z.enum(['income', 'expense']),
+  amountMode: z.enum(['fixed', 'variable']),
+  matchMode: z.enum(['single', 'aggregate']).default('single'),
+  destinationMode: z.enum(['automatic', 'fixed']),
+  frequency: z.enum(['monthly', 'yearly']),
+  nextDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+})
 
 export const createRecurrenceFn = createServerFn({ method: 'POST' })
   .validator(recurrenceInputSchema)
-  .handler(({ data }) => createRecurrence(data))
+  .handler(({ data }) => serverInput(() => createRecurrence(data)))
 
 export const updateRecurrenceFn = createServerFn({ method: 'POST' })
   .validator(recurrenceInputSchema.extend({ id: z.string().min(1) }))
   .handler(({ data }) => {
     const { id, ...input } = data
-    return updateRecurrence(id, input)
+    return serverInput(() => updateRecurrence(id, input))
   })
 
 export const setRecurrenceActiveFn = createServerFn({ method: 'POST' })
@@ -394,7 +350,7 @@ export const listLinkCandidatesFn = createServerFn({ method: 'GET' })
       today: isoDateSchema.optional(),
     }),
   )
-  .handler(({ data }) => listLinkCandidates(data))
+  .handler(({ data }) => serverInput(() => listLinkCandidates(data)))
 
 export const completeRecurrenceOccurrenceFn = createServerFn({
   method: 'POST',
@@ -417,27 +373,8 @@ export const createInstallmentFn = createServerFn({ method: 'POST' })
   .handler(({ data }) => createInstallment(data))
 
 export const stageImportFn = createServerFn({ method: 'POST' })
-  .validator((data: FormData) => {
-    const files = [...data.getAll('files'), ...data.getAll('file')].filter(
-      (file): file is File => file instanceof File && file.size > 0,
-    )
-    const targetType = data.get('targetType')
-    const targetId = data.get('targetId')
-    if (!files.length) throw new Error('Selecione pelo menos um arquivo.')
-    if (targetType !== 'account' && targetType !== 'card') {
-      throw new Error('Destino inválido.')
-    }
-    if (typeof targetId !== 'string' || !targetId) {
-      throw new Error('Selecione uma conta ou cartão.')
-    }
-    return {
-      files,
-      targetType: z.enum(['account', 'card']).parse(targetType),
-      targetId,
-      aiConsent: data.get('aiConsent') === 'true',
-    }
-  })
-  .handler(({ data }) => stageImportBatch(data))
+  .validator((data: FormData) => data)
+  .handler(({ data }) => serverInput(() => stageImportFormData(data)))
 
 export const commitImportFn = createServerFn({ method: 'POST' })
   .validator(
@@ -466,7 +403,7 @@ export const confirmImportCoverageFn = createServerFn({ method: 'POST' })
       periodEnd: isoDateSchema,
     }),
   )
-  .handler(({ data }) => confirmImportCoverage(data))
+  .handler(({ data }) => serverInput(() => confirmImportCoverage(data)))
 
 export const closeCurrentBudgetFn = createServerFn({ method: 'POST' }).handler(
   () => closeCurrentBudget(),
@@ -496,7 +433,7 @@ export const approveDetectedRecurrenceFn = createServerFn({ method: 'POST' })
       transactionIds: z.array(z.string().min(1)).min(1),
     }),
   )
-  .handler(({ data }) => approveDetectedRecurrence(data))
+  .handler(({ data }) => serverInput(() => approveDetectedRecurrence(data)))
 
 export const ignoreDetectedRecurrenceFn = createServerFn({ method: 'POST' })
   .validator(

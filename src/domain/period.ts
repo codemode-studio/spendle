@@ -1,5 +1,12 @@
 const DAY_MS = 86_400_000
 
+export class InvalidIsoDateError extends Error {
+  constructor() {
+    super('Informe uma data válida.')
+    this.name = 'InvalidIsoDateError'
+  }
+}
+
 export interface Period {
   /** Inclusive ISO date. */
   start: string
@@ -35,6 +42,19 @@ export type PeriodFormat = 'day-range' | 'month-range' | 'iso'
 function asDate(value: string) {
   const iso = value.length === 7 ? `${value}-01` : value.slice(0, 10)
   return new Date(`${iso}T12:00:00Z`)
+}
+
+export function isIsoDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const parsed = new Date(`${value}T12:00:00Z`)
+  return (
+    !Number.isNaN(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 10) === value
+  )
+}
+
+export function assertIsoDate(value: string) {
+  if (!isIsoDate(value)) throw new InvalidIsoDateError()
 }
 
 function capitalize(value: string) {
