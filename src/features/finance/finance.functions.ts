@@ -16,16 +16,13 @@ import {
   createInstallment,
   linkStatementObservation,
   createOwnershipScope,
-  createRecurrence,
-  deleteRecurrence,
   getFinanceSnapshot,
+  getStrategyHistory,
   saveGoal,
   resolveTransactionCorrection,
   resolveStatementExclusion,
   setReconciliationStatus,
-  setRecurrenceActive,
   updateCreditCard,
-  updateRecurrence,
   updateSettings,
   updateStagedTransactionCategory,
   updateTransactionCategory,
@@ -41,19 +38,22 @@ import {
 } from './import.server'
 import { getImportReviewSnapshot } from './import-review-read.server'
 import {
-  confirmRecurrenceMatch,
-  refreshRecurrenceSuggestions,
-  rejectRecurrenceMatch,
-  completeRecurrenceOccurrence,
-  linkRecurrenceOccurrence,
-  skipRecurrenceOccurrence,
-  unlinkRecurrenceMatch,
-} from './recurrence-refresh.server'
-import {
   approveDetectedRecurrence,
+  completeOccurrence as completeRecurrenceOccurrence,
+  confirmMatch as confirmRecurrenceMatch,
+  createRecurrence,
+  deleteRecurrence,
   detectRecurrenceCandidates,
   ignoreDetectedRecurrence,
-} from './recurrence-detection.server'
+  linkTransactions as linkRecurrenceOccurrence,
+  listLinkCandidates,
+  refreshRecurrences,
+  rejectMatch as rejectRecurrenceMatch,
+  setRecurrenceActive,
+  skipOccurrence as skipRecurrenceOccurrence,
+  unlinkMatch as unlinkRecurrenceMatch,
+  updateRecurrence,
+} from './recurrence.server'
 
 const isoDateSchema = z
   .string()
@@ -340,7 +340,10 @@ export const createRecurrenceFn = createServerFn({ method: 'POST' })
 
 export const updateRecurrenceFn = createServerFn({ method: 'POST' })
   .validator(recurrenceInputSchema.extend({ id: z.string().min(1) }))
-  .handler(({ data }) => updateRecurrence(data))
+  .handler(({ data }) => {
+    const { id, ...input } = data
+    return updateRecurrence(id, input)
+  })
 
 export const setRecurrenceActiveFn = createServerFn({ method: 'POST' })
   .validator(
@@ -356,7 +359,7 @@ export const deleteRecurrenceFn = createServerFn({ method: 'POST' })
   .handler(({ data }) => deleteRecurrence(data.id))
 
 export const refreshRecurrencesFn = createServerFn({ method: 'POST' }).handler(
-  () => refreshRecurrenceSuggestions(),
+  () => refreshRecurrences(),
 )
 
 export const confirmRecurrenceMatchFn = createServerFn({ method: 'POST' })
@@ -383,6 +386,15 @@ export const linkRecurrenceOccurrenceFn = createServerFn({ method: 'POST' })
     }),
   )
   .handler(({ data }) => linkRecurrenceOccurrence(data))
+
+export const listLinkCandidatesFn = createServerFn({ method: 'GET' })
+  .validator(
+    z.object({
+      occurrenceId: z.string().min(1),
+      today: isoDateSchema.optional(),
+    }),
+  )
+  .handler(({ data }) => listLinkCandidates(data))
 
 export const completeRecurrenceOccurrenceFn = createServerFn({
   method: 'POST',
@@ -494,3 +506,7 @@ export const ignoreDetectedRecurrenceFn = createServerFn({ method: 'POST' })
     }),
   )
   .handler(({ data }) => ignoreDetectedRecurrence(data))
+
+export const getStrategyHistoryFn = createServerFn({ method: 'GET' })
+  .validator(z.object({ months: z.number().int().min(1).max(12).default(3) }))
+  .handler(({ data }) => getStrategyHistory(data))

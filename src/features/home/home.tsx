@@ -23,6 +23,7 @@ import {
   TooltipTrigger,
 } from '#/components/ui/tooltip'
 import { formatCurrency } from '#/domain/finance'
+import { StrategyProgressView } from '#/features/finance/strategy-progress'
 import { cn } from '#/lib/utils'
 import {
   askFinanceQuestionFn,
@@ -80,6 +81,7 @@ export function Home({
           <Greeting snapshot={snapshot} />
           <div className="space-y-4 sm:space-y-5">
             <CashCard snapshot={snapshot} view={view} />
+            <StrategyCard snapshot={snapshot} />
             <SpendingCard view={view} />
             <div className="grid gap-4 sm:gap-5 md:grid-cols-2">
               <MerchantsCard view={view} />
@@ -313,6 +315,44 @@ function Hint({ text }: { text: string }) {
       </TooltipContent>
     </Tooltip>
   )
+}
+
+// ─── Estratégia do mês ───────────────────────────────────────────────────────
+
+function StrategyCard({ snapshot }: { snapshot: FinanceSnapshot }) {
+  return (
+    <section className="min-w-0 rounded-xl border bg-card p-panel shadow-xs">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium text-muted-foreground">
+            Estratégia do mês
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Quanto de cada envelope já foi usado em{' '}
+            {formatMonthName(snapshot.dashboard.currentMonth)}.
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          nativeButton={false}
+          render={<Link to="/planejamento" search={{ section: 'budget' }} />}
+        >
+          Ajustar
+        </Button>
+      </div>
+      <div className="mt-5">
+        <StrategyProgressView dashboard={snapshot.dashboard} />
+      </div>
+    </section>
+  )
+}
+
+function formatMonthName(month: string) {
+  return new Intl.DateTimeFormat('pt-BR', {
+    month: 'long',
+    timeZone: 'UTC',
+  }).format(new Date(`${month}-01T12:00:00Z`))
 }
 
 // ─── Para onde foi o dinheiro ────────────────────────────────────────────────

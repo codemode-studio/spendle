@@ -24,7 +24,7 @@ function tx(
     creditCardId: null,
     categoryId: null,
     counterpartyAccountId: null,
-    reconciliationType: null,
+    reconciliationTypes: null,
     ...overrides,
   }
 }

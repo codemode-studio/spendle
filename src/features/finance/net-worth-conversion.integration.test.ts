@@ -63,10 +63,11 @@ describe('patrimônio em moeda-base', () => {
   })
 
   it('converte projeções recorrentes para BRL e omite com alerta sem taxa', async () => {
-    const [{ db }, schema, finance] = await Promise.all([
+    const [{ db }, schema, finance, recurrence] = await Promise.all([
       import('#/db/index.server'),
       import('#/db/schema'),
       import('./finance.server'),
+      import('./recurrence.server'),
     ])
     await db.insert(schema.exchangeRates).values({
       id: 'usd-brl-recurrence',
@@ -83,7 +84,7 @@ describe('patrimônio em moeda-base', () => {
         .where(eq(schema.accounts.name, 'Conta USD de teste'))
         .limit(1)
     )[0]
-    const crossMonthRecurrence = await finance.createRecurrence({
+    const crossMonthRecurrence = await recurrence.createRecurrence({
       name: 'Despesa em dólar',
       categoryId: 'housing',
       amountCents: 10_000,
@@ -130,8 +131,8 @@ describe('patrimônio em moeda-base', () => {
       blocksClosing: true,
     })
 
-    await finance.deleteRecurrence(crossMonthRecurrence.id)
-    await finance.createRecurrence({
+    await recurrence.deleteRecurrence(crossMonthRecurrence.id)
+    await recurrence.createRecurrence({
       name: 'Despesa em dólar no mês',
       categoryId: 'housing',
       amountCents: 20_000,

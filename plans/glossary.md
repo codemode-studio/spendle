@@ -39,6 +39,12 @@ Compra parcelada em quatro ou mais vezes. Ela compromete um valor mensal fixo,
 mas termina na última parcela. Não é uma recorrência: o número de cobranças já
 foi contratado e o app projeta somente as parcelas restantes.
 
+## Envelope de recorrência
+
+Recorrência com `matchMode` igual a `aggregate`. Cada ocorrência representa um
+período aberto que pode reunir vários lançamentos confirmados. O período fecha
+com a soma realizada quando termina ou quando a pessoa o conclui.
+
 ## Fatura aberta
 
 Ciclo de cartão ainda sujeito a novos lançamentos e correções. Seus dados são
@@ -91,10 +97,22 @@ preservar, por exemplo, duas compras iguais realizadas no mesmo dia.
 Linha ou item bruto extraído de uma fonte. É imutável e mantém referência ao
 arquivo, parser, versão e evidência original.
 
+## Ocorrência
+
+Instância datada de uma recorrência. Registra o valor esperado, a moeda, a
+categoria e o estado daquele período, além dos lançamentos sugeridos ou
+confirmados que o realizaram.
+
 ## Reconciliação
 
 Prova de que o saldo calculado a partir de um checkpoint e dos lançamentos
 postados coincide com outro saldo bancário datado. A diferença deve ser zero.
+
+## Recorrência
+
+Regra para uma receita ou despesa que se repete em calendário mensal ou anual.
+Ela guarda a próxima data, a âncora do calendário e as tolerâncias usadas para
+encontrar lançamentos reais sem transformar parcelamentos em recorrências.
 
 ## Saldo disponível
 

@@ -23,9 +23,10 @@ import {
   countCoveredDaysAfter,
 } from '#/domain/import-coverage'
 import {
+  describeRecurrence,
   isAcceptedRecurrenceMatchStatus,
   pendingTransactionCoversRecurrence,
-} from '#/domain/recurrence-matching'
+} from '#/domain/recurrence-book'
 import {
   categorizeTransactionsWithAi,
   filterConfidentAiSuggestions,
@@ -43,7 +44,10 @@ import {
   refreshReconciliationAfterCommit,
   refreshReconciliationSuggestions,
 } from './reconciliation-refresh.server'
-import { refreshRecurrenceSuggestions } from './recurrence-refresh.server'
+import {
+  noteTransactionCategoryChanged,
+  refreshRecurrences,
+} from './recurrence.server'
 
 export async function getFinanceSnapshot(selectedMonth?: string) {
   await ensureDatabase()
@@ -566,8 +570,6 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
             creditCardId: recurrence.creditCardId,
             dateToleranceDays: recurrence.dateToleranceDays,
             amountToleranceBps: recurrence.amountToleranceBps,
-            autoMatchEnabled: recurrence.autoMatchEnabled,
-            minimumConfirmations: recurrence.minimumConfirmations,
           },
           transaction: {
             id: transaction.id,
@@ -676,15 +678,28 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
       missingRecurrenceProjectionConversionCount,
     reviewImportCount: importRows.filter((item) => item.status === 'review')
       .length,
-    overdueRecurrenceCount: recurrenceOccurrenceRows.filter(
-      (occurrence) =>
-        occurrence.status === 'expected' &&
-        occurrence.expectedDate < referenceDate &&
-        recurrenceRows.some(
-          (recurrence) =>
-            recurrence.id === occurrence.recurrenceId && recurrence.active,
-        ),
-    ).length,
+    overdueRecurrenceCount: recurrenceRows.reduce(
+      (count, recurrence) =>
+        count +
+        describeRecurrence(
+          {
+            active: recurrence.active,
+            matchMode: recurrence.matchMode,
+            frequency: recurrence.frequency,
+            scheduleAnchor: recurrence.scheduleAnchor,
+            occurrences: recurrenceOccurrenceRows
+              .filter((occurrence) => occurrence.recurrenceId === recurrence.id)
+              .map((occurrence) => ({
+                ...occurrence,
+                matches: recurrenceMatchRows.filter(
+                  (match) => match.occurrenceId === occurrence.id,
+                ),
+              })),
+          },
+          { today: referenceDate },
+        ).overdueOccurrences.length,
+      0,
+    ),
     unverifiedBalanceCount:
       accounts.filter(
         (account) =>
@@ -1908,70 +1923,15 @@ export async function updateTransactionCategory(input: {
     if (!counterparty[0]) throw new Error('Conta relacionada inválida.')
   }
 
-  const sourceAccount = source.accountId
-    ? await db
-        .select({ scopeId: schema.accounts.ownershipScopeId })
-        .from(schema.accounts)
-        .where(eq(schema.accounts.id, source.accountId))
-        .limit(1)
-    : []
-  const sourceCard = source.creditCardId
-    ? await db
-        .select({ scopeId: schema.creditCards.ownershipScopeId })
-        .from(schema.creditCards)
-        .where(eq(schema.creditCards.id, source.creditCardId))
-        .limit(1)
-    : []
-  const sourceScopeId = sourceAccount[0]?.scopeId ?? sourceCard[0]?.scopeId
-  const sourceScope = sourceScopeId
-    ? await db
-        .select({ type: schema.ownershipScopes.type })
-        .from(schema.ownershipScopes)
-        .where(eq(schema.ownershipScopes.id, sourceScopeId))
-        .limit(1)
-    : []
-  const companyTransaction =
-    sourceScope[0]?.type === 'company_br' ||
-    sourceScope[0]?.type === 'company_us'
-
-  const recurrenceMatches = await db
-    .select()
-    .from(schema.recurrenceMatches)
-    .where(eq(schema.recurrenceMatches.transactionId, input.transactionId))
-  const acceptedRecurrenceMatches = recurrenceMatches.filter((match) =>
-    isAcceptedRecurrenceMatchStatus(match.status),
-  )
-  const matchedOccurrences = acceptedRecurrenceMatches.length
-    ? await db
-        .select()
-        .from(schema.recurrenceOccurrences)
-        .where(
-          inArray(
-            schema.recurrenceOccurrences.id,
-            acceptedRecurrenceMatches.map((match) => match.occurrenceId),
-          ),
-        )
-    : []
-
   db.transaction((tx) => {
     tx.update(schema.transactions)
       .set({ categoryId: input.categoryId, counterpartyAccountId })
       .where(eq(schema.transactions.id, input.transactionId))
       .run()
-    for (const match of acceptedRecurrenceMatches) {
-      const occurrence = matchedOccurrences.find(
-        (item) => item.id === match.occurrenceId,
-      )
-      if (occurrence) {
-        tx.update(schema.recurrenceMatches)
-          .set({
-            categoryConflict:
-              !companyTransaction && occurrence.categoryId !== input.categoryId,
-          })
-          .where(eq(schema.recurrenceMatches.id, match.id))
-          .run()
-      }
-    }
+    noteTransactionCategoryChanged(tx, {
+      transactionId: input.transactionId,
+      categoryId: input.categoryId,
+    })
     if (counterpartyAccountId && source.accountId) {
       const direction = source.amountCents < 0 ? 'outgoing' : 'incoming'
       tx.insert(schema.categorizationRules)
@@ -2258,177 +2218,8 @@ export async function setReconciliationStatus(input: {
       .where(eq(schema.reconciliationGroups.id, input.groupId))
       .run()
   })
-  await refreshRecurrenceSuggestions()
+  await refreshRecurrences()
   return { success: true }
-}
-
-type RecurrenceInput = {
-  name: string
-  groupName?: string
-  participantLabel?: string
-  accountId?: string
-  creditCardId?: string
-  categoryId: string
-  amountCents: number
-  currency: string
-  direction: 'income' | 'expense'
-  amountMode: 'fixed' | 'variable'
-  matchMode?: 'single' | 'aggregate'
-  destinationMode: 'automatic' | 'fixed'
-  frequency: 'monthly' | 'yearly'
-  nextDate: string
-}
-
-async function resolveRecurrenceGroupId(groupName?: string) {
-  const name = groupName?.trim()
-  if (!name) return null
-
-  const normalizedName = normalizeDescription(name)
-  await db
-    .insert(schema.recurrenceGroups)
-    .values({ id: randomUUID(), name, normalizedName })
-    .onConflictDoNothing({ target: schema.recurrenceGroups.normalizedName })
-
-  const group = await db
-    .select({ id: schema.recurrenceGroups.id })
-    .from(schema.recurrenceGroups)
-    .where(eq(schema.recurrenceGroups.normalizedName, normalizedName))
-    .limit(1)
-  if (!group[0]) throw new Error('Não foi possível criar o grupo.')
-  return group[0].id
-}
-
-export async function createRecurrence(input: RecurrenceInput) {
-  await ensureDatabase()
-  const { groupName, participantLabel, ...values } = input
-  const groupId = await resolveRecurrenceGroupId(groupName)
-  const row = {
-    id: randomUUID(),
-    ...values,
-    groupId,
-    participantLabel: groupId ? participantLabel?.trim() || null : null,
-    accountId: input.accountId || null,
-    creditCardId: input.creditCardId || null,
-    amountCents: Math.abs(input.amountCents),
-    startsOn: input.nextDate,
-    scheduleAnchor: input.nextDate,
-  }
-  await db.insert(schema.recurrences).values(row)
-  await refreshRecurrenceSuggestions()
-  return row
-}
-
-export async function updateRecurrence(
-  input: RecurrenceInput & { id: string },
-) {
-  await ensureDatabase()
-  const { id, groupName, participantLabel, ...values } = input
-  const groupId = await resolveRecurrenceGroupId(groupName)
-  const expectedOccurrences = await db
-    .select({ id: schema.recurrenceOccurrences.id })
-    .from(schema.recurrenceOccurrences)
-    .where(
-      and(
-        eq(schema.recurrenceOccurrences.recurrenceId, id),
-        eq(schema.recurrenceOccurrences.status, 'expected'),
-      ),
-    )
-  // Envelopes em andamento já têm pagamentos aceitos: editar a recorrência
-  // não pode apagar esses vínculos (e a categoria aplicada por eles).
-  const occurrencesWithLinks = expectedOccurrences.length
-    ? await db
-        .select({ occurrenceId: schema.recurrenceMatches.occurrenceId })
-        .from(schema.recurrenceMatches)
-        .where(
-          and(
-            inArray(
-              schema.recurrenceMatches.occurrenceId,
-              expectedOccurrences.map((occurrence) => occurrence.id),
-            ),
-            inArray(schema.recurrenceMatches.status, [
-              'confirmed',
-              'auto_confirmed',
-            ]),
-          ),
-        )
-    : []
-  const keepOccurrenceIds = new Set(
-    occurrencesWithLinks.map((row) => row.occurrenceId),
-  )
-  if (expectedOccurrences.length) {
-    db.transaction((transaction) => {
-      for (const occurrence of expectedOccurrences) {
-        if (keepOccurrenceIds.has(occurrence.id)) continue
-        transaction
-          .update(schema.recurrenceMatches)
-          .set({ status: 'rejected', resolvedAt: new Date() })
-          .where(
-            and(
-              eq(schema.recurrenceMatches.occurrenceId, occurrence.id),
-              eq(schema.recurrenceMatches.status, 'suggested'),
-            ),
-          )
-          .run()
-        transaction
-          .delete(schema.recurrenceOccurrences)
-          .where(eq(schema.recurrenceOccurrences.id, occurrence.id))
-          .run()
-      }
-    })
-  }
-  await db
-    .update(schema.recurrences)
-    .set({
-      ...values,
-      groupId,
-      participantLabel: groupId ? participantLabel?.trim() || null : null,
-      accountId: values.accountId || null,
-      creditCardId: values.creditCardId || null,
-      amountCents: Math.abs(values.amountCents),
-      startsOn: values.nextDate,
-      scheduleAnchor: values.nextDate,
-    })
-    .where(eq(schema.recurrences.id, id))
-  await refreshRecurrenceSuggestions()
-  return { id }
-}
-
-export async function setRecurrenceActive(input: {
-  id: string
-  active: boolean
-}) {
-  await ensureDatabase()
-  await db
-    .update(schema.recurrences)
-    .set({ active: input.active })
-    .where(eq(schema.recurrences.id, input.id))
-  if (input.active) await refreshRecurrenceSuggestions()
-  return input
-}
-
-export async function deleteRecurrence(id: string) {
-  await ensureDatabase()
-  const occurrences = await db
-    .select({ id: schema.recurrenceOccurrences.id })
-    .from(schema.recurrenceOccurrences)
-    .where(eq(schema.recurrenceOccurrences.recurrenceId, id))
-  const matches = occurrences.length
-    ? await db.select().from(schema.recurrenceMatches)
-    : []
-  if (
-    matches.some(
-      (match) =>
-        occurrences.some(
-          (occurrence) => occurrence.id === match.occurrenceId,
-        ) && isAcceptedRecurrenceMatchStatus(match.status),
-    )
-  ) {
-    throw new Error(
-      'Desvincule os pagamentos confirmados antes de excluir a recorrência.',
-    )
-  }
-  await db.delete(schema.recurrences).where(eq(schema.recurrences.id, id))
-  return { id }
 }
 
 export async function createInstallment(input: {
@@ -2500,4 +2291,41 @@ export async function closeCurrentBudget() {
       },
     })
   return { month, alreadyClosed: false }
+}
+
+function shiftMonth(month: string, delta: number) {
+  const [year, monthNumber] = month.split('-').map(Number)
+  const date = new Date(Date.UTC(year, monthNumber - 1 + delta, 1))
+  return date.toISOString().slice(0, 7)
+}
+
+/**
+ * Metas e realizado por envelope dos meses anteriores, para mostrar se a
+ * estratégia vem sendo seguida. Meses fechados usam a alocação congelada.
+ */
+export async function getStrategyHistory(input: { months: number }) {
+  await ensureDatabase()
+  const current = new Date().toISOString().slice(0, 7)
+  const result = []
+  for (let offset = 1; offset <= input.months; offset += 1) {
+    const month = shiftMonth(current, -offset)
+    const snapshot = await getFinanceSnapshot(month)
+    const { dashboard } = snapshot
+    const actual = dashboard.budgetActual
+    result.push({
+      month,
+      strategyName: dashboard.activeStrategy.name,
+      baseIncomeCents: dashboard.baseIncomeCents,
+      incomeCents: dashboard.currentIncomeCents,
+      targets: dashboard.budgetTargets,
+      actual,
+      closed: snapshot.monthlyBudgets.some(
+        (budget) => budget.month === month && budget.closed,
+      ),
+      hasData:
+        dashboard.currentIncomeCents > 0 ||
+        Object.values(actual).some((value) => value !== 0),
+    })
+  }
+  return result
 }

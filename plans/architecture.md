@@ -31,6 +31,18 @@ domínio separadas de leitura de arquivos, persistência e apresentação.
   antigos. `index.server.ts` permanece responsável apenas por abrir, migrar,
   semear e verificar o banco.
 
+## Recorrências
+
+`src/features/finance/recurrence.server.ts` é a interface de servidor da
+Recorrência. O módulo concentra cadastro, atualização do calendário, detecção,
+sugestões, vínculos e transições de ocorrências. `recurrence-book.ts` é o modelo
+de leitura puro usado para escolher a ocorrência atual e descrever seu estado.
+
+`recurrence-matching.ts`, `recurrence-detection.ts` e
+`recurrence-schedule.ts` são detalhes internos do módulo. Rotas e outros
+módulos de produto não importam esses arquivos; chamam server functions ou o
+modelo de leitura.
+
 ## Regras de dependência
 
 - Adaptadores de arquivo dependem do formato, não do fluxo de commit.

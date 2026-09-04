@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { eq } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
+import { isAcceptedRecurrenceMatchStatus } from '#/domain/recurrence-book'
+
 describe('reconciliação de recorrências', () => {
   const directory = mkdtempSync(join(tmpdir(), 'financas-recurrence-match-'))
 
@@ -22,11 +24,11 @@ describe('reconciliação de recorrências', () => {
       [
         import('#/db/index.server'),
         import('./finance.server'),
-        import('./recurrence-refresh.server'),
+        import('./recurrence.server'),
       ],
     )
     await ensureDatabase()
-    const recurrence = await finance.createRecurrence({
+    const recurrence = await recurrenceMatching.createRecurrence({
       name: 'Netflix',
       categoryId: 'subscriptions',
       amountCents: 3_990,
@@ -56,7 +58,7 @@ describe('reconciliação de recorrências', () => {
       score: 90,
     })
 
-    await recurrenceMatching.confirmRecurrenceMatch(suggestedMatch!.id)
+    await recurrenceMatching.confirmMatch(suggestedMatch!.id)
     const confirmedSnapshot = await finance.getFinanceSnapshot('2026-08')
     expect(
       confirmedSnapshot.recurrences.find((item) => item.id === recurrence.id)
@@ -68,13 +70,13 @@ describe('reconciliação de recorrências', () => {
     ).toBe('subscriptions')
     expect(confirmedSnapshot.dashboard.budgetActual.lifestyle).toBe(3_990)
     await expect(
-      recurrenceMatching.rejectRecurrenceMatch(suggestedMatch!.id),
+      recurrenceMatching.rejectMatch(suggestedMatch!.id),
     ).rejects.toThrow('Somente sugestões abertas')
-    await expect(finance.deleteRecurrence(recurrence.id)).rejects.toThrow(
-      'Desvincule os pagamentos confirmados',
-    )
+    await expect(
+      recurrenceMatching.deleteRecurrence(recurrence.id),
+    ).rejects.toThrow('Desvincule os pagamentos confirmados')
 
-    await recurrenceMatching.unlinkRecurrenceMatch(suggestedMatch!.id)
+    await recurrenceMatching.unlinkMatch(suggestedMatch!.id)
     const unlinkedSnapshot = await finance.getFinanceSnapshot('2026-08')
     expect(
       unlinkedSnapshot.transactions.find((item) => item.id === transaction.id)
@@ -85,9 +87,7 @@ describe('reconciliação de recorrências', () => {
       unlinkedSnapshot.recurrences.find((item) => item.id === recurrence.id)
         ?.nextDate,
     ).toBe('2026-08-10')
-    await expect(
-      recurrenceMatching.refreshRecurrenceSuggestions(),
-    ).resolves.toBeDefined()
+    await expect(recurrenceMatching.refreshRecurrences()).resolves.toBeDefined()
     const refreshedSnapshot = await finance.getFinanceSnapshot('2026-08')
     expect(
       refreshedSnapshot.recurrences
@@ -95,17 +95,17 @@ describe('reconciliação de recorrências', () => {
         ?.occurrences.flatMap((item) => item.matches)
         .filter((match) => match.status === 'suggested'),
     ).toHaveLength(0)
-    await expect(finance.deleteRecurrence(recurrence.id)).resolves.toEqual({
-      id: recurrence.id,
-    })
+    await expect(
+      recurrenceMatching.deleteRecurrence(recurrence.id),
+    ).resolves.toEqual({ id: recurrence.id })
   })
 
   it('avança o calendário ao ignorar a próxima ocorrência', async () => {
     const [finance, recurrenceMatching] = await Promise.all([
       import('./finance.server'),
-      import('./recurrence-refresh.server'),
+      import('./recurrence.server'),
     ])
-    const recurrence = await finance.createRecurrence({
+    const recurrence = await recurrenceMatching.createRecurrence({
       name: 'Compromisso sem pagamento',
       categoryId: 'housing',
       amountCents: 20_000,
@@ -121,7 +121,7 @@ describe('reconciliação de recorrências', () => {
       .find((item) => item.id === recurrence.id)
       ?.occurrences.find((item) => item.expectedDate === '2026-08-31')
 
-    await recurrenceMatching.skipRecurrenceOccurrence(occurrence!.id)
+    await recurrenceMatching.skipOccurrence(occurrence!.id)
 
     const skippedSnapshot = await finance.getFinanceSnapshot('2026-08')
     expect(
@@ -131,12 +131,13 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('não duplica uma pendência categorizada na projeção recorrente', async () => {
-    const [finance, database, schema] = await Promise.all([
+    const [finance, recurrenceServer, database, schema] = await Promise.all([
       import('./finance.server'),
+      import('./recurrence.server'),
       import('#/db/index.server'),
       import('#/db/schema'),
     ])
-    await finance.createRecurrence({
+    await recurrenceServer.createRecurrence({
       name: 'Netflix',
       categoryId: 'subscriptions',
       amountCents: 20_000,
@@ -168,9 +169,9 @@ describe('reconciliação de recorrências', () => {
   it('pausa sugestões e resolve conflito quando a categoria é corrigida', async () => {
     const [finance, recurrenceMatching] = await Promise.all([
       import('./finance.server'),
-      import('./recurrence-refresh.server'),
+      import('./recurrence.server'),
     ])
-    const recurrence = await finance.createRecurrence({
+    const recurrence = await recurrenceMatching.createRecurrence({
       name: 'Spotify',
       categoryId: 'subscriptions',
       amountCents: 2_190,
@@ -196,16 +197,22 @@ describe('reconciliação de recorrências', () => {
       ?.occurrences.flatMap((item) => item.matches)
       .find((item) => item.status === 'suggested')
 
-    await finance.setRecurrenceActive({ id: recurrence.id, active: false })
+    await recurrenceMatching.setRecurrenceActive({
+      id: recurrence.id,
+      active: false,
+    })
     const paused = await finance.getFinanceSnapshot('2026-08')
     expect(paused.dashboard.budgetProjected.lifestyle).toBe(
       suggested.dashboard.budgetProjected.lifestyle - 2_190,
     )
-    await expect(
-      recurrenceMatching.confirmRecurrenceMatch(match!.id),
-    ).rejects.toThrow('Reative a recorrência')
-    await finance.setRecurrenceActive({ id: recurrence.id, active: true })
-    await recurrenceMatching.confirmRecurrenceMatch(match!.id)
+    await expect(recurrenceMatching.confirmMatch(match!.id)).rejects.toThrow(
+      'Reative a recorrência',
+    )
+    await recurrenceMatching.setRecurrenceActive({
+      id: recurrence.id,
+      active: true,
+    })
+    await recurrenceMatching.confirmMatch(match!.id)
 
     const conflicted = await finance.getFinanceSnapshot('2026-08')
     expect(
@@ -247,11 +254,11 @@ describe('reconciliação de recorrências', () => {
       [
         import('#/db/index.server'),
         import('./finance.server'),
-        import('./recurrence-refresh.server'),
+        import('./recurrence.server'),
       ],
     )
     await ensureDatabase()
-    const recurrence = await finance.createRecurrence({
+    const recurrence = await recurrenceMatching.createRecurrence({
       name: 'Cuidadora',
       categoryId: 'family',
       amountCents: 215_000,
@@ -289,13 +296,13 @@ describe('reconciliação de recorrências', () => {
     expect(occurrence?.matches).toHaveLength(0)
 
     await expect(
-      recurrenceMatching.linkRecurrenceOccurrence({
+      recurrenceMatching.linkTransactions({
         occurrenceId: occurrence!.id,
         transactionIds: [deposit.id],
       }),
     ).rejects.toThrow('escolha uma saída')
 
-    await recurrenceMatching.linkRecurrenceOccurrence({
+    await recurrenceMatching.linkTransactions({
       occurrenceId: occurrence!.id,
       transactionIds: [payment.id],
     })
@@ -324,7 +331,7 @@ describe('reconciliação de recorrências', () => {
       direction: 'outflow',
       amountCents: 215_000,
     })
-    await recurrenceMatching.refreshRecurrenceSuggestions()
+    await recurrenceMatching.refreshRecurrences()
     const learned = await finance.getFinanceSnapshot('2026-09')
     const suggestion = learned.recurrences
       .find((item) => item.id === recurrence.id)
@@ -338,7 +345,7 @@ describe('reconciliação de recorrências', () => {
     const [{ ensureDatabase }, finance, detection] = await Promise.all([
       import('#/db/index.server'),
       import('./finance.server'),
-      import('./recurrence-detection.server'),
+      import('./recurrence.server'),
     ])
     await ensureDatabase()
     const today = new Date()
@@ -434,12 +441,101 @@ describe('reconciliação de recorrências', () => {
     ).toBeUndefined()
   })
 
+  it('não cria recorrência quando a detecção ficou sem transações vinculáveis', async () => {
+    const [finance, recurrenceServer, database, schema] = await Promise.all([
+      import('./finance.server'),
+      import('./recurrence.server'),
+      import('#/db/index.server'),
+      import('#/db/schema'),
+    ])
+    const today = new Date()
+    const monthsAgo = (months: number) =>
+      new Date(
+        Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - months, 6),
+      )
+        .toISOString()
+        .slice(0, 10)
+    for (const months of [2, 1]) {
+      await finance.createManualTransaction({
+        targetType: 'account',
+        targetId: 'account-nubank-pf-6607',
+        postedAt: monthsAgo(months),
+        description: 'Clube Horizonte Teste Atomicidade',
+        direction: 'outflow',
+        amountCents: 8_765,
+      })
+    }
+    const candidate = (
+      await recurrenceServer.detectRecurrenceCandidates()
+    ).find((item) => item.name === 'Clube Horizonte Teste Atomicidade')
+    expect(candidate).toBeDefined()
+
+    const competing = await recurrenceServer.createRecurrence({
+      name: 'Vínculo concorrente da detecção',
+      categoryId: 'subscriptions',
+      amountCents: candidate!.typicalAmountCents,
+      currency: candidate!.currency,
+      direction: candidate!.direction,
+      amountMode: candidate!.amountMode,
+      destinationMode: 'automatic',
+      frequency: candidate!.frequency,
+      nextDate: candidate!.nextExpectedDate,
+      startsOn: candidate!.transactions[0].postedAt,
+      scheduleAnchor: candidate!.nextExpectedDate,
+    })
+    const competingOccurrences = await database.db
+      .select()
+      .from(schema.recurrenceOccurrences)
+      .where(eq(schema.recurrenceOccurrences.recurrenceId, competing.id))
+    for (const transaction of candidate!.transactions) {
+      const occurrence = competingOccurrences.find(
+        (item) => item.expectedDate === transaction.postedAt,
+      )
+      expect(occurrence).toBeDefined()
+      await recurrenceServer.linkTransactions({
+        occurrenceId: occurrence!.id,
+        transactionIds: [transaction.id],
+      })
+    }
+    const recurrencesBefore = await database.db
+      .select({ id: schema.recurrences.id })
+      .from(schema.recurrences)
+
+    const approvalError = await recurrenceServer
+      .approveDetectedRecurrence({
+        name: 'Clube Horizonte aprovado tarde demais',
+        categoryId: 'subscriptions',
+        amountCents: candidate!.typicalAmountCents,
+        currency: candidate!.currency,
+        direction: candidate!.direction,
+        amountMode: candidate!.amountMode,
+        frequency: candidate!.frequency,
+        nextDate: candidate!.nextExpectedDate,
+        accountId: candidate!.accountId ?? undefined,
+        creditCardId: candidate!.creditCardId ?? undefined,
+        transactionIds: candidate!.transactions.map((item) => item.id),
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      )
+    const recurrencesAfter = await database.db
+      .select({ id: schema.recurrences.id })
+      .from(schema.recurrences)
+    expect.soft(recurrencesAfter).toHaveLength(recurrencesBefore.length)
+    expect.soft(approvalError).toBeInstanceOf(Error)
+    expect(approvalError).toMatchObject({
+      message:
+        'Nenhuma das transações detectadas continua disponível para vinculação.',
+    })
+  })
+
   it('envelope: soma vários lançamentos, aprende estabelecimentos e fecha o período', async () => {
     const [{ ensureDatabase }, finance, recurrenceMatching] = await Promise.all(
       [
         import('#/db/index.server'),
         import('./finance.server'),
-        import('./recurrence-refresh.server'),
+        import('./recurrence.server'),
       ],
     )
     await ensureDatabase()
@@ -449,7 +545,7 @@ describe('reconciliação de recorrências', () => {
     )
       .toISOString()
       .slice(0, 10)
-    const recurrence = await finance.createRecurrence({
+    const recurrence = await recurrenceMatching.createRecurrence({
       name: 'Mercado',
       categoryId: 'food',
       amountCents: 300_000,
@@ -473,7 +569,7 @@ describe('reconciliação de recorrências', () => {
       })
     const angeloni = await grocery('Angeloni Super Loja', 22_000)
     const imperatriz = await grocery('Supermercados Imperatriz', 50_000)
-    await recurrenceMatching.refreshRecurrenceSuggestions()
+    await recurrenceMatching.refreshRecurrences()
 
     const suggestedSnapshot = await finance.getFinanceSnapshot()
     const occurrence = suggestedSnapshot.recurrences
@@ -488,7 +584,7 @@ describe('reconciliação de recorrências', () => {
 
     // Dois lançamentos no mesmo período: ambos confirmados, ocorrência aberta.
     for (const match of suggested!) {
-      await recurrenceMatching.confirmRecurrenceMatch(match.id)
+      await recurrenceMatching.confirmMatch(match.id)
     }
     const openSnapshot = await finance.getFinanceSnapshot()
     const openOccurrence = openSnapshot.recurrences
@@ -501,7 +597,7 @@ describe('reconciliação de recorrências', () => {
 
     // Estabelecimento aprendido entra sozinho na próxima busca.
     const angeloniAgain = await grocery('Angeloni Super Loja', 9_900)
-    await recurrenceMatching.refreshRecurrenceSuggestions()
+    await recurrenceMatching.refreshRecurrences()
     const learnedSnapshot = await finance.getFinanceSnapshot()
     const learnedMatch = learnedSnapshot.recurrences
       .find((item) => item.id === recurrence.id)
@@ -526,15 +622,14 @@ describe('reconciliação de recorrências', () => {
       direction: 'outflow',
       amountCents: 12_000,
     })
-    const linked = await recurrenceMatching.linkRecurrenceOccurrence({
+    const linked = await recurrenceMatching.linkTransactions({
       occurrenceId: occurrence!.id,
       transactionIds: [padaria.id, acougue.id],
     })
     expect(linked.linked).toBe(2)
 
     // Editar a recorrência não pode apagar o envelope em andamento.
-    await finance.updateRecurrence({
-      id: recurrence.id,
+    await recurrenceMatching.updateRecurrence(recurrence.id, {
       name: 'Mercado e feira',
       categoryId: 'food',
       amountCents: 320_000,
@@ -552,12 +647,12 @@ describe('reconciliação de recorrências', () => {
         .find((item) => item.id === recurrence.id)
         ?.occurrences.find((item) => item.id === occurrence!.id)
         ?.matches.filter((match) =>
-          ['confirmed', 'auto_confirmed'].includes(match.status),
+          isAcceptedRecurrenceMatchStatus(match.status),
         ),
     ).toHaveLength(5)
 
     // Concluir fecha o período e avança a próxima data.
-    await recurrenceMatching.completeRecurrenceOccurrence(occurrence!.id)
+    await recurrenceMatching.completeOccurrence(occurrence!.id)
     const closedSnapshot = await finance.getFinanceSnapshot()
     const closed = closedSnapshot.recurrences.find(
       (item) => item.id === recurrence.id,
@@ -570,7 +665,7 @@ describe('reconciliação de recorrências', () => {
       closed?.occurrences
         .find((item) => item.id === occurrence!.id)
         ?.matches.filter((match) =>
-          ['confirmed', 'auto_confirmed'].includes(match.status),
+          isAcceptedRecurrenceMatchStatus(match.status),
         ),
     ).toHaveLength(5)
   })
@@ -581,11 +676,11 @@ describe('reconciliação de recorrências', () => {
         import('#/db/index.server'),
         import('#/db/schema'),
         import('./finance.server'),
-        import('./recurrence-refresh.server'),
+        import('./recurrence.server'),
       ])
     await ensureDatabase()
     const today = new Date().toISOString().slice(0, 10)
-    const recurrence = await finance.createRecurrence({
+    const recurrence = await recurrenceMatching.createRecurrence({
       name: 'Salário',
       categoryId: 'profit_distribution_income',
       amountCents: 6_000_000,
@@ -646,7 +741,7 @@ describe('reconciliação de recorrências', () => {
     ])
     await finance.setReconciliationStatus({ groupId, status: 'confirmed' })
 
-    await recurrenceMatching.refreshRecurrenceSuggestions()
+    await recurrenceMatching.refreshRecurrences()
     const suggestedSnapshot = await finance.getFinanceSnapshot()
     const occurrence = suggestedSnapshot.recurrences
       .find((item) => item.id === recurrence.id)
@@ -658,13 +753,13 @@ describe('reconciliação de recorrências', () => {
       occurrence?.matches.map((match) => [match.transactionId, match.status]),
     ).toEqual([[inflow.id, 'auto_confirmed']])
     await expect(
-      recurrenceMatching.linkRecurrenceOccurrence({
+      recurrenceMatching.linkTransactions({
         occurrenceId: occurrence!.id,
         transactionIds: [inflow.id],
       }),
     ).rejects.toThrow('já está vinculada')
     await expect(
-      recurrenceMatching.linkRecurrenceOccurrence({
+      recurrenceMatching.linkTransactions({
         occurrenceId: occurrence!.id,
         transactionIds: [outflow.id],
       }),
@@ -672,8 +767,11 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('continua gerando ocorrências depois de dois anos', async () => {
-    const finance = await import('./finance.server')
-    const recurrence = await finance.createRecurrence({
+    const [finance, recurrenceServer] = await Promise.all([
+      import('./finance.server'),
+      import('./recurrence.server'),
+    ])
+    const recurrence = await recurrenceServer.createRecurrence({
       name: 'Recorrência longa',
       categoryId: 'housing',
       amountCents: 1_000,
@@ -690,5 +788,346 @@ describe('reconciliação de recorrências', () => {
       snapshot.recurrences.find((item) => item.id === recurrence.id)
         ?.occurrences.length,
     ).toBeGreaterThan(24)
+  })
+
+  it('preserva vínculos aceitos e só muda a âncora quando o calendário muda', async () => {
+    const [finance, recurrenceServer] = await Promise.all([
+      import('./finance.server'),
+      import('./recurrence.server'),
+    ])
+    const recurrence = await recurrenceServer.createRecurrence({
+      name: 'Envelope ancorado',
+      categoryId: 'food',
+      amountCents: 80_000,
+      currency: 'BRL',
+      direction: 'expense',
+      amountMode: 'variable',
+      matchMode: 'aggregate',
+      destinationMode: 'automatic',
+      frequency: 'monthly',
+      nextDate: '2027-01-31',
+    })
+    const row = await finance.createManualTransaction({
+      targetType: 'account',
+      targetId: 'account-nubank-pf-6607',
+      postedAt: '2027-01-31',
+      description: 'Mercado do futuro',
+      direction: 'outflow',
+      amountCents: 8_000,
+      categoryId: 'food',
+    })
+    const before = await finance.getFinanceSnapshot('2027-01')
+    const occurrence = before.recurrences
+      .find((item) => item.id === recurrence.id)
+      ?.occurrences.find((item) => item.expectedDate === '2027-01-31')
+    await recurrenceServer.linkTransactions({
+      occurrenceId: occurrence!.id,
+      transactionIds: [row.id],
+    })
+
+    await recurrenceServer.updateRecurrence(recurrence.id, {
+      name: 'Envelope apenas renomeado',
+      categoryId: 'food',
+      amountCents: 90_000,
+      currency: 'BRL',
+      direction: 'expense',
+      amountMode: 'variable',
+      matchMode: 'aggregate',
+      destinationMode: 'automatic',
+      frequency: 'monthly',
+      nextDate: '2027-01-31',
+    })
+    const renamed = await finance.getFinanceSnapshot('2027-01')
+    const renamedRecurrence = renamed.recurrences.find(
+      (item) => item.id === recurrence.id,
+    )
+    expect(renamedRecurrence).toMatchObject({
+      startsOn: '2027-01-31',
+      scheduleAnchor: '2027-01-31',
+    })
+    expect(
+      renamedRecurrence?.occurrences
+        .find((item) => item.id === occurrence!.id)
+        ?.matches.some((match) => match.status === 'confirmed'),
+    ).toBe(true)
+    await expect(
+      recurrenceServer.deleteRecurrence(recurrence.id),
+    ).rejects.toThrow('Desvincule os pagamentos confirmados')
+
+    await recurrenceServer.updateRecurrence(recurrence.id, {
+      name: 'Envelope em novo calendário',
+      categoryId: 'food',
+      amountCents: 90_000,
+      currency: 'BRL',
+      direction: 'expense',
+      amountMode: 'variable',
+      matchMode: 'aggregate',
+      destinationMode: 'automatic',
+      frequency: 'monthly',
+      nextDate: '2027-02-15',
+    })
+    const rescheduled = await finance.getFinanceSnapshot('2027-02')
+    expect(
+      rescheduled.recurrences.find((item) => item.id === recurrence.id),
+    ).toMatchObject({
+      startsOn: '2027-02-15',
+      scheduleAnchor: '2027-02-15',
+      nextDate: '2027-02-15',
+    })
+  })
+
+  it('rejeita uma sugestão aberta', async () => {
+    const [finance, recurrenceServer] = await Promise.all([
+      import('./finance.server'),
+      import('./recurrence.server'),
+    ])
+    const recurrence = await recurrenceServer.createRecurrence({
+      name: 'Serviço rejeitável',
+      categoryId: 'subscriptions',
+      amountCents: 4_321,
+      currency: 'BRL',
+      direction: 'expense',
+      amountMode: 'fixed',
+      destinationMode: 'automatic',
+      frequency: 'monthly',
+      nextDate: '2027-02-20',
+    })
+    await finance.createManualTransaction({
+      targetType: 'account',
+      targetId: 'account-nubank-pf-6607',
+      postedAt: '2027-02-20',
+      description: 'Serviço rejeitável',
+      direction: 'outflow',
+      amountCents: 4_321,
+    })
+    const suggested = await finance.getFinanceSnapshot('2027-02')
+    const match = suggested.recurrences
+      .find((item) => item.id === recurrence.id)
+      ?.occurrences.flatMap((item) => item.matches)
+      .find((item) => item.status === 'suggested')
+
+    await recurrenceServer.rejectMatch(match!.id)
+
+    const rejected = await finance.getFinanceSnapshot('2027-02')
+    expect(
+      rejected.recurrences
+        .find((item) => item.id === recurrence.id)
+        ?.occurrences.flatMap((item) => item.matches)
+        .find((item) => item.id === match!.id)?.status,
+    ).toBe('rejected')
+  })
+
+  it('lista candidatos sem transações tomadas e prioriza a janela do envelope', async () => {
+    const [finance, recurrenceServer] = await Promise.all([
+      import('./finance.server'),
+      import('./recurrence.server'),
+    ])
+    const target = await recurrenceServer.createRecurrence({
+      name: 'Compras do período',
+      categoryId: 'food',
+      amountCents: 50_000,
+      currency: 'BRL',
+      direction: 'expense',
+      amountMode: 'variable',
+      matchMode: 'aggregate',
+      destinationMode: 'automatic',
+      frequency: 'monthly',
+      nextDate: '2027-03-01',
+    })
+    const takenRecurrence = await recurrenceServer.createRecurrence({
+      name: 'Pagamento já usado',
+      categoryId: 'food',
+      amountCents: 7_000,
+      currency: 'BRL',
+      direction: 'expense',
+      amountMode: 'fixed',
+      destinationMode: 'automatic',
+      frequency: 'monthly',
+      nextDate: '2027-03-05',
+    })
+    const insideSame = await finance.createManualTransaction({
+      targetType: 'account',
+      targetId: 'account-nubank-pf-6607',
+      postedAt: '2027-03-20',
+      description: 'Mercado na janela',
+      direction: 'outflow',
+      amountCents: 20_000,
+      categoryId: 'food',
+    })
+    const insideOther = await finance.createManualTransaction({
+      targetType: 'account',
+      targetId: 'account-nubank-pf-6607',
+      postedAt: '2027-03-02',
+      description: 'Outra categoria na janela',
+      direction: 'outflow',
+      amountCents: 49_000,
+      categoryId: 'leisure',
+    })
+    const outside = await finance.createManualTransaction({
+      targetType: 'account',
+      targetId: 'account-nubank-pf-6607',
+      postedAt: '2027-04-02',
+      description: 'Mercado fora da janela',
+      direction: 'outflow',
+      amountCents: 50_000,
+      categoryId: 'food',
+    })
+    const taken = await finance.createManualTransaction({
+      targetType: 'account',
+      targetId: 'account-nubank-pf-6607',
+      postedAt: '2027-03-05',
+      description: 'Pagamento já usado',
+      direction: 'outflow',
+      amountCents: 7_000,
+      categoryId: 'food',
+    })
+    const snapshot = await finance.getFinanceSnapshot('2027-03')
+    const takenOccurrence = snapshot.recurrences
+      .find((item) => item.id === takenRecurrence.id)
+      ?.occurrences.find((item) => item.expectedDate === '2027-03-05')
+    const targetOccurrence = snapshot.recurrences
+      .find((item) => item.id === target.id)
+      ?.occurrences.find((item) => item.expectedDate === '2027-03-01')
+    await recurrenceServer.linkTransactions({
+      occurrenceId: takenOccurrence!.id,
+      transactionIds: [taken.id],
+    })
+
+    const candidates = await recurrenceServer.listLinkCandidates({
+      occurrenceId: targetOccurrence!.id,
+      today: '2027-03-25',
+    })
+
+    expect(candidates.map((candidate) => candidate.id)).not.toContain(taken.id)
+    const rankedIds = new Set<string>([
+      insideSame.id,
+      insideOther.id,
+      outside.id,
+    ])
+    expect(
+      candidates
+        .filter((candidate) => rankedIds.has(candidate.id))
+        .map((candidate) => candidate.id),
+    ).toEqual([insideSame.id, insideOther.id, outside.id])
+    expect(
+      candidates.find((candidate) => candidate.id === insideSame.id),
+    ).toMatchObject({
+      inWindow: true,
+      categoryName: 'Alimentação',
+      accountLabel: 'Nubank PF •6607',
+    })
+  })
+
+  it('retorna um candidato elegível depois dos 40 primeiros no ranking', async () => {
+    const [database, schema, recurrenceServer] = await Promise.all([
+      import('#/db/index.server'),
+      import('#/db/schema'),
+      import('./recurrence.server'),
+    ])
+    const recurrence = await recurrenceServer.createRecurrence({
+      name: 'Lista completa de candidatos',
+      categoryId: 'food',
+      amountCents: 10_000,
+      currency: 'USD',
+      direction: 'expense',
+      amountMode: 'fixed',
+      destinationMode: 'automatic',
+      frequency: 'monthly',
+      nextDate: '2030-01-10',
+    })
+    const occurrence = await database.db
+      .select({ id: schema.recurrenceOccurrences.id })
+      .from(schema.recurrenceOccurrences)
+      .where(eq(schema.recurrenceOccurrences.recurrenceId, recurrence.id))
+      .limit(1)
+    expect(occurrence[0]).toBeDefined()
+
+    await database.db.insert(schema.transactions).values(
+      Array.from({ length: 41 }, (_, index) => ({
+        id: `link-candidate-${index}`,
+        accountId: 'account-nubank-pf-6607',
+        categoryId: 'food',
+        fingerprint: `link-candidate-${index}`,
+        postedAt: '2030-01-10',
+        description: `Candidato ${index}`,
+        normalizedDescription: `candidato ${index}`,
+        amountCents: -(10_000 + index * 100),
+        currency: 'USD',
+        status: 'confirmed' as const,
+      })),
+    )
+
+    const candidates = await recurrenceServer.listLinkCandidates({
+      occurrenceId: occurrence[0].id,
+      today: '2030-01-10',
+    })
+
+    expect(candidates).toHaveLength(41)
+    expect(candidates.at(-1)?.id).toBe('link-candidate-40')
+  })
+
+  it('retorna deltas por execução e fecha envelope com hoje injetado', async () => {
+    const [{ db }, schema, finance, recurrenceServer] = await Promise.all([
+      import('#/db/index.server'),
+      import('#/db/schema'),
+      import('./finance.server'),
+      import('./recurrence.server'),
+    ])
+    const recurrence = await recurrenceServer.createRecurrence({
+      name: 'Envelope com relógio injetado',
+      categoryId: 'maintenance',
+      amountCents: 60_000,
+      currency: 'BRL',
+      direction: 'expense',
+      amountMode: 'variable',
+      matchMode: 'aggregate',
+      destinationMode: 'automatic',
+      frequency: 'monthly',
+      nextDate: '2027-06-01',
+    })
+    await recurrenceServer.refreshRecurrences({ today: '2027-06-20' })
+    await db.insert(schema.transactions).values({
+      id: 'injected-today-envelope-row',
+      accountId: 'account-nubank-pf-6607',
+      categoryId: 'maintenance',
+      fingerprint: 'injected-today-envelope-row',
+      postedAt: '2027-06-15',
+      description: 'Feira com relógio injetado',
+      normalizedDescription: 'feira com relogio injetado',
+      amountCents: -12_000,
+      currency: 'BRL',
+      baseAmountCents: -12_000,
+      status: 'confirmed',
+    })
+
+    const first = await recurrenceServer.refreshRecurrences({
+      today: '2027-06-20',
+    })
+    const second = await recurrenceServer.refreshRecurrences({
+      today: '2027-06-20',
+    })
+    expect(first).toMatchObject({ suggestionCount: 1, autoConfirmCount: 0 })
+    expect(second).toMatchObject({ suggestionCount: 0, autoConfirmCount: 0 })
+
+    const open = await finance.getFinanceSnapshot('2027-06')
+    const occurrence = open.recurrences
+      .find((item) => item.id === recurrence.id)
+      ?.occurrences.find((item) => item.expectedDate === '2027-06-01')
+    const match = occurrence?.matches.find(
+      (candidate) => candidate.transactionId === 'injected-today-envelope-row',
+    )
+    await recurrenceServer.confirmMatch(match!.id)
+    await recurrenceServer.refreshRecurrences({ today: '2027-07-01' })
+
+    const closed = await finance.getFinanceSnapshot('2027-06')
+    const closedRecurrence = closed.recurrences.find(
+      (item) => item.id === recurrence.id,
+    )
+    expect(
+      closedRecurrence?.occurrences.find(
+        (item) => item.expectedDate === '2027-06-01',
+      )?.status,
+    ).toBe('matched')
+    expect(closedRecurrence?.nextDate).toBe('2027-07-01')
   })
 })

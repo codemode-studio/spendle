@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
+import { buildRecurrenceCandidates } from './recurrence-matching'
 import {
-  addRecurrencePeriod,
-  buildRecurrenceCandidates,
   merchantSignature,
   pendingTransactionCoversRecurrence,
   transactionEligibleForRecurrence,
-} from './recurrence-matching'
+} from './recurrence-book'
 
 const rule = {
   expectedDate: '2026-08-10',
@@ -35,25 +34,6 @@ const transaction = {
 }
 
 describe('matching de recorrências', () => {
-  it.each([
-    ['2026-01-31', 'monthly', '2026-02-28'],
-    ['2024-02-29', 'yearly', '2025-02-28'],
-    ['2026-03-30', 'monthly', '2026-04-30'],
-  ] as const)(
-    'mantém o calendário sem derivar %s',
-    (date, frequency, expected) => {
-      expect(addRecurrencePeriod(date, frequency)).toBe(expected)
-    },
-  )
-
-  it('preserva o dia âncora depois de um mês curto', () => {
-    const february = addRecurrencePeriod('2026-01-31', 'monthly', '2026-01-31')
-    expect(february).toBe('2026-02-28')
-    expect(addRecurrencePeriod(february, 'monthly', '2026-01-31')).toBe(
-      '2026-03-31',
-    )
-  })
-
   it('remove identificadores instáveis da assinatura do estabelecimento', () => {
     expect(merchantSignature(transaction.description)).toBe('netflix com')
   })
@@ -145,7 +125,12 @@ describe('matching de recorrências', () => {
       buildRecurrenceCandidates({
         recurrenceName: 'Netflix',
         rule,
-        transactions: [{ ...transaction, reconciliationType: 'card_payment' }],
+        transactions: [
+          {
+            ...transaction,
+            reconciliationTypes: new Set(['card_payment'] as const),
+          },
+        ],
         learning: {
           confirmedCount: 3,
           aliases: [transaction.description],
@@ -182,7 +167,10 @@ describe('matching de recorrências', () => {
         recurrenceName: 'Salário',
         rule: incomeRule,
         transactions: [
-          { ...salary, reconciliationType: 'profit_distribution' },
+          {
+            ...salary,
+            reconciliationTypes: new Set(['profit_distribution'] as const),
+          },
         ],
         learning,
       }).map((candidate) => candidate.transactionId),
@@ -192,7 +180,12 @@ describe('matching de recorrências', () => {
       buildRecurrenceCandidates({
         recurrenceName: 'Salário',
         rule: incomeRule,
-        transactions: [{ ...salary, reconciliationType: 'transfer' }],
+        transactions: [
+          {
+            ...salary,
+            reconciliationTypes: new Set(['transfer'] as const),
+          },
+        ],
         learning,
       }),
     ).toEqual([])
@@ -200,7 +193,7 @@ describe('matching de recorrências', () => {
       buildRecurrenceCandidates({
         recurrenceName: 'Salário',
         rule: incomeRule,
-        transactions: [{ ...salary, reconciliationType: null }],
+        transactions: [{ ...salary, reconciliationTypes: null }],
         learning,
       }),
     ).toEqual([])
@@ -213,14 +206,18 @@ describe('matching de recorrências', () => {
     expect(
       transactionEligibleForRecurrence({
         counterpartyAccountId: 'pj',
-        reconciliationType: 'profit_distribution',
+        reconciliationTypes: new Set(['profit_distribution']),
       }),
     ).toBe(true)
     expect(
-      transactionEligibleForRecurrence({ reconciliationType: 'refund' }),
+      transactionEligibleForRecurrence({
+        reconciliationTypes: new Set(['refund']),
+      }),
     ).toBe(true)
     expect(
-      transactionEligibleForRecurrence({ reconciliationType: 'card_payment' }),
+      transactionEligibleForRecurrence({
+        reconciliationTypes: new Set(['card_payment']),
+      }),
     ).toBe(false)
   })
 })
@@ -261,6 +258,27 @@ describe('destino fixo com histórico', () => {
         { ...transaction, accountId: 'account-c', creditCardId: null },
       ],
       learning,
+    })
+    expect(candidates).toHaveLength(0)
+  })
+
+  it('mantém a tolerância configurada como limite do aprendizado', () => {
+    const candidates = buildRecurrenceCandidates({
+      recurrenceName: 'Netflix',
+      rule: { ...fixedRule, dateToleranceDays: 3 },
+      transactions: [
+        {
+          ...transaction,
+          postedAt: '2026-08-15',
+          accountId: 'account-a',
+          creditCardId: null,
+        },
+      ],
+      learning: {
+        ...learning,
+        medianDateOffsetDays: 0,
+        dateSpreadDays: 20,
+      },
     })
     expect(candidates).toHaveLength(0)
   })

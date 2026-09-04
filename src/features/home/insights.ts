@@ -3,6 +3,7 @@
  * Tudo aqui é cálculo puro (roda no cliente e no servidor) — nenhum dado fictício.
  */
 import type { getFinanceSnapshotFn } from '#/features/finance/finance.functions'
+import { describeRecurrence } from '#/domain/recurrence-book'
 
 export type FinanceSnapshot = Awaited<ReturnType<typeof getFinanceSnapshotFn>>
 
@@ -79,12 +80,18 @@ function internalTransferIds(snapshot: FinanceSnapshot) {
 function recurrenceMatchedIds(snapshot: FinanceSnapshot) {
   const ids = new Set<string>()
   for (const recurrence of snapshot.recurrences) {
-    for (const occurrence of recurrence.occurrences) {
-      for (const match of occurrence.matches) {
-        if (match.status === 'confirmed' || match.status === 'auto_confirmed') {
-          ids.add(match.transactionId)
-        }
-      }
+    const book = describeRecurrence(
+      {
+        active: recurrence.active,
+        matchMode: recurrence.matchMode,
+        frequency: recurrence.frequency,
+        scheduleAnchor: recurrence.scheduleAnchor,
+        occurrences: recurrence.occurrences,
+      },
+      { today: todayIso() },
+    )
+    for (const match of book.acceptedMatches) {
+      ids.add(match.transactionId)
     }
   }
   return ids
@@ -444,9 +451,13 @@ export function projectCash(
   for (const recurrence of snapshot.recurrences) {
     if (!recurrence.active || recurrence.creditCardId) continue
     for (const occurrence of recurrence.occurrences) {
-      if (occurrence.status !== 'expected') continue
-      if (occurrence.expectedDate <= today || occurrence.expectedDate > horizon)
+      if (
+        occurrence.status !== 'expected' ||
+        occurrence.expectedDate <= today ||
+        occurrence.expectedDate > horizon
+      ) {
         continue
+      }
       const cents =
         occurrence.currency === 'BRL'
           ? occurrence.expectedAmountCents
@@ -528,9 +539,13 @@ export function upcomingCommitments(
     // Recorrências no cartão são pagas pela fatura, que já entra abaixo.
     if (!recurrence.active || recurrence.creditCardId) continue
     for (const occurrence of recurrence.occurrences) {
-      if (occurrence.status !== 'expected') continue
-      if (occurrence.expectedDate <= today || occurrence.expectedDate > horizon)
+      if (
+        occurrence.status !== 'expected' ||
+        occurrence.expectedDate <= today ||
+        occurrence.expectedDate > horizon
+      ) {
         continue
+      }
       const cents =
         occurrence.currency === 'BRL'
           ? occurrence.expectedAmountCents

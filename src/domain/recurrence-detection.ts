@@ -6,7 +6,17 @@
  * candidatos para a pessoa revisar e aprovar; nada é criado automaticamente.
  */
 import { normalizeDescription } from './finance'
-import { addRecurrencePeriod, merchantSignature } from './recurrence-matching'
+import {
+  merchantSignature,
+  transactionEligibleForRecurrence,
+} from './recurrence-book'
+import type { RecurrenceReconciliationType } from './recurrence-book'
+import {
+  LOOKBACK_DAYS,
+  addRecurrencePeriod,
+  median,
+  shiftDays,
+} from './recurrence-schedule'
 
 const DAY_MS = 86_400_000
 
@@ -21,13 +31,7 @@ export type DetectionTransaction = {
   creditCardId: string | null
   categoryId: string | null
   counterpartyAccountId: string | null
-  reconciliationType?:
-    | 'transfer'
-    | 'fx_transfer'
-    | 'card_payment'
-    | 'refund'
-    | 'profit_distribution'
-    | null
+  reconciliationTypes?: ReadonlySet<RecurrenceReconciliationType> | null
 }
 
 export type DetectedRecurrence = {
@@ -58,25 +62,11 @@ export function detectionKey(
   return `${signature}|${direction}`
 }
 
-function shiftDays(iso: string, days: number) {
-  const date = new Date(`${iso}T12:00:00Z`)
-  date.setUTCDate(date.getUTCDate() + days)
-  return date.toISOString().slice(0, 10)
-}
-
 function daysBetween(left: string, right: string) {
   return Math.round(
     (Date.parse(`${right}T12:00:00Z`) - Date.parse(`${left}T12:00:00Z`)) /
       DAY_MS,
   )
-}
-
-function median(values: number[]) {
-  const ordered = [...values].sort((left, right) => left - right)
-  const middle = Math.floor(ordered.length / 2)
-  return ordered.length % 2
-    ? ordered[middle]
-    : (ordered[middle - 1] + ordered[middle]) / 2
 }
 
 function mostFrequent<T>(values: T[]): T | null {
@@ -143,8 +133,7 @@ export function detectRecurrences(input: {
     if (transaction.status !== 'confirmed') continue
     if (transaction.amountCents === 0) continue
     if (excludedIds.has(transaction.id)) continue
-    if (transaction.counterpartyAccountId) continue
-    if (transaction.reconciliationType) continue
+    if (!transactionEligibleForRecurrence(transaction)) continue
     if (
       transaction.categoryId &&
       excludedCategories.has(transaction.categoryId)
@@ -201,7 +190,7 @@ export function detectRecurrences(input: {
     const gaps = items
       .slice(1)
       .map((item, index) => daysBetween(items[index].postedAt, item.postedAt))
-    const medianGap = median(gaps)
+    const medianGap = median(gaps) ?? 0
     const cadence = CADENCES.find(
       (candidate) =>
         medianGap >= candidate.min &&
@@ -212,7 +201,7 @@ export function detectRecurrences(input: {
     if (!cadence) continue
 
     const amounts = items.map((item) => Math.abs(item.amountCents))
-    const typical = Math.round(median(amounts))
+    const typical = Math.round(median(amounts) ?? 0)
     const variation =
       typical > 0
         ? Math.max(...amounts.map((amount) => Math.abs(amount - typical))) /
@@ -241,7 +230,7 @@ export function detectRecurrences(input: {
     )
 
     const anchorDay = Math.round(
-      median(items.map((item) => Number(item.postedAt.slice(8, 10)))),
+      median(items.map((item) => Number(item.postedAt.slice(8, 10)))) ?? 1,
     )
     const anchor = `${last.postedAt.slice(0, 8)}${String(anchorDay).padStart(2, '0')}`
     let nextExpectedDate = addRecurrencePeriod(
@@ -249,7 +238,7 @@ export function detectRecurrences(input: {
       cadence.frequency,
       anchor,
     )
-    while (nextExpectedDate < shiftDays(today, -45)) {
+    while (nextExpectedDate < shiftDays(today, -LOOKBACK_DAYS)) {
       nextExpectedDate = addRecurrencePeriod(
         nextExpectedDate,
         cadence.frequency,

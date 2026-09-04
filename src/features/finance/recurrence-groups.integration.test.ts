@@ -17,10 +17,13 @@ describe('grupos de recorrências', () => {
   })
 
   it('mantém linhas independentes no mesmo grupo e soma a projeção uma vez', async () => {
-    const finance = await import('./finance.server')
+    const [finance, recurrence] = await Promise.all([
+      import('./finance.server'),
+      import('./recurrence.server'),
+    ])
     const before = await finance.getFinanceSnapshot('2026-09')
 
-    await finance.createRecurrence({
+    await recurrence.createRecurrence({
       name: 'Academia Donald',
       groupName: 'Academia',
       participantLabel: 'Donald',
@@ -33,7 +36,7 @@ describe('grupos de recorrências', () => {
       frequency: 'monthly',
       nextDate: '2026-09-15',
     })
-    await finance.createRecurrence({
+    await recurrence.createRecurrence({
       name: 'Academia esposa',
       groupName: 'academia',
       participantLabel: 'Esposa',
@@ -52,7 +55,7 @@ describe('grupos de recorrências', () => {
       (candidate) => candidate.normalizedName === 'academia',
     )
     const items = snapshot.recurrences.filter(
-      (recurrence) => recurrence.groupId === group?.id,
+      (item) => item.groupId === group?.id,
     )
 
     expect(snapshot.recurrenceGroups).toHaveLength(3)

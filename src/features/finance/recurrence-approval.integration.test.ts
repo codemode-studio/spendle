@@ -1,0 +1,165 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { eq } from 'drizzle-orm'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+
+import { isAcceptedRecurrenceMatchStatus } from '#/domain/recurrence-book'
+
+describe('aprovação de recorrências detectadas', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'financas-recurrence-approval-'))
+  const today = '2026-09-04'
+
+  beforeAll(() => {
+    process.env.DATABASE_URL = join(directory, 'integration.db')
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(`${today}T12:00:00Z`))
+    vi.resetModules()
+  })
+
+  afterAll(() => {
+    vi.useRealTimers()
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  it('alinha o histórico anual e ignora períodos passados sem pagamento', async () => {
+    const [{ ensureDatabase }, finance, recurrenceServer] = await Promise.all([
+      import('#/db/index.server'),
+      import('./finance.server'),
+      import('./recurrence.server'),
+    ])
+    await ensureDatabase()
+    const payments = await Promise.all(
+      [
+        { id: 'older', postedAt: '2024-12-31' },
+        { id: 'newer', postedAt: '2026-01-01' },
+      ].map(({ id, postedAt }) =>
+        finance.createManualTransaction({
+          targetType: 'account',
+          targetId: 'account-nubank-pf-6607',
+          postedAt,
+          description: `Seguro anual ${id}`,
+          direction: 'outflow',
+          amountCents: 12_345,
+        }),
+      ),
+    )
+
+    const approved = await recurrenceServer.approveDetectedRecurrence({
+      name: 'Seguro anual',
+      categoryId: 'insurance',
+      amountCents: 12_345,
+      currency: 'BRL',
+      direction: 'expense',
+      amountMode: 'fixed',
+      frequency: 'yearly',
+      nextDate: '2027-01-16',
+      transactionIds: payments.map((payment) => payment.id),
+    })
+
+    const snapshot = await finance.getFinanceSnapshot()
+    const recurrence = snapshot.recurrences.find(
+      (item) => item.id === approved.id,
+    )
+    const acceptedMatches =
+      recurrence?.occurrences.flatMap((occurrence) =>
+        occurrence.matches.filter((match) =>
+          isAcceptedRecurrenceMatchStatus(match.status),
+        ),
+      ) ?? []
+
+    expect(recurrence?.startsOn).toBe('2024-01-16')
+    expect(acceptedMatches).toHaveLength(2)
+    expect(
+      new Set(acceptedMatches.map((match) => match.transactionId)),
+    ).toEqual(new Set(payments.map((payment) => payment.id)))
+    expect(
+      recurrence?.occurrences.filter(
+        (occurrence) =>
+          occurrence.status === 'expected' && occurrence.expectedDate < today,
+      ),
+    ).toEqual([])
+    expect(snapshot.dashboard.integrity.issues).not.toContainEqual(
+      expect.objectContaining({ code: 'overdue_recurrence' }),
+    )
+  })
+
+  it('bloqueia um reembolso que também pertence a uma transferência ativa', async () => {
+    const [finance, recurrenceServer, database, schema] = await Promise.all([
+      import('./finance.server'),
+      import('./recurrence.server'),
+      import('#/db/index.server'),
+      import('#/db/schema'),
+    ])
+    const recurrence = await recurrenceServer.createRecurrence({
+      name: 'Serviço conciliado',
+      categoryId: 'subscriptions',
+      amountCents: 4_321,
+      currency: 'BRL',
+      direction: 'expense',
+      amountMode: 'fixed',
+      destinationMode: 'automatic',
+      frequency: 'monthly',
+      nextDate: today,
+    })
+    const payment = await finance.createManualTransaction({
+      targetType: 'account',
+      targetId: 'account-nubank-pf-6607',
+      postedAt: today,
+      description: 'Serviço conciliado',
+      direction: 'outflow',
+      amountCents: 4_321,
+    })
+    const occurrence = (
+      await database.db
+        .select()
+        .from(schema.recurrenceOccurrences)
+        .where(eq(schema.recurrenceOccurrences.recurrenceId, recurrence.id))
+    ).find((item) => item.expectedDate === today)
+    expect(occurrence).toBeDefined()
+
+    await database.db.insert(schema.reconciliationGroups).values([
+      {
+        id: 'mixed-refund',
+        type: 'refund',
+        status: 'confirmed',
+        confidence: 100,
+      },
+      {
+        id: 'mixed-transfer',
+        type: 'transfer',
+        status: 'suggested',
+        confidence: 100,
+      },
+    ])
+    await database.db.insert(schema.reconciliationLinks).values([
+      {
+        id: 'mixed-refund-link',
+        groupId: 'mixed-refund',
+        transactionId: payment.id,
+        role: 'refund',
+      },
+      {
+        id: 'mixed-transfer-link',
+        groupId: 'mixed-transfer',
+        transactionId: payment.id,
+        role: 'source',
+      },
+    ])
+
+    const candidates = await recurrenceServer.listLinkCandidates({
+      occurrenceId: occurrence!.id,
+      today,
+    })
+    expect(candidates.map((candidate) => candidate.id)).not.toContain(
+      payment.id,
+    )
+    await expect(
+      recurrenceServer.linkTransactions({
+        occurrenceId: occurrence!.id,
+        transactionIds: [payment.id],
+      }),
+    ).rejects.toThrow('Resolva primeiro a conciliação financeira')
+  })
+})

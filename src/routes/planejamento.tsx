@@ -82,10 +82,11 @@ import {
   toCents,
 } from '#/domain/finance'
 import {
-  addRecurrencePeriod,
+  describeRecurrence,
   isAcceptedRecurrenceMatchStatus,
-  transactionEligibleForRecurrence,
-} from '#/domain/recurrence-matching'
+  recurrenceLinkCandidateLimits,
+} from '#/domain/recurrence-book'
+import type { RecurrencePresentationStatus } from '#/domain/recurrence-book'
 import {
   activateStrategyFn,
   addGoalContributionFn,
@@ -106,16 +107,26 @@ import {
   updateRecurrenceFn,
   updateSettingsFn,
 } from '#/features/finance/finance.functions'
-import type { getFinanceSnapshot } from '#/features/finance/finance.server'
-import type { DetectedRecurrence } from '#/domain/recurrence-detection'
+import type {
+  detectRecurrencesFn,
+  getFinanceSnapshotFn,
+} from '#/features/finance/finance.functions'
+import {
+  StrategyHistory,
+  StrategyProgressView,
+} from '#/features/finance/strategy-progress'
 import { cn } from '#/lib/utils'
 import {
   financeQueryKeys,
   financeSnapshotOptions,
   recurrenceDetectionOptions,
+  recurrenceLinkCandidatesOptions,
 } from '#/features/finance/queries'
 
-type Snapshot = Awaited<ReturnType<typeof getFinanceSnapshot>>
+type Snapshot = Awaited<ReturnType<typeof getFinanceSnapshotFn>>
+type DetectedRecurrence = Awaited<
+  ReturnType<typeof detectRecurrencesFn>
+>[number]
 type DisplayRow =
   | {
       type: 'group'
@@ -127,6 +138,25 @@ type Allocation = Record<
   'essential' | 'lifestyle' | 'investment' | 'reserve',
   number
 >
+
+function recurrenceStatusBadge(
+  status: RecurrencePresentationStatus,
+): { label: string; tone: 'info' | 'warning' | 'success' } | null {
+  switch (status) {
+    case 'in_progress':
+      return { label: 'Em andamento', tone: 'info' }
+    case 'suggested':
+      return { label: 'Candidato encontrado', tone: 'warning' }
+    case 'overdue':
+      return { label: 'Atrasada', tone: 'warning' }
+    case 'done':
+      return { label: 'Realizada', tone: 'success' }
+    case 'pending':
+      return { label: 'Pendente', tone: 'info' }
+    case 'paused':
+      return null
+  }
+}
 
 const planningSearchSchema = z.object({
   section: z
@@ -285,9 +315,13 @@ function PlanningPage() {
   const refreshRecurrencesMutation = useMutation({
     mutationFn: refreshRecurrences,
     onSuccess: (result) => {
-      toast.success(
-        `${result.suggestionCount} correspondência(s) disponível(is) para revisão.`,
-      )
+      const parts = [
+        `${result.suggestionCount} nova(s) correspondência(s) para revisão`,
+        result.autoConfirmCount
+          ? `${result.autoConfirmCount} conciliada(s) automaticamente`
+          : null,
+      ].filter(Boolean)
+      toast.success(`${parts.join(' · ')}.`)
       void invalidate()
     },
     onError: showError,
@@ -806,6 +840,15 @@ function BudgetSection({
       </Panel>
 
       <Panel
+        title="Acompanhamento da estratégia"
+        description="Metas de cada envelope contra o que já foi gasto ou aportado."
+      >
+        <StrategyProgressView dashboard={data.dashboard} />
+        <h3 className="mt-6 mb-2 text-sm font-semibold">Meses anteriores</h3>
+        <StrategyHistory />
+      </Panel>
+
+      <Panel
         title={`Fechamento de ${formatMonth(data.dashboard.currentMonth).toLocaleLowerCase('pt-BR')}`}
         description="Preserva o retrato do orçamento deste mês."
         action={
@@ -1133,30 +1176,26 @@ function RecurrencesSection({
       right.expectedDate.localeCompare(left.expectedDate),
     )
     const today = new Date().toISOString().slice(0, 10)
+    const recurrenceBook = describeRecurrence(
+      {
+        active: item.active,
+        matchMode: item.matchMode,
+        frequency: item.frequency,
+        scheduleAnchor: item.scheduleAnchor,
+        occurrences: item.occurrences,
+      },
+      { today },
+    )
     const openOccurrences = sortedOccurrences.filter(
       (candidate) => candidate.status === 'expected',
     )
-    const occurrence =
-      openOccurrences.find((candidate) => candidate.expectedDate <= today) ??
-      [...openOccurrences]
-        .reverse()
-        .find((candidate) => candidate.expectedDate > today) ??
-      sortedOccurrences.at(0)
-    const acceptedHistory = sortedOccurrences.flatMap((candidateOccurrence) =>
-      candidateOccurrence.matches
-        .filter((match) => isAcceptedRecurrenceMatchStatus(match.status))
-        .map((match) => ({
-          match,
-          occurrence: candidateOccurrence,
-        })),
+    const occurrence = recurrenceBook.currentOccurrence
+    const acceptedMatch = recurrenceBook.acceptedMatches.at(0)
+    const latestAcceptedOccurrence = sortedOccurrences.find(
+      (candidate) => candidate.id === acceptedMatch?.occurrenceId,
     )
-    const latestAccepted = acceptedHistory.at(0)
-    const acceptedMatch = latestAccepted?.match
-    const suggestedMatch = item.active
-      ? occurrence?.matches
-          .filter((match) => match.status === 'suggested')
-          .sort((left, right) => right.score - left.score)[0]
-      : undefined
+    const suggestedMatch = recurrenceBook.bestSuggestion
+    const statusBadge = recurrenceStatusBadge(recurrenceBook.status)
     const displayName = item.groupId
       ? item.participantLabel || item.name
       : item.name
@@ -1169,21 +1208,10 @@ function RecurrencesSection({
               <StatusBadge tone={item.active ? 'success' : 'neutral'}>
                 {item.active ? 'Ativa' : 'Pausada'}
               </StatusBadge>
-              {!item.active ? null : item.matchMode === 'aggregate' &&
-                occurrence?.status === 'expected' ? (
-                <StatusBadge tone="info">Em andamento</StatusBadge>
-              ) : suggestedMatch ? (
-                <StatusBadge tone="warning">Candidato encontrado</StatusBadge>
-              ) : occurrence?.status === 'expected' ? (
-                occurrence.expectedDate < today ? (
-                  <StatusBadge tone="warning">Atrasada</StatusBadge>
-                ) : (
-                  <StatusBadge tone="info">Pendente</StatusBadge>
-                )
-              ) : acceptedMatch ? (
-                <StatusBadge tone="success">Realizada</StatusBadge>
-              ) : (
-                <StatusBadge tone="info">Pendente</StatusBadge>
+              {statusBadge && (
+                <StatusBadge tone={statusBadge.tone}>
+                  {statusBadge.label}
+                </StatusBadge>
               )}
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -1378,10 +1406,13 @@ function RecurrencesSection({
                   </Button>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {acceptedHistory.length} pagamento(s) confirmado(s) ·{' '}
-                  {new Date(
-                    `${latestAccepted?.occurrence.expectedDate}T12:00:00`,
-                  ).toLocaleDateString('pt-BR')}
+                  {recurrenceBook.acceptedMatches.length} pagamento(s)
+                  confirmado(s) ·{' '}
+                  {latestAcceptedOccurrence
+                    ? new Date(
+                        `${latestAcceptedOccurrence.expectedDate}T12:00:00`,
+                      ).toLocaleDateString('pt-BR')
+                    : 'data não identificada'}
                   {' · '}
                   Pago por{' '}
                   {formatInstrumentName(
@@ -1529,7 +1560,6 @@ function RecurrencesSection({
         recurrence={
           data.recurrences.find((item) => item.id === linkRecurrenceId) ?? null
         }
-        data={data}
         pending={pending}
         open={linkRecurrenceId !== null}
         onOpenChange={(open) => {
@@ -1546,14 +1576,12 @@ function RecurrencesSection({
 
 function LinkPaymentDialog({
   recurrence,
-  data,
   pending,
   open,
   onOpenChange,
   onLink,
 }: {
   recurrence: Snapshot['recurrences'][number] | null
-  data: Snapshot
   pending: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -1585,87 +1613,23 @@ function LinkPaymentDialog({
   const selectedOccurrence =
     openOccurrences.find((item) => item.id === occurrenceId) ??
     openOccurrences.at(0)
-
+  const candidatesQuery = useQuery(
+    recurrenceLinkCandidatesOptions(selectedOccurrence?.id),
+  )
   const candidates = useMemo(() => {
-    if (!recurrence || !selectedOccurrence) return []
-    const takenIds = new Set<string>()
-    for (const item of data.recurrences) {
-      for (const occurrence of item.occurrences) {
-        for (const match of occurrence.matches) {
-          if (isAcceptedRecurrenceMatchStatus(match.status)) {
-            takenIds.add(match.transactionId)
-          }
-        }
-      }
-    }
-    const reconciliationTypeById = new Map<
-      string,
-      Snapshot['reconciliations'][number]['type']
-    >()
-    for (const group of data.reconciliations) {
-      if (group.status === 'rejected') continue
-      for (const link of group.links) {
-        if (!reconciliationTypeById.has(link.transactionId)) {
-          reconciliationTypeById.set(link.transactionId, group.type)
-        }
-      }
-    }
-    const sign = recurrence.direction === 'expense' ? -1 : 1
-    const expectedCents = selectedOccurrence.expectedAmountCents
-    const expectedTime = Date.parse(
-      `${selectedOccurrence.expectedDate}T12:00:00Z`,
-    )
-    const windowEnd = addRecurrencePeriod(
-      selectedOccurrence.expectedDate,
-      recurrence.frequency,
-      recurrence.scheduleAnchor,
-    )
     const query = normalizeDescription(search)
-    return data.transactions
+    return (candidatesQuery.data ?? [])
       .filter(
-        (transaction) =>
-          transaction.status === 'confirmed' &&
-          transaction.currency === selectedOccurrence.currency &&
-          Math.sign(transaction.amountCents) === sign &&
-          !takenIds.has(transaction.id) &&
-          transactionEligibleForRecurrence({
-            counterpartyAccountId: transaction.counterpartyAccountId,
-            reconciliationType:
-              reconciliationTypeById.get(transaction.id) ?? null,
-          }) &&
-          (!query ||
-            normalizeDescription(transaction.description).includes(query)),
+        (candidate) =>
+          !query || normalizeDescription(candidate.description).includes(query),
       )
-      .map((transaction) => {
-        const amountDiff = Math.abs(
-          Math.abs(transaction.amountCents) - expectedCents,
-        )
-        const daysApart =
-          Math.abs(
-            Date.parse(`${transaction.postedAt}T12:00:00Z`) - expectedTime,
-          ) / 86_400_000
-        const inWindow =
-          transaction.postedAt >= selectedOccurrence.expectedDate &&
-          transaction.postedAt < windowEnd
-        const sameCategory =
-          recurrence.categoryId !== null &&
-          transaction.categoryId === recurrence.categoryId
-        return {
-          transaction,
-          amountDiff,
-          daysApart,
-          inWindow,
-          // Envelope: o que importa é estar no período e, em seguida, ser da
-          // mesma categoria (rendimentos diários não devem esconder um
-          // salário). Pagamento único: valor e data próximos.
-          rank: multiple
-            ? (inWindow ? 0 : 1_000) + (sameCategory ? 0 : 500) + daysApart
-            : (amountDiff / Math.max(expectedCents, 1)) * 100 + daysApart,
-        }
-      })
-      .sort((left, right) => left.rank - right.rank)
-      .slice(0, multiple ? 80 : 40)
-  }, [recurrence, selectedOccurrence, data, search, multiple])
+      .slice(
+        0,
+        recurrenceLinkCandidateLimits[
+          multiple ? 'aggregate' : 'single'
+        ],
+      )
+  }, [candidatesQuery.data, multiple, search])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1713,61 +1677,69 @@ function LinkPaymentDialog({
           />
         </div>
         <div className="max-h-80 overflow-y-auto rounded-lg border">
-          {candidates.length === 0 ? (
+          {candidatesQuery.isPending ? (
+            <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+              <Spinner /> Buscando transações…
+            </div>
+          ) : candidatesQuery.isError ? (
+            <p className="p-4 text-sm text-destructive">
+              Não foi possível buscar as transações compatíveis.
+            </p>
+          ) : candidates.length === 0 ? (
             <p className="p-4 text-sm text-muted-foreground">
               Nenhuma transação compatível. Confira a busca ou importe o extrato
               do período.
             </p>
           ) : (
             <ul className="divide-y">
-              {candidates.map(
-                ({ transaction, amountDiff, daysApart, inWindow }) => {
-                  const selected = selectedIds.includes(transaction.id)
-                  const hints = multiple
-                    ? [inWindow ? 'no período' : 'fora do período']
-                    : [
-                        amountDiff === 0 ? 'valor exato' : null,
-                        daysApart <= 3 ? 'data próxima' : null,
-                      ].filter(Boolean)
-                  return (
-                    <li key={transaction.id}>
-                      <button
-                        type="button"
-                        aria-pressed={selected}
-                        onClick={() => toggleTransaction(transaction.id)}
-                        className={cn(
-                          'flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors pointer-fine:hover:bg-muted/50',
-                          selected &&
-                            'bg-primary/5 ring-1 ring-primary/40 ring-inset',
-                        )}
-                      >
-                        <span className="w-20 shrink-0 text-xs text-muted-foreground tabular-nums">
-                          {formatDate(transaction.postedAt)}
+              {candidates.map((candidate) => {
+                const selected = selectedIds.includes(candidate.id)
+                const hints = multiple
+                  ? [candidate.inWindow ? 'no período' : 'fora do período']
+                  : [
+                      candidate.amountDifferenceCents === 0
+                        ? 'valor exato'
+                        : null,
+                      candidate.daysApart <= 3 ? 'data próxima' : null,
+                    ].filter(Boolean)
+                return (
+                  <li key={candidate.id}>
+                    <button
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => toggleTransaction(candidate.id)}
+                      className={cn(
+                        'flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors pointer-fine:hover:bg-muted/50',
+                        selected &&
+                          'bg-primary/5 ring-1 ring-primary/40 ring-inset',
+                      )}
+                    >
+                      <span className="w-20 shrink-0 text-xs text-muted-foreground tabular-nums">
+                        {formatDate(candidate.postedAt)}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">
+                          {candidate.description}
                         </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-medium">
-                            {transaction.description}
-                          </span>
-                          <span className="block truncate text-xs text-muted-foreground">
-                            {formatInstrumentName(
-                              transaction.account?.name ??
-                                transaction.creditCard?.name ??
-                                '—',
-                            )}
-                            {hints.length > 0 && ` · ${hints.join(' · ')}`}
-                          </span>
-                        </span>
-                        <span className="shrink-0 font-medium tabular-nums">
-                          {formatCurrency(
-                            Math.abs(transaction.amountCents),
-                            transaction.currency,
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {formatInstrumentName(
+                            candidate.accountLabel ??
+                              candidate.cardLabel ??
+                              '—',
                           )}
+                          {hints.length > 0 && ` · ${hints.join(' · ')}`}
                         </span>
-                      </button>
-                    </li>
-                  )
-                },
-              )}
+                      </span>
+                      <span className="shrink-0 font-medium tabular-nums">
+                        {formatCurrency(
+                          Math.abs(candidate.amountCents),
+                          candidate.currency,
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           )}
         </div>
@@ -1777,7 +1749,10 @@ function LinkPaymentDialog({
           </Button>
           <Button
             disabled={
-              selectedIds.length === 0 || !selectedOccurrence || pending
+              selectedIds.length === 0 ||
+              !selectedOccurrence ||
+              pending ||
+              candidatesQuery.isPending
             }
             onClick={() => {
               if (selectedOccurrence && selectedIds.length > 0) {
