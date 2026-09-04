@@ -8,9 +8,27 @@ import {
   resolveCompletedBatchStatus,
   summarizeCoveragePeriods,
 } from '#/domain/import-coverage'
-import { identifyDuplicateReasons } from '#/domain/import-audit'
+import {
+  duplicateReasonForOutcome,
+  resolveImportObservationOutcomes,
+} from '#/domain/canonicalization'
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+export function hasReliableCoverage(input: {
+  periodStart: string | null
+  periodEnd: string | null
+  periodSource?: string | null
+}) {
+  return Boolean(
+    input.periodStart &&
+    input.periodEnd &&
+    (!input.periodSource ||
+      input.periodSource === 'metadata' ||
+      input.periodSource === 'filename' ||
+      input.periodSource === 'user'),
+  )
+}
 
 export function setCoverageInterval(
   transaction: DatabaseTransaction,
@@ -163,15 +181,20 @@ export async function confirmCoveragePeriod(input: {
     })
     .from(schema.transactions)
     .where(targetFilter)
-  const duplicateReasons = identifyDuplicateReasons(
-    stagedRows,
-    existingTransactions.filter(
-      (transaction) =>
-        Boolean(transaction.externalId) ||
-        (transaction.postedAt >= input.periodStart &&
-          transaction.postedAt <= input.periodEnd),
-    ),
-  )
+  const duplicateReasons = resolveImportObservationOutcomes({
+    observations: stagedRows,
+    transactions: existingTransactions
+      .filter(
+        (transaction) =>
+          Boolean(transaction.externalId) ||
+          (transaction.postedAt >= input.periodStart &&
+            transaction.postedAt <= input.periodEnd),
+      )
+      .map((transaction, index) => ({
+        id: String(index),
+        ...transaction,
+      })),
+  }).map(duplicateReasonForOutcome)
 
   db.transaction((transaction) => {
     transaction

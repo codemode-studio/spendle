@@ -15,6 +15,7 @@ import {
   reconcileCsvWithPdfControl,
   rejectImport,
 } from './import.server'
+import { stageCardObservationAndResolveOutcome } from './import-outcome.integration-fixture'
 
 export async function runCardStatementControlFixture() {
   await ensureDatabase()
@@ -312,6 +313,9 @@ export async function runCardStatementControlFixture() {
   assert.equal(cycles[0].periodEnd, '2026-09-02')
   assert.equal(cycles[0].status, 'reconciled')
   assert.equal(checkpoints.length, 1)
+  assert.deepEqual(JSON.parse(checkpoints[0].evidenceJson!), {
+    method: 'date_amount_currency_multiset',
+  })
   assert.equal(openCsvImport[0].periodStart, '2026-08-01')
   assert.equal(openCsvImport[0].periodEnd, '2026-08-31')
   assert.equal(finalBatch[0].status, 'committed')
@@ -732,15 +736,9 @@ export async function runCardStatementControlFixture() {
     lastFour: '9753',
     closingDay: 31,
   })
-  await db.insert(schema.importBatches).values({
-    id: 'batch-pdf-first-no-id',
-    creditCardId: 'card-pdf-first-no-id',
-    status: 'review',
-  })
   await db.insert(schema.imports).values({
     id: 'import-pdf-first-no-id',
     sourceFileId: 'source-final-pdf',
-    batchId: 'batch-pdf-first-no-id',
     creditCardId: 'card-pdf-first-no-id',
     parser: 'pdf_inspector',
     documentKind: 'card_statement',
@@ -771,46 +769,27 @@ export async function runCardStatementControlFixture() {
   })
   await commitImport('import-pdf-first-no-id')
 
+  const stagedCsvImportIds: string[] = []
   for (const suffix of ['first', 'repeat']) {
-    const batchId = `batch-csv-no-id-${suffix}`
-    const importId = `import-csv-no-id-${suffix}`
-    const stagedId = `staged-csv-no-id-${suffix}`
-    await db.insert(schema.importBatches).values({
-      id: batchId,
+    const stagedResult = await stageCardObservationAndResolveOutcome({
+      file: new File(
+        [
+          [
+            'date;description;amount',
+            `2026-08-03;Outra descrição sem identificador ${suffix};100,00`,
+          ].join('\n'),
+        ],
+        `card-cycle-01-08-2026_a_31-08-2026-${suffix}.csv`,
+        { type: 'text/csv' },
+      ),
       creditCardId: 'card-pdf-first-no-id',
-      status: 'review',
     })
-    await db.insert(schema.imports).values({
-      id: importId,
-      sourceFileId: 'source-pdf-first-csv-no-id',
-      batchId,
-      creditCardId: 'card-pdf-first-no-id',
-      parser: 'csv',
-      documentKind: 'card_statement',
-      sourceTransactionCount: 1,
-      parsedTransactionCount: 1,
-      activityStart: '2026-08-03',
-      activityEnd: '2026-08-03',
-      periodStart: '2026-08-01',
-      periodEnd: '2026-08-31',
-      periodSource: 'user',
-      coverageConfidence: 'high',
-      totalDebitsCents: 10_000,
-      netMovementCents: -10_000,
-      validationStatus: 'warning',
-      status: 'review',
-    })
-    await db.insert(schema.stagedTransactions).values({
-      id: stagedId,
-      importId,
-      fingerprint: 'pdf-first-no-id-csv-fingerprint',
-      postedAt: '2026-08-03',
-      description: 'Outra descrição sem identificador',
-      normalizedDescription: 'OUTRA DESCRICAO SEM IDENTIFICADOR',
-      amountCents: -10_000,
-      currency: 'BRL',
-      suggestedCategoryId: 'uncategorized',
-    })
+    const importId = stagedResult.importId
+    stagedCsvImportIds.push(importId)
+    assert.deepEqual(
+      stagedResult.outcome.observations.map((observation) => observation.kind),
+      ['evidence'],
+    )
     const result = await commitImport(importId, true)
     assert.equal(result.committed, 0)
   }
@@ -832,8 +811,7 @@ export async function runCardStatementControlFixture() {
       .where(
         inArray(schema.stagedTransactions.importId, [
           'import-pdf-first-no-id',
-          'import-csv-no-id-first',
-          'import-csv-no-id-repeat',
+          ...stagedCsvImportIds,
         ]),
       ),
   ])

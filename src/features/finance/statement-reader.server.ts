@@ -16,6 +16,37 @@ import { inspectPdfStatement } from './pdf-inspector.server'
 
 export type StatementTargetType = 'account' | 'card'
 
+export function statementReaderDefaults(
+  filename: string,
+  targetType: StatementTargetType,
+) {
+  const extension = filename.split('.').pop()?.toLowerCase()
+  if (extension !== 'ofx' && extension !== 'csv' && extension !== 'pdf') {
+    throw new Error('Envie um arquivo OFX, CSV ou PDF.')
+  }
+  return {
+    extension,
+    parser:
+      extension === 'csv'
+        ? ('csv' as const)
+        : extension === 'pdf'
+          ? ('pdf_inspector' as const)
+          : ('ofx' as const),
+    documentKind:
+      extension === 'ofx'
+        ? targetType === 'account'
+          ? ('bank_statement' as const)
+          : ('card_statement' as const)
+        : ('unknown' as const),
+    mediaType:
+      extension === 'ofx'
+        ? 'application/x-ofx'
+        : extension === 'csv'
+          ? 'text/csv'
+          : 'application/pdf',
+  }
+}
+
 export interface ParsedTransaction {
   externalId?: string
   postedAt: string
@@ -78,9 +109,7 @@ export interface StatementReadResult {
   }
 }
 
-export type StatementReadErrorKind =
-  | 'identity_mismatch'
-  | 'extraction_blocked'
+export type StatementReadErrorKind = 'identity_mismatch' | 'extraction_blocked'
 
 export class StatementReadError extends Error {
   constructor(
@@ -731,7 +760,10 @@ async function readPdfStatement(
 export async function readStatement(
   input: ReadStatementInput,
 ): Promise<StatementReadResult> {
-  const extension = input.filename.split('.').pop()?.toLowerCase()
+  const { extension } = statementReaderDefaults(
+    input.filename,
+    input.targetType,
+  )
   let result: StatementReadResult
 
   if (extension === 'ofx') {

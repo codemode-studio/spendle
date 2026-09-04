@@ -5,19 +5,27 @@ domínio separadas de leitura de arquivos, persistência e apresentação.
 
 ## Fluxo principal
 
-1. `statement-reader.server.ts` escolhe o adaptador OFX, CSV ou PDF e devolve
-   um resultado normalizado, incluindo identidade, cobertura, controles e
-   diagnósticos.
-2. `canonicalization.ts` decide se cada observação representa um lançamento
-   novo, um lançamento conhecido ou evidência de controle. A decisão consome
-   cada candidato no máximo uma vez.
-3. `canonicalization.server.ts` grava o vínculo auditável entre observação e
-   lançamento canônico.
-4. `coverage-lifecycle.server.ts` mantém o período declarado, a confiança da
+1. `statement-reader.server.ts` valida a extensão, escolhe o adaptador OFX,
+   CSV ou PDF e devolve um resultado normalizado, incluindo identidade,
+   cobertura, controles e diagnósticos. `import-stage.server.ts` persiste o
+   arquivo e suas observações imutáveis para revisão.
+2. `canonicalization.ts` contém as decisões puras que classificam cada
+   observação como nova, conhecida, evidência, correção ou exclusão. Cada
+   candidato é consumido no máximo uma vez, preservando multiplicidade.
+3. `canonical-outcome.server.ts` carrega o estado persistido e produz um
+   `ImportOutcome`: decisões por observação, checkpoint, ciclo, promoções,
+   cobertura e vínculos de evidência do lote. `applyImportOutcome` é o único
+   escritor desse resultado e aplica tudo na transação ativa.
+4. `import-commit.server.ts` orquestra carregar, resolver o resultado e chamar
+   o escritor uma vez. `import-control-reconciliation.server.ts` usa a mesma
+   fronteira para controles CSV/PDF; cada operação lógica abre uma única
+   transação. `import.server.ts` permanece apenas como fachada de exportação.
+5. `coverage-lifecycle.server.ts` mantém o período declarado, a confiança da
    cobertura e o aprendizado de nomes de arquivo.
-5. `checkpoint-chain.server.ts` mantém checkpoints, invalida toda a cadeia a
-   partir de uma correção e recalcula a âncora de saldo do instrumento.
-6. `reconciliation-refresh.server.ts` recompõe sugestões derivadas. Depois de
+6. `checkpoint-chain.server.ts` aplica checkpoints, ciclos e promoções de
+   pendente para confirmado, além de invalidar a cadeia a partir de uma
+   correção e recalcular a âncora de saldo do instrumento.
+7. `reconciliation-refresh.server.ts` recompõe sugestões derivadas. Depois de
    um commit durável, falhas na evidência do lote, cobertura ou reconciliação
    retornam estado `deferred`, não transformam a importação concluída em erro e
    podem ser repetidas explicitamente pela interface.

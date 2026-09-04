@@ -16,6 +16,7 @@ import {
   isHardImportReviewReason,
   resolveImportReviewReason,
 } from '#/domain/import-audit'
+import { hasReliableCoverage } from './coverage-lifecycle.server'
 import { hasImportDestinationConflict } from './import-guards.server'
 import { effectiveImportReviewValidationMessage } from './import-review-guidance'
 
@@ -417,7 +418,11 @@ export async function getImportReviewSnapshot() {
         corrections,
         reasonCode,
         guidance,
-        needsCoverageConfirmation: !coverageProvenance.reliable,
+        needsCoverageConfirmation: !hasReliableCoverage({
+          periodStart: importRow.periodStart,
+          periodEnd: importRow.periodEnd,
+          periodSource: importRow.periodSource,
+        }),
         hasIncompleteTransfer: staged.some(
           (item) =>
             !item.duplicate &&

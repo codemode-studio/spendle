@@ -5,6 +5,226 @@ export interface CanonicalIdentity {
 
 export type DuplicateReason = 'external_id' | 'fingerprint_overlap' | null
 
+export type ImportObservationOutcomeKind =
+  'new' | 'known' | 'evidence' | 'correction' | 'excluded'
+
+export type ImportObservationOutcomeReason =
+  | 'new_observation'
+  | 'stable_external_id'
+  | 'known_evidence_version'
+  | 'changed_external_id'
+  | 'exact_overlap'
+  | 'trusted_statement_control'
+  | 'dependent_batch_evidence'
+  | 'previously_excluded'
+
+export interface ImportObservationOutcome {
+  observationId: string
+  kind: ImportObservationOutcomeKind
+  transactionId?: string
+  reasons: ImportObservationOutcomeReason[]
+}
+
+export interface CanonicalOutcomeObservation extends CanonicalIdentity {
+  id: string
+}
+
+export interface CanonicalOutcomeTransaction extends CanonicalIdentity {
+  id: string
+  status?: 'pending' | 'confirmed' | 'excluded'
+}
+
+export interface CanonicalOutcomeAssignment {
+  observationId: string
+  transactionId: string
+  reason: 'trusted_statement_control' | 'dependent_batch_evidence'
+}
+
+export interface ExternalIdentityTarget {
+  type: 'account' | 'card'
+  id: string
+}
+
+export function externalIdentityOwnerKey(
+  target: ExternalIdentityTarget,
+  externalId: string,
+) {
+  return `${target.type}:${target.id}:${externalId}`
+}
+
+export function assignDependentBatchEvidence(input: {
+  canonical: Array<{ transactionId: string; signature: string }>
+  observations: Array<{
+    observationId: string
+    signature: string
+    externalId: string | null
+  }>
+}) {
+  const available = new Map<string, string[]>()
+  for (const item of input.canonical) {
+    const transactionIds = available.get(item.signature) ?? []
+    transactionIds.push(item.transactionId)
+    available.set(item.signature, transactionIds)
+  }
+  const unmatchedObservationIds: string[] = []
+  const assignments = input.observations.flatMap((observation) => {
+    const transactionId = available.get(observation.signature)?.shift()
+    if (!transactionId) {
+      unmatchedObservationIds.push(observation.observationId)
+      return []
+    }
+    return [{ ...observation, transactionId }]
+  })
+  return { assignments, unmatchedObservationIds }
+}
+
+export function duplicateReasonForOutcome(
+  outcome: ImportObservationOutcome,
+): DuplicateReason {
+  if (
+    outcome.kind === 'new' ||
+    outcome.kind === 'evidence' ||
+    outcome.reasons.includes('trusted_statement_control') ||
+    outcome.reasons.includes('dependent_batch_evidence')
+  ) {
+    return null
+  }
+  return outcome.reasons.includes('stable_external_id')
+    ? 'external_id'
+    : 'fingerprint_overlap'
+}
+
+/**
+ * Decides how immutable observations relate to the canonical ledger. Callers
+ * must pass only the transactions eligible for exact-overlap matching. Stable
+ * external ids are always considered, even outside a declared coverage window.
+ */
+export function resolveImportObservationOutcomes(input: {
+  observations: CanonicalOutcomeObservation[]
+  transactions: CanonicalOutcomeTransaction[]
+  assignments?: CanonicalOutcomeAssignment[]
+  knownEvidenceVersions?: Array<{
+    transactionId: string
+    fingerprint: string
+  }>
+}): ImportObservationOutcome[] {
+  const explicitAssignments = new Map(
+    (input.assignments ?? []).map((assignment) => [
+      assignment.observationId,
+      assignment,
+    ]),
+  )
+  const transactionsById = new Map(
+    input.transactions.map((transaction) => [transaction.id, transaction]),
+  )
+  const transactionsByExternalId = new Map(
+    input.transactions.flatMap((transaction) =>
+      transaction.externalId
+        ? [[transaction.externalId, transaction] as const]
+        : [],
+    ),
+  )
+  const knownVersions = new Set(
+    (input.knownEvidenceVersions ?? []).map(
+      (version) => `${version.transactionId}:${version.fingerprint}`,
+    ),
+  )
+  const consumedTransactionIds = new Set<string>()
+
+  const assigned: Array<ImportObservationOutcome | null> =
+    input.observations.map((observation) => {
+      const assignment = explicitAssignments.get(observation.id)
+      if (!assignment) return null
+      const transaction = transactionsById.get(assignment.transactionId)
+      if (!transaction) return null
+      consumedTransactionIds.add(transaction.id)
+      return {
+        observationId: observation.id,
+        kind: transaction.status === 'excluded' ? 'excluded' : 'evidence',
+        transactionId: transaction.id,
+        reasons: [
+          assignment.reason,
+          ...(transaction.status === 'excluded'
+            ? (['previously_excluded'] as const)
+            : []),
+        ],
+      } satisfies ImportObservationOutcome
+    })
+
+  for (const [index, observation] of input.observations.entries()) {
+    if (assigned[index] || !observation.externalId) continue
+    const transaction = transactionsByExternalId.get(observation.externalId)
+    if (!transaction) continue
+    consumedTransactionIds.add(transaction.id)
+    const isKnownVersion = knownVersions.has(
+      `${transaction.id}:${observation.fingerprint}`,
+    )
+    if (
+      transaction.fingerprint !== observation.fingerprint &&
+      !isKnownVersion
+    ) {
+      assigned[index] = {
+        observationId: observation.id,
+        kind: 'correction',
+        transactionId: transaction.id,
+        reasons: ['stable_external_id', 'changed_external_id'],
+      }
+      continue
+    }
+    assigned[index] = {
+      observationId: observation.id,
+      kind: transaction.status === 'excluded' ? 'excluded' : 'known',
+      transactionId: transaction.id,
+      reasons: [
+        'stable_external_id',
+        ...(isKnownVersion ? (['known_evidence_version'] as const) : []),
+        ...(transaction.status === 'excluded'
+          ? (['previously_excluded'] as const)
+          : []),
+      ],
+    }
+  }
+
+  // ADR 001 deduplication order: identified observations take fallback
+  // candidates before ID-less ones, so an ID-less row cannot consume the only
+  // ID-less canonical candidate an identified row needs.
+  const fallbackOrder = [...input.observations.entries()].sort(
+    ([, left], [, right]) =>
+      Number(!left.externalId) - Number(!right.externalId),
+  )
+  for (const [index, observation] of fallbackOrder) {
+    if (assigned[index]) continue
+    const transaction = input.transactions.find(
+      (candidate) =>
+        !consumedTransactionIds.has(candidate.id) &&
+        (!observation.externalId || !candidate.externalId) &&
+        candidate.fingerprint === observation.fingerprint,
+    )
+    if (!transaction) {
+      assigned[index] = {
+        observationId: observation.id,
+        kind: 'new',
+        reasons: ['new_observation'],
+      }
+      continue
+    }
+    consumedTransactionIds.add(transaction.id)
+    assigned[index] = {
+      observationId: observation.id,
+      kind: transaction.status === 'excluded' ? 'excluded' : 'known',
+      transactionId: transaction.id,
+      reasons: [
+        'exact_overlap',
+        ...(transaction.status === 'excluded'
+          ? (['previously_excluded'] as const)
+          : []),
+      ],
+    }
+  }
+
+  return assigned as ImportObservationOutcome[]
+}
+
 export interface StatementValue {
   postedAt: string
   amountCents: number

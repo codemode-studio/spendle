@@ -279,6 +279,133 @@ describe('conflitos ao vivo em lotes e restaurações', () => {
     })
   })
 
+  it('recupera evidência mesmo quando o checkpoint do membro foi substituído', async () => {
+    const { db, ids, schema } = database
+    await db.insert(schema.creditCards).values({
+      id: 'replaced-checkpoint-evidence-card',
+      ownershipScopeId: ids.personScope,
+      institutionId: ids.institution,
+      name: 'Cartão com checkpoint substituído',
+      currency: 'BRL',
+      lastFour: '5252',
+      closingDay: 5,
+    })
+    await db.insert(schema.importBatches).values({
+      id: 'replaced-checkpoint-evidence-batch',
+      creditCardId: 'replaced-checkpoint-evidence-card',
+      status: 'committed',
+    })
+    await db.insert(schema.sourceFiles).values([
+      {
+        id: 'replaced-checkpoint-csv-source',
+        sha256: 'replaced-checkpoint-csv-source',
+        originalName: 'checkpoint-substituido.csv',
+        mediaType: 'text/csv',
+        sizeBytes: 10,
+        storagePath: '/tmp/checkpoint-substituido.csv',
+      },
+      {
+        id: 'replaced-checkpoint-pdf-source',
+        sha256: 'replaced-checkpoint-pdf-source',
+        originalName: 'checkpoint-substituido.pdf',
+        mediaType: 'application/pdf',
+        sizeBytes: 10,
+        storagePath: '/tmp/checkpoint-substituido.pdf',
+      },
+    ])
+    await db.insert(schema.imports).values([
+      {
+        id: 'replaced-checkpoint-csv-import',
+        sourceFileId: 'replaced-checkpoint-csv-source',
+        batchId: 'replaced-checkpoint-evidence-batch',
+        creditCardId: 'replaced-checkpoint-evidence-card',
+        parser: 'csv',
+        documentKind: 'card_statement',
+        periodStart: '2027-11-01',
+        periodEnd: '2027-11-30',
+        periodSource: 'user',
+        coverageConfidence: 'high',
+        validationStatus: 'imported',
+        validationReason: 'ready',
+        status: 'committed',
+      },
+      {
+        id: 'replaced-checkpoint-pdf-import',
+        sourceFileId: 'replaced-checkpoint-pdf-source',
+        batchId: 'replaced-checkpoint-evidence-batch',
+        creditCardId: 'replaced-checkpoint-evidence-card',
+        parser: 'pdf_inspector',
+        documentKind: 'card_statement',
+        detectedLastFour: '5252',
+        closingBalanceCents: 2_000,
+        closingBalanceType: 'card_statement',
+        balanceAsOf: '2027-11-30',
+        periodStart: '2027-11-01',
+        periodEnd: '2027-11-30',
+        periodSource: 'metadata',
+        coverageConfidence: 'high',
+        validationStatus: 'reconciled',
+        validationReason: 'ready',
+        status: 'evidence',
+      },
+    ])
+    await db.insert(schema.stagedTransactions).values({
+      id: 'replaced-checkpoint-pdf-row',
+      importId: 'replaced-checkpoint-pdf-import',
+      fingerprint: 'replaced-checkpoint-evidence-fingerprint',
+      postedAt: '2027-11-10',
+      description: 'Compra usada como evidência',
+      normalizedDescription: 'compra usada como evidencia',
+      amountCents: -2_000,
+      currency: 'BRL',
+      suggestedCategoryId: ids.categories.uncategorized,
+    })
+    await db.insert(schema.transactions).values({
+      id: 'replaced-checkpoint-transaction',
+      importId: 'replaced-checkpoint-csv-import',
+      creditCardId: 'replaced-checkpoint-evidence-card',
+      categoryId: ids.categories.uncategorized,
+      sourceKey: 'replaced-checkpoint-transaction',
+      fingerprint: 'replaced-checkpoint-evidence-fingerprint',
+      postedAt: '2027-11-10',
+      description: 'Compra usada como evidência',
+      normalizedDescription: 'compra usada como evidencia',
+      amountCents: -2_000,
+      currency: 'BRL',
+      status: 'confirmed',
+    })
+    await db.insert(schema.balanceCheckpoints).values({
+      id: 'replacement-checkpoint',
+      creditCardId: 'replaced-checkpoint-evidence-card',
+      kind: 'statement_closing',
+      balanceType: 'card_statement',
+      source: 'manual',
+      reviewState: 'verified',
+      balanceCents: 3_000,
+      asOf: '2027-11-30',
+    })
+
+    const result = await retryImportFinalization(
+      'replaced-checkpoint-csv-import',
+    )
+    const evidence = await db
+      .select()
+      .from(schema.transactionEvidence)
+      .where(
+        eq(
+          schema.transactionEvidence.stagedTransactionId,
+          'replaced-checkpoint-pdf-row',
+        ),
+      )
+
+    expect(result.batchEvidence).toEqual({ status: 'completed' })
+    expect(evidence).toHaveLength(1)
+    expect(evidence[0]).toMatchObject({
+      transactionId: 'replaced-checkpoint-transaction',
+      stagedTransactionId: 'replaced-checkpoint-pdf-row',
+    })
+  })
+
   it('recusa o commit do CSV quando o PDF dependente conflita com o destino atual', async () => {
     const { db, ids, schema } = database
     const csvPath = '/tmp/live-batch-commit.csv'

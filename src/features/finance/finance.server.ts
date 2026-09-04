@@ -43,10 +43,8 @@ import {
   recordManualBalanceCheckpoint,
   refreshStatementAnchor,
 } from './checkpoint-chain.server'
-import {
-  linkCanonicalObservation,
-  transactionFingerprint,
-} from './canonicalization.server'
+import { transactionFingerprint } from './canonicalization.server'
+import { applyCanonicalEvidenceLink } from './canonical-outcome.server'
 import { assertImportActionable } from './import-guards.server'
 import {
   refreshReconciliationAfterCommit,
@@ -1813,7 +1811,7 @@ async function resolveTransactionCorrectionInternal(
         )
         .where(eq(schema.imports.id, row.staged.importId))
         .run()
-      linkCanonicalObservation(transaction, {
+      applyCanonicalEvidenceLink(transaction, {
         stagedTransactionId: row.staged.id,
         transactionId: row.transaction.id,
         matchKind: 'manual_correction',
@@ -1835,7 +1833,7 @@ async function resolveTransactionCorrectionInternal(
         })
         .where(eq(schema.imports.id, row.staged.importId))
         .run()
-      linkCanonicalObservation(transaction, {
+      applyCanonicalEvidenceLink(transaction, {
         stagedTransactionId: row.staged.id,
         transactionId: row.transaction.id,
         matchKind: 'rejected_correction',

@@ -22,6 +22,189 @@ export interface CheckpointTarget {
   targetId: string
 }
 
+export type ImportCheckpointDecision =
+  | { kind: 'none' }
+  | {
+      kind: 'anchor'
+      targetType: 'account' | 'card'
+      targetId: string
+      importId: string
+      balanceCents: number
+      asOf: string
+      balanceType: 'posted' | 'available' | 'card_statement'
+      source: 'csv' | 'ofx' | 'pdf'
+      reviewState: 'observed' | 'verified'
+      differenceCents: number | null
+      method: 'date_amount_currency_multiset' | null
+      create: boolean
+      coverageStart: string
+      dueDate: string | null
+    }
+  | {
+      kind: 'invalidate-from'
+      targetType: 'account' | 'card'
+      targetId: string
+      from: string
+      reason: string
+    }
+
+export type CardCycleChange =
+  | { kind: 'none' }
+  | {
+      kind: 'open' | 'close'
+      id: string
+      creditCardId: string
+      importId: string
+      periodStart: string
+      periodEnd: string
+      closingDate: string | null
+      dueDate: string | null
+      totalCents: number | null
+      status: 'open' | 'closed' | 'reconciled'
+    }
+
+export interface PendingPromotion {
+  creditCardId: string
+  from: string | null
+  through: string
+}
+
+export function applyCardCycleChange(
+  transaction: DatabaseTransaction,
+  change: CardCycleChange,
+) {
+  if (change.kind === 'none') return
+  transaction
+    .insert(schema.cardStatementCycles)
+    .values({
+      id: change.id,
+      creditCardId: change.creditCardId,
+      importId: change.importId,
+      periodStart: change.periodStart,
+      periodEnd: change.periodEnd,
+      closingDate: change.closingDate,
+      dueDate: change.dueDate,
+      totalCents: change.totalCents,
+      status: change.status,
+    })
+    .onConflictDoUpdate({
+      target: [
+        schema.cardStatementCycles.creditCardId,
+        schema.cardStatementCycles.periodStart,
+        schema.cardStatementCycles.periodEnd,
+      ],
+      set: {
+        importId: change.importId,
+        closingDate: change.closingDate,
+        dueDate: change.dueDate,
+        totalCents: change.totalCents,
+        status: change.status,
+      },
+    })
+    .run()
+}
+
+export function applyPendingPromotion(
+  transaction: DatabaseTransaction,
+  promotion: PendingPromotion | null,
+) {
+  if (!promotion) return
+  transaction
+    .update(schema.transactions)
+    .set({ status: 'confirmed' })
+    .where(
+      and(
+        eq(schema.transactions.creditCardId, promotion.creditCardId),
+        eq(schema.transactions.status, 'pending'),
+        ...(promotion.from
+          ? [gte(schema.transactions.postedAt, promotion.from)]
+          : []),
+        lte(schema.transactions.postedAt, promotion.through),
+      ),
+    )
+    .run()
+}
+
+export function applyImportCheckpointDecision(
+  transaction: DatabaseTransaction,
+  decision: ImportCheckpointDecision,
+) {
+  if (decision.kind === 'none') return
+  if (decision.kind === 'invalidate-from') {
+    invalidateCheckpointChain(transaction, decision)
+    refreshStatementAnchor(transaction, {
+      targetType: decision.targetType,
+      targetId: decision.targetId,
+      balanceType:
+        decision.targetType === 'account' ? 'posted' : 'card_statement',
+    })
+    return
+  }
+
+  if (decision.targetType === 'account') {
+    const account = transaction
+      .select({ statementBalanceAt: schema.accounts.statementBalanceAt })
+      .from(schema.accounts)
+      .where(eq(schema.accounts.id, decision.targetId))
+      .get()
+    if (
+      decision.balanceType !== 'available' &&
+      (!account?.statementBalanceAt ||
+        account.statementBalanceAt < decision.asOf)
+    ) {
+      transaction
+        .update(schema.accounts)
+        .set({
+          statementBalanceCents: decision.balanceCents,
+          statementBalanceAt: decision.asOf,
+          coverageStart: decision.coverageStart,
+        })
+        .where(eq(schema.accounts.id, decision.targetId))
+        .run()
+    }
+  } else {
+    const card = transaction
+      .select({
+        statementBalanceAt: schema.creditCards.statementBalanceAt,
+        dueDay: schema.creditCards.dueDay,
+      })
+      .from(schema.creditCards)
+      .where(eq(schema.creditCards.id, decision.targetId))
+      .get()
+    if (!card?.statementBalanceAt || card.statementBalanceAt < decision.asOf) {
+      transaction
+        .update(schema.creditCards)
+        .set({
+          statementBalanceCents: decision.balanceCents,
+          statementBalanceAt: decision.asOf,
+          coverageStart: decision.coverageStart,
+          dueDay:
+            card?.dueDay ??
+            (decision.dueDate ? Number(decision.dueDate.slice(-2)) : null),
+        })
+        .where(eq(schema.creditCards.id, decision.targetId))
+        .run()
+    }
+  }
+  if (!decision.create) return
+  addBalanceCheckpoint(transaction, {
+    accountId: decision.targetType === 'account' ? decision.targetId : null,
+    creditCardId: decision.targetType === 'card' ? decision.targetId : null,
+    importId: decision.importId,
+    kind: 'statement_closing',
+    balanceType: decision.balanceType,
+    source: decision.source,
+    reviewState: decision.reviewState,
+    balanceCents: decision.balanceCents,
+    asOf: decision.asOf,
+    verified: decision.reviewState === 'verified',
+    differenceCents: decision.differenceCents,
+    evidenceJson: decision.method
+      ? JSON.stringify({ method: decision.method })
+      : null,
+  })
+}
+
 export type InvalidManualBalanceCheckpointCode =
   'card_period_start_required' | 'period_start_after_as_of'
 
