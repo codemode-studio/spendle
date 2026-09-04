@@ -9,7 +9,7 @@ import { identifyDuplicateReasons } from '#/domain/import-audit'
 import {
   linkStatementObservation,
   resolveStatementExclusion,
-} from './finance.server'
+} from './import-resolution.server'
 import {
   commitImport,
   reconcileCsvWithPdfControl,

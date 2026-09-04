@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm'
 
 import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
-import { resolveTransactionCorrection } from './finance.server'
+import { resolveTransactionCorrection } from './import-resolution.server'
 import { commitImport } from './import.server'
 
 export async function runImportCorrectionFixture() {

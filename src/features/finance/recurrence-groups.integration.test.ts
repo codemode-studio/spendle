@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { openTestDatabase } from '#/test/database'
 import type { TestDatabase } from '#/test/database'
-import * as finance from './finance.server'
+import { getFinanceSnapshot } from './finance-snapshot.server'
 import * as recurrence from './recurrence.server'
 
 describe('grupos de recorrências', () => {
@@ -18,7 +18,7 @@ describe('grupos de recorrências', () => {
 
   it('mantém linhas independentes no mesmo grupo e soma a projeção uma vez', async () => {
     const { ids } = database
-    const before = await finance.getFinanceSnapshot('2026-09')
+    const before = await getFinanceSnapshot('2026-09')
 
     await recurrence.createRecurrence({
       name: 'Academia Donald',
@@ -47,7 +47,7 @@ describe('grupos de recorrências', () => {
       nextDate: '2026-09-15',
     })
 
-    const snapshot = await finance.getFinanceSnapshot('2026-09')
+    const snapshot = await getFinanceSnapshot('2026-09')
     const group = snapshot.recurrenceGroups.find(
       (candidate) => candidate.normalizedName === 'academia',
     )

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { resetTestDatabase } from '#/test/database'
 import type { TestDatabase } from '#/test/database'
 import * as finance from './finance.server'
+import { getFinanceSnapshot } from './finance-snapshot.server'
 import * as recurrence from './recurrence.server'
 
 describe('patrimônio em moeda-base', () => {
@@ -37,7 +38,7 @@ describe('patrimônio em moeda-base', () => {
       source: 'manual',
     })
 
-    const converted = await finance.getFinanceSnapshot('2026-08')
+    const converted = await getFinanceSnapshot('2026-08')
     expect(converted.dashboard.netWorthCents).toBe(50_000)
     expect(
       converted.dashboard.integrity.issues.find(
@@ -48,7 +49,7 @@ describe('patrimônio em moeda-base', () => {
     await db
       .delete(schema.exchangeRates)
       .where(eq(schema.exchangeRates.id, 'usd-brl-test'))
-    const missing = await finance.getFinanceSnapshot('2026-08')
+    const missing = await getFinanceSnapshot('2026-08')
     expect(missing.dashboard.netWorthCents).toBe(0)
     expect(missing.dashboard.integrity.issues).toContainEqual({
       code: 'missing_balance_conversion',
@@ -100,7 +101,7 @@ describe('patrimônio em moeda-base', () => {
       status: 'pending',
     })
 
-    const converted = await finance.getFinanceSnapshot('2026-08')
+    const converted = await getFinanceSnapshot('2026-08')
     expect(converted.dashboard.budgetProjected.essential).toBe(50_000)
     expect(
       converted.recurrences.find((item) => item.name === 'Despesa em dólar')
@@ -115,7 +116,7 @@ describe('patrimônio em moeda-base', () => {
     await db
       .delete(schema.exchangeRates)
       .where(eq(schema.exchangeRates.id, 'usd-brl-recurrence'))
-    const missing = await finance.getFinanceSnapshot('2026-08')
+    const missing = await getFinanceSnapshot('2026-08')
     expect(missing.dashboard.budgetProjected.essential).toBe(0)
     expect(missing.dashboard.integrity.issues).toContainEqual({
       code: 'missing_base_conversion',
@@ -148,7 +149,7 @@ describe('patrimônio em moeda-base', () => {
       status: 'pending',
     })
 
-    const sameMonthMissing = await finance.getFinanceSnapshot('2026-08')
+    const sameMonthMissing = await getFinanceSnapshot('2026-08')
     expect(sameMonthMissing.dashboard.budgetProjected.essential).toBe(0)
     expect(
       sameMonthMissing.dashboard.integrity.issues.find(
@@ -165,7 +166,7 @@ describe('patrimônio em moeda-base', () => {
       .set({ baseAmountCents: -100_000, exchangeRateMicros: 5_000_000 })
       .where(eq(schema.transactions.id, 'pending-usd-august'))
     const historicalBaseWithoutCurrentRate =
-      await finance.getFinanceSnapshot('2026-08')
+      await getFinanceSnapshot('2026-08')
     expect(
       historicalBaseWithoutCurrentRate.dashboard.budgetProjected.essential,
     ).toBe(0)

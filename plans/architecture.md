@@ -39,6 +39,11 @@ domínio separadas de leitura de arquivos, persistência e apresentação.
   antigos. `index.server.ts` permanece responsável apenas por abrir, migrar,
   semear e verificar o banco.
 
+`finance-snapshot.server.ts` monta o snapshot financeiro e seu histórico,
+`import-resolution.server.ts` reúne as mutações de resolução da revisão de
+importações, e `planning.server.ts` mantém configurações, estratégia, metas e
+fechamento do orçamento.
+
 ## Recorrências
 
 `src/features/finance/recurrence.server.ts` é a interface de servidor da

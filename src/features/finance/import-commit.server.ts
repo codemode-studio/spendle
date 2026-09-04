@@ -38,7 +38,7 @@ import {
   normalizeLastFour,
 } from './statement-reader.server'
 import { refreshReconciliationAfterCommit } from './reconciliation-refresh.server'
-import { refreshStatementResolutionState } from './finance.server'
+import { refreshStatementResolutionState } from './import-resolution.server'
 import { findRestoredExclusionOwnerImportIds } from './statement-exclusions.server'
 
 export { reconcileCsvWithPdfControl } from './import-control-reconciliation.server'

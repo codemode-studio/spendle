@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
 import { getConfiguredAiModel } from '#/features/finance/ai.server'
-import { getFinanceSnapshot } from '#/features/finance/finance.server'
+import { getFinanceSnapshot } from '#/features/finance/finance-snapshot.server'
 import { buildAnalysisBrief } from './insights'
 
 export const fortnightAnalysisSchema = z.object({

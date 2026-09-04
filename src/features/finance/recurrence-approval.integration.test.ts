@@ -14,6 +14,7 @@ import { isAcceptedRecurrenceMatchStatus } from '#/domain/recurrence-book'
 import { resetTestDatabase } from '#/test/database'
 import type { TestDatabase } from '#/test/database'
 import * as finance from './finance.server'
+import { getFinanceSnapshot } from './finance-snapshot.server'
 import * as recurrenceServer from './recurrence.server'
 
 describe('aprovação de recorrências detectadas', () => {
@@ -67,7 +68,7 @@ describe('aprovação de recorrências detectadas', () => {
       transactionIds: payments.map((payment) => payment.id),
     })
 
-    const snapshot = await finance.getFinanceSnapshot()
+    const snapshot = await getFinanceSnapshot()
     const recurrence = snapshot.recurrences.find(
       (item) => item.id === approved.id,
     )

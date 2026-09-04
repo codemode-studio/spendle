@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { openTestDatabase } from '#/test/database'
 import type { TestDatabase } from '#/test/database'
 import * as finance from './finance.server'
+import { getFinanceSnapshot } from './finance-snapshot.server'
 
 describe('transferências para investimentos', () => {
   let database: TestDatabase
@@ -16,7 +17,7 @@ describe('transferências para investimentos', () => {
   })
 
   it('trata investimentos como contas normais com saldo e transferências', async () => {
-    const initialSnapshot = await finance.getFinanceSnapshot()
+    const initialSnapshot = await getFinanceSnapshot()
     expect(initialSnapshot.accounts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -46,7 +47,7 @@ describe('transferências para investimentos', () => {
       balanceType: 'posted',
     })
 
-    const updatedSnapshot = await finance.getFinanceSnapshot()
+    const updatedSnapshot = await getFinanceSnapshot()
     expect(updatedSnapshot.accounts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

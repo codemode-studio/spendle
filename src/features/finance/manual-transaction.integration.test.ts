@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { openTestDatabase } from '#/test/database'
 import type { TestDatabase } from '#/test/database'
 import * as finance from './finance.server'
+import { getFinanceSnapshot } from './finance-snapshot.server'
 
 describe('lançamentos manuais', () => {
   let database: TestDatabase
@@ -19,7 +20,7 @@ describe('lançamentos manuais', () => {
   it('completa uma transferência e registra uma despesa em BTC sem dupla contagem', async () => {
     const { db, schema } = database
 
-    const initialSnapshot = await finance.getFinanceSnapshot()
+    const initialSnapshot = await getFinanceSnapshot()
     const btg = initialSnapshot.accounts.find(
       (account) => account.name === 'BTG compartilhada',
     )!
@@ -113,7 +114,7 @@ describe('lançamentos manuais', () => {
 
     const [snapshot, manualRows, btgCheckpoints, bitcoinCheckpoints, groups] =
       await Promise.all([
-        finance.getFinanceSnapshot(),
+        getFinanceSnapshot(),
         db
           .select()
           .from(schema.transactions)

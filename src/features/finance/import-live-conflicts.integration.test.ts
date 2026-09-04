@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm'
 
 import { openTestDatabase } from '#/test/database'
 import type { TestDatabase } from '#/test/database'
-import { linkStatementObservation } from './finance.server'
+import { linkStatementObservation } from './import-resolution.server'
 import {
   commitImport,
   confirmImportCoverage,

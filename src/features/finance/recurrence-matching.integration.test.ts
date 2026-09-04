@@ -7,6 +7,7 @@ import { isAcceptedRecurrenceMatchStatus } from '#/domain/recurrence-book'
 import { resetTestDatabase } from '#/test/database'
 import type { TestDatabase } from '#/test/database'
 import * as finance from './finance.server'
+import { getFinanceSnapshot } from './finance-snapshot.server'
 import * as recurrenceMatching from './recurrence.server'
 
 const recurrenceServer = recurrenceMatching
@@ -44,7 +45,7 @@ describe('reconciliação de recorrências', () => {
       amountCents: 3_990,
     })
 
-    const suggestedSnapshot = await finance.getFinanceSnapshot('2026-08')
+    const suggestedSnapshot = await getFinanceSnapshot('2026-08')
     const suggestedMatch = suggestedSnapshot.recurrences
       .find((item) => item.id === recurrence.id)
       ?.occurrences.flatMap((occurrence) => occurrence.matches)
@@ -55,7 +56,7 @@ describe('reconciliação de recorrências', () => {
     })
 
     await recurrenceMatching.confirmMatch(suggestedMatch!.id)
-    const confirmedSnapshot = await finance.getFinanceSnapshot('2026-08')
+    const confirmedSnapshot = await getFinanceSnapshot('2026-08')
     expect(
       confirmedSnapshot.recurrences.find((item) => item.id === recurrence.id)
         ?.nextDate,
@@ -73,7 +74,7 @@ describe('reconciliação de recorrências', () => {
     ).rejects.toThrow('Desvincule os pagamentos confirmados')
 
     await recurrenceMatching.unlinkMatch(suggestedMatch!.id)
-    const unlinkedSnapshot = await finance.getFinanceSnapshot('2026-08')
+    const unlinkedSnapshot = await getFinanceSnapshot('2026-08')
     expect(
       unlinkedSnapshot.transactions.find((item) => item.id === transaction.id)
         ?.categoryId,
@@ -84,7 +85,7 @@ describe('reconciliação de recorrências', () => {
         ?.nextDate,
     ).toBe('2026-08-10')
     await expect(recurrenceMatching.refreshRecurrences()).resolves.toBeDefined()
-    const refreshedSnapshot = await finance.getFinanceSnapshot('2026-08')
+    const refreshedSnapshot = await getFinanceSnapshot('2026-08')
     expect(
       refreshedSnapshot.recurrences
         .find((item) => item.id === recurrence.id)
@@ -108,14 +109,14 @@ describe('reconciliação de recorrências', () => {
       frequency: 'monthly',
       nextDate: '2026-08-31',
     })
-    const snapshot = await finance.getFinanceSnapshot('2026-08')
+    const snapshot = await getFinanceSnapshot('2026-08')
     const occurrence = snapshot.recurrences
       .find((item) => item.id === recurrence.id)
       ?.occurrences.find((item) => item.expectedDate === '2026-08-31')
 
     await recurrenceMatching.skipOccurrence(occurrence!.id)
 
-    const skippedSnapshot = await finance.getFinanceSnapshot('2026-08')
+    const skippedSnapshot = await getFinanceSnapshot('2026-08')
     expect(
       skippedSnapshot.recurrences.find((item) => item.id === recurrence.id)
         ?.nextDate,
@@ -147,7 +148,7 @@ describe('reconciliação de recorrências', () => {
       status: 'pending',
     })
 
-    const snapshot = await finance.getFinanceSnapshot('2026-08')
+    const snapshot = await getFinanceSnapshot('2026-08')
 
     expect(snapshot.dashboard.budgetProjected.lifestyle).toBe(20_800)
   })
@@ -173,7 +174,7 @@ describe('reconciliação de recorrências', () => {
       amountCents: 2_190,
       categoryId: 'food',
     })
-    const suggested = await finance.getFinanceSnapshot('2026-08')
+    const suggested = await getFinanceSnapshot('2026-08')
     const match = suggested.recurrences
       .find((item) => item.id === recurrence.id)
       ?.occurrences.flatMap((item) => item.matches)
@@ -183,7 +184,7 @@ describe('reconciliação de recorrências', () => {
       id: recurrence.id,
       active: false,
     })
-    const paused = await finance.getFinanceSnapshot('2026-08')
+    const paused = await getFinanceSnapshot('2026-08')
     expect(paused.dashboard.budgetProjected.lifestyle).toBe(
       suggested.dashboard.budgetProjected.lifestyle - 2_190,
     )
@@ -196,7 +197,7 @@ describe('reconciliação de recorrências', () => {
     })
     await recurrenceMatching.confirmMatch(match!.id)
 
-    const conflicted = await finance.getFinanceSnapshot('2026-08')
+    const conflicted = await getFinanceSnapshot('2026-08')
     expect(
       conflicted.recurrences
         .find((item) => item.id === recurrence.id)
@@ -209,7 +210,7 @@ describe('reconciliação de recorrências', () => {
       categoryId: 'subscriptions',
       saveRule: false,
     })
-    const resolved = await finance.getFinanceSnapshot('2026-08')
+    const resolved = await getFinanceSnapshot('2026-08')
     expect(
       resolved.recurrences
         .find((item) => item.id === recurrence.id)
@@ -222,7 +223,7 @@ describe('reconciliação de recorrências', () => {
       categoryId: 'food',
       saveRule: false,
     })
-    const divergentAgain = await finance.getFinanceSnapshot('2026-08')
+    const divergentAgain = await getFinanceSnapshot('2026-08')
     expect(
       divergentAgain.recurrences
         .find((item) => item.id === recurrence.id)
@@ -262,7 +263,7 @@ describe('reconciliação de recorrências', () => {
 
     // Sem semelhança de nome nem destino conhecido, a busca automática não
     // sugere nada: é exatamente o caso que o vínculo manual resolve.
-    const before = await finance.getFinanceSnapshot('2026-08')
+    const before = await getFinanceSnapshot('2026-08')
     const occurrence = before.recurrences
       .find((item) => item.id === recurrence.id)
       ?.occurrences.find((item) => item.expectedDate === '2026-08-04')
@@ -280,7 +281,7 @@ describe('reconciliação de recorrências', () => {
       occurrenceId: occurrence!.id,
       transactionIds: [payment.id],
     })
-    const after = await finance.getFinanceSnapshot('2026-08')
+    const after = await getFinanceSnapshot('2026-08')
     const linked = after.recurrences.find((item) => item.id === recurrence.id)
     const linkedOccurrence = linked?.occurrences.find(
       (item) => item.id === occurrence!.id,
@@ -306,7 +307,7 @@ describe('reconciliação de recorrências', () => {
       amountCents: 215_000,
     })
     await recurrenceMatching.refreshRecurrences()
-    const learned = await finance.getFinanceSnapshot('2026-09')
+    const learned = await getFinanceSnapshot('2026-09')
     const suggestion = learned.recurrences
       .find((item) => item.id === recurrence.id)
       ?.occurrences.find((item) => item.expectedDate === '2026-09-04')
@@ -376,7 +377,7 @@ describe('reconciliação de recorrências', () => {
     })
     expect(approved.linked).toBe(3)
 
-    const snapshot = await finance.getFinanceSnapshot()
+    const snapshot = await getFinanceSnapshot()
     const recurrence = snapshot.recurrences.find(
       (item) => item.id === approved.id,
     )
@@ -525,7 +526,7 @@ describe('reconciliação de recorrências', () => {
     const imperatriz = await grocery('Supermercados Imperatriz', 50_000)
     await recurrenceMatching.refreshRecurrences()
 
-    const suggestedSnapshot = await finance.getFinanceSnapshot()
+    const suggestedSnapshot = await getFinanceSnapshot()
     const occurrence = suggestedSnapshot.recurrences
       .find((item) => item.id === recurrence.id)
       ?.occurrences.find((item) => item.expectedDate === monthStart)
@@ -540,7 +541,7 @@ describe('reconciliação de recorrências', () => {
     for (const match of suggested!) {
       await recurrenceMatching.confirmMatch(match.id)
     }
-    const openSnapshot = await finance.getFinanceSnapshot()
+    const openSnapshot = await getFinanceSnapshot()
     const openOccurrence = openSnapshot.recurrences
       .find((item) => item.id === recurrence.id)
       ?.occurrences.find((item) => item.id === occurrence!.id)
@@ -552,7 +553,7 @@ describe('reconciliação de recorrências', () => {
     // Estabelecimento aprendido entra sozinho na próxima busca.
     const angeloniAgain = await grocery('Angeloni Super Loja', 9_900)
     await recurrenceMatching.refreshRecurrences()
-    const learnedSnapshot = await finance.getFinanceSnapshot()
+    const learnedSnapshot = await getFinanceSnapshot()
     const learnedMatch = learnedSnapshot.recurrences
       .find((item) => item.id === recurrence.id)
       ?.occurrences.find((item) => item.id === occurrence!.id)
@@ -595,7 +596,7 @@ describe('reconciliação de recorrências', () => {
       frequency: 'monthly',
       nextDate: monthStart,
     })
-    const editedSnapshot = await finance.getFinanceSnapshot()
+    const editedSnapshot = await getFinanceSnapshot()
     expect(
       editedSnapshot.recurrences
         .find((item) => item.id === recurrence.id)
@@ -607,7 +608,7 @@ describe('reconciliação de recorrências', () => {
 
     // Concluir fecha o período e avança a próxima data.
     await recurrenceMatching.completeOccurrence(occurrence!.id)
-    const closedSnapshot = await finance.getFinanceSnapshot()
+    const closedSnapshot = await getFinanceSnapshot()
     const closed = closedSnapshot.recurrences.find(
       (item) => item.id === recurrence.id,
     )
@@ -697,7 +698,7 @@ describe('reconciliação de recorrências', () => {
     await finance.setReconciliationStatus({ groupId, status: 'confirmed' })
 
     await recurrenceMatching.refreshRecurrences()
-    const suggestedSnapshot = await finance.getFinanceSnapshot()
+    const suggestedSnapshot = await getFinanceSnapshot()
     const occurrence = suggestedSnapshot.recurrences
       .find((item) => item.id === recurrence.id)
       ?.occurrences.find((item) => item.status === 'expected')
@@ -733,7 +734,7 @@ describe('reconciliação de recorrências', () => {
       frequency: 'monthly',
       nextDate: '2023-01-15',
     })
-    const snapshot = await finance.getFinanceSnapshot('2026-08')
+    const snapshot = await getFinanceSnapshot('2026-08')
 
     expect(
       snapshot.recurrences.find((item) => item.id === recurrence.id)
@@ -763,7 +764,7 @@ describe('reconciliação de recorrências', () => {
       amountCents: 8_000,
       categoryId: 'food',
     })
-    const before = await finance.getFinanceSnapshot('2027-01')
+    const before = await getFinanceSnapshot('2027-01')
     const occurrence = before.recurrences
       .find((item) => item.id === recurrence.id)
       ?.occurrences.find((item) => item.expectedDate === '2027-01-31')
@@ -784,7 +785,7 @@ describe('reconciliação de recorrências', () => {
       frequency: 'monthly',
       nextDate: '2027-01-31',
     })
-    const renamed = await finance.getFinanceSnapshot('2027-01')
+    const renamed = await getFinanceSnapshot('2027-01')
     const renamedRecurrence = renamed.recurrences.find(
       (item) => item.id === recurrence.id,
     )
@@ -813,7 +814,7 @@ describe('reconciliação de recorrências', () => {
       frequency: 'monthly',
       nextDate: '2027-02-15',
     })
-    const rescheduled = await finance.getFinanceSnapshot('2027-02')
+    const rescheduled = await getFinanceSnapshot('2027-02')
     expect(
       rescheduled.recurrences.find((item) => item.id === recurrence.id),
     ).toMatchObject({
@@ -843,7 +844,7 @@ describe('reconciliação de recorrências', () => {
       direction: 'outflow',
       amountCents: 4_321,
     })
-    const suggested = await finance.getFinanceSnapshot('2027-02')
+    const suggested = await getFinanceSnapshot('2027-02')
     const match = suggested.recurrences
       .find((item) => item.id === recurrence.id)
       ?.occurrences.flatMap((item) => item.matches)
@@ -851,7 +852,7 @@ describe('reconciliação de recorrências', () => {
 
     await recurrenceServer.rejectMatch(match!.id)
 
-    const rejected = await finance.getFinanceSnapshot('2027-02')
+    const rejected = await getFinanceSnapshot('2027-02')
     expect(
       rejected.recurrences
         .find((item) => item.id === recurrence.id)
@@ -920,7 +921,7 @@ describe('reconciliação de recorrências', () => {
       amountCents: 7_000,
       categoryId: 'food',
     })
-    const snapshot = await finance.getFinanceSnapshot('2027-03')
+    const snapshot = await getFinanceSnapshot('2027-03')
     const takenOccurrence = snapshot.recurrences
       .find((item) => item.id === takenRecurrence.id)
       ?.occurrences.find((item) => item.expectedDate === '2027-03-05')
@@ -1039,7 +1040,7 @@ describe('reconciliação de recorrências', () => {
     expect(first).toMatchObject({ suggestionCount: 1, autoConfirmCount: 0 })
     expect(second).toMatchObject({ suggestionCount: 0, autoConfirmCount: 0 })
 
-    const open = await finance.getFinanceSnapshot('2027-06')
+    const open = await getFinanceSnapshot('2027-06')
     const occurrence = open.recurrences
       .find((item) => item.id === recurrence.id)
       ?.occurrences.find((item) => item.expectedDate === '2027-06-01')
@@ -1049,7 +1050,7 @@ describe('reconciliação de recorrências', () => {
     await recurrenceServer.confirmMatch(match!.id)
     await recurrenceServer.refreshRecurrences({ today: '2027-07-01' })
 
-    const closed = await finance.getFinanceSnapshot('2027-06')
+    const closed = await getFinanceSnapshot('2027-06')
     const closedRecurrence = closed.recurrences.find(
       (item) => item.id === recurrence.id,
     )

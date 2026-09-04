@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { statementValueSignature } from '#/domain/canonicalization'
 import { openTestDatabase } from '#/test/database'
 import type { TestDatabase } from '#/test/database'
-import { linkStatementObservation } from './finance.server'
+import { linkStatementObservation } from './import-resolution.server'
 import { getImportReviewSnapshot } from './import-review-read.server'
 
 describe('modelo de leitura da revisão de importação', () => {

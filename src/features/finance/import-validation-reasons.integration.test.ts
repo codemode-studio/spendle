@@ -8,7 +8,7 @@ import type { TestDatabase } from '#/test/database'
 import {
   linkStatementObservation,
   resolveStatementExclusion,
-} from './finance.server'
+} from './import-resolution.server'
 import {
   commitImport,
   confirmImportCoverage,
