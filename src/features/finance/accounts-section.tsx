@@ -1,0 +1,445 @@
+import { Building2, Plus } from 'lucide-react'
+import {
+  useMutation,
+  useQueryClient,
+  useSuspenseQuery,
+} from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
+import { useServerFn } from '@tanstack/react-start'
+import { toast } from 'sonner'
+import { useState } from 'react'
+
+import { EmptyState, Panel, SectionHeader, StatusBadge } from '#/components/ui'
+import { BalanceCheckpointDialog } from '#/components/balance-checkpoint-dialog'
+import { Button } from '#/components/ui/button'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '#/components/ui/dialog'
+import {
+  Field,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from '#/components/ui/field'
+import { Input } from '#/components/ui/input'
+import { NativeSelect } from '#/components/ui/native-select'
+import {
+  currencyOptions,
+  formatCurrency,
+  formatDate,
+  formatInstrumentName,
+  parseCurrency,
+} from '#/domain/finance'
+import type { getFinanceSnapshotFn } from '#/features/finance/finance.functions'
+import {
+  createAccountFn,
+  updateAccountFn,
+} from '#/features/finance/finance.functions'
+import { InstrumentCard } from '#/features/finance/instrument-card'
+import {
+  financeQueryKeys,
+  financeSnapshotOptions,
+} from '#/features/finance/queries'
+
+type FinanceSnapshot = Awaited<ReturnType<typeof getFinanceSnapshotFn>>
+type AccountSnapshot = FinanceSnapshot['accounts'][number]
+type AccountKind = AccountSnapshot['kind']
+type AccountPurpose = AccountSnapshot['purpose']
+
+export function AccountsSection() {
+  const { data } = useSuspenseQuery(financeSnapshotOptions())
+  const queryClient = useQueryClient()
+  const createAccount = useServerFn(createAccountFn)
+  const updateAccount = useServerFn(updateAccountFn)
+  const [error, setError] = useState('')
+  const [addOpen, setAddOpen] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const editing = data.accounts.find((account) => account.id === editingId)
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: financeQueryKeys.all })
+  const fail = (fallback: string) => (reason: unknown) => {
+    const message = reason instanceof Error ? reason.message : fallback
+    setError(message)
+    toast.error(message)
+  }
+  const createMutation = useMutation({
+    mutationFn: createAccount,
+    onSuccess: () => {
+      toast.success('Conta adicionada.')
+      setAddOpen(false)
+      invalidate()
+    },
+    onError: fail('Não foi possível salvar.'),
+  })
+  const updateMutation = useMutation({
+    mutationFn: updateAccount,
+    onSuccess: () => {
+      toast.success('Conta atualizada.')
+      setEditingId(null)
+      invalidate()
+    },
+    onError: fail('Não foi possível atualizar.'),
+  })
+
+  function submitCreate(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError('')
+    createMutation.mutate({
+      data: {
+        ...readAccountForm(new FormData(event.currentTarget)),
+        initialBalanceCents: 0,
+      },
+    })
+  }
+
+  function submitEdit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!editing) return
+    setError('')
+    updateMutation.mutate({
+      data: {
+        id: editing.id,
+        ...readAccountForm(new FormData(event.currentTarget)),
+      },
+    })
+  }
+
+  const currencies = new Set(data.accounts.map((account) => account.currency))
+  const groups = [
+    {
+      title: 'Movimentação',
+      accounts: data.accounts.filter((account) => !isInvestment(account)),
+    },
+    {
+      title: 'Investimentos',
+      accounts: data.accounts.filter(isInvestment),
+    },
+  ].filter((group) => group.accounts.length > 0)
+
+  return (
+    <div className="grid gap-6">
+      <SectionHeader
+        title="Contas"
+        description="Saldos por conta, proprietário e moeda."
+        action={
+          <Button
+            type="button"
+            onClick={() => {
+              setError('')
+              setAddOpen(true)
+            }}
+          >
+            <Plus data-icon="inline-start" />
+            Conta
+          </Button>
+        }
+      />
+      {groups.length ? (
+        groups.map((group) => (
+          <section key={group.title} className="grid gap-3">
+            {groups.length > 1 && (
+              <div className="flex items-baseline justify-between gap-3">
+                <h3 className="text-sm font-medium">{group.title}</h3>
+                <span className="font-mono text-xs text-muted-foreground tabular-nums">
+                  {sumByCurrency(group.accounts)
+                    .map(([currency, cents]) => formatCurrency(cents, currency))
+                    .join(' · ')}
+                </span>
+              </div>
+            )}
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {group.accounts.map((account) => (
+                <InstrumentCard
+                  key={account.id}
+                  title={formatInstrumentName(account.name)}
+                  subtitle={[
+                    account.institution?.name ?? 'Sem instituição',
+                    account.scope?.name,
+                    currencies.size > 1 ? account.currency : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                  editLabel={`Editar ${formatInstrumentName(account.name)}`}
+                  onEdit={() => {
+                    setError('')
+                    setEditingId(account.id)
+                  }}
+                  metrics={[
+                    {
+                      label: 'Saldo',
+                      value: formatCurrency(
+                        account.balanceCents,
+                        account.currency,
+                      ),
+                      caption: account.latestCheckpoint
+                        ? `Atualizado ${formatDate(account.latestCheckpoint.asOf)}`
+                        : 'Ainda não atualizado',
+                    },
+                    ...(account.projectedBalanceCents !== account.balanceCents
+                      ? [
+                          {
+                            label: 'Projetado',
+                            value: formatCurrency(
+                              account.projectedBalanceCents,
+                              account.currency,
+                            ),
+                            caption: 'Com lançamentos pendentes',
+                          },
+                        ]
+                      : []),
+                  ]}
+                  status={<AccountStatus account={account} />}
+                  actions={
+                    <BalanceCheckpointDialog
+                      targetType="account"
+                      targetId={account.id}
+                      targetName={formatInstrumentName(account.name)}
+                      targetCurrency={account.currency}
+                      trigger="icon"
+                    />
+                  }
+                />
+              ))}
+            </div>
+          </section>
+        ))
+      ) : (
+        <Panel>
+          <EmptyState
+            icon={Building2}
+            title="Cadastre sua primeira conta"
+            description="Adicione contas PF ou PJ antes de importar extratos OFX e PDF."
+          />
+        </Panel>
+      )}
+
+      <Dialog
+        open={addOpen}
+        onOpenChange={(open) => {
+          if (!createMutation.isPending) setAddOpen(open)
+          if (!open) setError('')
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <form onSubmit={submitCreate} className="grid gap-4">
+            <DialogHeader>
+              <DialogTitle>Adicionar conta</DialogTitle>
+              <DialogDescription>
+                Cadastre uma conta PF ou PJ antes de importar o extrato.
+              </DialogDescription>
+            </DialogHeader>
+            <AccountFormFields scopes={data.scopes} />
+            {error && <FieldError>{error}</FieldError>}
+            <DialogFooter>
+              <DialogClose render={<Button type="button" variant="outline" />}>
+                Cancelar
+              </DialogClose>
+              <Button type="submit" disabled={createMutation.isPending}>
+                {createMutation.isPending ? 'Salvando…' : 'Salvar conta'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(editing)}
+        onOpenChange={(open) => {
+          if (!open && !updateMutation.isPending) setEditingId(null)
+          if (!open) setError('')
+        }}
+      >
+        {editing && (
+          <DialogContent className="sm:max-w-lg">
+            <form onSubmit={submitEdit} className="grid gap-4">
+              <DialogHeader>
+                <DialogTitle>Editar conta</DialogTitle>
+                <DialogDescription>
+                  O saldo e o histórico importado não mudam.
+                </DialogDescription>
+              </DialogHeader>
+              <AccountFormFields scopes={data.scopes} account={editing} />
+              {error && <FieldError>{error}</FieldError>}
+              <DialogFooter>
+                <DialogClose
+                  render={<Button type="button" variant="outline" />}
+                >
+                  Cancelar
+                </DialogClose>
+                <Button type="submit" disabled={updateMutation.isPending}>
+                  {updateMutation.isPending ? 'Salvando…' : 'Salvar alterações'}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        )}
+      </Dialog>
+    </div>
+  )
+}
+
+function AccountStatus({ account }: { account: AccountSnapshot }) {
+  const coverageEnd = account.coverage.latestCoverageEnd
+  const verifiedAt = account.latestVerifiedCheckpoint?.asOf ?? null
+  const freshness = account.coverage.freshness.status
+  const tone =
+    freshness === 'current'
+      ? 'success'
+      : freshness === 'recommended'
+        ? 'warning'
+        : 'neutral'
+  const difference = account.latestCheckpoint?.differenceCents ?? 0
+  return (
+    <>
+      {coverageEnd ? (
+        <StatusBadge tone={tone}>
+          {verifiedAt && verifiedAt >= coverageEnd ? 'Conferido' : 'Extrato'}{' '}
+          até {formatDate(coverageEnd)}
+        </StatusBadge>
+      ) : (
+        <StatusBadge>Sem extratos</StatusBadge>
+      )}
+      {account.purpose === 'reserve' && (
+        <StatusBadge tone="info">Reserva</StatusBadge>
+      )}
+      {difference !== 0 && (
+        <StatusBadge tone="warning">
+          Diferença de {formatCurrency(Math.abs(difference), account.currency)}
+        </StatusBadge>
+      )}
+      {account.coverage.gaps.map((gap) => (
+        <StatusBadge
+          key={`${gap.start}-${gap.end}`}
+          tone="warning"
+          render={<Link to="/importar" search={{ view: 'upload' }} />}
+        >
+          Falta {formatDate(gap.start)} a {formatDate(gap.end)}
+        </StatusBadge>
+      ))}
+    </>
+  )
+}
+
+function AccountFormFields({
+  scopes,
+  account,
+}: {
+  scopes: FinanceSnapshot['scopes']
+  account?: AccountSnapshot
+}) {
+  const prefix = account ? `account-${account.id}` : 'account-new'
+  return (
+    <FieldGroup className="grid gap-4 sm:grid-cols-2">
+      <Field>
+        <FieldLabel htmlFor={`${prefix}-name`}>Nome</FieldLabel>
+        <Input
+          id={`${prefix}-name`}
+          name="name"
+          placeholder="Conta principal"
+          defaultValue={account?.name}
+          required
+        />
+      </Field>
+      <Field>
+        <FieldLabel htmlFor={`${prefix}-bank`}>Instituição</FieldLabel>
+        <Input
+          id={`${prefix}-bank`}
+          name="institutionName"
+          placeholder="Banco"
+          defaultValue={account?.institution?.name ?? ''}
+          required
+        />
+      </Field>
+      <Field>
+        <FieldLabel htmlFor={`${prefix}-owner`}>Proprietário</FieldLabel>
+        <NativeSelect
+          id={`${prefix}-owner`}
+          name="ownershipScopeId"
+          className="w-full"
+          defaultValue={account?.ownershipScopeId}
+          required
+        >
+          {scopes.map((scope) => (
+            <option key={scope.id} value={scope.id}>
+              {scope.name}
+            </option>
+          ))}
+        </NativeSelect>
+      </Field>
+      <Field>
+        <FieldLabel htmlFor={`${prefix}-kind`}>Tipo</FieldLabel>
+        <NativeSelect
+          id={`${prefix}-kind`}
+          name="kind"
+          className="w-full"
+          defaultValue={account?.kind}
+        >
+          <option value="checking">Conta corrente</option>
+          <option value="savings">Poupança</option>
+          <option value="cash">Dinheiro</option>
+          <option value="investment">Investimentos</option>
+        </NativeSelect>
+      </Field>
+      <Field>
+        <FieldLabel htmlFor={`${prefix}-purpose`}>Finalidade</FieldLabel>
+        <NativeSelect
+          id={`${prefix}-purpose`}
+          name="purpose"
+          className="w-full"
+          defaultValue={account?.purpose}
+        >
+          <option value="operating">Movimentação</option>
+          <option value="reserve">Reserva</option>
+          <option value="investment">Investimentos</option>
+        </NativeSelect>
+      </Field>
+      <Field>
+        <FieldLabel htmlFor={`${prefix}-currency`}>Moeda</FieldLabel>
+        <NativeSelect
+          id={`${prefix}-currency`}
+          name="currency"
+          className="w-full"
+          defaultValue={account?.currency}
+        >
+          {currencyOptions.map((currency) => (
+            <option key={currency.value} value={currency.value}>
+              {currency.label}
+            </option>
+          ))}
+        </NativeSelect>
+      </Field>
+    </FieldGroup>
+  )
+}
+
+function readAccountForm(form: FormData) {
+  return {
+    name: String(form.get('name')),
+    institutionName: String(form.get('institutionName')),
+    ownershipScopeId: String(form.get('ownershipScopeId')),
+    kind: String(form.get('kind')) as AccountKind,
+    purpose: String(form.get('purpose')) as AccountPurpose,
+    currency: parseCurrency(String(form.get('currency'))),
+  }
+}
+
+function isInvestment(account: AccountSnapshot) {
+  return account.kind === 'investment' || account.purpose === 'investment'
+}
+
+function sumByCurrency(accounts: AccountSnapshot[]) {
+  const totals = new Map<string, number>()
+  for (const account of accounts) {
+    totals.set(
+      account.currency,
+      (totals.get(account.currency) ?? 0) + account.balanceCents,
+    )
+  }
+  return [...totals.entries()]
+}

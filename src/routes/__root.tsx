@@ -10,7 +10,7 @@ import { FileQuestion } from 'lucide-react'
 
 import TanStackQueryDevtools from '../integrations/tanstack-query/devtools'
 import { AppShell } from '../components/app-shell'
-import { EmptyState } from '../components/ui'
+import { EmptyState, Page } from '../components/ui'
 import { Button } from '../components/ui/button'
 
 import appCss from '../styles.css?url'
@@ -52,7 +52,7 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 
 function NotFoundPage() {
   return (
-    <div className="page flex min-h-[60vh] items-center justify-center">
+    <Page className="flex min-h-[60vh] items-center justify-center">
       <EmptyState
         icon={FileQuestion}
         title="Página não encontrada"
@@ -63,7 +63,7 @@ function NotFoundPage() {
           </Button>
         }
       />
-    </div>
+    </Page>
   )
 }
 

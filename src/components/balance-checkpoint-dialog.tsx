@@ -23,6 +23,11 @@ import {
   FieldLabel,
 } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '#/components/ui/tooltip'
 import { currencyFractionDigits, toCents } from '#/domain/finance'
 import { createManualBalanceCheckpointFn } from '#/features/finance/finance.functions'
 import { financeQueryKeys } from '#/features/finance/queries'
@@ -32,12 +37,18 @@ export function BalanceCheckpointDialog({
   targetId,
   targetName,
   targetCurrency,
+  trigger = 'button',
 }: {
   targetType: 'account' | 'card'
   targetId: string
   targetName: string
   targetCurrency: string
+  /** `icon` renders só o ícone com tooltip, para caber no cabeçalho de um card. */
+  trigger?: 'button' | 'icon'
 }) {
+  const label =
+    targetType === 'account' ? 'Atualizar saldo' : 'Confirmar fatura'
+  const Icon = targetType === 'account' ? RefreshCw : CalendarCheck
   const [open, setOpen] = useState(false)
   const [replaceExisting, setReplaceExisting] = useState(false)
   const queryClient = useQueryClient()
@@ -104,16 +115,34 @@ export function BalanceCheckpointDialog({
         if (!nextOpen) setReplaceExisting(false)
       }}
     >
-      <DialogTrigger
-        render={<Button type="button" variant="outline" size="sm" />}
-      >
-        {targetType === 'account' ? (
-          <RefreshCw data-icon="inline-start" />
-        ) : (
-          <CalendarCheck data-icon="inline-start" />
-        )}
-        {targetType === 'account' ? 'Atualizar saldo' : 'Confirmar fatura'}
-      </DialogTrigger>
+      {trigger === 'icon' ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <DialogTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`${label}: ${targetName}`}
+                  />
+                }
+              />
+            }
+          >
+            <Icon />
+          </TooltipTrigger>
+          <TooltipContent>{label}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <DialogTrigger
+          render={<Button type="button" variant="outline" size="sm" />}
+        >
+          <Icon data-icon="inline-start" />
+          {label}
+        </DialogTrigger>
+      )}
       <DialogContent className="sm:max-w-md">
         <form onSubmit={submit} className="grid gap-4">
           <DialogHeader>

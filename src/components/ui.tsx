@@ -19,6 +19,22 @@ import {
   EmptyTitle,
 } from '#/components/ui/empty'
 import { Progress } from '#/components/ui/progress'
+import { cn } from '#/lib/utils'
+
+/** Container padrão de página: largura máxima e respiro externo da escala. */
+export function Page({
+  className,
+  children,
+}: {
+  className?: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className={cn('mx-auto w-full max-w-[1250px] p-page', className)}>
+      {children}
+    </div>
+  )
+}
 
 export function PageHeader({
   eyebrow,
@@ -32,17 +48,15 @@ export function PageHeader({
   actions?: React.ReactNode
 }) {
   return (
-    <header className="mb-6 flex flex-col items-start justify-between gap-4 md:mb-8 md:flex-row md:items-start">
+    <header className="mb-5 flex flex-col items-start justify-between gap-4 sm:mb-6 md:flex-row md:items-start">
       <div>
         {eyebrow && (
-          <span className="text-xs font-medium tracking-[0.14em] text-primary uppercase">
-            {eyebrow}
-          </span>
+          <span className="text-sm text-muted-foreground">{eyebrow}</span>
         )}
-        <h1 className="font-heading mt-1 text-3xl font-semibold tracking-tight md:text-4xl">
+        <h1 className="font-heading mt-0.5 text-2xl font-semibold tracking-tight sm:text-3xl md:text-[2rem]">
           {title}
         </h1>
-        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+        <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
           {description}
         </p>
       </div>
@@ -189,10 +203,9 @@ export function ProgressBar({
 }
 
 export function StatusBadge({
-  children,
   tone = 'neutral',
-}: {
-  children: React.ReactNode
+  ...props
+}: Omit<React.ComponentProps<typeof Badge>, 'variant'> & {
   tone?: 'neutral' | 'success' | 'warning' | 'danger' | 'info'
 }) {
   return (
@@ -204,8 +217,30 @@ export function StatusBadge({
             ? 'outline'
             : tone
       }
-    >
-      {children}
-    </Badge>
+      {...props}
+    />
+  )
+}
+
+/** Cabeçalho de seção dentro de uma página: título, descrição curta e ação. */
+export function SectionHeader({
+  title,
+  description,
+  action,
+}: {
+  title: string
+  description?: string
+  action?: React.ReactNode
+}) {
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h2 className="font-heading text-lg font-semibold">{title}</h2>
+        {description && (
+          <p className="text-sm text-muted-foreground">{description}</p>
+        )}
+      </div>
+      {action}
+    </div>
   )
 }

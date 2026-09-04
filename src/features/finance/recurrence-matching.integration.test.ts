@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { eq } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 describe('reconciliação de recorrências', () => {
@@ -239,6 +240,435 @@ describe('reconciliação de recorrências', () => {
         ?.occurrences.flatMap((item) => item.matches)
         .find((item) => item.id === match!.id)?.categoryConflict,
     ).toBe(true)
+  })
+
+  it('vincula manualmente um pagamento e aprende o estabelecimento', async () => {
+    const [{ ensureDatabase }, finance, recurrenceMatching] = await Promise.all(
+      [
+        import('#/db/index.server'),
+        import('./finance.server'),
+        import('./recurrence-refresh.server'),
+      ],
+    )
+    await ensureDatabase()
+    const recurrence = await finance.createRecurrence({
+      name: 'Cuidadora',
+      categoryId: 'family',
+      amountCents: 215_000,
+      currency: 'BRL',
+      direction: 'expense',
+      amountMode: 'fixed',
+      destinationMode: 'automatic',
+      frequency: 'monthly',
+      nextDate: '2026-08-04',
+    })
+    const payment = await finance.createManualTransaction({
+      targetType: 'account',
+      targetId: 'account-nubank-pf-6607',
+      postedAt: '2026-08-04',
+      description: 'Pix Janete Meili',
+      direction: 'outflow',
+      amountCents: 215_000,
+    })
+    const deposit = await finance.createManualTransaction({
+      targetType: 'account',
+      targetId: 'account-nubank-pf-6607',
+      postedAt: '2026-08-04',
+      description: 'Reembolso Janete',
+      direction: 'inflow',
+      amountCents: 215_000,
+    })
+
+    // Sem semelhança de nome nem destino conhecido, a busca automática não
+    // sugere nada: é exatamente o caso que o vínculo manual resolve.
+    const before = await finance.getFinanceSnapshot('2026-08')
+    const occurrence = before.recurrences
+      .find((item) => item.id === recurrence.id)
+      ?.occurrences.find((item) => item.expectedDate === '2026-08-04')
+    expect(occurrence?.status).toBe('expected')
+    expect(occurrence?.matches).toHaveLength(0)
+
+    await expect(
+      recurrenceMatching.linkRecurrenceOccurrence({
+        occurrenceId: occurrence!.id,
+        transactionIds: [deposit.id],
+      }),
+    ).rejects.toThrow('escolha uma saída')
+
+    await recurrenceMatching.linkRecurrenceOccurrence({
+      occurrenceId: occurrence!.id,
+      transactionIds: [payment.id],
+    })
+    const after = await finance.getFinanceSnapshot('2026-08')
+    const linked = after.recurrences.find((item) => item.id === recurrence.id)
+    const linkedOccurrence = linked?.occurrences.find(
+      (item) => item.id === occurrence!.id,
+    )
+    expect(linkedOccurrence?.status).toBe('matched')
+    expect(linkedOccurrence?.matches[0]).toMatchObject({
+      transactionId: payment.id,
+      status: 'confirmed',
+      reason: 'vinculado manualmente',
+    })
+    expect(linked?.nextDate).toBe('2026-09-04')
+    expect(
+      after.transactions.find((item) => item.id === payment.id)?.categoryId,
+    ).toBe('family')
+
+    // O próximo pagamento do mesmo estabelecimento passa a ser sugerido.
+    const nextPayment = await finance.createManualTransaction({
+      targetType: 'account',
+      targetId: 'account-nubank-pf-6607',
+      postedAt: '2026-09-04',
+      description: 'Pix Janete Meili',
+      direction: 'outflow',
+      amountCents: 215_000,
+    })
+    await recurrenceMatching.refreshRecurrenceSuggestions()
+    const learned = await finance.getFinanceSnapshot('2026-09')
+    const suggestion = learned.recurrences
+      .find((item) => item.id === recurrence.id)
+      ?.occurrences.find((item) => item.expectedDate === '2026-09-04')
+      ?.matches.find((match) => match.transactionId === nextPayment.id)
+    expect(suggestion?.status).toBe('suggested')
+    expect(suggestion?.score).toBeGreaterThanOrEqual(95)
+  })
+
+  it('detecta, aprova e passa a ignorar recorrências a partir dos lançamentos', async () => {
+    const [{ ensureDatabase }, finance, detection] = await Promise.all([
+      import('#/db/index.server'),
+      import('./finance.server'),
+      import('./recurrence-detection.server'),
+    ])
+    await ensureDatabase()
+    const today = new Date()
+    const monthsAgo = (months: number, day: number) => {
+      const date = new Date(
+        Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - months, day),
+      )
+      return date.toISOString().slice(0, 10)
+    }
+    const payments: Array<{ id: string }> = []
+    for (const months of [3, 2, 1]) {
+      payments.push(
+        await finance.createManualTransaction({
+          targetType: 'account',
+          targetId: 'account-nubank-pf-6607',
+          postedAt: monthsAgo(months, 12),
+          description: 'Icatu Seguros',
+          direction: 'outflow',
+          amountCents: 1_751,
+        }),
+      )
+    }
+    for (const months of [2, 1]) {
+      await finance.createManualTransaction({
+        targetType: 'account',
+        targetId: 'account-nubank-pf-6607',
+        postedAt: monthsAgo(months, 20),
+        description: 'Starlink Internet',
+        direction: 'outflow',
+        amountCents: 24_900,
+      })
+    }
+
+    const candidates = await detection.detectRecurrenceCandidates()
+    const icatu = candidates.find((item) => item.name === 'Icatu Seguros')
+    const starlink = candidates.find(
+      (item) => item.name === 'Starlink Internet',
+    )
+    expect(icatu).toMatchObject({
+      frequency: 'monthly',
+      amountMode: 'fixed',
+      typicalAmountCents: 1_751,
+    })
+    expect(icatu?.transactions.map((item) => item.id)).toEqual(
+      payments.map((item) => item.id),
+    )
+    expect(starlink).toBeDefined()
+
+    const approved = await detection.approveDetectedRecurrence({
+      name: 'Seguro Icatu',
+      categoryId: 'insurance',
+      amountCents: icatu!.typicalAmountCents,
+      currency: 'BRL',
+      direction: 'expense',
+      amountMode: 'fixed',
+      frequency: 'monthly',
+      nextDate: icatu!.nextExpectedDate,
+      accountId: icatu!.accountId ?? undefined,
+      transactionIds: icatu!.transactions.map((item) => item.id),
+    })
+    expect(approved.linked).toBe(3)
+
+    const snapshot = await finance.getFinanceSnapshot()
+    const recurrence = snapshot.recurrences.find(
+      (item) => item.id === approved.id,
+    )
+    expect(recurrence?.nextDate).toBe(icatu!.nextExpectedDate)
+    expect(
+      recurrence?.occurrences.filter((item) => item.status === 'matched'),
+    ).toHaveLength(3)
+    expect(
+      recurrence?.occurrences.some(
+        (item) =>
+          item.status === 'expected' &&
+          item.expectedDate === icatu!.nextExpectedDate,
+      ),
+    ).toBe(true)
+    expect(
+      snapshot.transactions.find((item) => item.id === payments[0].id)
+        ?.categoryId,
+    ).toBe('insurance')
+
+    await detection.ignoreDetectedRecurrence({
+      signature: starlink!.signature,
+      direction: starlink!.direction,
+    })
+    const remaining = await detection.detectRecurrenceCandidates()
+    expect(
+      remaining.find((item) => item.name === 'Icatu Seguros'),
+    ).toBeUndefined()
+    expect(
+      remaining.find((item) => item.name === 'Starlink Internet'),
+    ).toBeUndefined()
+  })
+
+  it('envelope: soma vários lançamentos, aprende estabelecimentos e fecha o período', async () => {
+    const [{ ensureDatabase }, finance, recurrenceMatching] = await Promise.all(
+      [
+        import('#/db/index.server'),
+        import('./finance.server'),
+        import('./recurrence-refresh.server'),
+      ],
+    )
+    await ensureDatabase()
+    const today = new Date()
+    const monthStart = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1),
+    )
+      .toISOString()
+      .slice(0, 10)
+    const recurrence = await finance.createRecurrence({
+      name: 'Mercado',
+      categoryId: 'food',
+      amountCents: 300_000,
+      currency: 'BRL',
+      direction: 'expense',
+      amountMode: 'variable',
+      matchMode: 'aggregate',
+      destinationMode: 'automatic',
+      frequency: 'monthly',
+      nextDate: monthStart,
+    })
+    const grocery = async (description: string, amountCents: number) =>
+      finance.createManualTransaction({
+        targetType: 'account',
+        targetId: 'account-nubank-pf-6607',
+        postedAt: monthStart,
+        description,
+        direction: 'outflow',
+        amountCents,
+        categoryId: 'food',
+      })
+    const angeloni = await grocery('Angeloni Super Loja', 22_000)
+    const imperatriz = await grocery('Supermercados Imperatriz', 50_000)
+    await recurrenceMatching.refreshRecurrenceSuggestions()
+
+    const suggestedSnapshot = await finance.getFinanceSnapshot()
+    const occurrence = suggestedSnapshot.recurrences
+      .find((item) => item.id === recurrence.id)
+      ?.occurrences.find((item) => item.expectedDate === monthStart)
+    const suggested = occurrence?.matches.filter(
+      (match) => match.status === 'suggested',
+    )
+    expect(suggested?.map((match) => match.transactionId).sort()).toEqual(
+      [angeloni.id, imperatriz.id].sort(),
+    )
+
+    // Dois lançamentos no mesmo período: ambos confirmados, ocorrência aberta.
+    for (const match of suggested!) {
+      await recurrenceMatching.confirmRecurrenceMatch(match.id)
+    }
+    const openSnapshot = await finance.getFinanceSnapshot()
+    const openOccurrence = openSnapshot.recurrences
+      .find((item) => item.id === recurrence.id)
+      ?.occurrences.find((item) => item.id === occurrence!.id)
+    expect(openOccurrence?.status).toBe('expected')
+    expect(
+      openOccurrence?.matches.filter((match) => match.status === 'confirmed'),
+    ).toHaveLength(2)
+
+    // Estabelecimento aprendido entra sozinho na próxima busca.
+    const angeloniAgain = await grocery('Angeloni Super Loja', 9_900)
+    await recurrenceMatching.refreshRecurrenceSuggestions()
+    const learnedSnapshot = await finance.getFinanceSnapshot()
+    const learnedMatch = learnedSnapshot.recurrences
+      .find((item) => item.id === recurrence.id)
+      ?.occurrences.find((item) => item.id === occurrence!.id)
+      ?.matches.find((match) => match.transactionId === angeloniAgain.id)
+    expect(learnedMatch?.status).toBe('auto_confirmed')
+
+    // Vínculo manual de vários lançamentos de uma vez.
+    const padaria = await finance.createManualTransaction({
+      targetType: 'account',
+      targetId: 'account-nubank-pf-6607',
+      postedAt: monthStart,
+      description: 'Padaria Pao Quente',
+      direction: 'outflow',
+      amountCents: 3_500,
+    })
+    const acougue = await finance.createManualTransaction({
+      targetType: 'account',
+      targetId: 'account-nubank-pf-6607',
+      postedAt: monthStart,
+      description: 'Acougue Central',
+      direction: 'outflow',
+      amountCents: 12_000,
+    })
+    const linked = await recurrenceMatching.linkRecurrenceOccurrence({
+      occurrenceId: occurrence!.id,
+      transactionIds: [padaria.id, acougue.id],
+    })
+    expect(linked.linked).toBe(2)
+
+    // Editar a recorrência não pode apagar o envelope em andamento.
+    await finance.updateRecurrence({
+      id: recurrence.id,
+      name: 'Mercado e feira',
+      categoryId: 'food',
+      amountCents: 320_000,
+      currency: 'BRL',
+      direction: 'expense',
+      amountMode: 'variable',
+      matchMode: 'aggregate',
+      destinationMode: 'automatic',
+      frequency: 'monthly',
+      nextDate: monthStart,
+    })
+    const editedSnapshot = await finance.getFinanceSnapshot()
+    expect(
+      editedSnapshot.recurrences
+        .find((item) => item.id === recurrence.id)
+        ?.occurrences.find((item) => item.id === occurrence!.id)
+        ?.matches.filter((match) =>
+          ['confirmed', 'auto_confirmed'].includes(match.status),
+        ),
+    ).toHaveLength(5)
+
+    // Concluir fecha o período e avança a próxima data.
+    await recurrenceMatching.completeRecurrenceOccurrence(occurrence!.id)
+    const closedSnapshot = await finance.getFinanceSnapshot()
+    const closed = closedSnapshot.recurrences.find(
+      (item) => item.id === recurrence.id,
+    )
+    expect(
+      closed?.occurrences.find((item) => item.id === occurrence!.id)?.status,
+    ).toBe('matched')
+    expect((closed?.nextDate ?? '') > monthStart).toBe(true)
+    expect(
+      closed?.occurrences
+        .find((item) => item.id === occurrence!.id)
+        ?.matches.filter((match) =>
+          ['confirmed', 'auto_confirmed'].includes(match.status),
+        ),
+    ).toHaveLength(5)
+  })
+
+  it('receita: vincula a perna recebida de uma distribuição de lucro conciliada', async () => {
+    const [{ db, ensureDatabase }, schema, finance, recurrenceMatching] =
+      await Promise.all([
+        import('#/db/index.server'),
+        import('#/db/schema'),
+        import('./finance.server'),
+        import('./recurrence-refresh.server'),
+      ])
+    await ensureDatabase()
+    const today = new Date().toISOString().slice(0, 10)
+    const recurrence = await finance.createRecurrence({
+      name: 'Salário',
+      categoryId: 'profit_distribution_income',
+      amountCents: 6_000_000,
+      currency: 'BRL',
+      direction: 'income',
+      amountMode: 'variable',
+      matchMode: 'aggregate',
+      destinationMode: 'fixed',
+      accountId: 'account-inter-pf-0532',
+      frequency: 'monthly',
+      nextDate: today,
+    })
+    const outflow = await finance.createManualTransaction({
+      targetType: 'account',
+      targetId: 'account-inter-pj-2673',
+      postedAt: today,
+      description: 'Donald Lourenco Silveira',
+      direction: 'outflow',
+      amountCents: 2_500_000,
+    })
+    const inflow = await finance.createManualTransaction({
+      targetType: 'account',
+      targetId: 'account-inter-pf-0532',
+      postedAt: today,
+      description: 'Donald Lourenco Silveira',
+      direction: 'inflow',
+      amountCents: 2_500_000,
+    })
+    // Conciliação PJ → PF como a importação registra: contrapartida nas duas pernas.
+    await db
+      .update(schema.transactions)
+      .set({ counterpartyAccountId: 'account-inter-pf-0532' })
+      .where(eq(schema.transactions.id, outflow.id))
+    await db
+      .update(schema.transactions)
+      .set({ counterpartyAccountId: 'account-inter-pj-2673' })
+      .where(eq(schema.transactions.id, inflow.id))
+    const groupId = 'profit-distribution-test'
+    await db.insert(schema.reconciliationGroups).values({
+      id: groupId,
+      type: 'profit_distribution',
+      status: 'suggested',
+      confidence: 100,
+    })
+    await db.insert(schema.reconciliationLinks).values([
+      {
+        id: `${groupId}-out`,
+        groupId,
+        transactionId: outflow.id,
+        role: 'source',
+      },
+      {
+        id: `${groupId}-in`,
+        groupId,
+        transactionId: inflow.id,
+        role: 'target',
+      },
+    ])
+    await finance.setReconciliationStatus({ groupId, status: 'confirmed' })
+
+    await recurrenceMatching.refreshRecurrenceSuggestions()
+    const suggestedSnapshot = await finance.getFinanceSnapshot()
+    const occurrence = suggestedSnapshot.recurrences
+      .find((item) => item.id === recurrence.id)
+      ?.occurrences.find((item) => item.status === 'expected')
+    expect(occurrence).toBeDefined()
+    // A entrada na conta PF entra sozinha (origem comprovada pela
+    // conciliação); a saída da PJ nunca entra.
+    expect(
+      occurrence?.matches.map((match) => [match.transactionId, match.status]),
+    ).toEqual([[inflow.id, 'auto_confirmed']])
+    await expect(
+      recurrenceMatching.linkRecurrenceOccurrence({
+        occurrenceId: occurrence!.id,
+        transactionIds: [inflow.id],
+      }),
+    ).rejects.toThrow('já está vinculada')
+    await expect(
+      recurrenceMatching.linkRecurrenceOccurrence({
+        occurrenceId: occurrence!.id,
+        transactionIds: [outflow.id],
+      }),
+    ).rejects.toThrow('escolha uma entrada')
   })
 
   it('continua gerando ocorrências depois de dois anos', async () => {

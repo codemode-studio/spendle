@@ -703,6 +703,10 @@ export const recurrences = sqliteTable(
     amountMode: text('amount_mode', { enum: ['fixed', 'variable'] })
       .notNull()
       .default('fixed'),
+    /** `aggregate`: a ocorrência é um envelope somado por vários lançamentos. */
+    matchMode: text('match_mode', { enum: ['single', 'aggregate'] })
+      .notNull()
+      .default('single'),
     destinationMode: text('destination_mode', {
       enum: ['automatic', 'fixed'],
     })
@@ -763,6 +767,23 @@ export const recurrenceOccurrences = sqliteTable(
   ],
 )
 
+/** Candidatos de recorrência que a pessoa mandou ignorar na detecção. */
+export const recurrenceDetectionIgnores = sqliteTable(
+  'recurrence_detection_ignores',
+  {
+    id: text('id').primaryKey(),
+    signature: text('signature').notNull(),
+    direction: text('direction', { enum: ['income', 'expense'] }).notNull(),
+    createdAt,
+  },
+  (table) => [
+    uniqueIndex('recurrence_detection_ignore_idx').on(
+      table.signature,
+      table.direction,
+    ),
+  ],
+)
+
 export const recurrenceMatches = sqliteTable(
   'recurrence_matches',
   {
@@ -807,9 +828,6 @@ export const recurrenceMatches = sqliteTable(
       table.occurrenceId,
       table.transactionId,
     ),
-    uniqueIndex('recurrence_match_accepted_occurrence_idx')
-      .on(table.occurrenceId)
-      .where(sql`${table.status} in ('confirmed', 'auto_confirmed')`),
     uniqueIndex('recurrence_match_accepted_transaction_idx')
       .on(table.transactionId)
       .where(sql`${table.status} in ('confirmed', 'auto_confirmed')`),

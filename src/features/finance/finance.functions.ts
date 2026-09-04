@@ -9,6 +9,7 @@ import {
   categorizeUncategorizedTransactionsWithAi,
   closeCurrentBudget,
   createAccount,
+  updateAccount,
   createManualBalanceCheckpoint,
   createManualTransaction,
   createCreditCard,
@@ -43,9 +44,16 @@ import {
   confirmRecurrenceMatch,
   refreshRecurrenceSuggestions,
   rejectRecurrenceMatch,
+  completeRecurrenceOccurrence,
+  linkRecurrenceOccurrence,
   skipRecurrenceOccurrence,
   unlinkRecurrenceMatch,
 } from './recurrence-refresh.server'
+import {
+  approveDetectedRecurrence,
+  detectRecurrenceCandidates,
+  ignoreDetectedRecurrence,
+} from './recurrence-detection.server'
 
 const isoDateSchema = z
   .string()
@@ -86,19 +94,24 @@ export const createOwnershipScopeFn = createServerFn({ method: 'POST' })
   )
   .handler(({ data }) => createOwnershipScope(data))
 
+const accountInputSchema = z.object({
+  name: z.string().trim().min(2).max(80),
+  institutionName: z.string().trim().min(2).max(80),
+  ownershipScopeId: z.string().min(1),
+  kind: z.enum(['checking', 'savings', 'cash', 'investment']),
+  purpose: z.enum(['operating', 'reserve', 'investment']),
+  currency: currencySchema,
+})
+
 export const createAccountFn = createServerFn({ method: 'POST' })
   .validator(
-    z.object({
-      name: z.string().trim().min(2).max(80),
-      institutionName: z.string().trim().min(2).max(80),
-      ownershipScopeId: z.string().min(1),
-      kind: z.enum(['checking', 'savings', 'cash', 'investment']),
-      purpose: z.enum(['operating', 'reserve', 'investment']),
-      currency: currencySchema,
-      initialBalanceCents: z.number().int(),
-    }),
+    accountInputSchema.extend({ initialBalanceCents: z.number().int() }),
   )
   .handler(({ data }) => createAccount(data))
+
+export const updateAccountFn = createServerFn({ method: 'POST' })
+  .validator(accountInputSchema.extend({ id: z.string().min(1) }))
+  .handler(({ data }) => updateAccount(data))
 
 export const createManualBalanceCheckpointFn = createServerFn({
   method: 'POST',
@@ -295,6 +308,7 @@ const recurrenceInputSchema = z
     currency: currencySchema,
     direction: z.enum(['income', 'expense']),
     amountMode: z.enum(['fixed', 'variable']),
+    matchMode: z.enum(['single', 'aggregate']).default('single'),
     destinationMode: z.enum(['automatic', 'fixed']),
     frequency: z.enum(['monthly', 'yearly']),
     nextDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -360,6 +374,21 @@ export const unlinkRecurrenceMatchFn = createServerFn({ method: 'POST' })
 export const skipRecurrenceOccurrenceFn = createServerFn({ method: 'POST' })
   .validator(z.object({ occurrenceId: z.string().min(1) }))
   .handler(({ data }) => skipRecurrenceOccurrence(data.occurrenceId))
+
+export const linkRecurrenceOccurrenceFn = createServerFn({ method: 'POST' })
+  .validator(
+    z.object({
+      occurrenceId: z.string().min(1),
+      transactionIds: z.array(z.string().min(1)).min(1).max(100),
+    }),
+  )
+  .handler(({ data }) => linkRecurrenceOccurrence(data))
+
+export const completeRecurrenceOccurrenceFn = createServerFn({
+  method: 'POST',
+})
+  .validator(z.object({ occurrenceId: z.string().min(1) }))
+  .handler(({ data }) => completeRecurrenceOccurrence(data.occurrenceId))
 
 export const createInstallmentFn = createServerFn({ method: 'POST' })
   .validator(
@@ -434,3 +463,34 @@ export const closeCurrentBudgetFn = createServerFn({ method: 'POST' }).handler(
 export const clearTransactionDataFn = createServerFn({ method: 'POST' })
   .validator(z.object({ confirmation: z.literal('APAGAR') }))
   .handler(() => clearTransactionData())
+
+export const detectRecurrencesFn = createServerFn({ method: 'GET' }).handler(
+  () => detectRecurrenceCandidates(),
+)
+
+export const approveDetectedRecurrenceFn = createServerFn({ method: 'POST' })
+  .validator(
+    z.object({
+      name: z.string().trim().min(2).max(100),
+      categoryId: z.string().min(1),
+      amountCents: z.number().int().positive(),
+      currency: currencySchema,
+      direction: z.enum(['income', 'expense']),
+      amountMode: z.enum(['fixed', 'variable']),
+      frequency: z.enum(['monthly', 'yearly']),
+      nextDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      accountId: z.string().optional(),
+      creditCardId: z.string().optional(),
+      transactionIds: z.array(z.string().min(1)).min(1),
+    }),
+  )
+  .handler(({ data }) => approveDetectedRecurrence(data))
+
+export const ignoreDetectedRecurrenceFn = createServerFn({ method: 'POST' })
+  .validator(
+    z.object({
+      signature: z.string().min(1),
+      direction: z.enum(['income', 'expense']),
+    }),
+  )
+  .handler(({ data }) => ignoreDetectedRecurrence(data))

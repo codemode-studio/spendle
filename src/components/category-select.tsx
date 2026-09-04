@@ -1,3 +1,5 @@
+import { CircleAlert } from 'lucide-react'
+
 import {
   Select,
   SelectContent,
@@ -21,6 +23,8 @@ interface CategorySelectProps {
   required?: boolean
   disabled?: boolean
   className?: string
+  /** `ghost`: sem borda até o hover, com ponto na cor da categoria. Para listas densas. */
+  variant?: 'default' | 'ghost'
   'aria-label': string
 }
 
@@ -34,6 +38,7 @@ export function CategorySelect({
   required,
   disabled,
   className,
+  variant = 'default',
   'aria-label': ariaLabel,
 }: CategorySelectProps) {
   const availableCategories = allowTransfer
@@ -44,6 +49,11 @@ export function CategorySelect({
     label: category.name,
     value: category.id,
   }))
+  const currentId = value ?? defaultValue ?? null
+  const uncategorized = !currentId || currentId === 'uncategorized'
+  const currentColor =
+    availableCategories.find((category) => category.id === currentId)?.color ??
+    '#94a3b8'
 
   return (
     <Select
@@ -57,7 +67,28 @@ export function CategorySelect({
         if (categoryId) onValueChange?.(categoryId)
       }}
     >
-      <SelectTrigger className={cn('w-full', className)} aria-label={ariaLabel}>
+      <SelectTrigger
+        size={variant === 'ghost' ? 'sm' : 'default'}
+        className={cn(
+          variant === 'ghost'
+            ? 'max-w-full border-transparent shadow-none hover:border-input hover:bg-muted/50 data-popup-open:border-input data-popup-open:bg-muted/50'
+            : 'w-full',
+          variant === 'ghost' &&
+            uncategorized &&
+            'bg-amber-50 text-amber-900 hover:border-amber-200 hover:bg-amber-100',
+          className,
+        )}
+        aria-label={ariaLabel}
+      >
+        {variant === 'ghost' &&
+          (uncategorized ? (
+            <CircleAlert className="size-3.5 text-amber-600" />
+          ) : (
+            <span
+              className="size-2 shrink-0 rounded-full"
+              style={{ background: currentColor }}
+            />
+          ))}
         <SelectValue placeholder="Selecione uma categoria" />
       </SelectTrigger>
       <SelectContent align="start" alignItemWithTrigger={false}>

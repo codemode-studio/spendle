@@ -197,8 +197,10 @@ async function seedDatabase() {
 
   const categorySeeds = [
     ['housing', 'Moradia', 'essential', '#2563eb', false],
+    ['financing', 'Financiamentos', 'essential', '#1d4ed8', false],
     ['utilities', 'Contas e serviços', 'essential', '#0284c7', false],
     ['food', 'Alimentação', 'essential', '#0d9488', false],
+    ['delivery', 'Delivery', 'lifestyle', '#f97316', false],
     ['transport', 'Transporte', 'essential', '#0891b2', false],
     ['health', 'Saúde', 'essential', '#dc2626', false],
     ['education', 'Educação', 'essential', '#7c3aed', false],
@@ -210,7 +212,6 @@ async function seedDatabase() {
     ['subscriptions', 'Assinaturas', 'lifestyle', '#c026d3', false],
     ['personal_care', 'Cuidados pessoais', 'lifestyle', '#e11d48', false],
     ['pets', 'Pets', 'lifestyle', '#ca8a04', false],
-    ['gifts_donations', 'Presentes e doações', 'lifestyle', '#be123c', false],
     ['maintenance', 'Manutenção e reparos', 'essential', '#64748b', false],
     ['fees_interest', 'Tarifas e juros', 'tax', '#9f1239', false],
     ['other_expense', 'Outras despesas', 'lifestyle', '#78716c', false],

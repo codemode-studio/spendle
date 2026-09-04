@@ -3,6 +3,7 @@ export interface CategoryOption {
   name: string
   bucket: string
   active?: boolean
+  color?: string
 }
 
 export function groupCategoryOptions(categories: CategoryOption[]) {

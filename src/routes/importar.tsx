@@ -22,7 +22,13 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
-import { EmptyState, PageHeader, Panel, StatusBadge } from '#/components/ui'
+import {
+  Page,
+  EmptyState,
+  PageHeader,
+  Panel,
+  StatusBadge,
+} from '#/components/ui'
 import { CategorySelect } from '#/components/category-select'
 import { TransferAccountSelect } from '#/components/transfer-account-select'
 import { Alert, AlertDescription, AlertTitle } from '#/components/ui/alert'
@@ -317,7 +323,7 @@ function ImportPage() {
   }
 
   return (
-    <div className="page">
+    <Page>
       <PageHeader
         eyebrow="OFX, CSV e PDF"
         title="Importar extratos"
@@ -1043,7 +1049,7 @@ function ImportPage() {
           </div>
         </SheetContent>
       </Sheet>
-    </div>
+    </Page>
   )
 }
 

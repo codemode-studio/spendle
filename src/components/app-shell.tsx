@@ -1,19 +1,17 @@
 import {
   ArrowLeftRight,
-  Building2,
-  CreditCard,
   LayoutDashboard,
   PiggyBank,
   Settings,
   Upload,
   WalletCards,
+  Tags,
 } from 'lucide-react'
 import { Link, useRouterState } from '@tanstack/react-router'
 
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -31,9 +29,8 @@ import { Toaster } from '#/components/ui/sonner'
 
 const navigation = [
   { to: '/', label: 'Visão geral', icon: LayoutDashboard },
-  { to: '/contas', label: 'Contas', icon: Building2 },
-  { to: '/cartoes', label: 'Cartões', icon: CreditCard },
   { to: '/transacoes', label: 'Transações', icon: ArrowLeftRight },
+  { to: '/categorias', label: 'Categorias', icon: Tags },
   { to: '/importar', label: 'Importar', icon: Upload },
   { to: '/planejamento', label: 'Planejamento', icon: PiggyBank },
   { to: '/configuracoes', label: 'Configurações', icon: Settings },
@@ -54,7 +51,7 @@ export function AppShell({
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton size="lg" tooltip="Família Finanças">
-                  <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                  <span className="flex size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
                     <WalletCards />
                   </span>
                   <span className="flex min-w-0 flex-col leading-none">
@@ -92,19 +89,13 @@ export function AppShell({
               </SidebarGroupContent>
             </SidebarGroup>
           </SidebarContent>
-          <SidebarFooter>
-            <div className="flex items-center gap-2.5 rounded-lg bg-sidebar-accent/25 px-3 py-2.5 text-xs leading-snug text-sidebar-foreground/65 ring-1 ring-inset ring-sidebar-border group-data-[collapsible=icon]:hidden">
-              <span className="size-2 shrink-0 rounded-full bg-sidebar-primary" />
-              <span>Dados somente neste computador</span>
-            </div>
-          </SidebarFooter>
           <SidebarRail />
         </Sidebar>
-        <SidebarInset className="overflow-hidden md:peer-data-[variant=inset]:shadow-none">
-          <header className="flex h-12 items-center border-b px-4 md:hidden">
+        <SidebarInset className="h-svh min-h-0 overflow-hidden md:h-[calc(100svh-1rem)] md:peer-data-[variant=inset]:shadow-none">
+          <header className="flex h-12 shrink-0 items-center border-b px-4 md:hidden">
             <SidebarTrigger />
           </header>
-          <div className="min-h-svh bg-muted/30 p-4 md:p-8 lg:p-10">
+          <div className="min-h-0 flex-1 overflow-y-auto bg-muted/30 [scrollbar-gutter:stable]">
             {children}
           </div>
         </SidebarInset>

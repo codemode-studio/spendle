@@ -277,12 +277,36 @@ describe('upgrade legado de recorrências', () => {
         )
         .all(),
     ).toEqual([
-      { groupName: 'Academia', participantLabel: 'Dayane', amountCents: 25_000 },
-      { groupName: 'Academia', participantLabel: 'Donald', amountCents: 25_000 },
-      { groupName: 'Psiquiatra', participantLabel: 'Dayane', amountCents: 70_000 },
-      { groupName: 'Psiquiatra', participantLabel: 'Donald', amountCents: 60_000 },
-      { groupName: 'Terapeuta', participantLabel: 'Dayane', amountCents: 150_000 },
-      { groupName: 'Terapeuta', participantLabel: 'Donald', amountCents: 150_000 },
+      {
+        groupName: 'Academia',
+        participantLabel: 'Dayane',
+        amountCents: 25_000,
+      },
+      {
+        groupName: 'Academia',
+        participantLabel: 'Donald',
+        amountCents: 25_000,
+      },
+      {
+        groupName: 'Psiquiatra',
+        participantLabel: 'Dayane',
+        amountCents: 70_000,
+      },
+      {
+        groupName: 'Psiquiatra',
+        participantLabel: 'Donald',
+        amountCents: 60_000,
+      },
+      {
+        groupName: 'Terapeuta',
+        participantLabel: 'Dayane',
+        amountCents: 150_000,
+      },
+      {
+        groupName: 'Terapeuta',
+        participantLabel: 'Donald',
+        amountCents: 150_000,
+      },
     ])
     expect(
       sqlite

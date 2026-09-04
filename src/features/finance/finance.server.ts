@@ -1677,6 +1677,28 @@ export async function resolveTransactionCorrection(input: {
   return { success: true }
 }
 
+export async function updateAccount(input: {
+  id: string
+  name: string
+  institutionName: string
+  ownershipScopeId: string
+  kind: 'checking' | 'savings' | 'cash' | 'investment'
+  purpose: 'operating' | 'reserve' | 'investment'
+  currency: string
+}) {
+  await ensureDatabase()
+  const institutionId = await findOrCreateInstitution(input.institutionName)
+  const { id, institutionName: _institutionName, ...values } = input
+  const updated = await db
+    .update(schema.accounts)
+    .set({ ...values, institutionId })
+    .where(eq(schema.accounts.id, id))
+    .returning({ id: schema.accounts.id })
+
+  if (!updated[0]) throw new Error('Conta não encontrada.')
+  return { id }
+}
+
 export async function createCreditCard(input: {
   name: string
   institutionName: string
@@ -2251,6 +2273,7 @@ type RecurrenceInput = {
   currency: string
   direction: 'income' | 'expense'
   amountMode: 'fixed' | 'variable'
+  matchMode?: 'single' | 'aggregate'
   destinationMode: 'automatic' | 'fixed'
   frequency: 'monthly' | 'yearly'
   nextDate: string
@@ -2310,9 +2333,32 @@ export async function updateRecurrence(
         eq(schema.recurrenceOccurrences.status, 'expected'),
       ),
     )
+  // Envelopes em andamento já têm pagamentos aceitos: editar a recorrência
+  // não pode apagar esses vínculos (e a categoria aplicada por eles).
+  const occurrencesWithLinks = expectedOccurrences.length
+    ? await db
+        .select({ occurrenceId: schema.recurrenceMatches.occurrenceId })
+        .from(schema.recurrenceMatches)
+        .where(
+          and(
+            inArray(
+              schema.recurrenceMatches.occurrenceId,
+              expectedOccurrences.map((occurrence) => occurrence.id),
+            ),
+            inArray(schema.recurrenceMatches.status, [
+              'confirmed',
+              'auto_confirmed',
+            ]),
+          ),
+        )
+    : []
+  const keepOccurrenceIds = new Set(
+    occurrencesWithLinks.map((row) => row.occurrenceId),
+  )
   if (expectedOccurrences.length) {
     db.transaction((transaction) => {
       for (const occurrence of expectedOccurrences) {
+        if (keepOccurrenceIds.has(occurrence.id)) continue
         transaction
           .update(schema.recurrenceMatches)
           .set({ status: 'rejected', resolvedAt: new Date() })

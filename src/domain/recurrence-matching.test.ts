@@ -5,6 +5,7 @@ import {
   buildRecurrenceCandidates,
   merchantSignature,
   pendingTransactionCoversRecurrence,
+  transactionEligibleForRecurrence,
 } from './recurrence-matching'
 
 const rule = {
@@ -153,5 +154,114 @@ describe('matching de recorrências', () => {
         },
       }),
     ).toEqual([])
+  })
+
+  it('aceita a perna recebida de uma distribuição de lucro como receita', () => {
+    const salary = {
+      ...transaction,
+      id: 'pro-labore',
+      amountCents: 2_500_000,
+      description: 'Donald Lourenco Silveira',
+      accountId: 'account-pf',
+      creditCardId: null,
+      counterpartyAccountId: 'account-pj',
+    }
+    const incomeRule = {
+      ...rule,
+      direction: 'income' as const,
+      expectedAmountCents: 2_500_000,
+    }
+    const learning = {
+      confirmedCount: 0,
+      aliases: [salary.description],
+      accountIds: [],
+      creditCardIds: [],
+    }
+    expect(
+      buildRecurrenceCandidates({
+        recurrenceName: 'Salário',
+        rule: incomeRule,
+        transactions: [
+          { ...salary, reconciliationType: 'profit_distribution' },
+        ],
+        learning,
+      }).map((candidate) => candidate.transactionId),
+    ).toEqual([salary.id])
+    // Uma transferência comum entre contas próprias continua fora.
+    expect(
+      buildRecurrenceCandidates({
+        recurrenceName: 'Salário',
+        rule: incomeRule,
+        transactions: [{ ...salary, reconciliationType: 'transfer' }],
+        learning,
+      }),
+    ).toEqual([])
+    expect(
+      buildRecurrenceCandidates({
+        recurrenceName: 'Salário',
+        rule: incomeRule,
+        transactions: [{ ...salary, reconciliationType: null }],
+        learning,
+      }),
+    ).toEqual([])
+  })
+
+  it('só libera transferências entre contas próprias quando são distribuição de lucro', () => {
+    expect(
+      transactionEligibleForRecurrence({ counterpartyAccountId: 'pj' }),
+    ).toBe(false)
+    expect(
+      transactionEligibleForRecurrence({
+        counterpartyAccountId: 'pj',
+        reconciliationType: 'profit_distribution',
+      }),
+    ).toBe(true)
+    expect(
+      transactionEligibleForRecurrence({ reconciliationType: 'refund' }),
+    ).toBe(true)
+    expect(
+      transactionEligibleForRecurrence({ reconciliationType: 'card_payment' }),
+    ).toBe(false)
+  })
+})
+
+describe('destino fixo com histórico', () => {
+  const learning = {
+    confirmedCount: 1,
+    aliases: ['PG *NETFLIX.COM'],
+    accountIds: ['account-a', 'account-b'],
+    creditCardIds: [],
+    medianDateOffsetDays: 1,
+    dateSpreadDays: 0,
+    amountRangeCents: { min: 3_990, max: 3_990 },
+  }
+  const fixedRule = {
+    ...rule,
+    destinationMode: 'fixed' as const,
+    accountId: 'account-a',
+  }
+
+  it('aceita um destino diferente do cadastrado quando já foi confirmado antes', () => {
+    const candidates = buildRecurrenceCandidates({
+      recurrenceName: 'Netflix',
+      rule: fixedRule,
+      transactions: [
+        { ...transaction, accountId: 'account-b', creditCardId: null },
+      ],
+      learning,
+    })
+    expect(candidates).toHaveLength(1)
+  })
+
+  it('continua recusando destinos nunca observados', () => {
+    const candidates = buildRecurrenceCandidates({
+      recurrenceName: 'Netflix',
+      rule: fixedRule,
+      transactions: [
+        { ...transaction, accountId: 'account-c', creditCardId: null },
+      ],
+      learning,
+    })
+    expect(candidates).toHaveLength(0)
   })
 })

@@ -181,8 +181,10 @@ async function suggestCategory(
   const heuristics: Array<[RegExp, string]> = [
     [/pagamento.*fatura|fatura.*(?:paga|pagamento)/i, 'card_payment'],
     [/aluguel|condominio|iptu/i, 'housing'],
+    [/financiamento|consorcio|prestacao|emprestimo|crediario/i, 'financing'],
     [/energia|internet|telefone|agua|gas/i, 'utilities'],
-    [/mercado|supermercado|padaria|restaurante|ifood|delivery/i, 'food'],
+    [/^ifd\*|ifood|rappi|delivery/i, 'delivery'],
+    [/mercado|supermercado|padaria|restaurante/i, 'food'],
     [/uber|posto|combustivel|estacionamento|pedagio/i, 'transport'],
     [/farmacia|hospital|clinica|medico|laboratorio/i, 'health'],
     [/escola|curso|faculdade|livro/i, 'education'],

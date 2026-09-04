@@ -14,8 +14,9 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { z } from 'zod'
 
-import { PageHeader, Panel, StatusBadge } from '#/components/ui'
+import { Page, PageHeader, Panel, StatusBadge } from '#/components/ui'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,6 +43,9 @@ import { Field, FieldGroup, FieldLabel } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '#/components/ui/native-select'
 import { Switch } from '#/components/ui/switch'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
+import { AccountsSection } from '#/features/finance/accounts-section'
+import { CardsSection } from '#/features/finance/cards-section'
 import {
   clearTransactionDataFn,
   createOwnershipScopeFn,
@@ -52,13 +56,73 @@ import {
   financeSnapshotOptions,
 } from '#/features/finance/queries'
 
+const settingsTabs = ['geral', 'contas', 'cartoes'] as const
+type SettingsTab = (typeof settingsTabs)[number]
+
+const settingsSearchSchema = z.object({
+  tab: z.enum(settingsTabs).optional().catch(undefined),
+})
+
 export const Route = createFileRoute('/configuracoes')({
+  validateSearch: settingsSearchSchema,
   loader: ({ context }) =>
     context.queryClient.ensureQueryData(financeSnapshotOptions()),
   component: SettingsPage,
 })
 
 function SettingsPage() {
+  const { tab } = Route.useSearch()
+  const navigate = Route.useNavigate()
+  const activeTab: SettingsTab = tab ?? 'geral'
+
+  return (
+    <Page>
+      <PageHeader
+        eyebrow="Preferências locais"
+        title="Configurações"
+        description="Família, contas, cartões e dados guardados neste computador."
+      />
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) =>
+          void navigate({
+            search: {
+              tab: value === 'geral' ? undefined : (value as SettingsTab),
+            },
+          })
+        }
+        className="gap-6"
+      >
+        <TabsList
+          variant="line"
+          aria-label="Áreas das configurações"
+          className="h-9 w-full justify-start overflow-x-auto overflow-y-hidden border-b px-0 pb-1"
+        >
+          <TabsTrigger value="geral" className="min-w-28 flex-none px-4">
+            Geral
+          </TabsTrigger>
+          <TabsTrigger value="contas" className="min-w-28 flex-none px-4">
+            Contas
+          </TabsTrigger>
+          <TabsTrigger value="cartoes" className="min-w-28 flex-none px-4">
+            Cartões
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="geral">
+          <GeneralSettings />
+        </TabsContent>
+        <TabsContent value="contas">
+          <AccountsSection />
+        </TabsContent>
+        <TabsContent value="cartoes">
+          <CardsSection />
+        </TabsContent>
+      </Tabs>
+    </Page>
+  )
+}
+
+function GeneralSettings() {
   const { data } = useSuspenseQuery(financeSnapshotOptions())
   const queryClient = useQueryClient()
   const createScope = useServerFn(createOwnershipScopeFn)
@@ -134,13 +198,7 @@ function SettingsPage() {
   }
 
   return (
-    <div className="page">
-      <PageHeader
-        eyebrow="Preferências locais"
-        title="Configurações"
-        description="Família, privacidade e dados guardados neste computador."
-      />
-
+    <div className="grid gap-4">
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel
           title="Família e empresas"
@@ -215,7 +273,6 @@ function SettingsPage() {
       <Panel
         title="Dados locais"
         description="Manutenção dos dados financeiros deste computador."
-        className="mt-4"
       >
         <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-col gap-1">

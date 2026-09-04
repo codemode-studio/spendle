@@ -163,6 +163,15 @@ export function formatDate(value: string) {
   }).format(new Date(`${value.slice(0, 10)}T12:00:00Z`))
 }
 
+export function formatMonth(value: string) {
+  const label = new Intl.DateTimeFormat('pt-BR', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(`${value.slice(0, 7)}-01T12:00:00Z`))
+  return label.charAt(0).toUpperCase() + label.slice(1)
+}
+
 export function percentFromBps(bps: number) {
   return `${new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(
     bps / 100,

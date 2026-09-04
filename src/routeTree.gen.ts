@@ -10,9 +10,8 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as CartoesRouteImport } from './routes/cartoes'
+import { Route as CategoriasRouteImport } from './routes/categorias'
 import { Route as ConfiguracoesRouteImport } from './routes/configuracoes'
-import { Route as ContasRouteImport } from './routes/contas'
 import { Route as ImportarRouteImport } from './routes/importar'
 import { Route as PlanejamentoRouteImport } from './routes/planejamento'
 import { Route as TransacoesRouteImport } from './routes/transacoes'
@@ -22,19 +21,14 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const CartoesRoute = CartoesRouteImport.update({
-  id: '/cartoes',
-  path: '/cartoes',
+const CategoriasRoute = CategoriasRouteImport.update({
+  id: '/categorias',
+  path: '/categorias',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConfiguracoesRoute = ConfiguracoesRouteImport.update({
   id: '/configuracoes',
   path: '/configuracoes',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ContasRoute = ContasRouteImport.update({
-  id: '/contas',
-  path: '/contas',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ImportarRoute = ImportarRouteImport.update({
@@ -55,18 +49,16 @@ const TransacoesRoute = TransacoesRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/cartoes': typeof CartoesRoute
+  '/categorias': typeof CategoriasRoute
   '/configuracoes': typeof ConfiguracoesRoute
-  '/contas': typeof ContasRoute
   '/importar': typeof ImportarRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/cartoes': typeof CartoesRoute
+  '/categorias': typeof CategoriasRoute
   '/configuracoes': typeof ConfiguracoesRoute
-  '/contas': typeof ContasRoute
   '/importar': typeof ImportarRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
@@ -74,9 +66,8 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/cartoes': typeof CartoesRoute
+  '/categorias': typeof CategoriasRoute
   '/configuracoes': typeof ConfiguracoesRoute
-  '/contas': typeof ContasRoute
   '/importar': typeof ImportarRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
@@ -85,27 +76,24 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/cartoes'
+    | '/categorias'
     | '/configuracoes'
-    | '/contas'
     | '/importar'
     | '/planejamento'
     | '/transacoes'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/cartoes'
+    | '/categorias'
     | '/configuracoes'
-    | '/contas'
     | '/importar'
     | '/planejamento'
     | '/transacoes'
   id:
     | '__root__'
     | '/'
-    | '/cartoes'
+    | '/categorias'
     | '/configuracoes'
-    | '/contas'
     | '/importar'
     | '/planejamento'
     | '/transacoes'
@@ -113,9 +101,8 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  CartoesRoute: typeof CartoesRoute
+  CategoriasRoute: typeof CategoriasRoute
   ConfiguracoesRoute: typeof ConfiguracoesRoute
-  ContasRoute: typeof ContasRoute
   ImportarRoute: typeof ImportarRoute
   PlanejamentoRoute: typeof PlanejamentoRoute
   TransacoesRoute: typeof TransacoesRoute
@@ -130,11 +117,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/cartoes': {
-      id: '/cartoes'
-      path: '/cartoes'
-      fullPath: '/cartoes'
-      preLoaderRoute: typeof CartoesRouteImport
+    '/categorias': {
+      id: '/categorias'
+      path: '/categorias'
+      fullPath: '/categorias'
+      preLoaderRoute: typeof CategoriasRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/configuracoes': {
@@ -142,13 +129,6 @@ declare module '@tanstack/react-router' {
       path: '/configuracoes'
       fullPath: '/configuracoes'
       preLoaderRoute: typeof ConfiguracoesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/contas': {
-      id: '/contas'
-      path: '/contas'
-      fullPath: '/contas'
-      preLoaderRoute: typeof ContasRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/importar': {
@@ -177,9 +157,8 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  CartoesRoute: CartoesRoute,
+  CategoriasRoute: CategoriasRoute,
   ConfiguracoesRoute: ConfiguracoesRoute,
-  ContasRoute: ContasRoute,
   ImportarRoute: ImportarRoute,
   PlanejamentoRoute: PlanejamentoRoute,
   TransacoesRoute: TransacoesRoute,

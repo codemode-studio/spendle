@@ -69,6 +69,9 @@ export type RecurrenceRuleInput = {
   minimumConfirmations: number
 }
 
+export type RecurrenceReconciliationType =
+  'transfer' | 'fx_transfer' | 'card_payment' | 'refund' | 'profit_distribution'
+
 export type RecurrenceTransactionInput = {
   id: string
   postedAt: string
@@ -78,14 +81,25 @@ export type RecurrenceTransactionInput = {
   status: 'pending' | 'confirmed' | 'excluded'
   accountId: string | null
   creditCardId: string | null
+  counterpartyAccountId?: string | null
   categoryId?: string | null
-  reconciliationType?:
-    | 'transfer'
-    | 'fx_transfer'
-    | 'card_payment'
-    | 'refund'
-    | 'profit_distribution'
-    | null
+  reconciliationType?: RecurrenceReconciliationType | null
+}
+
+/**
+ * Transferências entre contas próprias e pagamento de fatura só movem dinheiro
+ * de lugar, então nunca pagam uma recorrência. Estornos e distribuições de
+ * lucro têm efeito financeiro real: a distribuição sai da empresa e entra na
+ * pessoa física, e é assim que um salário de sócio aparece no extrato.
+ */
+export function transactionEligibleForRecurrence(transaction: {
+  counterpartyAccountId?: string | null
+  reconciliationType?: RecurrenceReconciliationType | null
+}) {
+  const type = transaction.reconciliationType ?? null
+  if (type === 'profit_distribution') return true
+  if (type && type !== 'refund') return false
+  return !transaction.counterpartyAccountId
 }
 
 export function pendingTransactionCoversRecurrence(input: {
@@ -189,19 +203,23 @@ export function buildRecurrenceCandidates(input: {
       transaction.currency !== input.rule.currency ||
       Math.sign(transaction.amountCents) !== expectedSign ||
       unavailable.has(transaction.id) ||
-      (transaction.reconciliationType &&
-        transaction.reconciliationType !== 'refund')
+      !transactionEligibleForRecurrence(transaction)
     ) {
       return []
     }
+    // Destino fixo: aceita o destino cadastrado e também os destinos de
+    // pagamentos já confirmados. O histórico real vale mais que o cadastro.
     if (
       input.rule.destinationMode === 'fixed' &&
-      ((input.rule.accountId &&
-        transaction.accountId !== input.rule.accountId) ||
-        (input.rule.creditCardId &&
-          transaction.creditCardId !== input.rule.creditCardId))
+      (input.rule.accountId || input.rule.creditCardId)
     ) {
-      return []
+      const knownAccount =
+        transaction.accountId !== null &&
+        input.learning.accountIds.includes(transaction.accountId)
+      const knownCard =
+        transaction.creditCardId !== null &&
+        input.learning.creditCardIds.includes(transaction.creditCardId)
+      if (!knownAccount && !knownCard) return []
     }
 
     const rawDateOffset =
