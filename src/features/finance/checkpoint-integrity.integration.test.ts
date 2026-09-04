@@ -1,26 +1,21 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { openTestDatabase } from '#/test/database'
+import type { TestDatabase } from '#/test/database'
+import { runCheckpointIntegrityFixture } from './checkpoint-integrity.integration.fixture'
 
 describe('integridade dos pontos de controle', () => {
-  const directory = mkdtempSync(
-    join(tmpdir(), 'financas-checkpoint-integrity-'),
-  )
+  let database: TestDatabase
 
-  beforeAll(() => {
-    process.env.DATABASE_URL = join(directory, 'integration.db')
-    vi.resetModules()
+  beforeAll(async () => {
+    database = await openTestDatabase({ seed: 'production' })
   })
 
   afterAll(() => {
-    rmSync(directory, { recursive: true, force: true })
+    database.close()
   })
 
   it('preserva linearidade, origem e tipo de saldo em importações e ajustes manuais', async () => {
-    await expect(
-      import('./checkpoint-integrity.integration.fixture'),
-    ).resolves.toBeDefined()
+    await expect(runCheckpointIntegrityFixture()).resolves.toBeUndefined()
   })
 })

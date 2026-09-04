@@ -1,29 +1,23 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-
 import { eq, isNull } from 'drizzle-orm'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+
+import { openTestDatabase } from '#/test/database'
+import type { TestDatabase } from '#/test/database'
+import * as finance from './finance.server'
 
 describe('lançamentos manuais', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'financas-manual-transaction-'))
+  let database: TestDatabase
 
-  beforeAll(() => {
-    process.env.DATABASE_URL = join(directory, 'integration.db')
-    vi.resetModules()
+  beforeAll(async () => {
+    database = await openTestDatabase({ seed: 'production' })
   })
 
   afterAll(() => {
-    rmSync(directory, { recursive: true, force: true })
+    database.close()
   })
 
   it('completa uma transferência e registra uma despesa em BTC sem dupla contagem', async () => {
-    const [{ db, ensureDatabase }, schema, finance] = await Promise.all([
-      import('#/db/index.server'),
-      import('#/db/schema'),
-      import('./finance.server'),
-    ])
-    await ensureDatabase()
+    const { db, schema } = database
 
     const initialSnapshot = await finance.getFinanceSnapshot()
     const btg = initialSnapshot.accounts.find(

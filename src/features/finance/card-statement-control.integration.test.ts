@@ -1,24 +1,21 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { openTestDatabase } from '#/test/database'
+import type { TestDatabase } from '#/test/database'
+import { runCardStatementControlFixture } from './card-statement-control.integration.fixture'
 
 describe('fechamento posterior de fatura', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'financas-card-control-'))
+  let database: TestDatabase
 
-  beforeAll(() => {
-    process.env.DATABASE_URL = join(directory, 'integration.db')
-    vi.resetModules()
+  beforeAll(async () => {
+    database = await openTestDatabase({ seed: 'production' })
   })
 
   afterAll(() => {
-    rmSync(directory, { recursive: true, force: true })
+    database.close()
   })
 
   it('reaproveita o CSV sem ciclo prévio, respeita o ciclo diferente do PDF e aceita segunda via', async () => {
-    await expect(
-      import('./card-statement-control.integration.fixture'),
-    ).resolves.toBeDefined()
+    await expect(runCardStatementControlFixture()).resolves.toBeUndefined()
   })
 })

@@ -1,33 +1,28 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-
 import { eq } from 'drizzle-orm'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+
+import { resetTestDatabase } from '#/test/database'
+import type { TestDatabase } from '#/test/database'
+import * as finance from './finance.server'
+import * as recurrence from './recurrence.server'
 
 describe('patrimônio em moeda-base', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'financas-net-worth-'))
+  let database: TestDatabase
 
-  beforeAll(() => {
-    process.env.DATABASE_URL = join(directory, 'integration.db')
-    vi.resetModules()
+  beforeEach(async () => {
+    database = await resetTestDatabase()
   })
 
-  afterAll(() => {
-    rmSync(directory, { recursive: true, force: true })
+  afterEach(() => {
+    database.close()
   })
 
   it('converte pelo câmbio mais recente e sinaliza saldo sem taxa', async () => {
-    const [{ db, ensureDatabase }, schema, finance] = await Promise.all([
-      import('#/db/index.server'),
-      import('#/db/schema'),
-      import('./finance.server'),
-    ])
-    await ensureDatabase()
+    const { db, ids, schema } = database
     await finance.createAccount({
       name: 'Conta USD de teste',
       institutionName: 'Banco de teste',
-      ownershipScopeId: 'household',
+      ownershipScopeId: ids.householdScope,
       kind: 'checking',
       purpose: 'operating',
       currency: 'USD',
@@ -63,12 +58,16 @@ describe('patrimônio em moeda-base', () => {
   })
 
   it('converte projeções recorrentes para BRL e omite com alerta sem taxa', async () => {
-    const [{ db }, schema, finance, recurrence] = await Promise.all([
-      import('#/db/index.server'),
-      import('#/db/schema'),
-      import('./finance.server'),
-      import('./recurrence.server'),
-    ])
+    const { db, ids, schema } = database
+    const account = await finance.createAccount({
+      name: 'Conta USD de teste',
+      institutionName: 'Banco de teste',
+      ownershipScopeId: ids.householdScope,
+      kind: 'checking',
+      purpose: 'operating',
+      currency: 'USD',
+      initialBalanceCents: 10_000,
+    })
     await db.insert(schema.exchangeRates).values({
       id: 'usd-brl-recurrence',
       date: '2026-08-27',
@@ -77,13 +76,6 @@ describe('patrimônio em moeda-base', () => {
       rateMicros: 5_000_000,
       source: 'manual',
     })
-    const account = (
-      await db
-        .select({ id: schema.accounts.id })
-        .from(schema.accounts)
-        .where(eq(schema.accounts.name, 'Conta USD de teste'))
-        .limit(1)
-    )[0]
     const crossMonthRecurrence = await recurrence.createRecurrence({
       name: 'Despesa em dólar',
       categoryId: 'housing',

@@ -1,33 +1,29 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-
 import { eq } from 'drizzle-orm'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { db } from '#/db/index.server'
+import * as schema from '#/db/schema'
 import { isAcceptedRecurrenceMatchStatus } from '#/domain/recurrence-book'
+import { resetTestDatabase } from '#/test/database'
+import type { TestDatabase } from '#/test/database'
+import * as finance from './finance.server'
+import * as recurrenceMatching from './recurrence.server'
+
+const recurrenceServer = recurrenceMatching
+const detection = recurrenceMatching
 
 describe('reconciliação de recorrências', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'financas-recurrence-match-'))
+  let testDatabase: TestDatabase
 
-  beforeAll(() => {
-    process.env.DATABASE_URL = join(directory, 'integration.db')
-    vi.resetModules()
+  beforeEach(async () => {
+    testDatabase = await resetTestDatabase()
   })
 
-  afterAll(() => {
-    rmSync(directory, { recursive: true, force: true })
+  afterEach(() => {
+    testDatabase.close()
   })
 
   it('confirma e desfaz um vínculo restaurando a categoria anterior', async () => {
-    const [{ ensureDatabase }, finance, recurrenceMatching] = await Promise.all(
-      [
-        import('#/db/index.server'),
-        import('./finance.server'),
-        import('./recurrence.server'),
-      ],
-    )
-    await ensureDatabase()
     const recurrence = await recurrenceMatching.createRecurrence({
       name: 'Netflix',
       categoryId: 'subscriptions',
@@ -41,7 +37,7 @@ describe('reconciliação de recorrências', () => {
     })
     const transaction = await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-nubank-pf-6607',
+      targetId: testDatabase.ids.brlAccount,
       postedAt: '2026-08-10',
       description: 'PG *NETFLIX.COM 847291',
       direction: 'outflow',
@@ -101,10 +97,6 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('avança o calendário ao ignorar a próxima ocorrência', async () => {
-    const [finance, recurrenceMatching] = await Promise.all([
-      import('./finance.server'),
-      import('./recurrence.server'),
-    ])
     const recurrence = await recurrenceMatching.createRecurrence({
       name: 'Compromisso sem pagamento',
       categoryId: 'housing',
@@ -131,12 +123,6 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('não duplica uma pendência categorizada na projeção recorrente', async () => {
-    const [finance, recurrenceServer, database, schema] = await Promise.all([
-      import('./finance.server'),
-      import('./recurrence.server'),
-      import('#/db/index.server'),
-      import('#/db/schema'),
-    ])
     await recurrenceServer.createRecurrence({
       name: 'Netflix',
       categoryId: 'subscriptions',
@@ -148,9 +134,9 @@ describe('reconciliação de recorrências', () => {
       frequency: 'monthly',
       nextDate: '2026-08-10',
     })
-    await database.db.insert(schema.transactions).values({
+    await db.insert(schema.transactions).values({
       id: 'pending-netflix',
-      accountId: 'account-nubank-pf-6607',
+      accountId: testDatabase.ids.brlAccount,
       categoryId: 'subscriptions',
       fingerprint: 'pending-netflix',
       postedAt: '2026-08-10',
@@ -167,10 +153,6 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('pausa sugestões e resolve conflito quando a categoria é corrigida', async () => {
-    const [finance, recurrenceMatching] = await Promise.all([
-      import('./finance.server'),
-      import('./recurrence.server'),
-    ])
     const recurrence = await recurrenceMatching.createRecurrence({
       name: 'Spotify',
       categoryId: 'subscriptions',
@@ -184,7 +166,7 @@ describe('reconciliação de recorrências', () => {
     })
     await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-nubank-pf-6607',
+      targetId: testDatabase.ids.brlAccount,
       postedAt: '2026-08-15',
       description: 'Spotify',
       direction: 'outflow',
@@ -250,14 +232,6 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('vincula manualmente um pagamento e aprende o estabelecimento', async () => {
-    const [{ ensureDatabase }, finance, recurrenceMatching] = await Promise.all(
-      [
-        import('#/db/index.server'),
-        import('./finance.server'),
-        import('./recurrence.server'),
-      ],
-    )
-    await ensureDatabase()
     const recurrence = await recurrenceMatching.createRecurrence({
       name: 'Cuidadora',
       categoryId: 'family',
@@ -271,7 +245,7 @@ describe('reconciliação de recorrências', () => {
     })
     const payment = await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-nubank-pf-6607',
+      targetId: testDatabase.ids.brlAccount,
       postedAt: '2026-08-04',
       description: 'Pix Janete Meili',
       direction: 'outflow',
@@ -279,7 +253,7 @@ describe('reconciliação de recorrências', () => {
     })
     const deposit = await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-nubank-pf-6607',
+      targetId: testDatabase.ids.brlAccount,
       postedAt: '2026-08-04',
       description: 'Reembolso Janete',
       direction: 'inflow',
@@ -325,7 +299,7 @@ describe('reconciliação de recorrências', () => {
     // O próximo pagamento do mesmo estabelecimento passa a ser sugerido.
     const nextPayment = await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-nubank-pf-6607',
+      targetId: testDatabase.ids.brlAccount,
       postedAt: '2026-09-04',
       description: 'Pix Janete Meili',
       direction: 'outflow',
@@ -342,12 +316,6 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('detecta, aprova e passa a ignorar recorrências a partir dos lançamentos', async () => {
-    const [{ ensureDatabase }, finance, detection] = await Promise.all([
-      import('#/db/index.server'),
-      import('./finance.server'),
-      import('./recurrence.server'),
-    ])
-    await ensureDatabase()
     const today = new Date()
     const monthsAgo = (months: number, day: number) => {
       const date = new Date(
@@ -360,7 +328,7 @@ describe('reconciliação de recorrências', () => {
       payments.push(
         await finance.createManualTransaction({
           targetType: 'account',
-          targetId: 'account-nubank-pf-6607',
+          targetId: testDatabase.ids.brlAccount,
           postedAt: monthsAgo(months, 12),
           description: 'Icatu Seguros',
           direction: 'outflow',
@@ -371,7 +339,7 @@ describe('reconciliação de recorrências', () => {
     for (const months of [2, 1]) {
       await finance.createManualTransaction({
         targetType: 'account',
-        targetId: 'account-nubank-pf-6607',
+        targetId: testDatabase.ids.brlAccount,
         postedAt: monthsAgo(months, 20),
         description: 'Starlink Internet',
         direction: 'outflow',
@@ -442,12 +410,6 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('não cria recorrência quando a detecção ficou sem transações vinculáveis', async () => {
-    const [finance, recurrenceServer, database, schema] = await Promise.all([
-      import('./finance.server'),
-      import('./recurrence.server'),
-      import('#/db/index.server'),
-      import('#/db/schema'),
-    ])
     const today = new Date()
     const monthsAgo = (months: number) =>
       new Date(
@@ -458,7 +420,7 @@ describe('reconciliação de recorrências', () => {
     for (const months of [2, 1]) {
       await finance.createManualTransaction({
         targetType: 'account',
-        targetId: 'account-nubank-pf-6607',
+        targetId: testDatabase.ids.brlAccount,
         postedAt: monthsAgo(months),
         description: 'Clube Horizonte Teste Atomicidade',
         direction: 'outflow',
@@ -483,7 +445,7 @@ describe('reconciliação de recorrências', () => {
       startsOn: candidate!.transactions[0].postedAt,
       scheduleAnchor: candidate!.nextExpectedDate,
     })
-    const competingOccurrences = await database.db
+    const competingOccurrences = await db
       .select()
       .from(schema.recurrenceOccurrences)
       .where(eq(schema.recurrenceOccurrences.recurrenceId, competing.id))
@@ -497,7 +459,7 @@ describe('reconciliação de recorrências', () => {
         transactionIds: [transaction.id],
       })
     }
-    const recurrencesBefore = await database.db
+    const recurrencesBefore = await db
       .select({ id: schema.recurrences.id })
       .from(schema.recurrences)
 
@@ -519,7 +481,7 @@ describe('reconciliação de recorrências', () => {
         () => null,
         (error: unknown) => error,
       )
-    const recurrencesAfter = await database.db
+    const recurrencesAfter = await db
       .select({ id: schema.recurrences.id })
       .from(schema.recurrences)
     expect.soft(recurrencesAfter).toHaveLength(recurrencesBefore.length)
@@ -531,14 +493,6 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('envelope: soma vários lançamentos, aprende estabelecimentos e fecha o período', async () => {
-    const [{ ensureDatabase }, finance, recurrenceMatching] = await Promise.all(
-      [
-        import('#/db/index.server'),
-        import('./finance.server'),
-        import('./recurrence.server'),
-      ],
-    )
-    await ensureDatabase()
     const today = new Date()
     const monthStart = new Date(
       Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1),
@@ -560,7 +514,7 @@ describe('reconciliação de recorrências', () => {
     const grocery = async (description: string, amountCents: number) =>
       finance.createManualTransaction({
         targetType: 'account',
-        targetId: 'account-nubank-pf-6607',
+        targetId: testDatabase.ids.brlAccount,
         postedAt: monthStart,
         description,
         direction: 'outflow',
@@ -608,7 +562,7 @@ describe('reconciliação de recorrências', () => {
     // Vínculo manual de vários lançamentos de uma vez.
     const padaria = await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-nubank-pf-6607',
+      targetId: testDatabase.ids.brlAccount,
       postedAt: monthStart,
       description: 'Padaria Pao Quente',
       direction: 'outflow',
@@ -616,7 +570,7 @@ describe('reconciliação de recorrências', () => {
     })
     const acougue = await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-nubank-pf-6607',
+      targetId: testDatabase.ids.brlAccount,
       postedAt: monthStart,
       description: 'Acougue Central',
       direction: 'outflow',
@@ -671,15 +625,16 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('receita: vincula a perna recebida de uma distribuição de lucro conciliada', async () => {
-    const [{ db, ensureDatabase }, schema, finance, recurrenceMatching] =
-      await Promise.all([
-        import('#/db/index.server'),
-        import('#/db/schema'),
-        import('./finance.server'),
-        import('./recurrence.server'),
-      ])
-    await ensureDatabase()
     const today = new Date().toISOString().slice(0, 10)
+    const companyAccount = await finance.createAccount({
+      name: 'Conta empresarial de teste',
+      institutionName: 'Banco empresarial de teste',
+      ownershipScopeId: testDatabase.ids.companyScope,
+      kind: 'checking',
+      purpose: 'operating',
+      currency: 'BRL',
+      initialBalanceCents: 0,
+    })
     const recurrence = await recurrenceMatching.createRecurrence({
       name: 'Salário',
       categoryId: 'profit_distribution_income',
@@ -689,13 +644,13 @@ describe('reconciliação de recorrências', () => {
       amountMode: 'variable',
       matchMode: 'aggregate',
       destinationMode: 'fixed',
-      accountId: 'account-inter-pf-0532',
+      accountId: testDatabase.ids.brlAccount,
       frequency: 'monthly',
       nextDate: today,
     })
     const outflow = await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-inter-pj-2673',
+      targetId: companyAccount.id,
       postedAt: today,
       description: 'Donald Lourenco Silveira',
       direction: 'outflow',
@@ -703,7 +658,7 @@ describe('reconciliação de recorrências', () => {
     })
     const inflow = await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-inter-pf-0532',
+      targetId: testDatabase.ids.brlAccount,
       postedAt: today,
       description: 'Donald Lourenco Silveira',
       direction: 'inflow',
@@ -712,11 +667,11 @@ describe('reconciliação de recorrências', () => {
     // Conciliação PJ → PF como a importação registra: contrapartida nas duas pernas.
     await db
       .update(schema.transactions)
-      .set({ counterpartyAccountId: 'account-inter-pf-0532' })
+      .set({ counterpartyAccountId: testDatabase.ids.brlAccount })
       .where(eq(schema.transactions.id, outflow.id))
     await db
       .update(schema.transactions)
-      .set({ counterpartyAccountId: 'account-inter-pj-2673' })
+      .set({ counterpartyAccountId: companyAccount.id })
       .where(eq(schema.transactions.id, inflow.id))
     const groupId = 'profit-distribution-test'
     await db.insert(schema.reconciliationGroups).values({
@@ -767,10 +722,6 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('continua gerando ocorrências depois de dois anos', async () => {
-    const [finance, recurrenceServer] = await Promise.all([
-      import('./finance.server'),
-      import('./recurrence.server'),
-    ])
     const recurrence = await recurrenceServer.createRecurrence({
       name: 'Recorrência longa',
       categoryId: 'housing',
@@ -791,10 +742,6 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('preserva vínculos aceitos e só muda a âncora quando o calendário muda', async () => {
-    const [finance, recurrenceServer] = await Promise.all([
-      import('./finance.server'),
-      import('./recurrence.server'),
-    ])
     const recurrence = await recurrenceServer.createRecurrence({
       name: 'Envelope ancorado',
       categoryId: 'food',
@@ -809,7 +756,7 @@ describe('reconciliação de recorrências', () => {
     })
     const row = await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-nubank-pf-6607',
+      targetId: testDatabase.ids.brlAccount,
       postedAt: '2027-01-31',
       description: 'Mercado do futuro',
       direction: 'outflow',
@@ -877,10 +824,6 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('rejeita uma sugestão aberta', async () => {
-    const [finance, recurrenceServer] = await Promise.all([
-      import('./finance.server'),
-      import('./recurrence.server'),
-    ])
     const recurrence = await recurrenceServer.createRecurrence({
       name: 'Serviço rejeitável',
       categoryId: 'subscriptions',
@@ -894,7 +837,7 @@ describe('reconciliação de recorrências', () => {
     })
     await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-nubank-pf-6607',
+      targetId: testDatabase.ids.brlAccount,
       postedAt: '2027-02-20',
       description: 'Serviço rejeitável',
       direction: 'outflow',
@@ -918,10 +861,6 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('lista candidatos sem transações tomadas e prioriza a janela do envelope', async () => {
-    const [finance, recurrenceServer] = await Promise.all([
-      import('./finance.server'),
-      import('./recurrence.server'),
-    ])
     const target = await recurrenceServer.createRecurrence({
       name: 'Compras do período',
       categoryId: 'food',
@@ -947,7 +886,7 @@ describe('reconciliação de recorrências', () => {
     })
     const insideSame = await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-nubank-pf-6607',
+      targetId: testDatabase.ids.brlAccount,
       postedAt: '2027-03-20',
       description: 'Mercado na janela',
       direction: 'outflow',
@@ -956,7 +895,7 @@ describe('reconciliação de recorrências', () => {
     })
     const insideOther = await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-nubank-pf-6607',
+      targetId: testDatabase.ids.brlAccount,
       postedAt: '2027-03-02',
       description: 'Outra categoria na janela',
       direction: 'outflow',
@@ -965,7 +904,7 @@ describe('reconciliação de recorrências', () => {
     })
     const outside = await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-nubank-pf-6607',
+      targetId: testDatabase.ids.brlAccount,
       postedAt: '2027-04-02',
       description: 'Mercado fora da janela',
       direction: 'outflow',
@@ -974,7 +913,7 @@ describe('reconciliação de recorrências', () => {
     })
     const taken = await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-nubank-pf-6607',
+      targetId: testDatabase.ids.brlAccount,
       postedAt: '2027-03-05',
       description: 'Pagamento já usado',
       direction: 'outflow',
@@ -1014,16 +953,13 @@ describe('reconciliação de recorrências', () => {
     ).toMatchObject({
       inWindow: true,
       categoryName: 'Alimentação',
-      accountLabel: 'Nubank PF •6607',
+      accountLabel: snapshot.accounts.find(
+        (account) => account.id === testDatabase.ids.brlAccount,
+      )?.name,
     })
   })
 
   it('retorna um candidato elegível depois dos 40 primeiros no ranking', async () => {
-    const [database, schema, recurrenceServer] = await Promise.all([
-      import('#/db/index.server'),
-      import('#/db/schema'),
-      import('./recurrence.server'),
-    ])
     const recurrence = await recurrenceServer.createRecurrence({
       name: 'Lista completa de candidatos',
       categoryId: 'food',
@@ -1035,17 +971,17 @@ describe('reconciliação de recorrências', () => {
       frequency: 'monthly',
       nextDate: '2030-01-10',
     })
-    const occurrence = await database.db
+    const occurrence = await db
       .select({ id: schema.recurrenceOccurrences.id })
       .from(schema.recurrenceOccurrences)
       .where(eq(schema.recurrenceOccurrences.recurrenceId, recurrence.id))
       .limit(1)
     expect(occurrence[0]).toBeDefined()
 
-    await database.db.insert(schema.transactions).values(
+    await db.insert(schema.transactions).values(
       Array.from({ length: 41 }, (_, index) => ({
         id: `link-candidate-${index}`,
-        accountId: 'account-nubank-pf-6607',
+        accountId: testDatabase.ids.brlAccount,
         categoryId: 'food',
         fingerprint: `link-candidate-${index}`,
         postedAt: '2030-01-10',
@@ -1067,12 +1003,6 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('retorna deltas por execução e fecha envelope com hoje injetado', async () => {
-    const [{ db }, schema, finance, recurrenceServer] = await Promise.all([
-      import('#/db/index.server'),
-      import('#/db/schema'),
-      import('./finance.server'),
-      import('./recurrence.server'),
-    ])
     const recurrence = await recurrenceServer.createRecurrence({
       name: 'Envelope com relógio injetado',
       categoryId: 'maintenance',
@@ -1088,7 +1018,7 @@ describe('reconciliação de recorrências', () => {
     await recurrenceServer.refreshRecurrences({ today: '2027-06-20' })
     await db.insert(schema.transactions).values({
       id: 'injected-today-envelope-row',
-      accountId: 'account-nubank-pf-6607',
+      accountId: testDatabase.ids.brlAccount,
       categoryId: 'maintenance',
       fingerprint: 'injected-today-envelope-row',
       postedAt: '2027-06-15',

@@ -1,33 +1,30 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { openTestDatabase } from '#/test/database'
+import type { TestDatabase } from '#/test/database'
+import * as finance from './finance.server'
+import * as recurrence from './recurrence.server'
 
 describe('grupos de recorrências', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'financas-recurrence-groups-'))
+  let database: TestDatabase
 
-  beforeAll(() => {
-    process.env.DATABASE_URL = join(directory, 'integration.db')
-    vi.resetModules()
+  beforeAll(async () => {
+    database = await openTestDatabase()
   })
 
   afterAll(() => {
-    rmSync(directory, { recursive: true, force: true })
+    database.close()
   })
 
   it('mantém linhas independentes no mesmo grupo e soma a projeção uma vez', async () => {
-    const [finance, recurrence] = await Promise.all([
-      import('./finance.server'),
-      import('./recurrence.server'),
-    ])
+    const { ids } = database
     const before = await finance.getFinanceSnapshot('2026-09')
 
     await recurrence.createRecurrence({
       name: 'Academia Donald',
       groupName: 'Academia',
       participantLabel: 'Donald',
-      categoryId: 'personal_care',
+      categoryId: ids.categories.personalCare,
       amountCents: 20_000,
       currency: 'BRL',
       direction: 'expense',
@@ -40,7 +37,7 @@ describe('grupos de recorrências', () => {
       name: 'Academia esposa',
       groupName: 'academia',
       participantLabel: 'Esposa',
-      categoryId: 'personal_care',
+      categoryId: ids.categories.personalCare,
       amountCents: 30_000,
       currency: 'BRL',
       direction: 'expense',

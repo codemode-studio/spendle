@@ -1,30 +1,27 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { eq } from 'drizzle-orm'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+
+import { openTestDatabase } from '#/test/database'
+import type { TestDatabase } from '#/test/database'
+import { repairImportProvenance } from './import-provenance-repair.server'
 
 describe('reparo de proveniência', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'financas-provenance-repair-'))
+  let database: TestDatabase
 
-  beforeAll(() => {
-    process.env.DATABASE_URL = join(directory, 'integration.db')
-    vi.resetModules()
+  beforeAll(async () => {
+    database = await openTestDatabase()
   })
 
   afterAll(() => {
-    rmSync(directory, { recursive: true, force: true })
+    database.close()
   })
 
   it('é idempotente e preserva cobertura OFX quando o arquivo não está disponível', async () => {
-    const [{ db, ensureDatabase }, schema, { repairImportProvenance }] =
-      await Promise.all([
-        import('./index.server'),
-        import('./schema'),
-        import('./import-provenance-repair.server'),
-      ])
-    await ensureDatabase()
+    const { db, schema } = database
     const scope = (await db.select().from(schema.ownershipScopes).limit(1))[0]
 
     await db.insert(schema.accounts).values({
@@ -38,7 +35,7 @@ describe('reparo de proveniência', () => {
       originalName: 'repair.ofx',
       mediaType: 'application/x-ofx',
       sizeBytes: 10,
-      storagePath: join(directory, 'arquivo-removido.ofx'),
+      storagePath: join(tmpdir(), `${randomUUID()}.ofx`),
     })
     await db.insert(schema.imports).values({
       id: 'repair-import',

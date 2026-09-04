@@ -1,35 +1,44 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-
 import { eq } from 'drizzle-orm'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest'
 
 import { isAcceptedRecurrenceMatchStatus } from '#/domain/recurrence-book'
+import { resetTestDatabase } from '#/test/database'
+import type { TestDatabase } from '#/test/database'
+import * as finance from './finance.server'
+import * as recurrenceServer from './recurrence.server'
 
 describe('aprovação de recorrências detectadas', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'financas-recurrence-approval-'))
   const today = '2026-09-04'
+  let database: TestDatabase
 
   beforeAll(() => {
-    process.env.DATABASE_URL = join(directory, 'integration.db')
     vi.useFakeTimers()
     vi.setSystemTime(new Date(`${today}T12:00:00Z`))
-    vi.resetModules()
+  })
+
+  beforeEach(async () => {
+    database = await resetTestDatabase()
+  })
+
+  afterEach(() => {
+    database.close()
   })
 
   afterAll(() => {
     vi.useRealTimers()
-    rmSync(directory, { recursive: true, force: true })
   })
 
   it('alinha o histórico anual e ignora períodos passados sem pagamento', async () => {
-    const [{ ensureDatabase }, finance, recurrenceServer] = await Promise.all([
-      import('#/db/index.server'),
-      import('./finance.server'),
-      import('./recurrence.server'),
-    ])
-    await ensureDatabase()
+    const { ids } = database
     const payments = await Promise.all(
       [
         { id: 'older', postedAt: '2024-12-31' },
@@ -37,7 +46,7 @@ describe('aprovação de recorrências detectadas', () => {
       ].map(({ id, postedAt }) =>
         finance.createManualTransaction({
           targetType: 'account',
-          targetId: 'account-nubank-pf-6607',
+          targetId: ids.brlAccount,
           postedAt,
           description: `Seguro anual ${id}`,
           direction: 'outflow',
@@ -48,7 +57,7 @@ describe('aprovação de recorrências detectadas', () => {
 
     const approved = await recurrenceServer.approveDetectedRecurrence({
       name: 'Seguro anual',
-      categoryId: 'insurance',
+      categoryId: ids.categories.insurance,
       amountCents: 12_345,
       currency: 'BRL',
       direction: 'expense',
@@ -86,15 +95,10 @@ describe('aprovação de recorrências detectadas', () => {
   })
 
   it('bloqueia um reembolso que também pertence a uma transferência ativa', async () => {
-    const [finance, recurrenceServer, database, schema] = await Promise.all([
-      import('./finance.server'),
-      import('./recurrence.server'),
-      import('#/db/index.server'),
-      import('#/db/schema'),
-    ])
+    const { db, ids, schema } = database
     const recurrence = await recurrenceServer.createRecurrence({
       name: 'Serviço conciliado',
-      categoryId: 'subscriptions',
+      categoryId: ids.categories.subscriptions,
       amountCents: 4_321,
       currency: 'BRL',
       direction: 'expense',
@@ -105,21 +109,21 @@ describe('aprovação de recorrências detectadas', () => {
     })
     const payment = await finance.createManualTransaction({
       targetType: 'account',
-      targetId: 'account-nubank-pf-6607',
+      targetId: ids.brlAccount,
       postedAt: today,
       description: 'Serviço conciliado',
       direction: 'outflow',
       amountCents: 4_321,
     })
     const occurrence = (
-      await database.db
+      await db
         .select()
         .from(schema.recurrenceOccurrences)
         .where(eq(schema.recurrenceOccurrences.recurrenceId, recurrence.id))
     ).find((item) => item.expectedDate === today)
     expect(occurrence).toBeDefined()
 
-    await database.db.insert(schema.reconciliationGroups).values([
+    await db.insert(schema.reconciliationGroups).values([
       {
         id: 'mixed-refund',
         type: 'refund',
@@ -133,7 +137,7 @@ describe('aprovação de recorrências detectadas', () => {
         confidence: 100,
       },
     ])
-    await database.db.insert(schema.reconciliationLinks).values([
+    await db.insert(schema.reconciliationLinks).values([
       {
         id: 'mixed-refund-link',
         groupId: 'mixed-refund',

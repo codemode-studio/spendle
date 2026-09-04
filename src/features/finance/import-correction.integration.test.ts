@@ -1,24 +1,21 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { openTestDatabase } from '#/test/database'
+import type { TestDatabase } from '#/test/database'
+import { runImportCorrectionFixture } from './import-correction.integration.fixture'
 
 describe('correções e identidade canônica', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'financas-import-correction-'))
+  let database: TestDatabase
 
-  beforeAll(() => {
-    process.env.DATABASE_URL = join(directory, 'integration.db')
-    vi.resetModules()
+  beforeAll(async () => {
+    database = await openTestDatabase({ seed: 'production' })
   })
 
   afterAll(() => {
-    rmSync(directory, { recursive: true, force: true })
+    database.close()
   })
 
   it('preserva lançamentos novos, promove identidade e recalcula a âncora', async () => {
-    await expect(
-      import('./import-correction.integration.fixture'),
-    ).resolves.toBeDefined()
+    await expect(runImportCorrectionFixture()).resolves.toBeUndefined()
   })
 })

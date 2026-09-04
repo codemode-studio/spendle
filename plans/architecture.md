@@ -59,6 +59,29 @@ móveis, período anterior, meses abrangidos e rótulos em pt-BR. Os cálculos u
 UTC para não variar com o fuso do processo. Funções que consultam a data atual
 aceitam uma data opcional, o que mantém testes e análises reproduzíveis.
 
+## Banco de dados e testes
+
+`src/db/connection.server.ts` abre uma conexão Drizzle/SQLite a partir de uma
+URL. Em produção, `src/db/index.server.ts` só cria essa conexão no primeiro uso
+de `db` ou `ensureDatabase()`. O caminho continua vindo de `DATABASE_URL`, com
+`./data/financas.db` como padrão. O `db` exportado é um proxy tipado, portanto os
+módulos de servidor mantêm o mesmo import e resolvem a conexão ativa ao executar
+cada operação.
+
+`ensureDatabase()` inicializa cada conexão uma vez. A sequência continua sendo
+migração dos arquivos em `drizzle/`, seed, reparo de proveniência e verificação
+de chaves estrangeiras. O seed de produção fica em `src/db/seed.server.ts`.
+
+Testes usam `openTestDatabase({ seed })` de `src/test/database.ts`. A função cria
+um diretório temporário exclusivo, instala a conexão antes de qualquer consulta,
+roda as mesmas migrações e retorna `{ db, schema, close, ids }`. O seed `minimal`
+é o padrão e fornece IDs estáveis para três escopos, uma conta BRL, um cartão e
+as categorias usadas pelos testes. Casos que verificam os dados iniciais reais
+pedem `seed: 'production'`. `resetTestDatabase()` fecha e remove o arquivo atual,
+abre outro com o mesmo tipo de seed e devolve o novo objeto de acesso. Cada
+arquivo de teste usa seu próprio banco, então o paralelismo padrão do Vitest não
+compartilha arquivos SQLite.
+
 ## Regras de dependência
 
 - Adaptadores de arquivo dependem do formato, não do fluxo de commit.
