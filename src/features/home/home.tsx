@@ -22,7 +22,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '#/components/ui/tooltip'
-import { formatCurrency } from '#/domain/finance'
+import { formatCurrency } from '#/domain/currency'
+import {
+  formatLongDate,
+  formatMonthName,
+  formatShortDate,
+  todayIso,
+} from '#/domain/period'
 import { StrategyProgressView } from '#/features/finance/strategy-progress'
 import { cn } from '#/lib/utils'
 import {
@@ -31,13 +37,7 @@ import {
 } from './analysis.functions'
 import type { FortnightAnalysis } from './analysis.server'
 import { CashChart, CategoryBar } from './charts'
-import {
-  buildHomeView,
-  buildInsights,
-  formatShortDate,
-  projectCash,
-  todayIso,
-} from './insights'
+import { buildHomeView, buildInsights, projectCash } from './insights'
 import type { FinanceSnapshot, HomeView, Insight } from './insights'
 
 // ─── Página ──────────────────────────────────────────────────────────────────
@@ -346,13 +346,6 @@ function StrategyCard({ snapshot }: { snapshot: FinanceSnapshot }) {
       </div>
     </section>
   )
-}
-
-function formatMonthName(month: string) {
-  return new Intl.DateTimeFormat('pt-BR', {
-    month: 'long',
-    timeZone: 'UTC',
-  }).format(new Date(`${month}-01T12:00:00Z`))
 }
 
 // ─── Para onde foi o dinheiro ────────────────────────────────────────────────
@@ -986,15 +979,4 @@ function AnalysisCard({ analysis }: { analysis: FortnightAnalysis }) {
       )}
     </div>
   )
-}
-
-function formatLongDate(iso: string) {
-  return new Intl.DateTimeFormat('pt-BR', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    timeZone: 'UTC',
-  })
-    .format(new Date(`${iso}T12:00:00Z`))
-    .replace('.', '')
 }

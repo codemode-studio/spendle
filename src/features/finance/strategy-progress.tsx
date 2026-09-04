@@ -1,7 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
+import { Info } from 'lucide-react'
 
 import { ProgressBar, StatusBadge } from '#/components/ui'
 import { Skeleton } from '#/components/ui/skeleton'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '#/components/ui/tooltip'
 import { formatCurrency, formatMonth } from '#/domain/finance'
 import {
   buildStrategyProgress,
@@ -86,10 +92,6 @@ export function StrategyProgressView({
           {overallLabel[progress.overall]}
         </StatusBadge>
         <span className="text-muted-foreground">
-          {dashboard.activeStrategy.name}
-          {progress.dayOfMonth !== null &&
-            ` · dia ${progress.dayOfMonth} de ${progress.daysInMonth}`}
-          {' · gastos '}
           <span className="font-medium text-foreground tabular-nums">
             {formatCurrency(progress.spending.actualCents)}
           </span>
@@ -99,24 +101,31 @@ export function StrategyProgressView({
           </span>
           {progress.spending.targetCents > 0 &&
             ` (${Math.round(spendingRatio * 100)}%)`}
+          {progress.dayOfMonth !== null &&
+            ` · dia ${progress.dayOfMonth} de ${progress.daysInMonth}`}
+          {` · ${dashboard.activeStrategy.name}`}
         </span>
+        <Tooltip>
+          <TooltipTrigger
+            aria-label="Como este acompanhamento é calculado"
+            className="inline-flex size-4 items-center justify-center rounded-full text-muted-foreground/70 hover:text-foreground pointer-coarse:size-6"
+          >
+            <Info className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipContent className="max-w-72 text-xs leading-snug">
+            Metas calculadas sobre a base de{' '}
+            {formatCurrency(progress.income.baseCents)}. Renda confirmada no
+            mês: {formatCurrency(progress.income.actualCents)}. O traço em cada
+            barra marca o ponto do mês em que estamos; gasto à direita dele está
+            adiantado.
+          </TooltipContent>
+        </Tooltip>
       </div>
-      <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+      <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-4">
         {progress.buckets.map((item) => (
           <BucketRow key={item.bucket} item={item} elapsed={progress.elapsed} />
         ))}
       </div>
-      <p className="text-xs text-muted-foreground">
-        Renda confirmada no mês:{' '}
-        <span className="tabular-nums">
-          {formatCurrency(progress.income.actualCents)}
-        </span>{' '}
-        · base da estratégia{' '}
-        <span className="tabular-nums">
-          {formatCurrency(progress.income.baseCents)}
-        </span>
-        . O traço na barra marca o ponto do mês em que estamos.
-      </p>
     </div>
   )
 }
@@ -132,22 +141,28 @@ function BucketRow({
     item.kind === 'spending'
       ? item.remainingCents >= 0
         ? item.projectedCents > item.actualCents
-          ? `Sobram ${formatCurrency(item.remainingCents)} · previsto chegar a ${formatCurrency(item.projectedCents)}`
+          ? `Sobram ${formatCurrency(item.remainingCents)} · previsão ${formatCurrency(item.projectedCents)}`
           : `Sobram ${formatCurrency(item.remainingCents)}`
-        : `Passou ${formatCurrency(-item.remainingCents)} da meta`
+        : `Passou ${formatCurrency(-item.remainingCents)}`
       : item.status === 'done'
         ? item.targetCents > 0
-          ? 'Aporte do mês feito'
-          : 'Sem meta neste mês'
+          ? 'Aporte feito'
+          : 'Sem meta'
         : `Faltam ${formatCurrency(item.remainingCents)}`
+  const projectedShare =
+    item.kind === 'spending' && item.targetCents > 0
+      ? Math.min(1, item.projectedCents / item.targetCents)
+      : 0
   return (
     <div className="min-w-0">
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
         <span className="flex items-center gap-2 text-sm">
           <span className="font-medium">{item.label}</span>
-          <StatusBadge tone={statusTone[item.status]}>
-            {bucketStatusLabels[item.status]}
-          </StatusBadge>
+          {item.status !== 'on_track' && (
+            <StatusBadge tone={statusTone[item.status]}>
+              {bucketStatusLabels[item.status]}
+            </StatusBadge>
+          )}
         </span>
         <span className="shrink-0 text-sm tabular-nums">
           <span className="font-medium">
@@ -160,10 +175,18 @@ function BucketRow({
         </span>
       </div>
       <div className="relative mt-2">
+        {projectedShare > 0 && (
+          <span
+            aria-hidden="true"
+            className="absolute top-1/2 left-0 h-1 -translate-y-1/2 rounded-full bg-foreground/15"
+            style={{ width: `${projectedShare * 100}%` }}
+          />
+        )}
         <ProgressBar
           value={item.actualCents}
           max={item.targetCents}
           className={cn(
+            'relative',
             item.status === 'over' || item.status === 'behind'
               ? '[&_[data-slot=progress-indicator]]:bg-destructive'
               : item.status === 'attention'
@@ -171,7 +194,12 @@ function BucketRow({
                 : item.status === 'done'
                   ? '[&_[data-slot=progress-indicator]]:bg-success'
                   : undefined,
+            '[&_[data-slot=progress-track]]:bg-transparent',
           )}
+        />
+        <span
+          aria-hidden="true"
+          className="absolute inset-x-0 top-1/2 -z-10 h-1 -translate-y-1/2 rounded-full bg-muted"
         />
         {item.kind === 'spending' && elapsed > 0 && elapsed < 1 && (
           <span
@@ -244,8 +272,13 @@ export function StrategyHistory({ months = 3 }: { months?: number }) {
                     >
                       {formatCurrency(actual)}
                     </span>
-                    <span className="block text-xs text-muted-foreground">
-                      meta {formatCurrency(target)}
+                    <span
+                      className="block text-xs text-muted-foreground"
+                      title={`Meta ${formatCurrency(target)}`}
+                    >
+                      {target > 0
+                        ? `${Math.round((actual / target) * 100)}% da meta`
+                        : 'sem meta'}
                     </span>
                   </td>
                 )

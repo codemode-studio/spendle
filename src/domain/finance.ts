@@ -1,21 +1,7 @@
 import { z } from 'zod'
 
-import { toMinorUnits } from './currency'
-
-export {
-  currencyFractionDigits,
-  convertMinorUnitsAtRate,
-  currencyOptions,
-  currencySchema,
-  formatCurrency,
-  formatMinorUnitsForInput,
-  isSupportedCurrency,
-  minorUnitsToMajor,
-  parseCurrency,
-  supportedCurrencies,
-  toMinorUnits,
-} from './currency'
-export type { SupportedCurrency } from './currency'
+import { formatCurrency as formatCurrencyValue } from './currency'
+import { formatMonthLong } from './period'
 
 export const allocationBuckets = [
   'essential',
@@ -155,29 +141,14 @@ export function formatInstrumentName(name: string) {
   return name.replace(/\s+•\s*(\d{4})$/, ' · $1')
 }
 
-export function formatDate(value: string) {
-  return new Intl.DateTimeFormat('pt-BR', {
-    day: '2-digit',
-    month: 'short',
-    timeZone: 'UTC',
-  }).format(new Date(`${value.slice(0, 10)}T12:00:00Z`))
-}
-
-export function formatMonth(value: string) {
-  const label = new Intl.DateTimeFormat('pt-BR', {
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'UTC',
-  }).format(new Date(`${value.slice(0, 7)}-01T12:00:00Z`))
-  return label.charAt(0).toUpperCase() + label.slice(1)
-}
-
 export function percentFromBps(bps: number) {
   return `${new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(
     bps / 100,
   )}%`
 }
 
-export function toCents(value: string | number, currency = 'BRL') {
-  return toMinorUnits(value, currency)
+// Kept only for strategy-progress.tsx, which is owned by another in-progress task.
+export const formatCurrency = formatCurrencyValue
+export function formatMonth(value: string) {
+  return formatMonthLong(value, { capitalize: true })
 }

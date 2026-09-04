@@ -51,12 +51,10 @@ import {
   TableHeader,
   TableRow,
 } from '#/components/ui/table'
-import {
-  formatCurrency,
-  formatInstrumentName,
-  normalizeDescription,
-  toCents,
-} from '#/domain/finance'
+import { formatInstrumentName, normalizeDescription } from '#/domain/finance'
+import { formatCurrency, toMinorUnits as toCents } from '#/domain/currency'
+import { baseAmount, ledgerSpan } from '#/domain/ledger'
+import { formatDayLabel, formatPeriod } from '#/domain/period'
 import {
   categorizeUncategorizedTransactionsWithAiFn,
   setReconciliationStatusFn,
@@ -253,10 +251,7 @@ function TransactionsPage() {
           transaction.categoryId === 'uncategorized'
         const matchesCategory =
           categoryFilter === 'all' || transaction.categoryId === categoryFilter
-        const signedCents =
-          transaction.baseAmountCents ??
-          (transaction.currency === 'BRL' ? transaction.amountCents : null) ??
-          transaction.amountCents
+        const signedCents = baseAmount(transaction) ?? transaction.amountCents
         const matchesDirection =
           direction === 'all' ||
           (direction === 'in' ? signedCents > 0 : signedCents < 0)
@@ -293,9 +288,10 @@ function TransactionsPage() {
     }
     return [...groups.entries()]
   }, [transactions])
-  const periodLabel = formatPeriod(
-    data.transactions.map((transaction) => transaction.postedAt),
-  )
+  const transactionPeriod = ledgerSpan(data.transactions)
+  const periodLabel = transactionPeriod
+    ? formatPeriod(transactionPeriod, 'month-range')
+    : ''
 
   const targetOptions = [
     ...data.accounts.map((account) => ({
@@ -938,7 +934,7 @@ function AmountCell({
   currency: string
   baseAmountCents: number | null
 }) {
-  const baseCents = baseAmountCents ?? (currency === 'BRL' ? amountCents : null)
+  const baseCents = baseAmount({ amountCents, currency, baseAmountCents })
   const primary =
     baseCents !== null
       ? formatCurrency(baseCents)
@@ -974,49 +970,4 @@ function displayDescription(text: string) {
       /(^|[\s(/-])([a-zà-ú])/g,
       (_, prefix, letter: string) => `${prefix}${letter.toUpperCase()}`,
     )
-}
-
-function formatDayLabel(iso: string) {
-  const today = new Date()
-  const localToday = new Date(
-    today.getFullYear(),
-    today.getMonth(),
-    today.getDate(),
-  )
-  const date = new Date(`${iso}T12:00:00`)
-  const diffDays = Math.round(
-    (localToday.getTime() -
-      new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()) /
-      86_400_000,
-  )
-  if (diffDays === 0) return 'Hoje'
-  if (diffDays === 1) return 'Ontem'
-  const label = new Intl.DateTimeFormat('pt-BR', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    ...(date.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}),
-  }).format(date)
-  return label.charAt(0).toUpperCase() + label.slice(1)
-}
-
-function formatPeriod(dates: Array<string>) {
-  if (dates.length === 0) return ''
-  const sorted = [...dates].sort()
-  const first = new Date(`${sorted[0]}T12:00:00`)
-  const last = new Date(`${sorted[sorted.length - 1]}T12:00:00`)
-  const month = (date: Date) =>
-    new Intl.DateTimeFormat('pt-BR', { month: 'short' })
-      .format(date)
-      .replace('.', '')
-  if (
-    first.getFullYear() === last.getFullYear() &&
-    first.getMonth() === last.getMonth()
-  ) {
-    return `${month(first)} ${first.getFullYear()}`
-  }
-  if (first.getFullYear() === last.getFullYear()) {
-    return `${month(first)} a ${month(last)} ${last.getFullYear()}`
-  }
-  return `${month(first)} ${first.getFullYear()} a ${month(last)} ${last.getFullYear()}`
 }

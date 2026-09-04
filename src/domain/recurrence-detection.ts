@@ -6,6 +6,7 @@
  * candidatos para a pessoa revisar e aprovar; nada é criado automaticamente.
  */
 import { normalizeDescription } from './finance'
+import { daysBetween, shiftDays } from './period'
 import {
   merchantSignature,
   transactionEligibleForRecurrence,
@@ -15,10 +16,7 @@ import {
   LOOKBACK_DAYS,
   addRecurrencePeriod,
   median,
-  shiftDays,
 } from './recurrence-schedule'
-
-const DAY_MS = 86_400_000
 
 export type DetectionTransaction = {
   id: string
@@ -60,13 +58,6 @@ export function detectionKey(
   direction: 'income' | 'expense',
 ) {
   return `${signature}|${direction}`
-}
-
-function daysBetween(left: string, right: string) {
-  return Math.round(
-    (Date.parse(`${right}T12:00:00Z`) - Date.parse(`${left}T12:00:00Z`)) /
-      DAY_MS,
-  )
 }
 
 function mostFrequent<T>(values: T[]): T | null {
@@ -189,7 +180,9 @@ export function detectRecurrences(input: {
 
     const gaps = items
       .slice(1)
-      .map((item, index) => daysBetween(items[index].postedAt, item.postedAt))
+      .map((item, index) =>
+        daysBetween(items[index].postedAt, item.postedAt, { inclusive: false }),
+      )
     const medianGap = median(gaps) ?? 0
     const cadence = CADENCES.find(
       (candidate) =>
@@ -213,7 +206,11 @@ export function detectRecurrences(input: {
     // Recorrência que parou de acontecer não vira candidato.
     const last = items[items.length - 1]
     const staleAfterDays = cadence.frequency === 'monthly' ? 75 : 400
-    if (daysBetween(last.postedAt, today) > staleAfterDays) continue
+    if (
+      daysBetween(last.postedAt, today, { inclusive: false }) > staleAfterDays
+    ) {
+      continue
+    }
 
     const maxDeviation = Math.max(
       ...gaps.map((gap) => Math.abs(gap - medianGap)),

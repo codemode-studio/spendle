@@ -17,6 +17,7 @@ import type {
   RecurrenceLearning,
   RecurrenceTransactionInput,
 } from '#/domain/recurrence-matching'
+import { daysBetween, todayIso } from '#/domain/period'
 import {
   addRecurrencePeriod,
   aggregateWindow,
@@ -97,21 +98,8 @@ type EngineState = {
   reconciliationByTransaction: Map<string, Set<RecurrenceReconciliationType>>
 }
 
-function todayIso() {
-  return new Date().toISOString().slice(0, 10)
-}
-
 function pairKey(occurrenceId: string, transactionId: string) {
   return `${occurrenceId}:${transactionId}`
-}
-
-function daysBetween(left: string, right: string) {
-  return (
-    Math.abs(
-      Date.parse(`${left.slice(0, 10)}T12:00:00Z`) -
-        Date.parse(`${right.slice(0, 10)}T12:00:00Z`),
-    ) / DAY_MS
-  )
 }
 
 async function loadReconciliationTypes() {
@@ -1353,7 +1341,10 @@ export async function listLinkCandidates(input: {
       const amountDifferenceCents = Math.abs(
         Math.abs(row.amountCents) - occurrence[0].expectedAmountCents,
       )
-      const distance = daysBetween(occurrence[0].expectedDate, row.postedAt)
+      const distance = daysBetween(occurrence[0].expectedDate, row.postedAt, {
+        inclusive: false,
+        absolute: true,
+      })
       const inWindow = row.postedAt >= window.start && row.postedAt < window.end
       const sameCategory = row.categoryId === recurrence.categoryId
       const rank =
@@ -1549,9 +1540,14 @@ export async function approveDetectedRecurrence(
         .filter((candidate) => candidate.status === 'expected')
         .sort(
           (left, right) =>
-            daysBetween(left.expectedDate, row.postedAt) -
-              daysBetween(right.expectedDate, row.postedAt) ||
-            left.expectedDate.localeCompare(right.expectedDate),
+            daysBetween(left.expectedDate, row.postedAt, {
+              inclusive: false,
+              absolute: true,
+            }) -
+              daysBetween(right.expectedDate, row.postedAt, {
+                inclusive: false,
+                absolute: true,
+              }) || left.expectedDate.localeCompare(right.expectedDate),
         )
         .at(0)
       if (!occurrence) break

@@ -10,6 +10,8 @@ import {
   summarizeCardStatements,
 } from '#/domain/credit-card'
 import { buildFinancialSummary } from '#/domain/financial-summary'
+import { isFamilyScope } from '#/domain/ledger'
+import type { OwnershipScopeType } from '#/domain/ledger'
 import {
   allocationAmount,
   calculateConservativeBase,
@@ -434,10 +436,7 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
   let netWorthCents = 0
   let missingBalanceConversionCount = 0
   for (const account of accounts) {
-    if (
-      account.scope?.type === 'company_br' ||
-      account.scope?.type === 'company_us'
-    ) {
+    if (!isFamilyScope(account.scope?.type)) {
       continue
     }
     const converted = convertToBaseCurrency(
@@ -451,10 +450,7 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
     }
   }
   for (const card of cards) {
-    if (
-      card.scope?.type === 'company_br' ||
-      card.scope?.type === 'company_us'
-    ) {
+    if (!isFamilyScope(card.scope?.type)) {
       continue
     }
     const converted = convertToBaseCurrency(
@@ -489,8 +485,7 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
     const scopeType = ownershipScopeId
       ? scopeById.get(ownershipScopeId)?.type
       : null
-    const companyTransaction =
-      scopeType === 'company_br' || scopeType === 'company_us'
+    const companyTransaction = !isFamilyScope(scopeType)
     if (
       transaction?.postedAt.startsWith(currentMonth) &&
       companyTransaction &&
@@ -534,11 +529,7 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
     const scopeType = ownershipScopeId
       ? scopeById.get(ownershipScopeId)?.type
       : null
-    return (
-      transaction.status === 'pending' &&
-      scopeType !== 'company_br' &&
-      scopeType !== 'company_us'
-    )
+    return transaction.status === 'pending' && isFamilyScope(scopeType)
   })
   for (const occurrence of recurrenceOccurrenceRows
     .filter(
@@ -703,15 +694,10 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
     unverifiedBalanceCount:
       accounts.filter(
         (account) =>
-          account.scope?.type !== 'company_br' &&
-          account.scope?.type !== 'company_us' &&
-          account.unverifiedDays > 0,
+          isFamilyScope(account.scope?.type) && account.unverifiedDays > 0,
       ).length +
       cards.filter(
-        (card) =>
-          card.scope?.type !== 'company_br' &&
-          card.scope?.type !== 'company_us' &&
-          card.unverifiedDays > 0,
+        (card) => isFamilyScope(card.scope?.type) && card.unverifiedDays > 0,
       ).length,
   })
 
@@ -849,7 +835,7 @@ export async function getFinanceSnapshot(selectedMonth?: string) {
 
 export async function createOwnershipScope(input: {
   name: string
-  type: 'household' | 'person' | 'company_br'
+  type: Exclude<OwnershipScopeType, 'company_us'>
 }) {
   await ensureDatabase()
   const row = { id: randomUUID(), ...input }
@@ -988,6 +974,7 @@ export async function createManualTransaction(input: {
   const id = randomUUID()
   const normalizedDescription = normalizeDescription(description)
   const notes = input.notes?.trim() || null
+  const inBaseCurrency = target.currency === 'BRL'
   const transactionResult = db.transaction((transaction) => {
     transaction
       .insert(schema.transactions)
@@ -1011,9 +998,9 @@ export async function createManualTransaction(input: {
         normalizedDescription,
         amountCents,
         currency: target.currency,
-        baseAmountCents: target.currency === 'BRL' ? amountCents : null,
+        baseAmountCents: inBaseCurrency ? amountCents : null,
         baseCurrency: 'BRL',
-        exchangeRateMicros: target.currency === 'BRL' ? 1_000_000 : null,
+        exchangeRateMicros: inBaseCurrency ? 1_000_000 : null,
         status: 'confirmed',
         notes,
       })

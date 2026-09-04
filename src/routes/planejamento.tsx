@@ -72,15 +72,20 @@ import {
 } from '#/components/ui/tooltip'
 import {
   formatCurrency,
-  formatDate,
-  formatInstrumentName,
   formatMinorUnitsForInput,
-  normalizeDescription,
   parseCurrency,
+  toMinorUnits as toCents,
+} from '#/domain/currency'
+import {
+  formatInstrumentName,
+  normalizeDescription,
   percentFromBps,
   strategyPresets,
-  toCents,
 } from '#/domain/finance'
+import {
+  formatMonthLong as formatMonth,
+  formatShortDate as formatDate,
+} from '#/domain/period'
 import {
   describeRecurrence,
   isAcceptedRecurrenceMatchStatus,
@@ -172,15 +177,6 @@ export const Route = createFileRoute('/planejamento')({
   component: PlanningPage,
 })
 
-function formatMonth(month: string) {
-  const label = new Intl.DateTimeFormat('pt-BR', {
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'UTC',
-  }).format(new Date(`${month}-01T12:00:00Z`))
-  return label.charAt(0).toUpperCase() + label.slice(1)
-}
-
 function PlanningPage() {
   const { section } = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -266,8 +262,8 @@ function PlanningPage() {
     onSuccess: (result) => {
       toast.success(
         result.alreadyClosed
-          ? `${formatMonth(result.month)} já estava fechado.`
-          : `${formatMonth(result.month)} foi fechado.`,
+          ? `${formatMonth(result.month, { capitalize: true })} já estava fechado.`
+          : `${formatMonth(result.month, { capitalize: true })} foi fechado.`,
       )
       void invalidate()
     },
@@ -1625,9 +1621,7 @@ function LinkPaymentDialog({
       )
       .slice(
         0,
-        recurrenceLinkCandidateLimits[
-          multiple ? 'aggregate' : 'single'
-        ],
+        recurrenceLinkCandidateLimits[multiple ? 'aggregate' : 'single'],
       )
   }, [candidatesQuery.data, multiple, search])
 

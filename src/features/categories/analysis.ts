@@ -1,7 +1,13 @@
-import type { FamilyTransaction, Period } from '#/features/home/insights'
-import { isSpending, shiftDays } from '#/features/home/insights'
-
-const OTHER_COLOR = '#94a3b8'
+import { isSpending, spendingByCategory } from '#/domain/ledger'
+import type { FamilyTransaction } from '#/domain/ledger'
+import {
+  daysBetween,
+  inPeriod,
+  monthKey,
+  monthsInPeriod,
+  previousPeriod as periodBefore,
+} from '#/domain/period'
+import type { Period } from '#/domain/period'
 
 export interface MonthPoint {
   /** `YYYY-MM` */
@@ -47,53 +53,6 @@ export interface CategoryAnalysis {
   items: Array<CategoryTrend>
 }
 
-function daysBetween(start: string, end: string) {
-  return (
-    Math.round(
-      (Date.parse(`${end}T12:00:00Z`) - Date.parse(`${start}T12:00:00Z`)) /
-        86_400_000,
-    ) + 1
-  )
-}
-
-const shortMonth = new Intl.DateTimeFormat('pt-BR', {
-  month: 'short',
-  timeZone: 'UTC',
-})
-const longMonth = new Intl.DateTimeFormat('pt-BR', {
-  month: 'long',
-  year: 'numeric',
-  timeZone: 'UTC',
-})
-
-export function monthsInPeriod(period: Period): Array<MonthPoint> {
-  const months: Array<MonthPoint> = []
-  let cursor = `${period.start.slice(0, 7)}-01`
-  while (cursor.slice(0, 7) <= period.end.slice(0, 7)) {
-    const date = new Date(`${cursor}T12:00:00Z`)
-    const key = cursor.slice(0, 7)
-    const monthEnd = new Date(
-      Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0),
-    )
-      .toISOString()
-      .slice(0, 10)
-    months.push({
-      key,
-      label: shortMonth.format(date).replace('.', ''),
-      fullLabel: longMonth.format(date),
-      cents: 0,
-      partial: cursor < period.start || monthEnd > period.end,
-    })
-    date.setUTCMonth(date.getUTCMonth() + 1)
-    cursor = date.toISOString().slice(0, 10)
-  }
-  return months
-}
-
-function ratio(current: number, previous: number) {
-  return previous > 0 ? (current - previous) / previous : null
-}
-
 /**
  * Gastos por categoria num período, com série mensal por categoria e
  * comparação com o período imediatamente anterior de mesmo tamanho.
@@ -103,38 +62,22 @@ export function analyzeCategories(
   period: Period,
 ): CategoryAnalysis {
   const periodDays = daysBetween(period.start, period.end)
-  const previousPeriod: Period = {
-    start: shiftDays(period.start, -periodDays),
-    end: shiftDays(period.start, -1),
-  }
-  const months = monthsInPeriod(period)
+  const previousPeriod = periodBefore(period)
+  const spending = spendingByCategory(transactions, period, previousPeriod)
+  const months: Array<MonthPoint> = monthsInPeriod(period).map((month) => ({
+    ...month,
+    cents: 0,
+  }))
   const monthIndex = new Map(months.map((month, index) => [month.key, index]))
   const monthsSpan = Math.max(periodDays / (365.25 / 12), 1)
-
-  const current = new Map<
-    string,
-    {
-      name: string
-      color: string
-      cents: number
-      count: number
-      monthly: Array<number>
-    }
-  >()
-  const previous = new Map<string, number>()
-  let totalCents = 0
-  let spendingCount = 0
+  const monthlyByCategory = new Map<string, Array<number>>()
   let uncategorizedCents = 0
   let uncategorizedCount = 0
 
   for (const transaction of transactions) {
-    const date = transaction.postedAt
-    const inCurrent = date >= period.start && date <= period.end
-    const inPrevious =
-      date >= previousPeriod.start && date <= previousPeriod.end
-    if (!inCurrent && !inPrevious) continue
+    if (!inPeriod(transaction.postedAt, period)) continue
     if (transaction.uncategorized) {
-      if (inCurrent && transaction.amountCents < 0) {
+      if (transaction.amountCents < 0) {
         uncategorizedCents += -transaction.amountCents
         uncategorizedCount += 1
       }
@@ -143,61 +86,44 @@ export function analyzeCategories(
     if (!isSpending(transaction)) continue
     const id = transaction.categoryId ?? 'uncategorized'
     const cents = -transaction.amountCents
-    if (inCurrent) {
-      const entry = current.get(id) ?? {
-        name: transaction.categoryName,
-        color: transaction.color || OTHER_COLOR,
-        cents: 0,
-        count: 0,
-        monthly: months.map(() => 0),
-      }
-      entry.cents += cents
-      entry.count += 1
-      const index = monthIndex.get(date.slice(0, 7))
-      if (index !== undefined) {
-        entry.monthly[index] = (entry.monthly[index] ?? 0) + cents
-        months[index].cents += cents
-      }
-      current.set(id, entry)
-      totalCents += cents
-      spendingCount += 1
-    } else {
-      previous.set(id, (previous.get(id) ?? 0) + cents)
+    const monthly = monthlyByCategory.get(id) ?? months.map(() => 0)
+    const index = monthIndex.get(monthKey(transaction.postedAt))
+    if (index !== undefined) {
+      monthly[index] = (monthly[index] ?? 0) + cents
+      months[index].cents += cents
     }
+    monthlyByCategory.set(id, monthly)
   }
 
-  const previousTotalCents = [...previous.values()].reduce(
-    (sum, value) => sum + value,
-    0,
-  )
-  const items: Array<CategoryTrend> = [...current.entries()]
-    .map(([id, entry]) => {
-      const previousCents = previous.get(id) ?? 0
-      return {
-        id,
-        name: entry.name,
-        color: entry.color,
-        cents: entry.cents,
-        count: entry.count,
-        share: totalCents > 0 ? entry.cents / totalCents : 0,
-        monthly: entry.monthly,
-        averageMonthlyCents: Math.round(entry.cents / monthsSpan),
-        previousCents,
-        deltaRatio: ratio(entry.cents, previousCents),
-      }
-    })
-    .sort((left, right) => right.cents - left.cents)
+  const items: Array<CategoryTrend> = spending.items
+    .filter((item) => item.cents > 0)
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      color: item.color,
+      cents: item.cents,
+      count: item.count,
+      share: item.share,
+      monthly: monthlyByCategory.get(item.id) ?? months.map(() => 0),
+      averageMonthlyCents: Math.round(item.cents / monthsSpan),
+      previousCents: item.previousCents,
+      deltaRatio: item.deltaRatio,
+    }))
 
   return {
     period,
     previousPeriod,
     periodDays,
     months,
-    totalCents,
-    previousTotalCents,
-    deltaRatio: ratio(totalCents, previousTotalCents),
-    averageMonthlyCents: Math.round(totalCents / monthsSpan),
-    spendingCount,
+    totalCents: spending.totalCents,
+    previousTotalCents: spending.previousTotalCents,
+    deltaRatio:
+      spending.previousTotalCents > 0
+        ? (spending.totalCents - spending.previousTotalCents) /
+          spending.previousTotalCents
+        : null,
+    averageMonthlyCents: Math.round(spending.totalCents / monthsSpan),
+    spendingCount: spending.spendingCount,
     uncategorizedCents,
     uncategorizedCount,
     items,

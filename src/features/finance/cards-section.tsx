@@ -41,13 +41,12 @@ import type { CardStatementSummary } from '#/domain/credit-card'
 import {
   currencyOptions,
   formatCurrency,
-  formatDate,
   formatMinorUnitsForInput,
-  formatInstrumentName,
-  formatMonth,
   parseCurrency,
-  toCents,
-} from '#/domain/finance'
+  toMinorUnits as toCents,
+} from '#/domain/currency'
+import { formatInstrumentName } from '#/domain/finance'
+import { formatMonthLong, formatShortDate as formatDate } from '#/domain/period'
 import type { getFinanceSnapshotFn } from '#/features/finance/finance.functions'
 import {
   createCreditCardFn,
@@ -604,7 +603,12 @@ function groupStatementsByMonth(cards: CardSnapshot[]) {
     const key = row.statement.dueDate.slice(0, 7)
     let month = months.get(key)
     if (!month) {
-      month = { key, label: formatMonth(key), rows: [], totals: new Map() }
+      month = {
+        key,
+        label: formatMonthLong(key, { capitalize: true }),
+        rows: [],
+        totals: new Map(),
+      }
       months.set(key, month)
     }
     month.rows.push(row)

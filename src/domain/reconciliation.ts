@@ -1,5 +1,6 @@
 import { minorUnitsToMajor } from './currency'
 import { normalizeDescription } from './finance'
+import { daysBetween } from './period'
 
 export interface ReconciliationTransaction {
   id: string
@@ -100,12 +101,6 @@ export function detectOwnedTransferCategory(input: {
   return 'transfer' as const
 }
 
-function daysBetween(left: string, right: string) {
-  const leftTime = new Date(`${left.slice(0, 10)}T12:00:00Z`).getTime()
-  const rightTime = new Date(`${right.slice(0, 10)}T12:00:00Z`).getTime()
-  return Math.abs(leftTime - rightTime) / 86_400_000
-}
-
 function cardPaymentDescription(value: string) {
   return /pag(?:amento)?\s*(?:de\s*)?(?:fatura|cartao)|fatura\s*(?:paga|cartao)/i.test(
     value,
@@ -132,7 +127,10 @@ export function buildReconciliationSuggestions(
     ) {
       const left = transactions[leftIndex]
       const right = transactions[rightIndex]
-      const days = daysBetween(left.postedAt, right.postedAt)
+      const days = daysBetween(left.postedAt, right.postedAt, {
+        inclusive: false,
+        absolute: true,
+      })
       if (
         days > 120 ||
         Math.sign(left.amountCents) === Math.sign(right.amountCents)

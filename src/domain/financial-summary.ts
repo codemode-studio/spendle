@@ -1,3 +1,10 @@
+import {
+  isBudgetSpendingBucket,
+  isFamilyScope,
+  isInternalTransferType,
+} from './ledger'
+import type { BudgetSpendingBucket, OwnershipScopeType } from './ledger'
+
 export type StrategyBucket =
   'essential' | 'lifestyle' | 'investment' | 'reserve'
 
@@ -9,7 +16,7 @@ export type SummaryTransaction = {
   categoryId: string | null
   bucket: string | null
   incomeBaseEligible: boolean
-  scopeType: 'household' | 'person' | 'company_br' | 'company_us' | null
+  scopeType: OwnershipScopeType | null
   accountPurpose: 'operating' | 'reserve' | 'investment' | null
 }
 
@@ -33,7 +40,7 @@ export type SummaryReconciliation = {
 export type RecurrenceActual = {
   transactionId: string
   amountCents: number
-  bucket: 'essential' | 'lifestyle'
+  bucket: BudgetSpendingBucket
   categoryConflict: boolean
 }
 
@@ -51,9 +58,6 @@ export type IntegrityIssue = {
   count: number
   blocksClosing: boolean
 }
-
-const isFamily = (scope: SummaryTransaction['scopeType']) =>
-  scope !== 'company_br' && scope !== 'company_us'
 
 export function buildFinancialSummary(input: {
   month: string
@@ -83,9 +87,7 @@ export function buildFinancialSummary(input: {
   )
   const excludedActualIds = new Set(
     confirmedGroups
-      .filter((group) =>
-        ['transfer', 'fx_transfer', 'card_payment'].includes(group.type),
-      )
+      .filter((group) => isInternalTransferType(group.type))
       .flatMap((group) => group.transactionIds),
   )
   const transactionsById = new Map(
@@ -116,7 +118,7 @@ export function buildFinancialSummary(input: {
   for (const transaction of monthTransactions) {
     if (
       transaction.status !== 'confirmed' ||
-      !isFamily(transaction.scopeType) ||
+      !isFamilyScope(transaction.scopeType) ||
       transaction.amountCents === null ||
       excludedActualIds.has(transaction.id)
     ) {
@@ -125,14 +127,11 @@ export function buildFinancialSummary(input: {
     const splits = splitByTransaction.get(transaction.id)
     if (splits?.length) {
       for (const split of splits) {
-        if (split.bucket === 'essential' || split.bucket === 'lifestyle') {
+        if (isBudgetSpendingBucket(split.bucket)) {
           actual[split.bucket] += -split.amountCents
         }
       }
-    } else if (
-      transaction.bucket === 'essential' ||
-      transaction.bucket === 'lifestyle'
-    ) {
+    } else if (isBudgetSpendingBucket(transaction.bucket)) {
       actual[transaction.bucket] += -transaction.amountCents
     }
   }
@@ -140,17 +139,14 @@ export function buildFinancialSummary(input: {
   for (const transaction of monthTransactions) {
     if (
       transaction.status !== 'pending' ||
-      !isFamily(transaction.scopeType) ||
+      !isFamilyScope(transaction.scopeType) ||
       transaction.amountCents === null ||
       recurrenceCandidateIds.has(transaction.id) ||
       excludedActualIds.has(transaction.id)
     ) {
       continue
     }
-    if (
-      transaction.bucket === 'essential' ||
-      transaction.bucket === 'lifestyle'
-    ) {
+    if (isBudgetSpendingBucket(transaction.bucket)) {
       pending[transaction.bucket] += -transaction.amountCents
     }
   }
@@ -164,7 +160,7 @@ export function buildFinancialSummary(input: {
           transaction &&
           transaction.status === 'confirmed' &&
           transaction.amountCents !== null &&
-          isFamily(transaction.scopeType),
+          isFamilyScope(transaction.scopeType),
         ),
       )
     const source = groupTransactions.find(
@@ -191,7 +187,7 @@ export function buildFinancialSummary(input: {
     const transaction = transactionsById.get(recurrence.transactionId)
     if (
       !transaction ||
-      isFamily(transaction.scopeType) ||
+      isFamilyScope(transaction.scopeType) ||
       !transaction.postedAt.startsWith(input.month)
     ) {
       continue
@@ -205,7 +201,7 @@ export function buildFinancialSummary(input: {
   const currentIncomeCents = monthTransactions.reduce((sum, transaction) => {
     if (
       transaction.status !== 'confirmed' ||
-      !isFamily(transaction.scopeType) ||
+      !isFamilyScope(transaction.scopeType) ||
       transaction.amountCents === null ||
       transaction.amountCents <= 0 ||
       !transaction.incomeBaseEligible ||
@@ -231,7 +227,7 @@ export function buildFinancialSummary(input: {
     monthTransactions.filter(
       (transaction) =>
         transaction.status === 'confirmed' &&
-        isFamily(transaction.scopeType) &&
+        isFamilyScope(transaction.scopeType) &&
         (!transaction.categoryId || transaction.categoryId === 'uncategorized'),
     ).length,
     true,
@@ -240,7 +236,8 @@ export function buildFinancialSummary(input: {
     'pending_transaction',
     monthTransactions.filter(
       (transaction) =>
-        transaction.status === 'pending' && isFamily(transaction.scopeType),
+        transaction.status === 'pending' &&
+        isFamilyScope(transaction.scopeType),
     ).length,
     true,
   )
@@ -249,7 +246,7 @@ export function buildFinancialSummary(input: {
     monthTransactions.filter(
       (transaction) =>
         transaction.status !== 'excluded' &&
-        isFamily(transaction.scopeType) &&
+        isFamilyScope(transaction.scopeType) &&
         transaction.amountCents === null,
     ).length + input.missingRecurrenceConversionCount,
     true,

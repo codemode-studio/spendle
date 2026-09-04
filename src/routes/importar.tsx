@@ -61,7 +61,9 @@ import {
   TableHeader,
   TableRow,
 } from '#/components/ui/table'
-import { formatCurrency, formatInstrumentName } from '#/domain/finance'
+import { formatCurrency } from '#/domain/currency'
+import { formatInstrumentName } from '#/domain/finance'
+import { formatPeriod } from '#/domain/period'
 import {
   commitImportFn,
   confirmImportCoverageFn,
@@ -972,7 +974,7 @@ function ImportPage() {
                         {formatInstrumentName(
                           item.target?.name ?? 'Destino removido',
                         )}{' '}
-                        · {formatPeriod(item.periodStart, item.periodEnd)}
+                        · {formatImportPeriod(item.periodStart, item.periodEnd)}
                       </p>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <Badge
@@ -1236,7 +1238,7 @@ function ImportAuditReport({
     },
     {
       title: 'Cobertura e saldo',
-      value: formatPeriod(item.periodStart, item.periodEnd),
+      value: formatImportPeriod(item.periodStart, item.periodEnd),
       description: `${
         item.periodSource === 'filename'
           ? 'Período identificado no nome do arquivo. '
@@ -1323,7 +1325,7 @@ function getImportAuditGuidance(item: ImportItem) {
   const targetName = formatInstrumentName(
     item.target?.name ?? 'destino removido',
   )
-  const period = formatPeriod(item.periodStart, item.periodEnd)
+  const period = formatImportPeriod(item.periodStart, item.periodEnd)
   const currency =
     item.target?.currency ?? item.detectedCurrency ?? item.staged[0]?.currency
   const totals = `${formatCurrency(item.totalCreditsCents, currency)} em créditos e ${formatCurrency(item.totalDebitsCents, currency)} em débitos`
@@ -1443,10 +1445,11 @@ function formatFileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function formatPeriod(start: string | null, end: string | null) {
+function formatImportPeriod(start: string | null, end: string | null) {
   if (!start && !end) return 'Período não informado'
   if (start === end || !end) return start ?? end ?? 'Período não informado'
-  return `${start ?? 'Data ausente'} a ${end}`
+  if (!start) return `Data ausente a ${end}`
+  return formatPeriod({ start, end }, 'iso')
 }
 
 const importStatusLabels: Record<string, string> = {

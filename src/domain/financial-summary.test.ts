@@ -43,6 +43,15 @@ describe('resumo financeiro único', () => {
     expect(result.currentExpenseCents).toBe(8_000)
   })
 
+  it('mantém impostos fora dos quatro envelopes da estratégia', () => {
+    const result = summarize({
+      transactions: [{ ...base, bucket: 'tax' }],
+    })
+    expect(result.currentExpenseCents).toBe(0)
+    expect(result.budgetActual.essential).toBe(0)
+    expect(result.budgetActual.lifestyle).toBe(0)
+  })
+
   it('inclui apenas rendas elegíveis na renda familiar', () => {
     const result = summarize({
       transactions: [

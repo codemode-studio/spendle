@@ -1,12 +1,8 @@
+import { shiftDays, todayIso } from './period'
+
 export const LOOKBACK_DAYS = 45
 
 export type RecurrenceFrequency = 'monthly' | 'yearly'
-
-export function shiftDays(iso: string, days: number) {
-  const date = new Date(`${iso}T12:00:00Z`)
-  date.setUTCDate(date.getUTCDate() + days)
-  return date.toISOString().slice(0, 10)
-}
 
 export function median(values: number[]) {
   if (!values.length) return undefined
@@ -84,7 +80,7 @@ export function occurrenceDates(
   },
   options: { today?: string } = {},
 ) {
-  const today = options.today ?? new Date().toISOString().slice(0, 10)
+  const today = options.today ?? todayIso()
   const result: string[] = []
   let date = input.startsOn === '1970-01-01' ? input.nextDate : input.startsOn
   if (input.startsOn === '1970-01-01') {

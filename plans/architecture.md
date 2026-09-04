@@ -43,6 +43,22 @@ de leitura puro usado para escolher a ocorrência atual e descrever seu estado.
 módulos de produto não importam esses arquivos; chamam server functions ou o
 modelo de leitura.
 
+## Lançamento (read model)
+
+`src/domain/ledger.ts` transforma o snapshot financeiro em
+`FamilyTransaction`, a linha plana consumida pela Home e por Categorias. O
+módulo decide o escopo familiar, a conversão para o valor-base e as exclusões de
+transferências internas. Também calcula os mapas de gasto atual e anterior por
+categoria. As features podem acrescentar séries mensais ou agrupar "Outras",
+mas não repetem esses predicados.
+
+## Período de análise
+
+`src/domain/period.ts` concentra intervalos inclusivos em datas ISO, janelas
+móveis, período anterior, meses abrangidos e rótulos em pt-BR. Os cálculos usam
+UTC para não variar com o fuso do processo. Funções que consultam a data atual
+aceitam uma data opcional, o que mantém testes e análises reproduzíveis.
+
 ## Regras de dependência
 
 - Adaptadores de arquivo dependem do formato, não do fluxo de commit.

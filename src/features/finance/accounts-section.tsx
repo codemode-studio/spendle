@@ -32,10 +32,10 @@ import { NativeSelect } from '#/components/ui/native-select'
 import {
   currencyOptions,
   formatCurrency,
-  formatDate,
-  formatInstrumentName,
   parseCurrency,
-} from '#/domain/finance'
+} from '#/domain/currency'
+import { formatInstrumentName } from '#/domain/finance'
+import { formatShortDate as formatDate } from '#/domain/period'
 import type { getFinanceSnapshotFn } from '#/features/finance/finance.functions'
 import {
   createAccountFn,

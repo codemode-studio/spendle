@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import type { FamilyTransaction } from '#/features/home/insights'
+import type { FamilyTransaction } from '#/domain/ledger'
+import { monthsInPeriod } from '#/domain/period'
 
-import { analyzeCategories, monthsInPeriod } from './analysis'
+import { analyzeCategories } from './analysis'
 
 function spend(
   id: string,

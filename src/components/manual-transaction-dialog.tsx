@@ -34,9 +34,9 @@ import { ToggleGroup, ToggleGroupItem } from '#/components/ui/toggle-group'
 import type { CategoryOption } from '#/domain/categories'
 import {
   currencyFractionDigits,
-  formatInstrumentName,
-  toCents,
-} from '#/domain/finance'
+  toMinorUnits as toCents,
+} from '#/domain/currency'
+import { formatInstrumentName } from '#/domain/finance'
 import { createManualTransactionFn } from '#/features/finance/finance.functions'
 import { financeQueryKeys } from '#/features/finance/queries'
 

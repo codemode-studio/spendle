@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { shiftDays } from './period'
 import {
   LOOKBACK_DAYS,
   addRecurrencePeriod,
@@ -7,7 +8,6 @@ import {
   median,
   occurrenceDates,
   previousRecurrencePeriod,
-  shiftDays,
 } from './recurrence-schedule'
 
 describe('calendário de recorrências', () => {

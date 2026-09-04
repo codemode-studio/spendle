@@ -28,7 +28,10 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '#/components/ui/tooltip'
-import { currencyFractionDigits, toCents } from '#/domain/finance'
+import {
+  currencyFractionDigits,
+  toMinorUnits as toCents,
+} from '#/domain/currency'
 import { createManualBalanceCheckpointFn } from '#/features/finance/finance.functions'
 import { financeQueryKeys } from '#/features/finance/queries'
 

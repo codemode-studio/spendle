@@ -2,154 +2,30 @@
  * Derivações do painel sobre o snapshot financeiro real.
  * Tudo aqui é cálculo puro (roda no cliente e no servidor) — nenhum dado fictício.
  */
+import {
+  familyTransactions,
+  internalTransferIds,
+  isFamilyScope,
+  isSpending,
+  OTHER_CATEGORY_COLOR,
+  recurrenceMatchedIds,
+  spendingByCategory,
+} from '#/domain/ledger'
+import type { FamilyTransaction } from '#/domain/ledger'
+import {
+  daysBetween,
+  formatShortDate,
+  inPeriod,
+  shiftDays,
+  todayIso,
+  trailingPeriod,
+} from '#/domain/period'
+import type { Period } from '#/domain/period'
 import type { getFinanceSnapshotFn } from '#/features/finance/finance.functions'
-import { describeRecurrence } from '#/domain/recurrence-book'
 
 export type FinanceSnapshot = Awaited<ReturnType<typeof getFinanceSnapshotFn>>
 
-type Scope = FinanceSnapshot['scopes'][number]
-
-const COMPANY_SCOPES = new Set(['company_br', 'company_us'])
-const SPENDING_BUCKETS = new Set(['essential', 'lifestyle', 'tax'])
 const ALLOCATION_BUCKETS = new Set(['investment', 'reserve'])
-const OTHER_COLOR = '#94a3b8'
-
-function isFamilyScope(scope: Scope | null | undefined) {
-  return !scope || !COMPANY_SCOPES.has(scope.type)
-}
-
-export function todayIso() {
-  return new Date().toISOString().slice(0, 10)
-}
-
-export function shiftDays(iso: string, days: number) {
-  const date = new Date(`${iso}T12:00:00Z`)
-  date.setUTCDate(date.getUTCDate() + days)
-  return date.toISOString().slice(0, 10)
-}
-
-export interface Period {
-  /** Inclusive, ISO date. */
-  start: string
-  /** Inclusive, ISO date. */
-  end: string
-}
-
-/** Janela de `days` dias terminando `endOffset` dias antes de hoje. */
-export function trailingPeriod(days: number, endOffset = 0): Period {
-  const today = todayIso()
-  const end = shiftDays(today, -endOffset)
-  return { start: shiftDays(end, -(days - 1)), end }
-}
-
-function inPeriod(date: string, period: Period) {
-  return date >= period.start && date <= period.end
-}
-
-// ─── Transações da família ───────────────────────────────────────────────────
-
-export interface FamilyTransaction {
-  id: string
-  postedAt: string
-  description: string
-  normalized: string
-  /** Valor em BRL (base), assinado. */
-  amountCents: number
-  categoryId: string | null
-  categoryName: string
-  color: string
-  bucket: string | null
-  source: 'account' | 'card'
-  uncategorized: boolean
-}
-
-/** IDs de transações que são transferências internas / pagamento de fatura confirmados. */
-function internalTransferIds(snapshot: FinanceSnapshot) {
-  const ids = new Set<string>()
-  for (const group of snapshot.reconciliations) {
-    if (group.status !== 'confirmed') continue
-    if (!['transfer', 'fx_transfer', 'card_payment'].includes(group.type)) {
-      continue
-    }
-    for (const link of group.links) ids.add(link.transactionId)
-  }
-  return ids
-}
-
-/** IDs de transações já casadas com recorrências. */
-function recurrenceMatchedIds(snapshot: FinanceSnapshot) {
-  const ids = new Set<string>()
-  for (const recurrence of snapshot.recurrences) {
-    const book = describeRecurrence(
-      {
-        active: recurrence.active,
-        matchMode: recurrence.matchMode,
-        frequency: recurrence.frequency,
-        scheduleAnchor: recurrence.scheduleAnchor,
-        occurrences: recurrence.occurrences,
-      },
-      { today: todayIso() },
-    )
-    for (const match of book.acceptedMatches) {
-      ids.add(match.transactionId)
-    }
-  }
-  return ids
-}
-
-/**
- * Lançamentos confirmados da família, em BRL, sem transferências internas,
- * pagamentos de fatura e movimentos da empresa.
- */
-export function familyTransactions(
-  snapshot: FinanceSnapshot,
-): Array<FamilyTransaction> {
-  const excluded = internalTransferIds(snapshot)
-  const scopeById = new Map(snapshot.scopes.map((scope) => [scope.id, scope]))
-  const result: Array<FamilyTransaction> = []
-
-  for (const transaction of snapshot.transactions) {
-    if (transaction.status !== 'confirmed') continue
-    if (excluded.has(transaction.id)) continue
-    if (transaction.counterpartyAccountId) continue
-    const scopeId =
-      transaction.account?.ownershipScopeId ??
-      transaction.creditCard?.ownershipScopeId
-    if (scopeId && !isFamilyScope(scopeById.get(scopeId))) continue
-    const category = transaction.category
-    const bucket = category?.bucket ?? null
-    if (bucket === 'business') continue
-    const uncategorized = !category || category.id === 'uncategorized'
-    if (bucket === 'excluded' && !uncategorized) continue
-    const amount =
-      transaction.baseAmountCents ??
-      (transaction.currency === 'BRL' ? transaction.amountCents : null)
-    if (amount === null) continue
-    result.push({
-      id: transaction.id,
-      postedAt: transaction.postedAt,
-      description: transaction.description,
-      normalized: transaction.normalizedDescription,
-      amountCents: amount,
-      categoryId: uncategorized ? null : category.id,
-      categoryName: uncategorized ? 'Sem categoria' : category.name,
-      color: uncategorized ? OTHER_COLOR : category.color,
-      bucket: uncategorized ? null : bucket,
-      source: transaction.creditCardId ? 'card' : 'account',
-      uncategorized,
-    })
-  }
-  return result
-}
-
-export function isSpending(transaction: FamilyTransaction) {
-  return (
-    transaction.amountCents < 0 &&
-    !transaction.uncategorized &&
-    transaction.bucket !== null &&
-    SPENDING_BUCKETS.has(transaction.bucket)
-  )
-}
 
 // ─── Totais por período ──────────────────────────────────────────────────────
 
@@ -237,77 +113,37 @@ export function categoryBreakdown(
   referenceDays = 90,
   limit = 7,
 ): CategoryBreakdown {
-  const periodDays =
-    Math.round(
-      (Date.parse(`${period.end}T12:00:00Z`) -
-        Date.parse(`${period.start}T12:00:00Z`)) /
-        86_400_000,
-    ) + 1
   const reference: Period = {
     start: shiftDays(period.start, -referenceDays),
     end: shiftDays(period.start, -1),
   }
-  const scale = periodDays / referenceDays
-  const current = new Map<
-    string,
-    { name: string; color: string; cents: number; count: number }
-  >()
-  const previous = new Map<string, number>()
-
-  for (const transaction of transactions) {
-    if (!isSpending(transaction)) continue
-    const id = transaction.categoryId ?? 'uncategorized'
-    if (inPeriod(transaction.postedAt, period)) {
-      const entry = current.get(id) ?? {
-        name: transaction.categoryName,
-        color: transaction.color,
-        cents: 0,
-        count: 0,
-      }
-      entry.cents += -transaction.amountCents
-      entry.count += 1
-      current.set(id, entry)
-    } else if (inPeriod(transaction.postedAt, reference)) {
-      previous.set(id, (previous.get(id) ?? 0) + -transaction.amountCents)
-    }
-  }
-
-  const totalCents = [...current.values()].reduce((sum, e) => sum + e.cents, 0)
-  const referenceTotalCents = Math.round(
-    [...previous.values()].reduce((sum, value) => sum + value, 0) * scale,
-  )
-  const ids = new Set([...current.keys(), ...previous.keys()])
-  const all: Array<CategoryShare> = []
-  for (const id of ids) {
-    const entry = current.get(id)
-    const referenceCents = Math.round((previous.get(id) ?? 0) * scale)
-    const cents = entry?.cents ?? 0
-    if (cents === 0 && referenceCents === 0) continue
-    all.push({
-      id,
-      name: entry?.name ?? id,
-      color: entry?.color ?? OTHER_COLOR,
-      cents,
-      count: entry?.count ?? 0,
-      share: totalCents > 0 ? cents / totalCents : 0,
-      referenceCents,
-      deltaCents: cents - referenceCents,
-      deltaRatio:
-        referenceCents > 0 ? (cents - referenceCents) / referenceCents : null,
-      folded: false,
-    })
-  }
-  all.sort((a, b) => b.cents - a.cents)
+  const spending = spendingByCategory(transactions, period, reference)
+  const all: Array<CategoryShare> = spending.items.map((item) => ({
+    id: item.id,
+    name: item.name,
+    color: item.color,
+    cents: item.cents,
+    count: item.count,
+    share: item.share,
+    referenceCents: item.previousCents,
+    deltaCents: item.deltaCents,
+    deltaRatio: item.deltaRatio,
+    folded: false,
+  }))
 
   const visible = all.filter((item) => item.cents > 0)
   if (visible.length <= limit)
-    return { totalCents, referenceTotalCents, items: visible }
+    return {
+      totalCents: spending.totalCents,
+      referenceTotalCents: spending.previousTotalCents,
+      items: visible,
+    }
   const head = visible.slice(0, limit - 1)
   const tail = visible.slice(limit - 1)
   const folded: CategoryShare = {
     id: 'other',
     name: `Outras (${tail.length})`,
-    color: OTHER_COLOR,
+    color: OTHER_CATEGORY_COLOR,
     cents: tail.reduce((sum, item) => sum + item.cents, 0),
     count: tail.reduce((sum, item) => sum + item.count, 0),
     share: 0,
@@ -316,11 +152,16 @@ export function categoryBreakdown(
     deltaRatio: null,
     folded: true,
   }
-  folded.share = totalCents > 0 ? folded.cents / totalCents : 0
+  folded.share =
+    spending.totalCents > 0 ? folded.cents / spending.totalCents : 0
   folded.deltaCents = folded.cents - folded.referenceCents
   folded.deltaRatio =
     folded.referenceCents > 0 ? folded.deltaCents / folded.referenceCents : null
-  return { totalCents, referenceTotalCents, items: [...head, folded] }
+  return {
+    totalCents: spending.totalCents,
+    referenceTotalCents: spending.previousTotalCents,
+    items: [...head, folded],
+  }
 }
 
 // ─── Maiores destinos (estabelecimentos) ─────────────────────────────────────
@@ -405,8 +246,8 @@ export function projectCash(
   snapshot: FinanceSnapshot,
   daysBack = 90,
   daysAhead = 60,
+  today = todayIso(),
 ): CashProjection {
-  const today = todayIso()
   const accounts = familyOperatingAccounts(snapshot)
   const accountIds = new Set(accounts.map((account) => account.id))
   const startBalance = operatingCashCents(snapshot)
@@ -530,8 +371,8 @@ export interface Commitment {
 export function upcomingCommitments(
   snapshot: FinanceSnapshot,
   daysAhead = 30,
+  today = todayIso(),
 ): Array<Commitment> {
-  const today = todayIso()
   const horizon = shiftDays(today, daysAhead)
   const events: Array<Commitment> = []
 
@@ -600,17 +441,20 @@ export interface HomeView {
   integrity: FinanceSnapshot['dashboard']['integrity']
 }
 
-export function buildHomeView(snapshot: FinanceSnapshot): HomeView {
+export function buildHomeView(
+  snapshot: FinanceSnapshot,
+  today = todayIso(),
+): HomeView {
   const transactions = familyTransactions(snapshot)
-  const p30 = trailingPeriod(30)
-  const p30prev = trailingPeriod(30, 30)
-  const p14 = trailingPeriod(14)
-  const p14prev = trailingPeriod(14, 14)
+  const p30 = trailingPeriod(30, 0, today)
+  const p30prev = trailingPeriod(30, 30, today)
+  const p14 = trailingPeriod(14, 0, today)
+  const p14prev = trailingPeriod(14, 14, today)
   const last30 = periodTotals(transactions, p30)
   const previous30 = periodTotals(transactions, p30prev)
-  const cash = projectCash(snapshot)
+  const cash = projectCash(snapshot, 90, 60, today)
   const cashTodayCents = operatingCashCents(snapshot)
-  const reference90 = periodTotals(transactions, trailingPeriod(90))
+  const reference90 = periodTotals(transactions, trailingPeriod(90, 0, today))
   const monthlyBurn = reference90.spendingCents / 3
   const runwayMonths =
     monthlyBurn > 0
@@ -628,7 +472,7 @@ export function buildHomeView(snapshot: FinanceSnapshot): HomeView {
     merchants30: topMerchants(transactions, p30),
     cash,
     cashTodayCents,
-    commitments30: upcomingCommitments(snapshot, 30),
+    commitments30: upcomingCommitments(snapshot, 30, today),
     netWorthCents: snapshot.dashboard.netWorthCents,
     reserve: snapshot.dashboard.reserve,
     integrity: snapshot.dashboard.integrity,
@@ -670,6 +514,7 @@ const integrityLabels: Record<string, string> = {
 export function buildInsights(
   view: HomeView,
   formatCents: (cents: number) => string,
+  today = todayIso(),
 ): Array<Insight> {
   const insights: Array<Insight> = []
   const pct = (ratio: number) =>
@@ -677,11 +522,9 @@ export function buildInsights(
 
   // 0. Extratos desatualizados: sem dados recentes, o resto perde valor.
   if (view.latestPostedAt) {
-    const staleDays = Math.round(
-      (Date.parse(`${todayIso()}T12:00:00Z`) -
-        Date.parse(`${view.latestPostedAt}T12:00:00Z`)) /
-        86_400_000,
-    )
+    const staleDays = daysBetween(view.latestPostedAt, today, {
+      inclusive: false,
+    })
     if (staleDays >= 5) {
       insights.push({
         id: 'stale-data',
@@ -791,7 +634,6 @@ export function buildInsights(
   }
 
   // 5. Compromissos dos próximos 14 dias vs caixa
-  const today = todayIso()
   const in14 = shiftDays(today, 14)
   const due = view.commitments30.filter(
     (item) => item.date <= in14 && item.amountCents < 0,
@@ -857,23 +699,16 @@ function shortName(value: string, max = 28) {
   return clean.length > max ? `${clean.slice(0, max - 1).trimEnd()}…` : clean
 }
 
-export function formatShortDate(iso: string) {
-  return new Intl.DateTimeFormat('pt-BR', {
-    day: '2-digit',
-    month: 'short',
-    timeZone: 'UTC',
-  })
-    .format(new Date(`${iso}T12:00:00Z`))
-    .replace('.', '')
-}
-
 // ─── Briefing para a análise com IA ──────────────────────────────────────────
 
 const reais = (cents: number) => Math.round(cents) / 100
 
 /** Resumo compacto e numérico do momento financeiro, para o modelo analisar. */
-export function buildAnalysisBrief(snapshot: FinanceSnapshot) {
-  const view = buildHomeView(snapshot)
+export function buildAnalysisBrief(
+  snapshot: FinanceSnapshot,
+  today = todayIso(),
+) {
+  const view = buildHomeView(snapshot, today)
   const totals = (t: PeriodTotals) => ({
     periodo: `${t.period.start} a ${t.period.end}`,
     receitas: reais(t.incomeCents),
@@ -882,7 +717,7 @@ export function buildAnalysisBrief(snapshot: FinanceSnapshot) {
     semCategoria: reais(t.uncategorizedCents),
   })
   return {
-    hoje: todayIso(),
+    hoje: today,
     moeda: 'BRL',
     quinzenaAtual: totals(view.last14),
     quinzenaAnterior: totals(view.previous14),

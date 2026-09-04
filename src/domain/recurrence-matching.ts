@@ -6,6 +6,7 @@ import type {
   RecurrenceProjectionRule,
   RecurrenceReconciliationType,
 } from './recurrence-book'
+import { daysBetween } from './period'
 
 const DAY_MS = 86_400_000
 
@@ -53,12 +54,6 @@ export type RecurrenceLearning = {
   dateSpreadDays?: number
   amountRangeCents?: { min: number; max: number }
   rejectionCount?: number
-}
-
-function daysBetween(left: string, right: string) {
-  const leftTime = new Date(`${left.slice(0, 10)}T12:00:00Z`).getTime()
-  const rightTime = new Date(`${right.slice(0, 10)}T12:00:00Z`).getTime()
-  return Math.abs(leftTime - rightTime) / DAY_MS
 }
 
 export function buildRecurrenceCandidates(input: {
@@ -111,7 +106,11 @@ export function buildRecurrenceCandidates(input: {
           Math.max(2, (input.learning.dateSpreadDays ?? 0) + 2),
         )
       : input.rule.dateToleranceDays
-    const daysApart = daysBetween(input.rule.expectedDate, transaction.postedAt)
+    const daysApart = daysBetween(
+      input.rule.expectedDate,
+      transaction.postedAt,
+      { inclusive: false, absolute: true },
+    )
     if (learnedDateDistance > effectiveDateTolerance) return []
 
     const amountDifferenceCents = Math.abs(

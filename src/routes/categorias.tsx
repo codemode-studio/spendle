@@ -16,6 +16,9 @@ import {
   TableRow,
 } from '#/components/ui/table'
 import { formatCurrency } from '#/domain/currency'
+import { familyTransactions, fullPeriod } from '#/domain/ledger'
+import { formatPeriod, trailingPeriod } from '#/domain/period'
+import type { Period } from '#/domain/period'
 import { analyzeCategories } from '#/features/categories/analysis'
 import type { CategoryTrend } from '#/features/categories/analysis'
 import {
@@ -24,12 +27,6 @@ import {
   StackedMonthly,
 } from '#/features/categories/monthly-chart'
 import { financeSnapshotOptions } from '#/features/finance/queries'
-import {
-  familyTransactions,
-  todayIso,
-  trailingPeriod,
-} from '#/features/home/insights'
-import type { Period } from '#/features/home/insights'
 import { cn } from '#/lib/utils'
 
 const PERIODS = {
@@ -54,28 +51,6 @@ export const Route = createFileRoute('/categorias')({
     context.queryClient.ensureQueryData(financeSnapshotOptions()),
   component: CategoriesPage,
 })
-
-const dayMonth = new Intl.DateTimeFormat('pt-BR', {
-  day: 'numeric',
-  month: 'short',
-  timeZone: 'UTC',
-})
-const dayMonthYear = new Intl.DateTimeFormat('pt-BR', {
-  day: 'numeric',
-  month: 'short',
-  year: 'numeric',
-  timeZone: 'UTC',
-})
-
-function formatPeriod(period: Period) {
-  const start = new Date(`${period.start}T12:00:00Z`)
-  const end = new Date(`${period.end}T12:00:00Z`)
-  const sameYear = start.getUTCFullYear() === end.getUTCFullYear()
-  return `${(sameYear ? dayMonth : dayMonthYear).format(start)} a ${dayMonthYear.format(end)}`.replaceAll(
-    '.',
-    '',
-  )
-}
 
 function DeltaBadge({ ratio, label }: { ratio: number | null; label: string }) {
   if (ratio === null) return null
@@ -134,13 +109,7 @@ function CategoriesPage() {
   const period = useMemo<Period>(() => {
     const config = PERIODS[periodo]
     if (config.days) return trailingPeriod(config.days)
-    const today = todayIso()
-    const earliest = transactions.reduce(
-      (min, transaction) =>
-        transaction.postedAt < min ? transaction.postedAt : min,
-      today,
-    )
-    return { start: earliest, end: today }
+    return fullPeriod(transactions)
   }, [periodo, transactions])
   const analysis = useMemo(
     () => analyzeCategories(transactions, period),

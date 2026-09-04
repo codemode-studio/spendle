@@ -35,6 +35,9 @@
 - O mês-calendário é o período principal. Comparações durante o mês usam o mesmo
   número de dias dos três meses anteriores, e compromissos usam projeção de 90
   dias.
+- Impostos e tarifas no bucket `tax` contam como gasto nas análises da Home e de
+  Categorias. Eles não pertencem aos quatro envelopes da estratégia, portanto o
+  realizado do orçamento continua somando apenas `essential` e `lifestyle`.
 - O saldo exibido como verificado precisa fechar exatamente contra um ponto de controle datado; a tolerância é zero.
 - Investimentos e cripto são contas normais com finalidade de investimento.
   Transferências internas registram aportes e retiradas; saldos informados
