@@ -94,3 +94,13 @@ it('reconhece o favorecido após os textos bancários explícitos de pagamento',
     'loja',
   )
 })
+
+it('preserva o padrão específico e oferece a referência da loja sem número de filial', () => {
+  expect(knowledgeExactPatterns('ANGELONI SUPER LOJA 41')).toEqual([
+    'angeloni super loja 41',
+    'angeloni super loja',
+  ])
+  expect(knowledgeExactPatterns('ESTABELECIMENTO 41')).toEqual([
+    'estabelecimento 41',
+  ])
+})

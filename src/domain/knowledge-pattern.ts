@@ -84,6 +84,9 @@ export function matchesKnowledgePrefix(pattern: string, prefix: string) {
 /** Alternativa exata após textos bancários explícitos, preservando o padrão original. */
 export function knowledgeExactPatterns(description: string) {
   const primary = knowledgePattern(description)
+  const store = primary.replace(/(\bloja)\s+\d{1,4}$/, '$1')
+  if (store !== primary && isValidKnowledgePattern(store))
+    return [primary, store]
   const payment = description
     .trim()
     .match(/^pagamento\s+(?:efetuado\s*:|de\s+conta\b)\s*(.+)$/i)

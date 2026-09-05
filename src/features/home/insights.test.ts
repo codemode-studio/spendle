@@ -46,6 +46,8 @@ function snapshotWithMonthlyRecurrence() {
         amountCents: 10_000,
         currency: 'BRL',
         direction: 'expense',
+        amountMode: 'fixed',
+        dateToleranceDays: 15,
         active: true,
         creditCardId: null,
         baseAmountCents: null,
@@ -415,7 +417,7 @@ it('não repete no consumo variável um pagamento reconhecido pela KB da recorr�
       creditCardId: null,
       description: 'Pix enviado: "Cp :12345678-LOCADORA EXEMPLO"',
       currency: 'BRL',
-      postedAt: shiftDays(today, -1),
+      postedAt: shiftDays(today, -30),
       amountCents: -60_000,
       status: 'confirmed',
       counterpartyAccountId: null,
@@ -598,4 +600,58 @@ it('explica separadamente recebimentos estimados, documentos e repetição do hi
     id: 'one-off',
     cents: 60_000,
   })
+})
+
+it('retira da previsão uma conta fixa paga antecipadamente, sem confirmar o cadastro', () => {
+  const { snapshot, today } = snapshotWithMonthlyRecurrence()
+  const recurrence = snapshot.recurrences[0]
+  recurrence.knowledgeReferences = [
+    {
+      id: 'approved-payee',
+      recurrenceId: recurrence.id,
+      description: 'OPERADORA EXEMPLO',
+    },
+  ]
+  snapshot.transactions = [
+    {
+      id: 'paid-early',
+      description: 'Pix enviado: "Cp :12345678-OPERADORA EXEMPLO"',
+      accountId: 'operating-account',
+      creditCardId: null,
+      postedAt: shiftDays(today, -1),
+      currency: 'BRL',
+      amountCents: -10_000,
+      status: 'confirmed',
+      counterpartyAccountId: null,
+      category: { id: 'health', bucket: 'essential' },
+    },
+  ] as unknown as FinanceSnapshot['transactions']
+  const before = JSON.stringify(snapshot)
+  expect(upcomingCommitments(snapshot, 30, today)).toEqual([])
+  const result = projectCash(snapshot, 0, 30, today)
+  expect(result.assumptions.estimatedRecurrenceCents).toBe(0)
+  expect(result.observedAdvancePayments).toMatchObject([
+    {
+      transactionId: 'paid-early',
+      occurrenceId: recurrence.occurrences[0].id,
+      cents: 10_000,
+    },
+  ])
+  expect(JSON.stringify(snapshot)).toBe(before)
+  snapshot.recurrences.push({
+    ...recurrence,
+    id: 'ambiguous',
+    occurrences: recurrence.occurrences.map((o) => ({
+      ...o,
+      id: 'second-' + o.id,
+    })),
+  })
+  expect(projectCash(snapshot, 0, 30, today).observedAdvancePayments).toEqual(
+    [],
+  )
+  snapshot.recurrences.pop()
+  snapshot.transactions[0].amountCents = -5_000
+  expect(projectCash(snapshot, 0, 30, today).observedAdvancePayments).toEqual(
+    [],
+  )
 })

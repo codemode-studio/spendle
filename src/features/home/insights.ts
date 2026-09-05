@@ -288,6 +288,7 @@ export interface CashProjection {
     description: string
     cents: number
   }>
+  observedAdvancePayments: ReturnType<typeof observedAdvancePayments>
   assumptions: {
     days: number
     startingCents: number
@@ -338,6 +339,102 @@ function forecastOccurrences(
     })
   }
   return [...occurrences.values()]
+}
+
+/** Pagamentos fixos inequívocos ajustam o cenário, sem confirmar ocorrências. */
+function observedAdvancePayments(
+  snapshot: FinanceSnapshot,
+  today: string,
+  horizon: string,
+) {
+  const internal = internalTransferIds(snapshot)
+  const accepted = recurrenceMatchedIds(snapshot)
+  const recurrences = snapshot.recurrences
+    .filter(
+      (r) =>
+        r.active &&
+        !r.creditCardId &&
+        r.direction === 'expense' &&
+        r.amountMode === 'fixed',
+    )
+    .map((recurrence) => ({
+      recurrence,
+      patterns: new Set(
+        recurrence.knowledgeReferences.flatMap((entry) =>
+          knowledgeExactPatterns(entry.description),
+        ),
+      ),
+      occurrences: forecastOccurrences(recurrence, horizon),
+    }))
+  const payments: Array<{
+    occurrenceId: string
+    transactionId: string
+    name: string
+    dueDate: string
+    paidDate: string
+    cents: number
+  }> = []
+  for (const row of snapshot.transactions) {
+    if (
+      !row.accountId ||
+      row.status !== 'confirmed' ||
+      row.amountCents >= 0 ||
+      row.currency !== 'BRL' ||
+      row.postedAt > today ||
+      row.counterpartyAccountId ||
+      internal.has(row.id) ||
+      accepted.has(row.id)
+    )
+      continue
+    if (!recurrences.some((item) => item.patterns.size > 0)) continue
+    const patterns = knowledgeExactPatterns(row.description)
+    const candidates = recurrences.flatMap(
+      ({ recurrence, patterns: approved, occurrences }) => {
+        if (
+          recurrence.currency !== row.currency ||
+          !patterns.some((pattern) => approved.has(pattern)) ||
+          (recurrence.destinationMode === 'fixed' &&
+            recurrence.accountId &&
+            recurrence.accountId !== row.accountId)
+        )
+          return []
+        return occurrences
+          .filter(
+            (occurrence) =>
+              occurrence.expectedAmountCents === -row.amountCents &&
+              Math.abs(
+                daysBetween(row.postedAt, occurrence.expectedDate, {
+                  inclusive: false,
+                }),
+              ) <= recurrence.dateToleranceDays,
+          )
+          .map((occurrence) => ({ recurrence, occurrence }))
+      },
+    )
+    if (candidates.length !== 1) continue
+    const { recurrence, occurrence } = candidates[0]
+    if (
+      occurrence.status !== 'expected' ||
+      occurrence.expectedDate <= today ||
+      occurrence.expectedDate > horizon
+    )
+      continue
+    payments.push({
+      occurrenceId: occurrence.id,
+      transactionId: row.id,
+      name: recurrence.name,
+      dueDate: occurrence.expectedDate,
+      paidDate: row.postedAt,
+      cents: -row.amountCents,
+    })
+  }
+  const counts = new Map<string, number>()
+  for (const payment of payments)
+    counts.set(
+      payment.occurrenceId,
+      (counts.get(payment.occurrenceId) ?? 0) + 1,
+    )
+  return payments.filter((payment) => counts.get(payment.occurrenceId) === 1)
 }
 
 /**
@@ -459,6 +556,10 @@ export function projectCash(
     historicalEstimateCents: dailyVariableCents * daysAhead,
   }
   const horizon = shiftDays(today, daysAhead)
+  const advancePayments = observedAdvancePayments(snapshot, today, horizon)
+  const paidOccurrenceIds = new Set(
+    advancePayments.map((payment) => payment.occurrenceId),
+  )
   const futureDelta = new Map<string, number>()
   const addFuture = (date: string, cents: number) => {
     futureDelta.set(date, (futureDelta.get(date) ?? 0) + cents)
@@ -468,6 +569,7 @@ export function projectCash(
     for (const occurrence of forecastOccurrences(recurrence, horizon)) {
       if (
         occurrence.status !== 'expected' ||
+        paidOccurrenceIds.has(occurrence.id) ||
         occurrence.expectedDate <= today ||
         occurrence.expectedDate > horizon
       ) {
@@ -538,6 +640,7 @@ export function projectCash(
       points[Math.min(todayIndex + 30, points.length - 1)].balanceCents,
     dailyVariableCents,
     recurringEstimateTransactionIds,
+    observedAdvancePayments: advancePayments,
     assumptions,
     largestHistoricalExpenses: historicalExpenses
       .sort((a, b) => b.cents - a.cents)
@@ -562,6 +665,11 @@ export function upcomingCommitments(
 ): Array<Commitment> {
   const horizon = shiftDays(today, daysAhead)
   const events: Array<Commitment> = []
+  const paidOccurrenceIds = new Set(
+    observedAdvancePayments(snapshot, today, horizon).map(
+      (payment) => payment.occurrenceId,
+    ),
+  )
 
   for (const recurrence of snapshot.recurrences) {
     // Recorrências no cartão são pagas pela fatura, que já entra abaixo.
@@ -569,6 +677,7 @@ export function upcomingCommitments(
     for (const occurrence of forecastOccurrences(recurrence, horizon)) {
       if (
         occurrence.status !== 'expected' ||
+        paidOccurrenceIds.has(occurrence.id) ||
         occurrence.expectedDate <= today ||
         occurrence.expectedDate > horizon
       ) {

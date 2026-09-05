@@ -280,6 +280,24 @@ function CashCard({
           reconhecidos pela KB já estão representados nas recorrências. Essa
           identificação ajusta apenas a estimativa; não confirma pagamentos.
         </p>
+        {cash.observedAdvancePayments.length > 0 && (
+          <div className="mt-4">
+            <p className="font-medium">Pagamentos antecipados observados</p>
+            <ul className="mt-2 space-y-2 text-xs">
+              {cash.observedAdvancePayments.map((payment) => (
+                <li key={payment.occurrenceId}>
+                  {payment.name} · {formatCurrency(payment.cents)} em{' '}
+                  {formatShortDate(payment.paidDate)}, antes do vencimento de{' '}
+                  {formatShortDate(payment.dueDate)}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Esses valores não são reservados novamente neste cenário. O
+              vínculo no cadastro continua aguardando confirmação.
+            </p>
+          </div>
+        )}
         {cash.largestHistoricalExpenses.length > 0 && (
           <div className="mt-4">
             <p className="font-medium">Maiores pagamentos incluídos na média</p>

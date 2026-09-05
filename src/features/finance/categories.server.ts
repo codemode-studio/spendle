@@ -75,6 +75,7 @@ export async function suggestCategory(input: {
   }
 
   const heuristics: Array<[RegExp, string]> = [
+    [/^(?:shein|shopee|mercadolivre)\s*\*/i, 'shopping'],
     [/pagamento.*fatura|fatura.*(?:paga|pagamento)/i, 'card_payment'],
     [/aluguel|condominio|iptu/i, 'housing'],
     [/financiamento|consorcio|prestacao|emprestimo|crediario/i, 'financing'],
