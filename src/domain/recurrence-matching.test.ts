@@ -141,7 +141,7 @@ describe('matching de recorrências', () => {
     ).toEqual([])
   })
 
-  it('aceita a perna recebida de uma distribuição de lucro como receita', () => {
+  it('não usa transferência PJ para PF como nova receita do caixa unificado', () => {
     const salary = {
       ...transaction,
       id: 'pro-labore',
@@ -174,7 +174,7 @@ describe('matching de recorrências', () => {
         ],
         learning,
       }).map((candidate) => candidate.transactionId),
-    ).toEqual([salary.id])
+    ).toEqual([])
     // Uma transferência comum entre contas próprias continua fora.
     expect(
       buildRecurrenceCandidates({
@@ -199,7 +199,7 @@ describe('matching de recorrências', () => {
     ).toEqual([])
   })
 
-  it('só libera transferências entre contas próprias quando são distribuição de lucro', () => {
+  it('exclui também a distribuição entre contas próprias das recorrências', () => {
     expect(
       transactionEligibleForRecurrence({ counterpartyAccountId: 'pj' }),
     ).toBe(false)
@@ -208,7 +208,7 @@ describe('matching de recorrências', () => {
         counterpartyAccountId: 'pj',
         reconciliationTypes: new Set(['profit_distribution']),
       }),
-    ).toBe(true)
+    ).toBe(false)
     expect(
       transactionEligibleForRecurrence({
         reconciliationTypes: new Set(['refund']),
@@ -281,5 +281,29 @@ describe('destino fixo com histórico', () => {
       },
     })
     expect(candidates).toHaveLength(0)
+  })
+})
+
+it('reconhece o favorecido Pix aprovado sem o código do banco', () => {
+  const candidates = buildRecurrenceCandidates({
+    recurrenceName: 'Aluguel',
+    rule,
+    transactions: [
+      {
+        ...transaction,
+        description: 'Pix enviado: "Cp :12345678-LOCADORA EXEMPLO"',
+      },
+    ],
+    learning: {
+      confirmedCount: 0,
+      aliases: ['LOCADORA EXEMPLO'],
+      accountIds: [],
+      creditCardIds: [],
+    },
+  })
+  expect(candidates).toHaveLength(1)
+  expect(candidates[0]).toMatchObject({
+    autoConfirm: false,
+    evidence: { exactLearnedAlias: true },
   })
 })

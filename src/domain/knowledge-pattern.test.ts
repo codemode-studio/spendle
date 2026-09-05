@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   isValidKnowledgePattern,
   knowledgePattern,
+  knowledgeExactPatterns,
   knowledgePrefixCandidate,
   matchesKnowledgePrefix,
   normalizeKnowledgePattern,
@@ -18,6 +19,15 @@ describe('knowledgePattern', () => {
     ['Sephora Store - Parcela 1/6', 'sephora store'],
     ['Andrade e Ceccon - Parcela 6/6', 'andrade e ceccon'],
     ['Stb*Carbonepizzaria', 'carbonepizzaria'],
+    [
+      'Pix enviado: "Cp :12345678-LOCADORA EXEMPLO"',
+      'enviado locadora exemplo',
+    ],
+    [
+      'Pix recebido: "Cp :12345678-CLIENTE EXEMPLO"',
+      'recebido cliente exemplo',
+    ],
+    ['CP Comercio 123', 'cp comercio 123'],
     ['Mp *Dayanemeilipalma', 'mp dayanemeilipalma'],
     ['Htm*Besties em Flor', 'besties em flor'],
     ['ZP*GW HAPPY KIDS LTDA', 'gw happy kids ltda'],
@@ -73,4 +83,14 @@ describe('padrão digitado', () => {
     expect(isValidKnowledgePattern('1234')).toBe(false)
     expect(isValidKnowledgePattern('ifd')).toBe(true)
   })
+})
+
+it('reconhece o favorecido após os textos bancários explícitos de pagamento', () => {
+  expect(
+    knowledgeExactPatterns('Pagamento efetuado: "ESCOLA EXEMPLO"'),
+  ).toContain('escola exemplo')
+  expect(knowledgeExactPatterns('Pagamento de conta ALFA')).toContain('alfa')
+  expect(knowledgeExactPatterns('Loja Pagamento Efetuado')).not.toContain(
+    'loja',
+  )
 })

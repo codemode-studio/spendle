@@ -625,7 +625,7 @@ describe('reconciliação de recorrências', () => {
     ).toHaveLength(5)
   })
 
-  it('receita: vincula a perna recebida de uma distribuição de lucro conciliada', async () => {
+  it('receita: desfaz vínculo automático antigo com transferência própria sem alterar a KB', async () => {
     const today = new Date().toISOString().slice(0, 10)
     const companyAccount = await finance.createAccount({
       name: 'Conta empresarial de teste',
@@ -696,24 +696,53 @@ describe('reconciliação de recorrências', () => {
       },
     ])
     await finance.setReconciliationStatus({ groupId, status: 'confirmed' })
+    const [oldOccurrence] = await db
+      .select()
+      .from(schema.recurrenceOccurrences)
+      .where(eq(schema.recurrenceOccurrences.recurrenceId, recurrence.id))
+    await db.insert(schema.recurrenceMatches).values({
+      id: 'stale-auto-income',
+      occurrenceId: oldOccurrence.id,
+      transactionId: inflow.id,
+      status: 'auto_confirmed',
+      score: 95,
+      reason: 'regra anterior',
+    })
+    const knowledgeBefore = await db.select().from(schema.knowledgeBase)
 
     await recurrenceMatching.refreshRecurrences()
+    expect(await db.select().from(schema.knowledgeBase)).toEqual(
+      knowledgeBefore,
+    )
+    expect(
+      (
+        await db
+          .select()
+          .from(schema.recurrenceMatches)
+          .where(eq(schema.recurrenceMatches.id, 'stale-auto-income'))
+      )[0].status,
+    ).toBe('unlinked')
     const suggestedSnapshot = await getFinanceSnapshot()
     const occurrence = suggestedSnapshot.recurrences
       .find((item) => item.id === recurrence.id)
       ?.occurrences.find((item) => item.status === 'expected')
     expect(occurrence).toBeDefined()
-    // A entrada na conta PF entra sozinha (origem comprovada pela
-    // conciliação); a saída da PJ nunca entra.
+    // Ambas as pontas pertencem ao caixa consolidado.
     expect(
-      occurrence?.matches.map((match) => [match.transactionId, match.status]),
-    ).toEqual([[inflow.id, 'auto_confirmed']])
+      occurrence?.matches
+        .filter(
+          (match) =>
+            isAcceptedRecurrenceMatchStatus(match.status) ||
+            match.status === 'suggested',
+        )
+        .map((match) => [match.transactionId, match.status]),
+    ).toEqual([])
     await expect(
       recurrenceMatching.linkTransactions({
         occurrenceId: occurrence!.id,
         transactionIds: [inflow.id],
       }),
-    ).rejects.toThrow('já está vinculada')
+    ).rejects.toThrow()
     await expect(
       recurrenceMatching.linkTransactions({
         occurrenceId: occurrence!.id,

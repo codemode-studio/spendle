@@ -84,3 +84,53 @@ describe('ciclo de cartão', () => {
     expect(result.current.transactionCount).toBe(2)
   })
 })
+
+it('preserva total e vencimento documentados mesmo com cadastro de ciclo diferente', () => {
+  const result = summarizeCardStatements({
+    transactions: [{ postedAt: '2026-08-03', amountCents: -10_000 }],
+    installmentPlans: [],
+    closingDay: 3,
+    dueDay: 10,
+    referenceDate: '2026-09-05',
+    documentedStatements: [
+      {
+        closingDate: '2026-09-02',
+        dueDate: '2026-09-09',
+        totalCents: 1_355_218,
+      },
+    ],
+  })
+  expect(result.current).toMatchObject({
+    dueDate: '2026-09-09',
+    amountCents: 1_355_218,
+  })
+  expect(
+    result.statements.filter((s) => s.dueDate.startsWith('2026-09')),
+  ).toHaveLength(1)
+})
+
+it('não projeta novamente parcelas de faturas antigas da mesma compra', () => {
+  const result = summarizeCardStatements({
+    transactions: [],
+    installmentPlans: [
+      {
+        description: 'Compra',
+        installmentAmountCents: 52000,
+        currentInstallment: 4,
+        totalInstallments: 10,
+        firstChargeDate: '2026-06-02',
+      },
+      {
+        description: 'Compra',
+        installmentAmountCents: 52000,
+        currentInstallment: 6,
+        totalInstallments: 10,
+        firstChargeDate: '2026-08-02',
+      },
+    ],
+    closingDay: 2,
+    dueDay: 9,
+    referenceDate: '2026-09-05',
+  })
+  expect(result.outstandingCents).toBe(208000)
+})

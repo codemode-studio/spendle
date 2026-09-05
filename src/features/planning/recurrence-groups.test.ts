@@ -139,3 +139,36 @@ describe('buildRecurrenceGroups', () => {
     })
   })
 })
+
+it('separa previsão variável de valores fixos sem contar itens pausados', () => {
+  const fixed = {
+    ...recurrence({
+      id: 'rent',
+      name: 'Aluguel',
+      groupId: null,
+      direction: 'expense',
+      amountCents: 200_000,
+      baseAmountCents: 200_000,
+      frequency: 'monthly',
+    }),
+    amountMode: 'fixed' as const,
+  }
+  const variable = {
+    ...fixed,
+    id: 'market',
+    name: 'Mercado',
+    amountMode: 'variable' as const,
+    amountCents: 445_512,
+    baseAmountCents: 445_512,
+  }
+  const paused = { ...variable, id: 'paused', active: false }
+  const result = buildRecurrenceGroups(
+    { recurrences: [fixed, variable, paused], recurrenceGroups: [] },
+    { today: '2026-09-05' },
+  )
+  expect(result.monthlyExpense).toBe(645_512)
+  expect(result).toMatchObject({
+    monthlyFixedExpense: 200_000,
+    monthlyVariableExpense: 445_512,
+  })
+})

@@ -307,7 +307,20 @@ export async function parsePdfBufferLegacy(buffer: Buffer) {
     ]
 
     for (const sourceLine of result.text.split('\n')) {
-      const line = sourceLine.replace(/\s+/g, ' ').trim()
+      let line = sourceLine.replace(/\s+/g, ' ').trim()
+      // Statement balances are controls, never ledger movements.
+      if (/^\d{2}\/\d{2}\/\d{2,4}\s+Saldo (?:Anterior|Final)\b/i.test(line))
+        continue
+      // In the BTG movement table the final number is the running balance.
+      if (
+        /BTG PACTUAL/i.test(result.text) &&
+        /corrente\s*-\s*Movimentação/i.test(result.text)
+      ) {
+        line = line.replace(
+          /^(\d{2}\/\d{2}\/\d{2,4}\s+.+?\s+-?[\d.]+,\d{2})\s+-?[\d.]+,\d{2}$/,
+          '$1',
+        )
+      }
       const match = patterns.map((pattern) => line.match(pattern)).find(Boolean)
       if (!match) continue
       const [, rawDate, description, rawAmount, direction] = match

@@ -214,7 +214,7 @@ function CashCard({
           <span className="h-0.5 w-3 rounded-full bg-[#b9c0c9]" />
           Projeção
           <Hint
-            text={`Projeção de 60 dias com recorrências, faturas conhecidas e gasto variável médio de ${formatCurrency(cash.dailyVariableCents)} por dia.`}
+            text={`Cenário de 60 dias com recorrências previstas, faturas conhecidas e reserva para novas compras em conta e cartão de ${formatCurrency(cash.dailyVariableCents)} por dia. A média usa os últimos 60 dias importados, excluindo parcelas identificadas e aportes.`}
           />
         </span>
         <span>
@@ -234,6 +234,72 @@ function CashCard({
         )}
       </div>
 
+      <p className="mt-3 text-xs text-muted-foreground">
+        Cenário estimado, incluindo receitas cadastradas ainda não recebidas.
+        Novas compras no cartão comprometem o saldo desde a compra, antes do
+        pagamento da fatura. A projeção depende da cobertura dos extratos e dos
+        vínculos das recorrências; não é uma previsão exata do saldo bancário.
+      </p>
+
+      <details className="mt-4 text-sm">
+        <summary className="cursor-pointer font-medium">
+          Premissas deste cenário · {cash.assumptions.days} dias
+        </summary>
+        <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
+          <dt>Caixa inicial em reais</dt>
+          <dd className="text-right">
+            {formatCurrency(cash.assumptions.startingCents)}
+          </dd>
+          <dt>Receitas cadastradas, ainda estimadas</dt>
+          <dd className="text-right">
+            + {formatCurrency(cash.assumptions.estimatedIncomeCents)}
+          </dd>
+          <dt>Faturas fechadas</dt>
+          <dd className="text-right">
+            − {formatCurrency(cash.assumptions.closedCardCents)}
+          </dd>
+          <dt>Parcelas futuras conhecidas</dt>
+          <dd className="text-right">
+            − {formatCurrency(cash.assumptions.scheduledCardCents)}
+          </dd>
+          <dt>Outros valores de cartão estimados</dt>
+          <dd className="text-right">
+            − {formatCurrency(cash.assumptions.estimatedCardCents)}
+          </dd>
+          <dt>Recorrências estimadas</dt>
+          <dd className="text-right">
+            − {formatCurrency(cash.assumptions.estimatedRecurrenceCents)}
+          </dd>
+          <dt>Repetição estimada do consumo histórico</dt>
+          <dd className="text-right">
+            − {formatCurrency(cash.assumptions.historicalEstimateCents)}
+          </dd>
+        </dl>
+        <p className="mt-3 text-xs text-muted-foreground">
+          {cash.recurringEstimateTransactionIds.length} pagamentos históricos
+          reconhecidos pela KB já estão representados nas recorrências. Essa
+          identificação ajusta apenas a estimativa; não confirma pagamentos.
+        </p>
+        {cash.largestHistoricalExpenses.length > 0 && (
+          <div className="mt-4">
+            <p className="font-medium">Maiores pagamentos incluídos na média</p>
+            <ul className="mt-2 space-y-2 text-xs">
+              {cash.largestHistoricalExpenses.map((expense) => (
+                <li key={expense.id}>
+                  {formatShortDate(expense.date)} · {expense.description} ·{' '}
+                  {formatCurrency(expense.cents)}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 text-xs text-muted-foreground">
+              Um pagamento isolado pode aumentar muito esta estimativa. A lista
+              mostra observações dos últimos 60 dias, não novas contas a pagar
+              nem despesas cuja repetição foi confirmada.
+            </p>
+          </div>
+        )}
+      </details>
+
       <dl className="mt-5 grid grid-cols-2 gap-4 border-t pt-5 lg:grid-cols-4">
         <Stat
           label="Patrimônio líquido"
@@ -241,23 +307,41 @@ function CashCard({
           hint="Contas, investimentos e cartões, em BRL."
         />
         <Stat
-          label="Entradas · 30 dias"
+          label="Receitas classificadas · 30 dias"
           value={formatCurrency(view.last30.incomeCents)}
           detail={
-            <DeltaText
-              cents={view.last30.incomeCents - view.previous30.incomeCents}
-              base={view.previous30.incomeCents}
-            />
+            view.comparisonReady.month ? (
+              <DeltaText
+                cents={view.last30.incomeCents - view.previous30.incomeCents}
+                base={view.previous30.incomeCents}
+              />
+            ) : (
+              <span className="text-xs text-muted-foreground">
+                Valores classificados; comparação parcial
+              </span>
+            )
           }
         />
         <Stat
-          label="Saídas · 30 dias"
+          label="Gastos classificados · 30 dias"
           value={formatCurrency(view.last30.spendingCents)}
+          hint={`${formatCurrency(view.last30.uncategorizedCents)} em saídas ainda sem categoria, além deste valor.`}
           detail={
-            <DeltaText
-              cents={-spendingDelta}
-              base={view.previous30.spendingCents}
-            />
+            view.last30.uncategorizedCents > 0 ? (
+              <span className="text-xs text-muted-foreground">
+                Mais {formatCurrency(view.last30.uncategorizedCents)} em saídas
+                a classificar
+              </span>
+            ) : view.comparisonReady.month ? (
+              <DeltaText
+                cents={-spendingDelta}
+                base={view.previous30.spendingCents}
+              />
+            ) : (
+              <span className="text-xs text-muted-foreground">
+                Cobertura parcial
+              </span>
+            )
           }
         />
         <Stat
@@ -267,9 +351,33 @@ function CashCard({
               ? '—'
               : `${view.runwayMonths.toFixed(1)} meses`
           }
-          hint="Caixa + reserva dividido pelo gasto médio mensal dos últimos 90 dias."
+          hint="Estimativa: caixa + reserva dividido pela média de gastos classificados e saídas a classificar dos últimos 90 dias."
         />
       </dl>
+      {view.accountInflows30.length > 0 && (
+        <details className="mt-5 border-t pt-4 text-sm">
+          <summary className="cursor-pointer font-medium">
+            Entradas em contas por moeda · últimos 30 dias
+          </summary>
+          <ul className="mt-3 space-y-2">
+            {view.accountInflows30.map((entry) => (
+              <li key={entry.currency}>
+                <strong>{formatCurrency(entry.cents, entry.currency)}</strong>
+                {' · '}
+                {entry.transactionIds.length} lançamentos
+                {entry.uncategorizedCount > 0 &&
+                  ` · ${entry.uncategorizedCount} ainda sem categoria`}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Moedas preservadas separadamente, sem conversão estimada.
+            Transferências próprias confirmadas não entram novamente. Estes
+            créditos podem incluir rendimentos e estornos; não são todos receita
+            recorrente.
+          </p>
+        </details>
+      )}
     </section>
   )
 }
@@ -354,7 +462,7 @@ function StrategyCard({ snapshot }: { snapshot: FinanceSnapshot }) {
 function SpendingCard({ view }: { view: HomeView }) {
   const { categories30: breakdown, last30, previous30 } = view
   const ratio =
-    previous30.spendingCents > 0
+    view.comparisonReady.month && previous30.spendingCents > 0
       ? (last30.spendingCents - previous30.spendingCents) /
         previous30.spendingCents
       : null
@@ -385,7 +493,9 @@ function SpendingCard({ view }: { view: HomeView }) {
               </span>
             )}
             <span className="text-xs text-muted-foreground">
-              vs. 30 dias anteriores
+              {view.comparisonReady.month
+                ? 'vs. 30 dias anteriores'
+                : 'Classificação ou cobertura parcial'}
             </span>
           </div>
         </div>
@@ -447,7 +557,8 @@ function SpendingCard({ view }: { view: HomeView }) {
                     {formatCurrency(item.cents)}
                   </td>
                   <td className="hidden py-2.5 text-right tabular-nums sm:table-cell">
-                    {item.deltaRatio === null ? (
+                    {!view.comparisonReady.categories ||
+                    item.deltaRatio === null ? (
                       <span className="text-muted-foreground">
                         {item.referenceCents === 0 ? 'novo' : '—'}
                       </span>

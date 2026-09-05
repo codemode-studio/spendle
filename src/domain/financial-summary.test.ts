@@ -74,7 +74,7 @@ describe('resumo financeiro único', () => {
     expect(result.currentIncomeCents).toBe(20_000)
   })
 
-  it('conta a ponta familiar de uma distribuição de lucros confirmada', () => {
+  it('não duplica receita nas distribuições confirmadas entre PF e PJ', () => {
     const result = summarize({
       transactions: [
         {
@@ -94,7 +94,7 @@ describe('resumo financeiro único', () => {
         },
       ],
     })
-    expect(result.currentIncomeCents).toBe(25_000)
+    expect(result.currentIncomeCents).toBe(0)
   })
 
   it('conta aporte uma vez pelo destino de uma transferência confirmada', () => {

@@ -949,6 +949,62 @@ export async function refreshRecurrences(options: { today?: string } = {}) {
   await ensureDatabase()
   const today = options.today ?? todayIso()
   const state = await loadEngineState()
+  // Conciliações confirmadas podem invalidar um vínculo automático anterior.
+  // Reabrir a ocorrência preserva a evidência e não altera decisões na KB.
+  const ownLinks = await db
+    .select({ transactionId: schema.reconciliationLinks.transactionId })
+    .from(schema.reconciliationLinks)
+    .innerJoin(
+      schema.reconciliationGroups,
+      eq(schema.reconciliationLinks.groupId, schema.reconciliationGroups.id),
+    )
+    .where(
+      and(
+        eq(schema.reconciliationGroups.status, 'confirmed'),
+        inArray(schema.reconciliationGroups.type, [
+          'transfer',
+          'fx_transfer',
+          'card_payment',
+          'profit_distribution',
+        ]),
+      ),
+    )
+  const ownIds = new Set(ownLinks.map((link) => link.transactionId))
+  for (const match of state.matches) {
+    if (match.status !== 'auto_confirmed' || !ownIds.has(match.transactionId))
+      continue
+    const occurrence = state.occurrences.find(
+      (item) => item.id === match.occurrenceId,
+    )
+    const recurrence = state.recurrences.find(
+      (item) => item.id === occurrence?.recurrenceId,
+    )
+    const row = state.transactions.find(
+      (item) => item.id === match.transactionId,
+    )
+    if (!occurrence || !recurrence) continue
+    db.transaction((transaction) => {
+      if (
+        row &&
+        match.categoryAppliedByMatch &&
+        row.categoryId === occurrence.categoryId
+      ) {
+        transaction
+          .update(schema.transactions)
+          .set({ categoryId: match.previousCategoryId })
+          .where(eq(schema.transactions.id, row.id))
+          .run()
+        row.categoryId = match.previousCategoryId
+      }
+      transaction
+        .update(schema.recurrenceMatches)
+        .set({ status: 'unlinked', resolvedAt: new Date() })
+        .where(eq(schema.recurrenceMatches.id, match.id))
+        .run()
+      match.status = 'unlinked'
+      reopenOccurrence(transaction, recurrence, occurrence)
+    })
+  }
 
   const occurrenceCount = await generateSchedule(state, today)
 

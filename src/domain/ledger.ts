@@ -22,6 +22,7 @@ export const analysisSpendingBuckets = [
   'essential',
   'lifestyle',
   'tax',
+  'business',
 ] as const
 export type AnalysisSpendingBucket = (typeof analysisSpendingBuckets)[number]
 
@@ -32,13 +33,10 @@ export const internalTransferTypes = [
   'transfer',
   'fx_transfer',
   'card_payment',
+  'profit_distribution',
 ] as const
 export type InternalTransferType = (typeof internalTransferTypes)[number]
 
-const COMPANY_SCOPE_TYPES = new Set<OwnershipScopeType>([
-  'company_br',
-  'company_us',
-])
 const ANALYSIS_SPENDING_BUCKETS = new Set<string>(analysisSpendingBuckets)
 const BUDGET_SPENDING_BUCKETS = new Set<string>(budgetSpendingBuckets)
 const INTERNAL_TRANSFER_TYPES = new Set<string>(internalTransferTypes)
@@ -126,7 +124,9 @@ type Scope =
 
 export function isFamilyScope(scope: Scope) {
   const type = typeof scope === 'string' ? scope : scope?.type
-  return type === undefined || !COMPANY_SCOPE_TYPES.has(type)
+  // All registered owners share the consolidated household ledger. Ownership
+  // remains descriptive; it does not remove PJ cash or duplicate distributions.
+  return type === undefined || ownershipScopeTypes.includes(type)
 }
 
 export function isBudgetSpendingBucket(
@@ -192,7 +192,7 @@ export function recurrenceMatchedIds(
 
 /**
  * Confirmed family entries in BRL, without internal transfers, card payments,
- * company movements, or categories excluded from analysis.
+ * or categories excluded from analysis. PF and PJ share this ledger.
  */
 export function familyTransactions(
   snapshot: Pick<LedgerSnapshot, 'scopes' | 'transactions' | 'reconciliations'>,
@@ -211,7 +211,6 @@ export function familyTransactions(
     if (scopeId && !isFamilyScope(scopeById.get(scopeId))) continue
     const category = transaction.category
     const bucket = category?.bucket ?? null
-    if (bucket === 'business') continue
     const uncategorized = !category || category.id === 'uncategorized'
     if (bucket === 'excluded' && !uncategorized) continue
     const amount = baseAmount(transaction)

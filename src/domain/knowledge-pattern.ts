@@ -53,7 +53,13 @@ export function normalizeKnowledgePattern(value: string) {
 
 /** Padrão exato derivado de uma descrição. Vazio quando a descrição não tem nome útil. */
 export function knowledgePattern(description: string) {
-  const signature = merchantSignature(description)
+  // O Inter pode envolver a contraparte Pix com um código de instituição.
+  // Remover apenas esse formato evita confundir a sigla de uma loja com metadados.
+  const counterpartDescription = description.replace(
+    /^(pix\s+(?:enviado|recebido)\s*:\s*["']?)cp\s*:\s*\d{8}\s*-\s*/i,
+    '$1',
+  )
+  const signature = merchantSignature(counterpartDescription)
   let pattern = signature.replace(INSTALLMENT_SUFFIX, '')
   const tokens = pattern.split(' ')
   if (tokens.length > 1 && PAYMENT_PROCESSORS.has(tokens[0])) {
@@ -73,4 +79,24 @@ export function knowledgePrefixCandidate(pattern: string) {
 /** Um prefixo casa no limite de token: `ifd` casa `ifd pizzaria`, não `ifdx`. */
 export function matchesKnowledgePrefix(pattern: string, prefix: string) {
   return pattern === prefix || pattern.startsWith(`${prefix} `)
+}
+
+/** Alternativa exata após textos bancários explícitos, preservando o padrão original. */
+export function knowledgeExactPatterns(description: string) {
+  const primary = knowledgePattern(description)
+  const payment = description
+    .trim()
+    .match(/^pagamento\s+(?:efetuado\s*:|de\s+conta\b)\s*(.+)$/i)
+  if (payment) {
+    const counterpart = knowledgePattern(payment[1])
+    return counterpart !== primary && isValidKnowledgePattern(counterpart)
+      ? [primary, counterpart]
+      : [primary]
+  }
+  if (!/^pix\s+(?:enviado|recebido)\b/i.test(description.trim()))
+    return [primary]
+  const counterpart = primary.replace(/^(?:enviado|recebido)\s+/, '')
+  return counterpart !== primary && isValidKnowledgePattern(counterpart)
+    ? [primary, counterpart]
+    : [primary]
 }

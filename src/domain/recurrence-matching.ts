@@ -7,6 +7,7 @@ import type {
   RecurrenceReconciliationType,
 } from './recurrence-book'
 import { daysBetween } from './period'
+import { knowledgeExactPatterns } from './knowledge-pattern'
 
 const DAY_MS = 86_400_000
 
@@ -66,7 +67,12 @@ export function buildRecurrenceCandidates(input: {
   const unavailable = input.unavailableTransactionIds ?? new Set<string>()
   const expectedSign = input.rule.direction === 'expense' ? -1 : 1
   const expectedSignature = merchantSignature(input.recurrenceName)
-  const aliases = new Set(input.learning.aliases.map(merchantSignature))
+  const aliases = new Set(
+    input.learning.aliases.flatMap((alias) => [
+      merchantSignature(alias),
+      ...knowledgeExactPatterns(alias),
+    ]),
+  )
 
   const candidates = input.transactions.flatMap((transaction) => {
     if (
@@ -152,7 +158,10 @@ export function buildRecurrenceCandidates(input: {
       25 * (1 - learnedDateDistance / Math.max(1, effectiveDateTolerance)),
     )
     const signature = merchantSignature(transaction.description)
-    const exactLearnedAlias = signature.length > 1 && aliases.has(signature)
+    const exactLearnedAlias = [
+      signature,
+      ...knowledgeExactPatterns(transaction.description),
+    ].some((candidate) => candidate.length > 1 && aliases.has(candidate))
     const expectedWords = new Set(
       expectedSignature.split(' ').filter((word) => word.length >= 4),
     )

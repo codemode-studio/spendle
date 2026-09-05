@@ -20,6 +20,30 @@ describe('limpeza de transações e importações', () => {
     database.close()
   })
 
+  it('remove parcelamentos vinculados antes de limpar suas transações', async () => {
+    const transaction = await finance.createManualTransaction({
+      targetType: 'card',
+      targetId: database.ids.card,
+      postedAt: '2026-08-10',
+      description: 'Compra parcelada',
+      direction: 'outflow',
+      amountCents: 50_000,
+    })
+    await db.insert(schema.installmentPlans).values({
+      id: 'linked-plan',
+      creditCardId: database.ids.card,
+      sourceTransactionId: transaction.id,
+      description: 'Compra parcelada',
+      installmentAmountCents: 50_000,
+      totalInstallments: 6,
+      currentInstallment: 1,
+      firstChargeDate: '2026-08-10',
+    })
+    await clearTransactionData()
+    expect(await db.select().from(schema.transactions)).toEqual([])
+    expect(await db.select().from(schema.installmentPlans)).toEqual([])
+  })
+
   it('mantém recorrências e conhecimento e reabre ocorrências vinculadas', async () => {
     const created = await recurrence.createRecurrence({
       name: 'Netflix',

@@ -74,6 +74,8 @@ function RecurrencesSection({
     missingConversionCount,
     monthlyIncome,
     monthlyExpense,
+    monthlyFixedExpense,
+    monthlyVariableExpense,
     sections,
   } = buildRecurrenceGroups(data, {
     today: new Date().toISOString().slice(0, 10),
@@ -131,6 +133,11 @@ function RecurrencesSection({
               <StatusBadge tone={item.active ? 'success' : 'neutral'}>
                 {item.active ? 'Ativa' : 'Pausada'}
               </StatusBadge>
+              {item.amountMode === 'variable' && (
+                <StatusBadge tone="neutral">
+                  Valor variável · estimativa
+                </StatusBadge>
+              )}
               {statusBadge && (
                 <StatusBadge tone={statusBadge.tone}>
                   {statusBadge.label}
@@ -373,10 +380,17 @@ function RecurrencesSection({
           </strong>
         </Panel>
         <Panel>
-          <p className="text-xs text-muted-foreground">Despesas mensais</p>
+          <p className="text-xs text-muted-foreground">
+            Despesas previstas por mês
+          </p>
           <strong className="mt-1 block text-lg tabular-nums text-destructive">
             {formatCurrency(monthlyExpense)}
           </strong>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Fixas cadastradas: {formatCurrency(monthlyFixedExpense)}
+            <br />
+            Variáveis estimadas: {formatCurrency(monthlyVariableExpense)}
+          </p>
         </Panel>
         <Panel className="col-span-2 sm:col-span-1">
           <p className="text-xs text-muted-foreground">Recorrências ativas</p>
@@ -402,7 +416,7 @@ function RecurrencesSection({
               Receitas e despesas recorrentes
             </h2>
             <p className="text-sm text-muted-foreground">
-              Compromissos previstos para os próximos meses.
+              Valores fixos e estimativas variáveis para os próximos meses.
             </p>
           </div>
           {data.recurrences.length ? (

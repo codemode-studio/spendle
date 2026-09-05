@@ -179,14 +179,20 @@ export function CardsSection() {
                 }}
                 metrics={[
                   {
-                    label: 'Fatura atual',
+                    label:
+                      card.currentStatement.certainty === 'installment_schedule'
+                        ? 'Parcelas conhecidas'
+                        : 'Fatura atual',
                     value: formatCurrency(card.statementCents, card.currency),
                     caption: card.dueDayEstimated
                       ? 'Vencimento a confirmar'
                       : `Vence ${formatDate(card.currentStatement.dueDate)}`,
                   },
                   {
-                    label: 'Próxima fatura',
+                    label:
+                      card.nextStatement?.certainty === 'installment_schedule'
+                        ? 'Saldo futuro conhecido'
+                        : 'Próxima fatura',
                     value: formatCurrency(
                       card.nextStatement?.amountCents ?? 0,
                       card.currency,
@@ -292,10 +298,21 @@ export function CardsSection() {
         </Panel>
       )}
 
+      {data.cards
+        .filter((card) => card.unexplainedNextStatementCents > 0)
+        .map((card) => (
+          <p key={card.id} className="text-sm text-muted-foreground">
+            {formatInstrumentName(card.name)}: o saldo futuro documentado inclui{' '}
+            {formatCurrency(card.unexplainedNextStatementCents, card.currency)}{' '}
+            cuja composição não aparece nas parcelas identificadas. Esse valor
+            já está incluído na próxima fatura projetada.
+          </p>
+        ))}
+
       {data.installmentPlans.length > 0 && (
         <Panel
-          title="Parcelas futuras"
-          description="Compromissos já assumidos nos cartões."
+          title="Histórico de parcelas identificadas"
+          description="Uma compra pode aparecer em várias faturas. O calendário acima reúne os compromissos futuros."
         >
           <Table>
             <TableHeader>

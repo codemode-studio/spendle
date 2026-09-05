@@ -12,6 +12,8 @@ export interface CardStatementTransaction {
 }
 
 export interface CardInstallmentPlan {
+  description?: string
+  creditCardId?: string
   installmentAmountCents: number
   currentInstallment: number
   totalInstallments: number
@@ -21,6 +23,8 @@ export interface CardInstallmentPlan {
 export type InstallmentCommitmentType = 'short_installment' | 'temporary_fixed'
 
 export interface CardStatementSummary {
+  certainty?: 'closed' | 'installment_schedule'
+  sourceImportId?: string
   dueDate: string
   closingDate: string
   amountCents: number
@@ -100,8 +104,42 @@ export function parseInstallmentDescription(description: string) {
 
 export function classifyInstallmentCommitment(
   totalInstallments: number,
+  installmentAmountCents = 0,
 ): InstallmentCommitmentType {
-  return totalInstallments > 3 ? 'temporary_fixed' : 'short_installment'
+  return totalInstallments > 3 || installmentAmountCents >= 50_000
+    ? 'temporary_fixed'
+    : 'short_installment'
+}
+
+/** Preserve source observations; project only the latest installment observation per purchase cohort. */
+export function latestInstallmentPlans<T extends CardInstallmentPlan>(
+  plans: T[],
+): T[] {
+  const groups = new Map<string, T[]>()
+  const unnamed: T[] = []
+  for (const plan of plans) {
+    if (!plan.description) {
+      unnamed.push(plan)
+      continue
+    }
+    const origin = addMonths(
+      plan.firstChargeDate,
+      1 - plan.currentInstallment,
+    ).slice(0, 7)
+    const key = JSON.stringify([
+      plan.creditCardId,
+      plan.description.trim().toLowerCase(),
+      plan.installmentAmountCents,
+      plan.totalInstallments,
+      origin,
+    ])
+    const group = groups.get(key) ?? []
+    const current = group[0]?.currentInstallment ?? 0
+    if (plan.currentInstallment > current) groups.set(key, [plan])
+    else if (plan.currentInstallment === current)
+      groups.set(key, [...group, plan])
+  }
+  return [...unnamed, ...[...groups.values()].flat()]
 }
 
 export function projectRemainingInstallments(plan: CardInstallmentPlan) {
@@ -130,10 +168,31 @@ export function summarizeCardStatements(input: {
   closingDay: number
   dueDay: number
   referenceDate: string
+  documentedStatements?: Array<{
+    closingDate: string
+    dueDate: string
+    totalCents: number
+    certainty?: 'closed' | 'installment_schedule'
+    sourceImportId?: string
+  }>
 }) {
+  const documented = input.documentedStatements ?? []
+  const resolveCycle = (postedAt: string) => {
+    const inferred = resolveCardCycle(postedAt, input.closingDay, input.dueDay)
+    const control = documented.find(
+      (c) => c.closingDate.slice(0, 7) === inferred.closingDate.slice(0, 7),
+    )
+    return control
+      ? {
+          closingDate: control.closingDate,
+          dueDate: control.dueDate,
+          statementMonth: control.dueDate.slice(0, 7),
+        }
+      : inferred
+  }
   const summaries = new Map<string, CardStatementSummary>()
   const ensureSummary = (postedAt: string) => {
-    const cycle = resolveCardCycle(postedAt, input.closingDay, input.dueDay)
+    const cycle = resolveCycle(postedAt)
     const current = summaries.get(cycle.dueDate)
     if (current) return current
     const created = {
@@ -164,7 +223,7 @@ export function summarizeCardStatements(input: {
     summary.transactionCount += 1
   }
 
-  for (const plan of input.installmentPlans) {
+  for (const plan of latestInstallmentPlans(input.installmentPlans)) {
     for (const projected of projectRemainingInstallments(plan)) {
       const summary = ensureSummary(projected.postedAt)
       summary.amountCents += projected.amountCents
@@ -172,11 +231,19 @@ export function summarizeCardStatements(input: {
     }
   }
 
-  const openCycle = resolveCardCycle(
-    input.referenceDate,
-    input.closingDay,
-    input.dueDay,
-  )
+  for (const control of documented) {
+    const existing = summaries.get(control.dueDate)
+    summaries.set(control.dueDate, {
+      closingDate: control.closingDate,
+      dueDate: control.dueDate,
+      amountCents: control.totalCents,
+      certainty: control.certainty ?? 'closed',
+      sourceImportId: control.sourceImportId,
+      transactionCount: existing?.transactionCount ?? 0,
+      projectedInstallmentCount: 0,
+    })
+  }
+  const openCycle = resolveCycle(input.referenceDate)
   if (!summaries.has(openCycle.dueDate)) {
     summaries.set(openCycle.dueDate, {
       dueDate: openCycle.dueDate,

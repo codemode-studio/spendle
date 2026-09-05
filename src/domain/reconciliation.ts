@@ -235,7 +235,31 @@ export function buildReconciliationSuggestions(
         continue
       }
 
-      if (days <= 3 && differentTargets && left.currency !== right.currency) {
+      const linkedFxAccounts = Boolean(
+        transferSource.accountId &&
+        transferDestination.accountId &&
+        (transferSource.counterpartyAccountId ===
+          transferDestination.accountId ||
+          transferDestination.counterpartyAccountId ===
+            transferSource.accountId),
+      )
+      const fxDescription = (description: string) =>
+        /\b(?:cambio|remessa|resgate|conversao|exchange|conversion)\b/.test(
+          normalizeDescription(description),
+        )
+      const hasFxEvidence =
+        linkedFxAccounts ||
+        (fxDescription(left.description) && fxDescription(right.description))
+      if (
+        days <= 3 &&
+        differentTargets &&
+        left.currency !== right.currency &&
+        left.accountId &&
+        right.accountId &&
+        !left.creditCardId &&
+        !right.creditCardId &&
+        hasFxEvidence
+      ) {
         const source = Math.abs(
           minorUnitsToMajor(left.amountCents, left.currency),
         )
@@ -249,7 +273,8 @@ export function buildReconciliationSuggestions(
             type: 'fx_transfer',
             transactionIds: [left.id, right.id],
             confidence: 82,
-            reason: 'Movimentações próximas em moedas diferentes.',
+            reason:
+              'Remessa entre contas com indicação de câmbio e valores compatíveis.',
             exchangeRateMicros: Math.round(normalizedRate * 1_000_000),
           })
           continue

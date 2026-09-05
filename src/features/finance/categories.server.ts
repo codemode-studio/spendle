@@ -213,15 +213,5 @@ export function applyTargetCategoryPolicy(input: {
       source: 'system' as const,
     }
   }
-  if (
-    input.scopeType === 'company_br' &&
-    input.suggestion.categoryId === 'uncategorized'
-  ) {
-    return {
-      categoryId: 'business',
-      confidence: 70,
-      source: 'system' as const,
-    }
-  }
   return input.suggestion
 }

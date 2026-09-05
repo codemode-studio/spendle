@@ -130,11 +130,11 @@ export function transactionEligibleForRecurrence(transaction: {
   if (
     types?.has('transfer') ||
     types?.has('fx_transfer') ||
-    types?.has('card_payment')
+    types?.has('card_payment') ||
+    types?.has('profit_distribution')
   ) {
     return false
   }
-  if (types?.has('profit_distribution')) return true
   return !transaction.counterpartyAccountId
 }
 

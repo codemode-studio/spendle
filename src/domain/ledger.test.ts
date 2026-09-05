@@ -49,15 +49,15 @@ function snapshot(): LedgerSnapshot {
 }
 
 describe('predicados do razão familiar', () => {
-  it('aceita escopos da família e rejeita as duas empresas', () => {
+  it('inclui PF e PJ no consolidado familiar', () => {
     expect(isFamilyScope(null)).toBe(true)
     expect(isFamilyScope('household')).toBe(true)
     expect(isFamilyScope({ type: 'person' })).toBe(true)
-    expect(isFamilyScope('company_br')).toBe(false)
-    expect(isFamilyScope({ type: 'company_us' })).toBe(false)
+    expect(isFamilyScope('company_br')).toBe(true)
+    expect(isFamilyScope({ type: 'company_us' })).toBe(true)
   })
 
-  it.each(['essential', 'lifestyle', 'tax'])(
+  it.each(['essential', 'lifestyle', 'tax', 'business'])(
     'trata %s como gasto analítico',
     (bucket) => {
       expect(isSpending(entry(bucket, '2026-08-01', -1_000, { bucket }))).toBe(
@@ -199,9 +199,13 @@ describe('valor-base e exclusões', () => {
 
     expect(familyTransactions(data).map((item) => item.id)).toEqual([
       'kept',
+      'company',
+      'business',
       'uncategorized',
     ])
-    expect(familyTransactions(data)[1]).toMatchObject({
+    expect(
+      familyTransactions(data).find((item) => item.id === 'uncategorized'),
+    ).toMatchObject({
       categoryId: null,
       categoryName: 'Sem categoria',
       uncategorized: true,

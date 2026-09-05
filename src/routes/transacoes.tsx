@@ -720,6 +720,23 @@ function TransactionsPage() {
                               </StatusBadge>
                             ) : null}
                           </div>
+                          {transaction.sourceDocument && (
+                            <p
+                              className="mt-1 text-xs font-normal text-muted-foreground"
+                              title={`${transaction.sourceDocument.file} · página ${transaction.sourceDocument.page ?? '?'}`}
+                            >
+                              Data no documento:{' '}
+                              {transaction.sourceDocument.date
+                                .split('-')
+                                .reverse()
+                                .join('/')}
+                              {transaction.sourceDocument.dueDate &&
+                                ` · Fatura: ${transaction.sourceDocument.dueDate.split('-').reverse().join('/')}`}
+                              {transaction.sourceDocument.date !==
+                                transaction.postedAt &&
+                                ' · agrupada pela cobrança'}
+                            </p>
+                          )}
                         </TableCell>
                         <TableCell className="truncate text-muted-foreground">
                           {formatInstrumentName(

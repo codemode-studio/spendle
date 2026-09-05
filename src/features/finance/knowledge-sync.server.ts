@@ -13,7 +13,10 @@ import { and, eq, isNull, ne } from 'drizzle-orm'
 
 import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
-import { matchesKnowledgePrefix } from '#/domain/knowledge-pattern'
+import {
+  knowledgeExactPatterns,
+  matchesKnowledgePrefix,
+} from '#/domain/knowledge-pattern'
 import type { KnowledgeMatchMode } from '#/domain/knowledge-pattern'
 import {
   knowledgeKey,
@@ -78,7 +81,9 @@ async function loadResolver() {
   return (item: { description: string; amountCents: number }) => {
     const key = knowledgeKey(item)
     if (!key) return null
-    const direct = exact.get(`${key.pattern}|${key.direction}`)
+    const direct = knowledgeExactPatterns(item.description)
+      .map((pattern) => exact.get(`${pattern}|${key.direction}`))
+      .find((entry) => entry !== undefined)
     if (direct) return direct
     return (
       prefixes.find(

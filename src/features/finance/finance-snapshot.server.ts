@@ -1,9 +1,12 @@
-import { desc } from 'drizzle-orm'
+import { readInterFutureControl } from './pdf-parsers/inter-future-control'
+import { readNubankFutureControl } from './pdf-parsers/nubank-future-control'
+import { desc, eq } from 'drizzle-orm'
 
 import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
 import { convertMinorUnitsAtRate } from '#/domain/currency'
 import {
+  addMonths,
   classifyInstallmentCommitment,
   summarizeCardStatements,
 } from '#/domain/credit-card'
@@ -66,6 +69,7 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
     exchangeRateRows,
     installmentRows,
     settingsRows,
+    recurrenceKnowledgeRows,
   ] = await Promise.all([
     db
       .select()
@@ -166,6 +170,16 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       .from(schema.installmentPlans)
       .orderBy(schema.installmentPlans.firstChargeDate),
     db.select().from(schema.appSettings).limit(1),
+    view === 'configuration'
+      ? []
+      : db
+          .select({
+            id: schema.knowledgeBase.id,
+            recurrenceId: schema.knowledgeBase.recurrenceId,
+            description: schema.knowledgeBase.sampleDescription,
+          })
+          .from(schema.knowledgeBase)
+          .where(eq(schema.knowledgeBase.kind, 'recurrence')),
   ])
 
   const settings = settingsRows[0]
@@ -293,7 +307,61 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
   const cards = cardRows.map((card) => {
     const effectiveDueDay =
       card.dueDay ?? Math.min(28, Math.max(1, card.closingDay + 7))
+    const latestImport = importRows
+      .filter(
+        (row) => row.creditCardId === card.id && row.status === 'committed',
+      )
+      .sort((a, b) => (b.balanceAsOf ?? '').localeCompare(a.balanceAsOf ?? ''))
+      .at(0)
+    const latestInstallments = installmentRows.filter(
+      (plan) =>
+        plan.sourceTransactionId &&
+        transactionById.get(plan.sourceTransactionId)?.importId ===
+          latestImport?.id,
+    )
+    const futureControl =
+      readInterFutureControl(
+        latestImport?.markdown ?? null,
+        latestInstallments,
+      ) ??
+      readNubankFutureControl(
+        latestImport?.markdown ?? null,
+        latestInstallments,
+      )
+    const latestDueDate = cardStatementCycleRows.find(
+      (cycle) => cycle.importId === latestImport?.id,
+    )?.dueDate
+    const scheduledStatements =
+      futureControl && latestImport && latestDueDate
+        ? (futureControl.monthlyCents ?? [futureControl.nextCents]).map(
+            (amount, index) => ({
+              closingDate: addMonths(futureControl.closingDate, index),
+              dueDate: addMonths(latestDueDate, index + 1),
+              totalCents: amount,
+              certainty: 'installment_schedule' as const,
+              sourceImportId: latestImport.id,
+            }),
+          )
+        : []
     const statementSummary = summarizeCardStatements({
+      documentedStatements: [
+        ...scheduledStatements,
+        ...cardStatementCycleRows.flatMap((cycle) =>
+          cycle.creditCardId === card.id &&
+          cycle.status !== 'open' &&
+          cycle.closingDate &&
+          cycle.dueDate &&
+          cycle.totalCents !== null
+            ? [
+                {
+                  closingDate: cycle.closingDate,
+                  dueDate: cycle.dueDate,
+                  totalCents: cycle.totalCents,
+                },
+              ]
+            : [],
+        ),
+      ],
       transactions: transactionRows.filter(
         (transaction) =>
           transaction.creditCardId === card.id &&
@@ -325,6 +393,10 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       instruments: cardInstrumentRows.filter(
         (instrument) => instrument.creditCardId === card.id,
       ),
+      unexplainedNextStatementCents:
+        futureControl && 'unexplainedNextCents' in futureControl
+          ? Math.max(0, futureControl.unexplainedNextCents)
+          : 0,
       statementCents: statementSummary.current.amountCents,
       currentStatement: statementSummary.current,
       nextStatement: statementSummary.next,
@@ -808,7 +880,10 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
         settings,
         installmentPlans: installmentRows.map((plan) => ({
           ...plan,
-          commitmentType: classifyInstallmentCommitment(plan.totalInstallments),
+          commitmentType: classifyInstallmentCommitment(
+            plan.totalInstallments,
+            plan.installmentAmountCents,
+          ),
         })),
       }
     },
@@ -840,6 +915,9 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
         recurrenceGroups: recurrenceGroupRows,
         recurrences: recurrenceRows.map((recurrence) => ({
           ...recurrence,
+          knowledgeReferences: recurrenceKnowledgeRows.filter(
+            (entry) => entry.recurrenceId === recurrence.id,
+          ),
           baseAmountCents: convertToBaseCurrency(
             recurrence.amountCents,
             recurrence.currency,
@@ -858,7 +936,10 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
         })),
         installmentPlans: installmentRows.map((plan) => ({
           ...plan,
-          commitmentType: classifyInstallmentCommitment(plan.totalInstallments),
+          commitmentType: classifyInstallmentCommitment(
+            plan.totalInstallments,
+            plan.installmentAmountCents,
+          ),
         })),
         settings,
         dashboard: dashboard(selectedMonth),

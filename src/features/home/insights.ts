@@ -26,6 +26,9 @@ import type {
   FinanceSnapshot,
 } from '#/features/finance/snapshot.types'
 
+import { knowledgeExactPatterns } from '#/domain/knowledge-pattern'
+import { addRecurrencePeriod } from '#/domain/recurrence-schedule'
+
 const ALLOCATION_BUCKETS = new Set(['investment', 'reserve'])
 
 // ─── Totais por período ──────────────────────────────────────────────────────
@@ -77,6 +80,48 @@ export function periodTotals(
     }
   }
   return totals
+}
+
+/** Entradas bancárias na moeda do extrato; não equivalem a receita classificada. */
+export function accountInflowsByCurrency(
+  snapshot: FinanceSnapshot,
+  period: Period,
+) {
+  const internal = internalTransferIds(snapshot)
+  const totals = new Map<
+    string,
+    {
+      currency: string
+      cents: number
+      transactionIds: string[]
+      uncategorizedCount: number
+    }
+  >()
+  for (const row of snapshot.transactions) {
+    if (
+      !row.accountId ||
+      row.status !== 'confirmed' ||
+      row.amountCents <= 0 ||
+      !inPeriod(row.postedAt, period) ||
+      internal.has(row.id) ||
+      row.counterpartyAccountId
+    )
+      continue
+    const total = totals.get(row.currency) ?? {
+      currency: row.currency,
+      cents: 0,
+      transactionIds: [],
+      uncategorizedCount: 0,
+    }
+    total.cents += row.amountCents
+    total.transactionIds.push(row.id)
+    if (!row.categoryId || row.categoryId === 'uncategorized')
+      total.uncategorizedCount += 1
+    totals.set(row.currency, total)
+  }
+  return [...totals.values()].sort((a, b) =>
+    a.currency.localeCompare(b.currency),
+  )
 }
 
 // ─── Gastos por categoria ────────────────────────────────────────────────────
@@ -236,6 +281,63 @@ export interface CashProjection {
   lowPoint: CashPoint | null
   in30Cents: number
   dailyVariableCents: number
+  recurringEstimateTransactionIds: string[]
+  largestHistoricalExpenses: Array<{
+    id: string
+    date: string
+    description: string
+    cents: number
+  }>
+  assumptions: {
+    days: number
+    startingCents: number
+    estimatedIncomeCents: number
+    estimatedRecurrenceCents: number
+    closedCardCents: number
+    scheduledCardCents: number
+    estimatedCardCents: number
+    historicalEstimateCents: number
+  }
+}
+
+/** Completa o cenário sem criar ocorrências ou substituir pagamentos registrados. */
+function forecastOccurrences(
+  recurrence: FinanceSnapshot['recurrences'][number],
+  horizon: string,
+) {
+  const occurrences = new Map(
+    recurrence.occurrences.map((occurrence) => [
+      occurrence.expectedDate,
+      {
+        id: occurrence.id,
+        expectedDate: occurrence.expectedDate,
+        expectedAmountCents: occurrence.expectedAmountCents,
+        currency: occurrence.currency,
+        direction: occurrence.direction,
+        status: occurrence.status,
+      },
+    ]),
+  )
+  for (
+    let date = recurrence.nextDate;
+    date <= horizon;
+    date = addRecurrencePeriod(
+      date,
+      recurrence.frequency,
+      recurrence.scheduleAnchor,
+    )
+  ) {
+    if (occurrences.has(date)) continue
+    occurrences.set(date, {
+      id: `forecast:${recurrence.id}:${date}`,
+      expectedDate: date,
+      expectedAmountCents: Math.abs(recurrence.amountCents),
+      currency: recurrence.currency,
+      direction: recurrence.direction,
+      status: 'expected',
+    })
+  }
+  return [...occurrences.values()]
 }
 
 /**
@@ -253,20 +355,51 @@ export function projectCash(
   const accountIds = new Set(accounts.map((account) => account.id))
   const startBalance = operatingCashCents(snapshot)
   const excluded = internalTransferIds(snapshot)
-  const matched = recurrenceMatchedIds(snapshot)
+  const matched = recurrenceMatchedIds({
+    recurrences: snapshot.recurrences.filter(
+      (recurrence) => recurrence.active && !recurrence.creditCardId,
+    ),
+  })
+  const cardIds = new Set(
+    snapshot.cards
+      .filter((card) => isFamilyScope(card.scope) && card.currency === 'BRL')
+      .map((card) => card.id),
+  )
+  const installmentIds = new Set(
+    snapshot.installmentPlans.map((plan) => plan.sourceTransactionId),
+  )
 
+  const recurringEstimates = snapshot.recurrences
+    .filter(
+      (recurrence) =>
+        recurrence.active &&
+        !recurrence.creditCardId &&
+        recurrence.direction === 'expense',
+    )
+    .map((recurrence) => ({
+      recurrence,
+      patterns: new Set(
+        recurrence.knowledgeReferences.flatMap((entry) =>
+          knowledgeExactPatterns(entry.description),
+        ),
+      ),
+    }))
+  const recurringEstimateTransactionIds: string[] = []
   const variableWindowStart = shiftDays(today, -60)
   let variableTotal = 0
+  const historicalExpenses: CashProjection['largestHistoricalExpenses'] = []
   const historyDelta = new Map<string, number>()
   const historyStart = shiftDays(today, -daysBack)
 
   for (const transaction of snapshot.transactions) {
     if (transaction.status !== 'confirmed') continue
-    if (!transaction.accountId || !accountIds.has(transaction.accountId)) {
-      continue
-    }
+    const inOperatingAccount =
+      transaction.accountId !== null && accountIds.has(transaction.accountId)
+    const inBrlCard =
+      transaction.creditCardId !== null && cardIds.has(transaction.creditCardId)
+    if (!inOperatingAccount && !inBrlCard) continue
     if (transaction.postedAt > today) continue
-    if (transaction.postedAt >= historyStart) {
+    if (inOperatingAccount && transaction.postedAt >= historyStart) {
       historyDelta.set(
         transaction.postedAt,
         (historyDelta.get(transaction.postedAt) ?? 0) + transaction.amountCents,
@@ -277,14 +410,54 @@ export function projectCash(
       transaction.postedAt >= variableWindowStart &&
       !excluded.has(transaction.id) &&
       !matched.has(transaction.id) &&
+      !installmentIds.has(transaction.id) &&
+      !ALLOCATION_BUCKETS.has(transaction.category?.bucket ?? '') &&
       !transaction.counterpartyAccountId &&
-      transaction.category?.bucket !== 'excluded'
+      (transaction.category?.bucket !== 'excluded' ||
+        transaction.category.id === 'uncategorized')
     ) {
-      variableTotal += -transaction.amountCents
+      const patterns = knowledgeExactPatterns(transaction.description)
+      const covered = recurringEstimates.filter(
+        ({ recurrence, patterns: approved }) =>
+          recurrence.currency === transaction.currency &&
+          patterns.some(
+            (pattern) => pattern.length > 2 && approved.has(pattern),
+          ) &&
+          (recurrence.amountMode === 'variable' ||
+            Math.abs(
+              Math.abs(transaction.amountCents) - recurrence.amountCents,
+            ) <=
+              Math.round(
+                (recurrence.amountCents * recurrence.amountToleranceBps) /
+                  10_000,
+              )),
+      )
+      // Só uma recorrência compatível pode substituir a média; não confirma pagamento.
+      if (covered.length === 1)
+        recurringEstimateTransactionIds.push(transaction.id)
+      else {
+        variableTotal += -transaction.amountCents
+        historicalExpenses.push({
+          id: transaction.id,
+          date: transaction.postedAt,
+          description: transaction.description,
+          cents: -transaction.amountCents,
+        })
+      }
     }
   }
   const dailyVariableCents = Math.round(variableTotal / 60)
 
+  const assumptions = {
+    days: daysAhead,
+    startingCents: startBalance,
+    estimatedIncomeCents: 0,
+    estimatedRecurrenceCents: 0,
+    closedCardCents: 0,
+    scheduledCardCents: 0,
+    estimatedCardCents: 0,
+    historicalEstimateCents: dailyVariableCents * daysAhead,
+  }
   const horizon = shiftDays(today, daysAhead)
   const futureDelta = new Map<string, number>()
   const addFuture = (date: string, cents: number) => {
@@ -292,7 +465,7 @@ export function projectCash(
   }
   for (const recurrence of snapshot.recurrences) {
     if (!recurrence.active || recurrence.creditCardId) continue
-    for (const occurrence of recurrence.occurrences) {
+    for (const occurrence of forecastOccurrences(recurrence, horizon)) {
       if (
         occurrence.status !== 'expected' ||
         occurrence.expectedDate <= today ||
@@ -305,6 +478,9 @@ export function projectCash(
           ? occurrence.expectedAmountCents
           : recurrence.baseAmountCents
       if (cents === null) continue
+      if (occurrence.direction === 'income')
+        assumptions.estimatedIncomeCents += cents
+      else assumptions.estimatedRecurrenceCents += cents
       addFuture(
         occurrence.expectedDate,
         occurrence.direction === 'income' ? cents : -cents,
@@ -317,6 +493,11 @@ export function projectCash(
     if (!isFamilyScope(card.scope) || card.currency !== 'BRL') continue
     for (const statement of card.upcomingStatements) {
       if (statement.dueDate <= today || statement.dueDate > horizon) continue
+      if (statement.certainty === 'closed')
+        assumptions.closedCardCents += Math.abs(statement.amountCents)
+      else if (statement.certainty === 'installment_schedule')
+        assumptions.scheduledCardCents += Math.abs(statement.amountCents)
+      else assumptions.estimatedCardCents += Math.abs(statement.amountCents)
       addFuture(statement.dueDate, -Math.abs(statement.amountCents))
     }
   }
@@ -356,6 +537,11 @@ export function projectCash(
     in30Cents:
       points[Math.min(todayIndex + 30, points.length - 1)].balanceCents,
     dailyVariableCents,
+    recurringEstimateTransactionIds,
+    assumptions,
+    largestHistoricalExpenses: historicalExpenses
+      .sort((a, b) => b.cents - a.cents)
+      .slice(0, 5),
   }
 }
 
@@ -380,7 +566,7 @@ export function upcomingCommitments(
   for (const recurrence of snapshot.recurrences) {
     // Recorrências no cartão são pagas pela fatura, que já entra abaixo.
     if (!recurrence.active || recurrence.creditCardId) continue
-    for (const occurrence of recurrence.occurrences) {
+    for (const occurrence of forecastOccurrences(recurrence, horizon)) {
       if (
         occurrence.status !== 'expected' ||
         occurrence.expectedDate <= today ||
@@ -410,7 +596,7 @@ export function upcomingCommitments(
       events.push({
         id: `${card.id}-${statement.dueDate}`,
         date: statement.dueDate,
-        name: `Fatura ${card.name}`,
+        name: `${statement.certainty === 'installment_schedule' ? 'Parcelas conhecidas' : 'Fatura'} ${card.name}`,
         amountCents: -Math.abs(statement.amountCents),
         kind: 'statement',
       })
@@ -425,6 +611,7 @@ export interface HomeView {
   transactions: Array<FamilyTransaction>
   last30: PeriodTotals
   previous30: PeriodTotals
+  accountInflows30: ReturnType<typeof accountInflowsByCurrency>
   last14: PeriodTotals
   previous14: PeriodTotals
   categories30: CategoryBreakdown
@@ -440,6 +627,7 @@ export interface HomeView {
   /** Data do lançamento mais recente da família (ou null sem dados). */
   latestPostedAt: string | null
   integrity: DashboardSnapshot['integrity']
+  comparisonReady: { fortnight: boolean; month: boolean; categories: boolean }
 }
 
 export function buildHomeView(
@@ -456,7 +644,25 @@ export function buildHomeView(
   const cash = projectCash(snapshot, 90, 60, today)
   const cashTodayCents = operatingCashCents(snapshot)
   const reference90 = periodTotals(transactions, trailingPeriod(90, 0, today))
-  const monthlyBurn = reference90.spendingCents / 3
+  const sources = [...snapshot.accounts, ...snapshot.cards].filter(
+    (source) =>
+      source.active && source.currency === 'BRL' && isFamilyScope(source.scope),
+  )
+  const canCompare = (days: number) => {
+    const period = trailingPeriod(days, 0, today)
+    return (
+      !snapshot.dashboard.integrity.partial &&
+      sources.length > 0 &&
+      sources.every((source) =>
+        source.coverage.intervals.some(
+          (interval) =>
+            interval.start <= period.start && interval.end >= period.end,
+        ),
+      )
+    )
+  }
+  const monthlyBurn =
+    (reference90.spendingCents + reference90.uncategorizedCents) / 3
   const runwayMonths =
     monthlyBurn > 0
       ? (cashTodayCents + snapshot.dashboard.reserve.currentCents) / monthlyBurn
@@ -466,6 +672,7 @@ export function buildHomeView(
     transactions,
     last30,
     previous30,
+    accountInflows30: accountInflowsByCurrency(snapshot, p30),
     last14: periodTotals(transactions, p14),
     previous14: periodTotals(transactions, p14prev),
     categories30: categoryBreakdown(transactions, p30),
@@ -477,6 +684,11 @@ export function buildHomeView(
     netWorthCents: snapshot.dashboard.netWorthCents,
     reserve: snapshot.dashboard.reserve,
     integrity: snapshot.dashboard.integrity,
+    comparisonReady: {
+      fortnight: canCompare(28),
+      month: canCompare(60),
+      categories: canCompare(120),
+    },
     runwayMonths,
     latestPostedAt: transactions.reduce<string | null>(
       (latest, transaction) =>
@@ -557,7 +769,7 @@ export function buildInsights(
   if (view.last14.spendingCents > 0 || view.previous14.spendingCents > 0) {
     const delta = view.last14.spendingCents - view.previous14.spendingCents
     const ratio =
-      view.previous14.spendingCents > 0
+      view.comparisonReady.fortnight && view.previous14.spendingCents > 0
         ? delta / view.previous14.spendingCents
         : null
     const biggest = [...view.categories14.items]
@@ -574,20 +786,22 @@ export function buildInsights(
             : 'neutral',
       title:
         ratio === null
-          ? `Gastos da quinzena: ${formatCents(view.last14.spendingCents)}`
+          ? `Gastos classificados na quinzena: ${formatCents(view.last14.spendingCents)}`
           : `Gastos da quinzena ${ratio >= 0 ? 'subiram' : 'caíram'} ${pct(Math.abs(ratio) * Math.sign(ratio))}`,
-      body: `${formatCents(view.last14.spendingCents)} nos últimos 14 dias contra ${formatCents(view.previous14.spendingCents)} na quinzena anterior.${
-        biggest && biggest.deltaCents !== 0
-          ? ` Maior variação: ${biggest.name} (${biggest.deltaCents > 0 ? '+' : '−'}${formatCents(Math.abs(biggest.deltaCents))}).`
-          : ''
-      }`,
+      body: !view.comparisonReady.fortnight
+        ? 'Cobertura ou classificação parcial. Os valores importados não comprovam aumento ou queda do consumo.'
+        : `${formatCents(view.last14.spendingCents)} nos últimos 14 dias contra ${formatCents(view.previous14.spendingCents)} na quinzena anterior.${
+            biggest && biggest.deltaCents !== 0
+              ? ` Maior variação: ${biggest.name} (${biggest.deltaCents > 0 ? '+' : '−'}${formatCents(Math.abs(biggest.deltaCents))}).`
+              : ''
+          }`,
       to: '/transacoes',
       cta: 'Ver lançamentos',
     })
   }
 
   // 2. Categorias acima da média (vazamentos)
-  const leaks = view.categories30.items
+  const leaks = (view.comparisonReady.categories ? view.categories30.items : [])
     .filter(
       (item) =>
         !item.folded &&
@@ -615,7 +829,7 @@ export function buildInsights(
     insights.push({
       id: 'subscriptions',
       tone: 'neutral',
-      title: `Assinaturas somam ${formatCents(subscriptions.cents)} por mês`,
+      title: `Assinaturas identificadas: ${formatCents(subscriptions.cents)} em 30 dias`,
       body: `${subscriptions.count} cobranças nos últimos 30 dias.`,
       to: '/transacoes',
       cta: 'Revisar',
@@ -630,7 +844,7 @@ export function buildInsights(
       id: 'merchants',
       tone: 'neutral',
       title: 'Onde mais foi o dinheiro',
-      body: `${top.map((item) => shortName(item.name)).join(', ')} concentram ${formatCents(cents)} (${Math.round((cents / view.last30.spendingCents) * 100)}% dos gastos dos últimos 30 dias).`,
+      body: `${top.map((item) => shortName(item.name)).join(', ')} concentram ${formatCents(cents)} (${Math.round((cents / view.last30.spendingCents) * 100)}% dos gastos classificados dos últimos 30 dias).`,
     })
   }
 
@@ -659,7 +873,7 @@ export function buildInsights(
       id: 'cash-negative',
       tone: 'alert',
       title: `Caixa projetado fica negativo em ${formatShortDate(view.cash.lowPoint.date)}`,
-      body: `Mínimo previsto de ${formatCents(view.cash.lowPoint.balanceCents)}. Antecipe receitas ou reordene aportes.`,
+      body: `Mínimo neste cenário: ${formatCents(view.cash.lowPoint.balanceCents)}. Confira renda esperada e continuidade dos gastos históricos antes de decidir.`,
       to: '/planejamento',
       cta: 'Planejar',
     })
@@ -671,7 +885,7 @@ export function buildInsights(
       id: 'uncategorized',
       tone: 'warn',
       title: `${formatCents(view.last30.uncategorizedCents)} sem categoria`,
-      body: `${view.last30.uncategorizedCount} lançamentos dos últimos 30 dias ficam fora da análise até serem classificados.`,
+      body: `${view.last30.uncategorizedCount} lançamentos dos últimos 30 dias ficam fora dos totais por categoria, mas suas saídas continuam consideradas no caixa.`,
       to: '/transacoes',
       cta: 'Classificar',
     })

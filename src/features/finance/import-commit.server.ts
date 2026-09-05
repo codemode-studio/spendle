@@ -735,6 +735,7 @@ export async function clearTransactionData() {
       .set({ status: 'expected', resolvedAt: null })
       .where(eq(schema.recurrenceOccurrences.status, 'matched'))
       .run()
+    transaction.delete(schema.installmentPlans).run()
     transaction.delete(schema.transactions).run()
     transaction.delete(schema.balanceCheckpoints).run()
     transaction.delete(schema.stagedTransactions).run()

@@ -18,6 +18,7 @@ import * as schema from '#/db/schema'
 import {
   isValidKnowledgePattern,
   knowledgePattern,
+  knowledgeExactPatterns,
   knowledgePrefixCandidate,
   matchesKnowledgePrefix,
   normalizeKnowledgePattern,
@@ -321,7 +322,7 @@ export async function loadCategoryKnowledge(
     ...new Set(
       items.flatMap((item) => {
         const key = knowledgeKey(item)
-        return key ? [key.pattern] : []
+        return key ? knowledgeExactPatterns(item.description) : []
       }),
     ),
   ]
@@ -395,7 +396,11 @@ export function applyCategoryKnowledge(
   }
   const key = knowledgeKey(item)
   if (!key) return suggestion
-  const exact = knowledge.exact.get(lookupKey(key))
+  const exact = knowledgeExactPatterns(item.description)
+    .map((pattern) =>
+      knowledge.exact.get(lookupKey({ pattern, direction: key.direction })),
+    )
+    .find((entry) => entry !== undefined)
   if (exact) {
     return {
       categoryId: exact.categoryId,

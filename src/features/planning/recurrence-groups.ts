@@ -56,6 +56,17 @@ export function buildRecurrenceGroups(
         : 0),
     0,
   )
+  const monthlyVariableExpense = active.reduce(
+    (sum, item) =>
+      sum +
+      (item.direction === 'expense' &&
+      item.amountMode === 'variable' &&
+      item.baseAmountCents !== null
+        ? item.baseAmountCents / (item.frequency === 'yearly' ? 12 : 1)
+        : 0),
+    0,
+  )
+  const monthlyFixedExpense = monthlyExpense - monthlyVariableExpense
   // Receitas e despesas ficam em listas separadas; um grupo aparece na lista
   // de cada direção em que tiver recorrências.
   const rowsFor = (direction: 'income' | 'expense'): RecurrenceDisplayRow[] => {
@@ -158,6 +169,8 @@ export function buildRecurrenceGroups(
     missingConversionCount,
     monthlyIncome,
     monthlyExpense,
+    monthlyFixedExpense,
+    monthlyVariableExpense,
     sections,
   }
 }

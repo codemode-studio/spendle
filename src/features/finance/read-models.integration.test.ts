@@ -102,7 +102,8 @@ describe('bounded financial reads', () => {
     selects = 0
     await getStrategyHistory({ months: 12 })
     expect(selects).toBe(threeMonths)
-    expect(threeMonths).toBeLessThanOrEqual(27)
+    // Uma leitura adicional carrega as referências humanas das recorrências.
+    expect(threeMonths).toBeLessThanOrEqual(28)
     expect(history[0]).toMatchObject({
       month: '2026-08',
       closed: true,

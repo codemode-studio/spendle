@@ -45,6 +45,28 @@ describe('sincronização das categorias com a base de conhecimento', () => {
     )
   }
 
+  it('reconhece a contraparte Pix com metadados bancários sem aprender outra regra', async () => {
+    const learned = await expense('LOCADORA EXEMPLO')
+    await finance.updateTransactionCategory({
+      transactionId: learned.id,
+      categoryId: database.ids.categories.housing,
+      saveRule: false,
+    })
+    const imported = await expense(
+      'Pix enviado: "Cp :12345678-LOCADORA EXEMPLO"',
+    )
+    const before = await db.select().from(schema.knowledgeBase)
+    const plan = await planKnowledgeSync()
+    expect(plan.changes.map((change) => change.transactionId)).toContain(
+      imported.id,
+    )
+    await applyKnowledgeSync()
+    expect(
+      (await categoriesById())['Pix enviado: "Cp :12345678-LOCADORA EXEMPLO"'],
+    ).toBe(database.ids.categories.housing)
+    expect(await db.select().from(schema.knowledgeBase)).toEqual(before)
+  })
+
   it('aplica o padrão aos lançamentos desatualizados e preserva categorias protegidas', async () => {
     const learned = await expense('LOJA DO BAIRRO 1111')
     await expense('LOJA DO BAIRRO 2222')
