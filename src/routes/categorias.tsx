@@ -20,7 +20,6 @@ import { fullPeriod } from '#/domain/ledger'
 import { formatPeriod, trailingPeriod } from '#/domain/period'
 import type { Period } from '#/domain/period'
 import { analyzeCategories } from '#/features/categories/analysis'
-import type { CategoryTrend } from '#/features/categories/analysis'
 import {
   CategoryHeatmap,
   Sparkline,
@@ -52,52 +51,6 @@ export const Route = createFileRoute('/categorias')({
   component: CategoriesPage,
 })
 
-function DeltaBadge({ ratio, label }: { ratio: number | null; label: string }) {
-  if (ratio === null) return null
-  return (
-    <span className="flex items-center gap-2 text-xs text-muted-foreground">
-      <span
-        className={cn(
-          'rounded-full px-2 py-0.5 font-semibold tabular-nums',
-          ratio > 0.02
-            ? 'bg-red-100 text-red-700'
-            : ratio < -0.02
-              ? 'bg-emerald-100 text-emerald-700'
-              : 'bg-muted text-muted-foreground',
-        )}
-      >
-        {ratio > 0 ? '+' : ''}
-        {Math.round(ratio * 100)}%
-      </span>
-      {label}
-    </span>
-  )
-}
-
-function DeltaCell({ item }: { item: CategoryTrend }) {
-  if (item.deltaRatio === null) {
-    return (
-      <span className="text-muted-foreground">
-        {item.previousCents === 0 ? 'novo' : '—'}
-      </span>
-    )
-  }
-  return (
-    <span
-      className={
-        item.deltaRatio > 0.1
-          ? 'font-medium text-red-700'
-          : item.deltaRatio < -0.1
-            ? 'font-medium text-emerald-700'
-            : 'text-muted-foreground'
-      }
-    >
-      {item.deltaRatio > 0 ? '+' : ''}
-      {Math.round(item.deltaRatio * 100)}%
-    </span>
-  )
-}
-
 function CategoriesPage() {
   const { data } = useSuspenseQuery(categoryTransactionsOptions())
   const { periodo = '30d' } = Route.useSearch()
@@ -119,7 +72,6 @@ function CategoriesPage() {
     analysis.items.find((item) => item.id === selectedId) ?? null
   const hasPartialMonth = analysis.months.some((month) => month.partial)
   const showAverage = analysis.periodDays > 45
-  const hasPrevious = periodo !== 'tudo'
   const maxShare = analysis.items[0]?.share ?? 0
 
   const setPeriod = (value: string) =>
@@ -154,18 +106,16 @@ function CategoriesPage() {
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="text-sm font-medium text-muted-foreground">
-              Gasto no período
+              Gastos classificados no período
             </p>
             <p className="mt-1 text-3xl font-semibold tracking-tight">
               {formatCurrency(analysis.totalCents)}
             </p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              A cobertura dos extratos não foi validada nesta visão. Os valores
+              classificados não comprovam aumento ou queda do consumo.
+            </p>
             <div className="mt-2 flex flex-wrap items-center gap-3">
-              {hasPrevious && (
-                <DeltaBadge
-                  ratio={analysis.deltaRatio}
-                  label={`vs. ${PERIODS[periodo].label} anteriores`}
-                />
-              )}
               {showAverage && (
                 <span className="text-xs text-muted-foreground tabular-nums">
                   ≈ {formatCurrency(analysis.averageMonthlyCents)}/mês
@@ -272,11 +222,6 @@ function CategoriesPage() {
                     Média/mês
                   </TableHead>
                 )}
-                {hasPrevious && (
-                  <TableHead className="hidden w-28 text-right sm:table-cell">
-                    vs. anterior
-                  </TableHead>
-                )}
                 {analysis.months.length > 1 && (
                   <TableHead className="hidden w-24 text-right lg:table-cell">
                     Tendência
@@ -356,11 +301,6 @@ function CategoriesPage() {
                         {formatCurrency(item.averageMonthlyCents)}
                       </TableCell>
                     )}
-                    {hasPrevious && (
-                      <TableCell className="hidden text-right tabular-nums sm:table-cell">
-                        <DeltaCell item={item} />
-                      </TableCell>
-                    )}
                     {analysis.months.length > 1 && (
                       <TableCell className="hidden text-right lg:table-cell">
                         <Sparkline
@@ -409,9 +349,6 @@ function CategoriesPage() {
                   </TableCell>
                   {showAverage && (
                     <TableCell className="hidden md:table-cell" />
-                  )}
-                  {hasPrevious && (
-                    <TableCell className="hidden sm:table-cell" />
                   )}
                   {analysis.months.length > 1 && (
                     <TableCell className="hidden lg:table-cell" />
