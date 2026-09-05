@@ -46,17 +46,19 @@ import { Switch } from '#/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import { AccountsSection } from '#/features/finance/accounts-section'
 import { CardsSection } from '#/features/finance/cards-section'
+import { KnowledgeBaseSection } from '#/features/finance/knowledge-base-section'
 import {
   clearTransactionDataFn,
   createOwnershipScopeFn,
   updateSettingsFn,
 } from '#/features/finance/finance.functions'
 import {
-  financeSnapshotOptions,
+  configurationOptions,
   invalidateFinance,
+  knowledgeBaseOptions,
 } from '#/features/finance/queries'
 
-const settingsTabs = ['geral', 'contas', 'cartoes'] as const
+const settingsTabs = ['geral', 'contas', 'cartoes', 'conhecimento'] as const
 type SettingsTab = (typeof settingsTabs)[number]
 
 const settingsSearchSchema = z.object({
@@ -65,8 +67,14 @@ const settingsSearchSchema = z.object({
 
 export const Route = createFileRoute('/configuracoes')({
   validateSearch: settingsSearchSchema,
-  loader: ({ context }) =>
-    context.queryClient.ensureQueryData(financeSnapshotOptions()),
+  loaderDeps: ({ search }) => ({ tab: search.tab }),
+  loader: ({ context, deps }) =>
+    Promise.all([
+      context.queryClient.ensureQueryData(configurationOptions()),
+      deps.tab === 'conhecimento'
+        ? context.queryClient.ensureQueryData(knowledgeBaseOptions())
+        : null,
+    ]),
   component: SettingsPage,
 })
 
@@ -80,7 +88,7 @@ function SettingsPage() {
       <PageHeader
         eyebrow="Preferências locais"
         title="Configurações"
-        description="Família, contas, cartões e dados guardados neste computador."
+        description="Família, contas, cartões, aprendizados e dados guardados neste computador."
       />
       <Tabs
         value={activeTab}
@@ -107,6 +115,9 @@ function SettingsPage() {
           <TabsTrigger value="cartoes" className="min-w-28 flex-none px-4">
             Cartões
           </TabsTrigger>
+          <TabsTrigger value="conhecimento" className="min-w-28 flex-none px-4">
+            Conhecimento
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="geral">
           <GeneralSettings />
@@ -117,13 +128,16 @@ function SettingsPage() {
         <TabsContent value="cartoes">
           <CardsSection />
         </TabsContent>
+        <TabsContent value="conhecimento">
+          <KnowledgeBaseSection />
+        </TabsContent>
       </Tabs>
     </Page>
   )
 }
 
 function GeneralSettings() {
-  const { data } = useSuspenseQuery(financeSnapshotOptions())
+  const { data } = useSuspenseQuery(configurationOptions())
   const queryClient = useQueryClient()
   const createScope = useServerFn(createOwnershipScopeFn)
   const updateSettings = useServerFn(updateSettingsFn)
@@ -277,7 +291,8 @@ function GeneralSettings() {
             <strong className="text-sm">Limpar transações e importações</strong>
             <p className="max-w-2xl text-sm text-muted-foreground">
               Remove lançamentos, extratos, lotes, conciliações e meses
-              fechados. Contas, cartões, metas e preferências permanecem.
+              fechados. Contas, cartões, metas, recorrências, conhecimento e
+              preferências permanecem.
             </p>
           </div>
           <AlertDialog

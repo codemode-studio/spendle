@@ -1,4 +1,4 @@
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
 
@@ -6,6 +6,7 @@ import { openDatabase } from './connection.server'
 import type { AppDatabase, DatabaseConnection } from './connection.server'
 import { repairImportProvenance } from './import-provenance-repair.server'
 import { seedDatabase } from './seed.server'
+import { seedQaDatabase } from './qa-seed.server'
 
 type DatabaseSeeder = (db: AppDatabase) => Promise<void>
 
@@ -23,9 +24,14 @@ function createState(connection: DatabaseConnection, seed: DatabaseSeeder) {
 }
 
 function getProductionState() {
+  if (process.env.VITEST) {
+    throw new Error(
+      'Tests must install an isolated database with openTestDatabase().',
+    )
+  }
   productionState ??= createState(
     openDatabase(process.env.DATABASE_URL || './data/financas.db'),
-    seedDatabase,
+    process.env.FINANCAS_QA === '1' ? seedQaDatabase : seedDatabase,
   )
   return productionState
 }
@@ -45,6 +51,10 @@ export const db = new Proxy({} as AppDatabase, {
     return typeof value === 'function' ? value.bind(activeDatabase) : value
   },
 })
+
+export function getImportsDirectory() {
+  return resolve(dirname(getActiveState().connection.sqlite.name), 'imports')
+}
 
 export function ensureDatabase() {
   const state = getActiveState()

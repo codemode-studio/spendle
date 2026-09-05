@@ -36,7 +36,7 @@ import {
   StrategyHistory,
   StrategyProgressView,
 } from '#/features/finance/strategy-progress'
-import type { FinanceSnapshot } from '#/features/finance/snapshot.types'
+import type { PlanningSnapshot } from '#/features/finance/snapshot.types'
 
 type Allocation = Record<
   'essential' | 'lifestyle' | 'investment' | 'reserve',
@@ -59,7 +59,7 @@ function BudgetSection({
   settingsPending,
   closePending,
 }: {
-  data: FinanceSnapshot
+  data: PlanningSnapshot
   selectedId: string
   allocation: Allocation
   totalBps: number
@@ -284,7 +284,7 @@ function GoalsSection({
   openGoal,
   openContribution,
 }: {
-  data: FinanceSnapshot
+  data: PlanningSnapshot
   submitReserve: (event: React.FormEvent<HTMLFormElement>) => void
   settingsPending: boolean
   openGoal: () => void
@@ -464,7 +464,7 @@ function ContributionDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  data: FinanceSnapshot
+  data: PlanningSnapshot
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
   pending: boolean
 }) {

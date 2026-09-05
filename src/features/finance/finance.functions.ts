@@ -1,3 +1,6 @@
+import { identifyImportFiles } from './import-identification.server'
+import { getTransactionsPage } from './transactions.server'
+import { transactionFiltersSchema } from './transactions.filters'
 import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
 
@@ -19,6 +22,9 @@ import {
 } from './finance.server'
 import {
   getFinanceSnapshot,
+  getCategoryTransactions,
+  getConfigurationSnapshot,
+  getPlanningSnapshot,
   getStrategyHistory,
 } from './finance-snapshot.server'
 import {
@@ -43,6 +49,16 @@ import {
   stageImportFormData,
 } from './import.server'
 import { getImportReviewSnapshot } from './import-review-read.server'
+import {
+  forgetKnowledgeEntry,
+  getKnowledgeBaseSnapshot,
+} from './knowledge-base.server'
+import {
+  applyKnowledgeSync,
+  planKnowledgeSync,
+  reviewKnowledgeCategoryAndSync,
+  updateKnowledgePatternAndSync,
+} from './knowledge-sync.server'
 import { serverInput } from './input-errors.server'
 import {
   approveDetectedRecurrence,
@@ -378,6 +394,10 @@ export const createInstallmentFn = createServerFn({ method: 'POST' })
   )
   .handler(({ data }) => createInstallment(data))
 
+export const identifyImportFilesFn = createServerFn({ method: 'POST' })
+  .validator((data: FormData) => data)
+  .handler(({ data }) => identifyImportFiles(data))
+
 export const stageImportFn = createServerFn({ method: 'POST' })
   .validator((data: FormData) => data)
   .handler(({ data }) => serverInput(() => stageImportFormData(data)))
@@ -450,6 +470,51 @@ export const ignoreDetectedRecurrenceFn = createServerFn({ method: 'POST' })
   )
   .handler(({ data }) => ignoreDetectedRecurrence(data))
 
+export const getKnowledgeBaseFn = createServerFn({ method: 'GET' }).handler(
+  () => getKnowledgeBaseSnapshot(),
+)
+
+export const reviewKnowledgeCategoryFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ id: z.string().min(1), categoryId: z.string().min(1) }))
+  .handler(({ data }) => reviewKnowledgeCategoryAndSync(data))
+
+export const updateKnowledgePatternFn = createServerFn({ method: 'POST' })
+  .validator(
+    z.object({
+      id: z.string().min(1),
+      pattern: z.string().min(1),
+      matchMode: z.enum(['exact', 'prefix']),
+    }),
+  )
+  .handler(({ data }) => updateKnowledgePatternAndSync(data))
+
+export const previewKnowledgeSyncFn = createServerFn({ method: 'GET' }).handler(
+  () => planKnowledgeSync(),
+)
+
+export const applyKnowledgeSyncFn = createServerFn({ method: 'POST' }).handler(
+  () => applyKnowledgeSync(),
+)
+
+export const forgetKnowledgeEntryFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ id: z.string().min(1) }))
+  .handler(({ data }) => forgetKnowledgeEntry(data))
+
 export const getStrategyHistoryFn = createServerFn({ method: 'GET' })
   .validator(z.object({ months: z.number().int().min(1).max(12).default(3) }))
   .handler(({ data }) => getStrategyHistory(data))
+
+export const getConfigurationSnapshotFn = createServerFn({
+  method: 'GET',
+}).handler(() => getConfigurationSnapshot())
+export const getPlanningSnapshotFn = createServerFn({ method: 'GET' }).handler(
+  () => getPlanningSnapshot(),
+)
+
+export const getTransactionsPageFn = createServerFn({ method: 'GET' })
+  .validator(transactionFiltersSchema)
+  .handler(({ data }) => getTransactionsPage(data))
+
+export const getCategoryTransactionsFn = createServerFn({
+  method: 'GET',
+}).handler(() => getCategoryTransactions())

@@ -1,7 +1,10 @@
+import { baseAmount } from '#/domain/ledger'
+import { transactionFiltersSchema } from '#/features/finance/transactions.filters'
 import {
   ArrowLeftRight,
   Check,
   ReceiptText,
+  RefreshCw,
   Search,
   SlidersHorizontal,
   Sparkles,
@@ -14,7 +17,7 @@ import {
 } from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useDeferredValue, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
@@ -29,6 +32,16 @@ import { CategorySelect } from '#/components/category-select'
 import { ManualTransactionDialog } from '#/components/manual-transaction-dialog'
 import { SegmentedControl } from '#/components/segmented-control'
 import { TransferAccountSelect } from '#/components/transfer-account-select'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '#/components/ui/alert-dialog'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import {
@@ -51,17 +64,18 @@ import {
   TableHeader,
   TableRow,
 } from '#/components/ui/table'
-import { formatInstrumentName, normalizeDescription } from '#/domain/finance'
+import { formatInstrumentName } from '#/domain/finance'
 import { formatCurrency, toMinorUnits as toCents } from '#/domain/currency'
-import { baseAmount, ledgerSpan } from '#/domain/ledger'
 import { formatDayLabel, formatPeriod } from '#/domain/period'
 import {
+  applyKnowledgeSyncFn,
   categorizeUncategorizedTransactionsWithAiFn,
+  previewKnowledgeSyncFn,
   setReconciliationStatusFn,
   updateTransactionCategoryFn,
 } from '#/features/finance/finance.functions'
 import {
-  financeSnapshotOptions,
+  transactionsPageOptions,
   invalidateFinance,
   patchTransactionCategory,
 } from '#/features/finance/queries'
@@ -75,18 +89,24 @@ const transactionsSearchSchema = z.object({
 export const Route = createFileRoute('/transacoes')({
   validateSearch: transactionsSearchSchema,
   loader: ({ context }) =>
-    context.queryClient.ensureQueryData(financeSnapshotOptions()),
+    context.queryClient.ensureQueryData(
+      transactionsPageOptions(transactionFiltersSchema.parse({})),
+    ),
   component: TransactionsPage,
 })
 
 function TransactionsPage() {
-  const { data } = useSuspenseQuery(financeSnapshotOptions())
   const queryClient = useQueryClient()
   const updateCategory = useServerFn(updateTransactionCategoryFn)
   const categorizeWithAi = useServerFn(
     categorizeUncategorizedTransactionsWithAiFn,
   )
   const setReconciliation = useServerFn(setReconciliationStatusFn)
+  const previewKnowledgeSync = useServerFn(previewKnowledgeSyncFn)
+  const applyKnowledgeSync = useServerFn(applyKnowledgeSyncFn)
+  const [syncPlan, setSyncPlan] = useState<Awaited<
+    ReturnType<typeof previewKnowledgeSync>
+  > | null>(null)
   const [search, setSearch] = useState('')
   const [target, setTarget] = useState('all')
   const { category: initialCategory } = Route.useSearch()
@@ -103,6 +123,44 @@ function TransactionsPage() {
   const [maxAmount, setMaxAmount] = useState('')
   const minCents = parseAmountInput(minAmount)
   const maxCents = parseAmountInput(maxAmount)
+  const [pagination, setPagination] = useState({ key: '', page: 0 })
+  const filterKey = JSON.stringify([
+    search,
+    target,
+    categoryFilter,
+    onlyUncategorized,
+    direction,
+    minCents,
+    maxCents,
+  ])
+  const page = pagination.key === filterKey ? pagination.page : 0
+  const filters = useMemo(
+    () => ({
+      search,
+      target,
+      category: categoryFilter,
+      onlyUncategorized,
+      direction,
+      minCents,
+      maxCents,
+      page,
+    }),
+    [
+      search,
+      target,
+      categoryFilter,
+      onlyUncategorized,
+      direction,
+      minCents,
+      maxCents,
+      page,
+    ],
+  )
+  const deferredFilters = useDeferredValue(filters)
+  const { data, isFetching } = useSuspenseQuery(
+    transactionsPageOptions(deferredFilters),
+  )
+  const changingPage = isFetching || deferredFilters !== filters
   const hasActiveFilters =
     search !== '' ||
     target !== 'all' ||
@@ -183,23 +241,48 @@ function TransactionsPage() {
       ),
   })
 
-  const uncategorizedCount = data.transactions.filter(
-    (transaction) =>
-      transaction.status === 'confirmed' &&
-      (!transaction.categoryId || transaction.categoryId === 'uncategorized'),
-  ).length
+  const syncPreviewMutation = useMutation({
+    mutationFn: previewKnowledgeSync,
+    onSuccess: (plan) => {
+      if (!plan.changes.length) {
+        toast.success('As categorias já refletem a base de conhecimento.')
+        return
+      }
+      setSyncPlan(plan)
+    },
+    onError: (error) =>
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível calcular a sincronização.',
+      ),
+  })
+  const syncApplyMutation = useMutation({
+    mutationFn: applyKnowledgeSync,
+    onSuccess: async (result) => {
+      setSyncPlan(null)
+      toast.success(
+        `${result.changed} lançamentos atualizados pela base de conhecimento.`,
+      )
+      await invalidate()
+    },
+    onError: (error) =>
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível sincronizar.',
+      ),
+  })
+
+  const uncategorizedCount = data.uncategorizedCount
 
   // Só categorias com lançamentos no período aparecem no filtro (com a
   // contagem), para a lista não virar a taxonomia inteira.
   const categoryGroups = useMemo(() => {
     const counts = new Map<string, number>()
-    for (const transaction of data.transactions) {
-      if (!transaction.categoryId || transaction.categoryId === 'uncategorized')
-        continue
-      counts.set(
-        transaction.categoryId,
-        (counts.get(transaction.categoryId) ?? 0) + 1,
-      )
+    for (const item of data.categoryCounts) {
+      if (item.categoryId && item.categoryId !== 'uncategorized')
+        counts.set(item.categoryId, item.count)
     }
     const groups = groupCategoryOptions(data.categories)
     const withCount = (items: typeof groups.income) =>
@@ -210,54 +293,9 @@ function TransactionsPage() {
       income: withCount(groups.income),
       expenses: withCount(groups.expenses),
     }
-  }, [data.transactions, data.categories, categoryFilter])
+  }, [data.categoryCounts, data.categories, categoryFilter])
 
-  const transactions = useMemo(
-    () =>
-      data.transactions.filter((transaction) => {
-        const matchesSearch =
-          !search ||
-          normalizeDescription(transaction.description).includes(
-            normalizeDescription(search),
-          )
-        const matchesTarget =
-          target === 'all' ||
-          transaction.accountId === target ||
-          transaction.creditCardId === target
-        const matchesUncategorized =
-          !onlyUncategorized ||
-          !transaction.categoryId ||
-          transaction.categoryId === 'uncategorized'
-        const matchesCategory =
-          categoryFilter === 'all' || transaction.categoryId === categoryFilter
-        const signedCents = baseAmount(transaction) ?? transaction.amountCents
-        const matchesDirection =
-          direction === 'all' ||
-          (direction === 'in' ? signedCents > 0 : signedCents < 0)
-        const magnitude = Math.abs(signedCents)
-        const matchesAmount =
-          (minCents === null || magnitude >= minCents) &&
-          (maxCents === null || magnitude <= maxCents)
-        return (
-          matchesSearch &&
-          matchesTarget &&
-          matchesUncategorized &&
-          matchesCategory &&
-          matchesDirection &&
-          matchesAmount
-        )
-      }),
-    [
-      data.transactions,
-      search,
-      target,
-      onlyUncategorized,
-      categoryFilter,
-      direction,
-      minCents,
-      maxCents,
-    ],
-  )
+  const transactions = data.transactions
   const dayGroups = useMemo(() => {
     const groups = new Map<string, typeof transactions>()
     for (const transaction of transactions) {
@@ -267,7 +305,7 @@ function TransactionsPage() {
     }
     return [...groups.entries()]
   }, [transactions])
-  const transactionPeriod = ledgerSpan(data.transactions)
+  const transactionPeriod = data.period
   const periodLabel = transactionPeriod
     ? formatPeriod(transactionPeriod, 'month-range')
     : ''
@@ -316,7 +354,7 @@ function TransactionsPage() {
   const reconciliationHistory = data.reconciliations.filter(
     (item) => item.status !== 'suggested',
   )
-  const hasTransactions = data.transactions.length > 0
+  const hasTransactions = data.totalCount > 0
 
   return (
     <Page>
@@ -324,7 +362,7 @@ function TransactionsPage() {
         title="Transações"
         description={
           hasTransactions
-            ? `${data.transactions.length} lançamentos · ${periodLabel}`
+            ? `${data.totalCount} lançamentos · ${periodLabel}`
             : 'Nenhum lançamento registrado ainda.'
         }
         actions={
@@ -334,6 +372,20 @@ function TransactionsPage() {
               cards={data.cards}
               categories={data.categories}
             />
+            {hasTransactions ? (
+              <Button
+                variant="outline"
+                onClick={() => syncPreviewMutation.mutate({})}
+                disabled={syncPreviewMutation.isPending}
+              >
+                {syncPreviewMutation.isPending ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <RefreshCw data-icon="inline-start" />
+                )}
+                Sincronizar com a base
+              </Button>
+            ) : null}
             {uncategorizedCount > 0 ? (
               <Button
                 variant="outline"
@@ -353,6 +405,57 @@ function TransactionsPage() {
           </div>
         }
       />
+      <AlertDialog
+        open={syncPlan !== null}
+        onOpenChange={(open) => !open && setSyncPlan(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Sincronizar {syncPlan?.changes.length ?? 0} lançamentos com a base
+              de conhecimento?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Cada lançamento recebe a categoria do padrão que o cobre.
+              Transferências e pagamentos de fatura não mudam.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {syncPlan ? (
+            <ul className="max-h-64 divide-y overflow-y-auto rounded-lg border text-sm">
+              {syncPlan.changes.slice(0, 8).map((change) => (
+                <li
+                  key={change.transactionId}
+                  className="flex flex-col gap-0.5 px-3 py-2"
+                >
+                  <span className="truncate font-medium">
+                    {change.description}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {formatDayLabel(change.postedAt)} ·{' '}
+                    {change.fromCategoryName} → {change.toCategoryName}
+                  </span>
+                </li>
+              ))}
+              {syncPlan.changes.length > 8 ? (
+                <li className="px-3 py-2 text-xs text-muted-foreground">
+                  e mais {syncPlan.changes.length - 8} lançamentos
+                </li>
+              ) : null}
+            </ul>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={syncApplyMutation.isPending}>
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={syncApplyMutation.isPending}
+              onClick={() => syncApplyMutation.mutate({})}
+            >
+              {syncApplyMutation.isPending ? 'Sincronizando…' : 'Sincronizar'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {!hasTransactions ? (
         <Panel>
           <EmptyState
@@ -430,6 +533,7 @@ function TransactionsPage() {
                     placeholder="Buscar descrição…"
                     className="pl-8 md:pl-8"
                     aria-label="Buscar transações"
+                    maxLength={200}
                   />
                 </div>
                 <Popover>
@@ -534,7 +638,7 @@ function TransactionsPage() {
                     </div>
                     <div className="flex items-center justify-between gap-2 border-t pt-3 text-xs text-muted-foreground">
                       <span className="tabular-nums">
-                        {transactions.length} de {data.transactions.length}
+                        {data.filteredCount} de {data.totalCount}
                       </span>
                       <Button
                         variant="ghost"
@@ -564,8 +668,7 @@ function TransactionsPage() {
                   </button>
                 ))}
                 <Button variant="ghost" size="sm" onClick={clearFilters}>
-                  Limpar tudo · {transactions.length} de{' '}
-                  {data.transactions.length}
+                  Limpar tudo · {data.filteredCount} de {data.totalCount}
                 </Button>
               </div>
             )}
@@ -693,6 +796,38 @@ function TransactionsPage() {
               title="Nenhum lançamento encontrado"
               description="Ajuste os filtros ou importe um extrato para começar."
             />
+          )}
+          {data.filteredCount > 50 && (
+            <div
+              className="flex items-center justify-end gap-3 p-3"
+              aria-label="Paginação"
+            >
+              <span className="text-sm text-muted-foreground">
+                Página {data.page + 1} de {Math.ceil(data.filteredCount / 50)}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={changingPage || data.page === 0}
+                onClick={() =>
+                  setPagination({ key: filterKey, page: data.page - 1 })
+                }
+              >
+                Anterior
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={
+                  changingPage || (data.page + 1) * 50 >= data.filteredCount
+                }
+                onClick={() =>
+                  setPagination({ key: filterKey, page: data.page + 1 })
+                }
+              >
+                Próxima
+              </Button>
+            </div>
           )}
         </Panel>
       )}

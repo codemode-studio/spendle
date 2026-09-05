@@ -119,24 +119,43 @@ export function buildReconciliationSuggestions(
 ) {
   const suggestions: ReconciliationSuggestion[] = []
 
-  for (let leftIndex = 0; leftIndex < transactions.length; leftIndex += 1) {
-    for (
-      let rightIndex = leftIndex + 1;
-      rightIndex < transactions.length;
-      rightIndex += 1
-    ) {
-      const left = transactions[leftIndex]
-      const right = transactions[rightIndex]
-      const days = daysBetween(left.postedAt, right.postedAt, {
-        inclusive: false,
-        absolute: true,
-      })
-      if (
-        days > 120 ||
-        Math.sign(left.amountCents) === Math.sign(right.amountCents)
-      ) {
-        continue
+  // Keep original pair order: equal-priority suggestions use it to break ties.
+  const dated = transactions.map((transaction, index) => ({
+    index,
+    day: daysBetween('1970-01-01', transaction.postedAt, { inclusive: false }),
+    sign: Math.sign(transaction.amountCents),
+  }))
+  const bySign = new Map<number, typeof dated>()
+  for (const entry of dated) {
+    const entries = bySign.get(entry.sign) ?? []
+    entries.push(entry)
+    bySign.set(entry.sign, entries)
+  }
+  for (const entries of bySign.values()) entries.sort((a, b) => a.day - b.day)
+
+  for (const entry of dated) {
+    const candidateIndices: number[] = []
+    for (const [sign, entries] of bySign) {
+      if (sign === entry.sign) continue
+      let low = 0
+      let high = entries.length
+      while (low < high) {
+        const middle = (low + high) >>> 1
+        if (entries[middle].day < entry.day - 120) low = middle + 1
+        else high = middle
       }
+      for (let index = low; index < entries.length; index += 1) {
+        const candidate = entries[index]
+        if (candidate.day > entry.day + 120) break
+        if (candidate.index > entry.index)
+          candidateIndices.push(candidate.index)
+      }
+    }
+    candidateIndices.sort((a, b) => a - b)
+    for (const rightIndex of candidateIndices) {
+      const left = transactions[entry.index]
+      const right = transactions[rightIndex]
+      const days = Math.abs(entry.day - dated[rightIndex].day)
 
       const sameAmount =
         left.currency === right.currency &&

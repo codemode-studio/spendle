@@ -25,13 +25,13 @@ import {
   invalidateFinance,
   recurrenceDetectionOptions,
 } from '#/features/finance/queries'
-import type { FinanceSnapshot } from '#/features/finance/snapshot.types'
+import type { PlanningSnapshot } from '#/features/finance/snapshot.types'
 
 type DetectedRecurrence = Awaited<
   ReturnType<typeof detectRecurrencesFn>
 >[number]
 
-function DetectedRecurrencesPanel({ data }: { data: FinanceSnapshot }) {
+function DetectedRecurrencesPanel({ data }: { data: PlanningSnapshot }) {
   const queryClient = useQueryClient()
   const detection = useQuery(recurrenceDetectionOptions())
   const approve = useServerFn(approveDetectedRecurrenceFn)
@@ -108,7 +108,7 @@ function DetectedRecurrenceCard({
   onIgnore,
 }: {
   candidate: DetectedRecurrence
-  data: FinanceSnapshot
+  data: PlanningSnapshot
   pending: boolean
   onApprove: (input: {
     name: string

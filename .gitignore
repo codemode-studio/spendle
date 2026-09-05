@@ -17,3 +17,5 @@ data/
 .vinxi
 __unconfig*
 todos.json
+
+.qa/

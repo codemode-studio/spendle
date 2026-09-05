@@ -27,7 +27,7 @@ import { formatInstrumentName } from '#/domain/finance'
 import { formatShortDate as formatDate } from '#/domain/period'
 import { isAcceptedRecurrenceMatchStatus } from '#/domain/recurrence-book'
 import type {
-  FinanceSnapshot,
+  PlanningSnapshot,
   RecurrenceSnapshot,
 } from '#/features/finance/snapshot.types'
 import { cn } from '#/lib/utils'
@@ -54,7 +54,7 @@ function RecurrencesSection({
   linkOccurrence,
   completeOccurrence,
 }: {
-  data: FinanceSnapshot
+  data: PlanningSnapshot
   pending: boolean
   openNew: () => void
   openEdit: (id: string) => void

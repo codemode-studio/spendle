@@ -59,6 +59,55 @@ modelo de leitura.
 `src/features/planning` reúne as derivações puras e as seções de apresentação
 do planejamento, enquanto a rota carrega o read model e compõe essas seções.
 
+## Base de conhecimento
+
+`knowledge-base.server.ts` guarda na tabela `knowledge_base` as decisões
+humanas por assinatura de estabelecimento (`merchantSignature`) e direção do
+valor: a categoria escolhida na lista de transações ou na revisão de um lote, e
+o estabelecimento vinculado a uma recorrência ao confirmar ou aprovar um
+pagamento. Heurística, histórico implícito, vínculos automáticos e IA não
+escrevem nela. Reafirmar a mesma decisão soma `confirmations`; trocar a decisão
+conta uma `corrections`. As entradas não dependem do ledger, então sobrevivem a
+`clearTransactionData` e a reimportações.
+
+Entradas de categoria casam pelo padrão (`src/domain/knowledge-pattern.ts`):
+a assinatura sem sufixo de parcela e sem prefixo de processador de pagamento
+(lista fechada). Um padrão pode ser `exact` ou `prefix`; o prefixo casa no
+limite de token e só nasce por decisão explícita, na aba Conhecimento ou na
+lista aprovada das migrações `0036` e `0037` (`ifd`, `mercadolivre`, `shopee`,
+`mp`, `nuv`). O padrão exato vence o prefixo; uma entrada exata da mesma
+categoria coberta por um prefixo é redundante e é absorvida por ele. Recorrências continuam casando pela assinatura completa.
+
+Na preparação de um lote, a base substitui apenas sugestões sem origem ou
+heurísticas (`suggestionSource = 'knowledge'`, confiança 98 para padrão exato e
+92 para prefixo); regras explícitas, transferências aprendidas e políticas de
+destino continuam prevalecendo.
+Categorias de sistema (`uncategorized`, `transfer`, `card_payment`) nunca são
+aprendidas. Os aliases de recorrência entram nas assinaturas conhecidas da
+detecção e no matching; desvincular um pagamento remove o alias, e excluir a
+recorrência ou a categoria apaga as entradas por cascata.
+
+A migração `0034_backfill_knowledge_base.sql` reconstruiu a base a partir das
+decisões já registradas (revisões de lote com origem `manual`, lançamentos cuja
+categoria final difere de uma sugestão concreta, lançamentos manuais com
+categoria e vínculos de recorrência com status `confirmed`). Ela depende da
+função SQL `merchant_signature`, registrada em `connection.server.ts`, portanto
+roda pelo `ensureDatabase()`, pelo doctor e pelo QA, não pelo CLI do drizzle-kit.
+A aba **Conhecimento** em Configurações (`knowledge-base-section.tsx`) lista as
+entradas, permite corrigir a categoria aprendida, editar o padrão e esquecer uma
+entrada. `knowledge-sync.server.ts` reaplica a base aos lançamentos: corrigir a
+categoria ou o padrão de uma entrada sincroniza só os lançamentos daquela
+entrada, e o botão **Sincronizar com a base** em Transações calcula uma prévia
+completa antes de aplicar. Transferências, pagamentos de fatura e lançamentos com
+contraparte nunca mudam por sincronização.
+
+A migração `0035_reclassify_food_categories.sql` substituiu Alimentação (inativa,
+mantida pelo histórico) por Mercado, Restaurantes e Delivery, com listas explícitas
+de estabelecimentos e atualização de lotes, parcelas, splits, categorias anteriores
+de vínculos e da base de conhecimento. A prévia somente leitura fica em
+`scripts/preview-food-reclassification.ts`; o plano está em
+`plans/reclassificacao-comida-e-kb.md`.
+
 ## Lançamento (read model)
 
 `src/domain/ledger.ts` transforma o snapshot financeiro em

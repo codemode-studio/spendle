@@ -16,7 +16,7 @@ import {
   TableRow,
 } from '#/components/ui/table'
 import { formatCurrency } from '#/domain/currency'
-import { familyTransactions, fullPeriod } from '#/domain/ledger'
+import { fullPeriod } from '#/domain/ledger'
 import { formatPeriod, trailingPeriod } from '#/domain/period'
 import type { Period } from '#/domain/period'
 import { analyzeCategories } from '#/features/categories/analysis'
@@ -26,7 +26,7 @@ import {
   Sparkline,
   StackedMonthly,
 } from '#/features/categories/monthly-chart'
-import { financeSnapshotOptions } from '#/features/finance/queries'
+import { categoryTransactionsOptions } from '#/features/finance/queries'
 import { cn } from '#/lib/utils'
 
 const PERIODS = {
@@ -48,7 +48,7 @@ const searchSchema = z.object({
 export const Route = createFileRoute('/categorias')({
   validateSearch: searchSchema,
   loader: ({ context }) =>
-    context.queryClient.ensureQueryData(financeSnapshotOptions()),
+    context.queryClient.ensureQueryData(categoryTransactionsOptions()),
   component: CategoriesPage,
 })
 
@@ -99,13 +99,13 @@ function DeltaCell({ item }: { item: CategoryTrend }) {
 }
 
 function CategoriesPage() {
-  const { data } = useSuspenseQuery(financeSnapshotOptions())
-  const { periodo = 'tudo' } = Route.useSearch()
+  const { data } = useSuspenseQuery(categoryTransactionsOptions())
+  const { periodo = '30d' } = Route.useSearch()
   const navigate = Route.useNavigate()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [chart, setChart] = useState<'stack' | 'heat'>('stack')
 
-  const transactions = useMemo(() => familyTransactions(data), [data])
+  const transactions = data
   const period = useMemo<Period>(() => {
     const config = PERIODS[periodo]
     if (config.days) return trailingPeriod(config.days)

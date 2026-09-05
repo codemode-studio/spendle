@@ -1,9 +1,10 @@
+import { measureOperation } from './diagnostics.server'
 import { randomUUID } from 'node:crypto'
 import { readFile, unlink } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { and, eq, sql } from 'drizzle-orm'
 
-import { db, ensureDatabase } from '#/db/index.server'
+import { db, ensureDatabase, getImportsDirectory } from '#/db/index.server'
 import * as schema from '#/db/schema'
 import { parseInstallmentDescription } from '#/domain/credit-card'
 import { classifyCheckpointAtDate } from '#/domain/balance-checkpoint'
@@ -289,272 +290,277 @@ export async function commitImport(
   importId: string,
   manualReviewConfirmed = false,
 ) {
-  await ensureDatabase()
-  const importRows = await db
-    .select()
-    .from(schema.imports)
-    .where(eq(schema.imports.id, importId))
-    .limit(1)
-  if (!importRows[0]) throw new Error('Importação não encontrada.')
-  let importRow: typeof schema.imports.$inferSelect = importRows[0]
-  if (importRow.status === 'committed' || importRow.status === 'evidence') {
-    return { committed: 0, reused: true }
-  }
-  await assertImportActionable(importRow, 'commit')
-  if (importRow.status !== 'review') {
-    throw new Error('Somente lotes em revisão podem ser consolidados.')
-  }
-  if (isDependentBatchEvidence(importRow)) {
-    throw new Error(
-      'Este arquivo está aguardando o documento principal do mesmo lote. Consolide ou rejeite o documento principal primeiro.',
-    )
-  }
-  const source = await db
-    .select({
-      sha256: schema.sourceFiles.sha256,
-      storagePath: schema.sourceFiles.storagePath,
-      originalName: schema.sourceFiles.originalName,
-    })
-    .from(schema.sourceFiles)
-    .where(eq(schema.sourceFiles.id, importRow.sourceFileId))
-    .limit(1)
-  if (!source[0]) throw new Error('Arquivo original não encontrado.')
-
-  const refreshedControls = await refreshCsvImportControls(importRow, source[0])
-  importRow = refreshedControls.importRow
-
-  if (importRow.batchId) {
-    const batchMembers = (
-      await db
-        .select()
-        .from(schema.imports)
-        .where(eq(schema.imports.batchId, importRow.batchId))
-    ).map((member) => (member.id === importId ? importRow : member))
-    await assertImportActionable(batchMembers, 'commit', {
-      targetType: importRow.accountId ? 'account' : 'card',
-      targetId: importRow.accountId ?? importRow.creditCardId!,
-    })
-  }
-
-  if (importRow.validationStatus === 'divergent') {
-    throw new Error(
-      importRow.validationMessage ||
-        'A auditoria encontrou uma divergência. Revise ou rejeite este lote antes de continuar.',
-    )
-  }
-  if (
-    importRow.periodSource === 'activity' ||
-    importRow.periodSource === 'unknown'
-  ) {
-    // Persist the reparsed controls before rejecting, otherwise the review
-    // keeps reading the stale (reliable) period, hides the coverage
-    // confirmation form and every retry repeats this error.
-    if (refreshedControls.patch) {
-      await db
-        .update(schema.imports)
-        .set(refreshedControls.patch)
-        .where(eq(schema.imports.id, importId))
-    }
-    throw new Error(
-      'Confirme o período exportado antes de consolidar. Os dias com movimentação não provam, sozinhos, a cobertura do arquivo.',
-    )
-  }
-  const staged = await db
-    .select()
-    .from(schema.stagedTransactions)
-    .where(eq(schema.stagedTransactions.importId, importId))
-  const incompleteTransfer = staged.find(
-    (item) =>
-      !item.duplicate &&
-      item.suggestedCategoryId === 'transfer' &&
-      !item.counterpartyAccountId,
-  )
-  if (incompleteTransfer) {
-    throw new Error(
-      `Selecione a conta relacionada à transferência "${incompleteTransfer.description}" antes de consolidar.`,
-    )
-  }
-  if (
-    importRow.parser === 'pdf_inspector' &&
-    (importRow.creditCardId || importRow.accountId) &&
-    importRow.closingBalanceCents !== null &&
-    importRow.closingBalanceType !== 'available' &&
-    importRow.balanceAsOf
-  ) {
-    await reconcileCsvWithPdfControl({
-      importIds: [importId],
-      targetType: importRow.accountId ? 'account' : 'card',
-      targetId: importRow.accountId ?? importRow.creditCardId!,
-      finalize: true,
-    })
-    const refreshed = await db
+  return measureOperation('import.commit', { importId }, async () => {
+    await ensureDatabase()
+    const importRows = await db
       .select()
       .from(schema.imports)
       .where(eq(schema.imports.id, importId))
       .limit(1)
-    importRow = refreshed[0]
+    if (!importRows[0]) throw new Error('Importação não encontrada.')
+    let importRow: typeof schema.imports.$inferSelect = importRows[0]
     if (importRow.status === 'committed' || importRow.status === 'evidence') {
-      const postCommit = await finalizeImportAfterCommit(
-        importRow.batchId,
-        importId,
-      )
-      const created = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(schema.transactions)
-        .where(eq(schema.transactions.importId, importId))
-      return {
-        committed: Number(created[0]?.count ?? 0),
-        reused: false,
-        postCommit,
-      }
+      return { committed: 0, reused: true }
     }
+    await assertImportActionable(importRow, 'commit')
+    if (importRow.status !== 'review') {
+      throw new Error('Somente lotes em revisão podem ser consolidados.')
+    }
+    if (isDependentBatchEvidence(importRow)) {
+      throw new Error(
+        'Este arquivo está aguardando o documento principal do mesmo lote. Consolide ou rejeite o documento principal primeiro.',
+      )
+    }
+    const source = await db
+      .select({
+        sha256: schema.sourceFiles.sha256,
+        storagePath: schema.sourceFiles.storagePath,
+        originalName: schema.sourceFiles.originalName,
+      })
+      .from(schema.sourceFiles)
+      .where(eq(schema.sourceFiles.id, importRow.sourceFileId))
+      .limit(1)
+    if (!source[0]) throw new Error('Arquivo original não encontrado.')
+
+    const refreshedControls = await refreshCsvImportControls(
+      importRow,
+      source[0],
+    )
+    importRow = refreshedControls.importRow
+
+    if (importRow.batchId) {
+      const batchMembers = (
+        await db
+          .select()
+          .from(schema.imports)
+          .where(eq(schema.imports.batchId, importRow.batchId))
+      ).map((member) => (member.id === importId ? importRow : member))
+      await assertImportActionable(batchMembers, 'commit', {
+        targetType: importRow.accountId ? 'account' : 'card',
+        targetId: importRow.accountId ?? importRow.creditCardId!,
+      })
+    }
+
     if (importRow.validationStatus === 'divergent') {
       throw new Error(
         importRow.validationMessage ||
-          'O documento ainda tem observações sem vínculo. Resolva as diferenças antes de consolidar.',
+          'A auditoria encontrou uma divergência. Revise ou rejeite este lote antes de continuar.',
       )
     }
-  }
-  const { closedCycleAssignments, duplicateReasons, audit } =
-    await buildCanonicalCommitPlan(
+    if (
+      importRow.periodSource === 'activity' ||
+      importRow.periodSource === 'unknown'
+    ) {
+      // Persist the reparsed controls before rejecting, otherwise the review
+      // keeps reading the stale (reliable) period, hides the coverage
+      // confirmation form and every retry repeats this error.
+      if (refreshedControls.patch) {
+        await db
+          .update(schema.imports)
+          .set(refreshedControls.patch)
+          .where(eq(schema.imports.id, importId))
+      }
+      throw new Error(
+        'Confirme o período exportado antes de consolidar. Os dias com movimentação não provam, sozinhos, a cobertura do arquivo.',
+      )
+    }
+    const staged = await db
+      .select()
+      .from(schema.stagedTransactions)
+      .where(eq(schema.stagedTransactions.importId, importId))
+    const incompleteTransfer = staged.find(
+      (item) =>
+        !item.duplicate &&
+        item.suggestedCategoryId === 'transfer' &&
+        !item.counterpartyAccountId,
+    )
+    if (incompleteTransfer) {
+      throw new Error(
+        `Selecione a conta relacionada à transferência "${incompleteTransfer.description}" antes de consolidar.`,
+      )
+    }
+    if (
+      importRow.parser === 'pdf_inspector' &&
+      (importRow.creditCardId || importRow.accountId) &&
+      importRow.closingBalanceCents !== null &&
+      importRow.closingBalanceType !== 'available' &&
+      importRow.balanceAsOf
+    ) {
+      await reconcileCsvWithPdfControl({
+        importIds: [importId],
+        targetType: importRow.accountId ? 'account' : 'card',
+        targetId: importRow.accountId ?? importRow.creditCardId!,
+        finalize: true,
+      })
+      const refreshed = await db
+        .select()
+        .from(schema.imports)
+        .where(eq(schema.imports.id, importId))
+        .limit(1)
+      importRow = refreshed[0]
+      if (importRow.status === 'committed' || importRow.status === 'evidence') {
+        const postCommit = await finalizeImportAfterCommit(
+          importRow.batchId,
+          importId,
+        )
+        const created = await db
+          .select({ count: sql<number>`count(*)` })
+          .from(schema.transactions)
+          .where(eq(schema.transactions.importId, importId))
+        return {
+          committed: Number(created[0]?.count ?? 0),
+          reused: false,
+          postCommit,
+        }
+      }
+      if (importRow.validationStatus === 'divergent') {
+        throw new Error(
+          importRow.validationMessage ||
+            'O documento ainda tem observações sem vínculo. Resolva as diferenças antes de consolidar.',
+        )
+      }
+    }
+    const { closedCycleAssignments, duplicateReasons, audit } =
+      await buildCanonicalCommitPlan(
+        importRow,
+        staged,
+        manualReviewConfirmed,
+        refreshedControls.patch,
+      )
+    const checkpointBalanceType = importRow.creditCardId
+      ? ('card_statement' as const)
+      : importRow.closingBalanceType === 'available'
+        ? ('available' as const)
+        : ('posted' as const)
+    const checkpointAtDate =
+      importRow.closingBalanceCents !== null && importRow.balanceAsOf
+        ? classifyCheckpointAtDate(
+            await db
+              .select()
+              .from(schema.balanceCheckpoints)
+              .where(
+                importRow.accountId
+                  ? eq(schema.balanceCheckpoints.accountId, importRow.accountId)
+                  : eq(
+                      schema.balanceCheckpoints.creditCardId,
+                      importRow.creditCardId!,
+                    ),
+              ),
+            {
+              balanceType: checkpointBalanceType,
+              balanceCents: importRow.closingBalanceCents,
+              asOf: importRow.balanceAsOf,
+            },
+          )
+        : { status: 'none' as const, checkpointId: null }
+    if (checkpointAtDate.status === 'conflict') {
+      const message =
+        'Já existe outro saldo ativo deste tipo para a mesma data. Invalide o ponto anterior antes de consolidar este arquivo.'
+      db.transaction((transaction) => {
+        transaction
+          .update(schema.imports)
+          .set({
+            ...(refreshedControls.patch ?? {}),
+            ...nextValidationState({
+              current: importRow,
+              evaluated: {
+                validationStatus: 'divergent',
+                validationReason: 'balance_mismatch',
+                validationMessage: message,
+              },
+            }),
+          })
+          .where(eq(schema.imports.id, importId))
+          .run()
+      })
+      throw new Error(message)
+    }
+    const checkpointControlImport =
+      importRow.batchId &&
+      (importRow.parser === 'csv' || importRow.parser === 'ofx') &&
+      importRow.closingBalanceCents !== null &&
+      importRow.balanceAsOf
+        ? (
+            await db
+              .select()
+              .from(schema.imports)
+              .where(eq(schema.imports.batchId, importRow.batchId))
+          ).find(
+            (candidate) =>
+              candidate.parser === 'pdf_inspector' &&
+              candidate.status === 'review' &&
+              getEffectiveImportValidationState(candidate).remediation
+                .checkpointReplacement &&
+              candidate.dependsOnImportId === importId &&
+              candidate.closingBalanceCents === importRow.closingBalanceCents &&
+              candidate.balanceAsOf === importRow.balanceAsOf,
+          )
+        : null
+    const checkpointImportId = checkpointControlImport?.id ?? importId
+    const checkpointSource = checkpointControlImport
+      ? ('pdf' as const)
+      : importRow.parser === 'ofx'
+        ? ('ofx' as const)
+        : importRow.parser === 'csv'
+          ? ('csv' as const)
+          : ('pdf' as const)
+    const {
+      transactions: prepared,
+      transactionByObservation: createdTransactionByStagedId,
+      installments: detectedInstallments,
+    } = await prepareCanonicalTransactions({
       importRow,
       staged,
-      manualReviewConfirmed,
-      refreshedControls.patch,
-    )
-  const checkpointBalanceType = importRow.creditCardId
-    ? ('card_statement' as const)
-    : importRow.closingBalanceType === 'available'
-      ? ('available' as const)
-      : ('posted' as const)
-  const checkpointAtDate =
-    importRow.closingBalanceCents !== null && importRow.balanceAsOf
-      ? classifyCheckpointAtDate(
-          await db
-            .select()
-            .from(schema.balanceCheckpoints)
-            .where(
-              importRow.accountId
-                ? eq(schema.balanceCheckpoints.accountId, importRow.accountId)
-                : eq(
-                    schema.balanceCheckpoints.creditCardId,
-                    importRow.creditCardId!,
-                  ),
-            ),
-          {
-            balanceType: checkpointBalanceType,
-            balanceCents: importRow.closingBalanceCents,
-            asOf: importRow.balanceAsOf,
-          },
-        )
-      : { status: 'none' as const, checkpointId: null }
-  if (checkpointAtDate.status === 'conflict') {
-    const message =
-      'Já existe outro saldo ativo deste tipo para a mesma data. Invalide o ponto anterior antes de consolidar este arquivo.'
+      duplicateReasons,
+      sourceSha256: source[0].sha256,
+    })
     db.transaction((transaction) => {
-      transaction
-        .update(schema.imports)
-        .set({
-          ...(refreshedControls.patch ?? {}),
-          ...nextValidationState({
-            current: importRow,
-            evaluated: {
-              validationStatus: 'divergent',
-              validationReason: 'balance_mismatch',
-              validationMessage: message,
-            },
+      const outcome = resolveImportOutcome(transaction, importId, {
+        importOverrides: refreshedControls.patch ?? undefined,
+        assignments: [...closedCycleAssignments.entries()].map(
+          ([observationId, assignment]) => ({
+            observationId,
+            transactionId: assignment.transactionId,
+            externalId: assignment.externalId,
           }),
-        })
-        .where(eq(schema.imports.id, importId))
-        .run()
-    })
-    throw new Error(message)
-  }
-  const checkpointControlImport =
-    importRow.batchId &&
-    (importRow.parser === 'csv' || importRow.parser === 'ofx') &&
-    importRow.closingBalanceCents !== null &&
-    importRow.balanceAsOf
-      ? (
-          await db
-            .select()
-            .from(schema.imports)
-            .where(eq(schema.imports.batchId, importRow.batchId))
-        ).find(
-          (candidate) =>
-            candidate.parser === 'pdf_inspector' &&
-            candidate.status === 'review' &&
-            getEffectiveImportValidationState(candidate).remediation
-              .checkpointReplacement &&
-            candidate.dependsOnImportId === importId &&
-            candidate.closingBalanceCents === importRow.closingBalanceCents &&
-            candidate.balanceAsOf === importRow.balanceAsOf,
-        )
-      : null
-  const checkpointImportId = checkpointControlImport?.id ?? importId
-  const checkpointSource = checkpointControlImport
-    ? ('pdf' as const)
-    : importRow.parser === 'ofx'
-      ? ('ofx' as const)
-      : importRow.parser === 'csv'
-        ? ('csv' as const)
-        : ('pdf' as const)
-  const {
-    transactions: prepared,
-    transactionByObservation: createdTransactionByStagedId,
-    installments: detectedInstallments,
-  } = await prepareCanonicalTransactions({
-    importRow,
-    staged,
-    duplicateReasons,
-    sourceSha256: source[0].sha256,
-  })
-  db.transaction((transaction) => {
-    const outcome = resolveImportOutcome(transaction, importId, {
-      importOverrides: refreshedControls.patch ?? undefined,
-      assignments: [...closedCycleAssignments.entries()].map(
-        ([observationId, assignment]) => ({
-          observationId,
-          transactionId: assignment.transactionId,
-          externalId: assignment.externalId,
-        }),
-      ),
-      checkpointImportId,
-      checkpointSource,
-      checkpointMethod: checkpointControlImport
-        ? 'date_amount_currency_multiset'
-        : undefined,
-      auditStatus: audit.status,
-      balanceDifferenceCents: audit.balanceDifferenceCents,
-      createdTransactions: prepared.map(({ id, externalId }) => ({
-        id,
-        externalId: externalId ?? null,
-      })),
-      createdTransactionByObservation: createdTransactionByStagedId,
-    })
-    outcome.commit = {
-      importPatch: refreshedControls.patch,
-      transactions: prepared,
-      installments: detectedInstallments,
-      validation: {
-        status: audit.status,
-        reason: audit.reasonCode,
-        message: audit.message,
-        expectedBalanceCents: audit.expectedBalanceCents,
+        ),
+        checkpointImportId,
+        checkpointSource,
+        checkpointMethod: checkpointControlImport
+          ? 'date_amount_currency_multiset'
+          : undefined,
+        auditStatus: audit.status,
         balanceDifferenceCents: audit.balanceDifferenceCents,
-      },
+        createdTransactions: prepared.map(({ id, externalId }) => ({
+          id,
+          externalId: externalId ?? null,
+        })),
+        createdTransactionByObservation: createdTransactionByStagedId,
+      })
+      outcome.commit = {
+        importPatch: refreshedControls.patch,
+        transactions: prepared,
+        installments: detectedInstallments,
+        validation: {
+          status: audit.status,
+          reason: audit.reasonCode,
+          message: audit.message,
+          expectedBalanceCents: audit.expectedBalanceCents,
+          balanceDifferenceCents: audit.balanceDifferenceCents,
+        },
+      }
+      applyImportOutcome(transaction, outcome)
+    })
+    const postCommit = await finalizeImportAfterCommit(
+      importRow.batchId,
+      importId,
+    )
+    return {
+      committed: prepared.length,
+      reused: false,
+      postCommit,
     }
-    applyImportOutcome(transaction, outcome)
   })
-  const postCommit = await finalizeImportAfterCommit(
-    importRow.batchId,
-    importId,
-  )
-  return {
-    committed: prepared.length,
-    reused: false,
-    postCommit,
-  }
 }
 
 export async function retryImportFinalization(importId: string) {
@@ -723,6 +729,12 @@ export async function clearTransactionData() {
     transaction.delete(schema.transactionSplits).run()
     transaction.delete(schema.transactionEvidence).run()
     transaction.delete(schema.transactionCorrections).run()
+    transaction.delete(schema.recurrenceMatches).run()
+    transaction
+      .update(schema.recurrenceOccurrences)
+      .set({ status: 'expected', resolvedAt: null })
+      .where(eq(schema.recurrenceOccurrences.status, 'matched'))
+      .run()
     transaction.delete(schema.transactions).run()
     transaction.delete(schema.balanceCheckpoints).run()
     transaction.delete(schema.stagedTransactions).run()
@@ -749,7 +761,7 @@ export async function clearTransactionData() {
       .run()
   })
 
-  const importsDirectory = resolve(process.cwd(), 'data', 'imports')
+  const importsDirectory = getImportsDirectory()
   await Promise.allSettled(
     storedFiles.map(async ({ storagePath }) => {
       const absolutePath = resolve(storagePath)

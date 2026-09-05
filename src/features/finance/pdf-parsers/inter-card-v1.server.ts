@@ -58,6 +58,13 @@ function extractDateFromLine(line: PdfPositionedLine | undefined) {
   return value ? parseBrazilianDate(value) : null
 }
 
+function parseTrailingMoney(line: PdfPositionedLine, currency: string) {
+  const token = line.text.match(
+    /R\$\s*((?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})\s*$/,
+  )?.[1]
+  return token ? parseMoney(token, currency) : null
+}
+
 function findRequiredControlLine(lines: PdfPositionedLine[], pattern: RegExp) {
   const line = lines.find((candidate) => pattern.test(candidate.text))
   if (!line) throw new Error('O resumo da fatura Inter está incompleto.')
@@ -87,15 +94,19 @@ function parseInterCardStatement(input: {
   const periodEnd = shiftMonth(nextCutDate, -1)
   const periodStart = nextDay(shiftMonth(periodEnd, -1))
   const totalLine = findRequiredControlLine(input.lines, /^fatura atual\s+R\$/i)
-  const totalToken = totalLine.text.match(
-    /R\$\s*((?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})\s*$/,
-  )?.[1]
-  const closingBalanceCents = totalToken
-    ? parseMoney(totalToken, input.currency)
-    : null
-  if (closingBalanceCents === null) {
+  const statementTotalCents = parseTrailingMoney(totalLine, input.currency)
+  if (statementTotalCents === null) {
     throw new Error('Não foi possível interpretar o total da fatura Inter.')
   }
+  // "Fatura atual" is net of payments anticipated inside the cycle. When the
+  // holder pays before the cut, the amount due drops (possibly to zero) while
+  // the purchases still add up to "Despesas do mês".
+  const monthlyExpensesLine = input.lines.find((line) =>
+    /^despesas do m[eê]s\s+R\$/i.test(line.text),
+  )
+  const monthlyExpensesCents = monthlyExpensesLine
+    ? parseTrailingMoney(monthlyExpensesLine, input.currency)
+    : null
 
   const transactionPages = new Set(
     input.lines
@@ -130,11 +141,15 @@ function parseInterCardStatement(input: {
     const installmentDate = installment
       ? shiftMonth(originalDate, Number(installment[1]) - 1)
       : originalDate
-    if (installmentDate < periodStart || installmentDate > periodEnd) {
+    if (installmentDate > periodEnd) {
       throw new Error(`Parcela fora do ciclo da fatura Inter: ${line.text}`)
     }
+    // Inter prints the purchase date, and a purchase authorised before the cut
+    // can still be captured (and billed) in the following cycle. The invoice
+    // is the source of truth for which cycle bills it, so such rows are posted
+    // on the first day of this cycle instead of being rejected.
     transactions.push({
-      postedAt: installmentDate,
+      postedAt: installmentDate < periodStart ? periodStart : installmentDate,
       description,
       amountCents: creditMarker
         ? Math.abs(parsedAmount)
@@ -148,11 +163,19 @@ function parseInterCardStatement(input: {
     (sum, transaction) => sum + transaction.amountCents,
     0,
   )
-  if (!transactions.length || calculatedTotal !== closingBalanceCents) {
+  const acceptedTotals = [
+    statementTotalCents,
+    ...(monthlyExpensesCents !== null &&
+    monthlyExpensesCents !== statementTotalCents
+      ? [monthlyExpensesCents]
+      : []),
+  ]
+  if (!transactions.length || !acceptedTotals.includes(calculatedTotal)) {
     throw new Error(
-      `As compras da fatura Inter não fecham: esperado ${closingBalanceCents}, extraído ${calculatedTotal}.`,
+      `As compras da fatura Inter não fecham: esperado ${acceptedTotals.join(' ou ')}, extraído ${calculatedTotal}.`,
     )
   }
+  const closingBalanceCents = calculatedTotal
 
   return {
     transactions,

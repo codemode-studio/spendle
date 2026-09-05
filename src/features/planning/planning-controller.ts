@@ -25,10 +25,10 @@ import {
   updateSettingsFn,
 } from '#/features/finance/finance.functions'
 import { invalidateFinance } from '#/features/finance/queries'
-import type { FinanceSnapshot } from '#/features/finance/snapshot.types'
+import type { PlanningSnapshot } from '#/features/finance/snapshot.types'
 import type { Allocation } from './budget-section'
 
-export function usePlanningController(data: FinanceSnapshot) {
+export function usePlanningController(data: PlanningSnapshot) {
   const queryClient = useQueryClient()
   const activateStrategy = useServerFn(activateStrategyFn)
   const updateSettings = useServerFn(updateSettingsFn)

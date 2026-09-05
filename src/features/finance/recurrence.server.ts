@@ -26,6 +26,13 @@ import {
   previousRecurrencePeriod,
 } from '#/domain/recurrence-schedule'
 import { normalizeDescription } from '#/domain/finance'
+import {
+  forgetRecurrence,
+  learnCategory,
+  learnRecurrence,
+  loadRecurrenceKnowledge,
+} from './knowledge-base.server'
+import type { KnowledgeSource } from './knowledge-base.server'
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
 type RecurrenceRow = typeof schema.recurrences.$inferSelect
@@ -134,7 +141,15 @@ type EngineState = {
   occurrences: OccurrenceRow[]
   matches: MatchRow[]
   reconciliationByTransaction: Map<string, Set<RecurrenceReconciliationType>>
+  /** Assinaturas aprendidas na base de conhecimento, por recorrência. */
+  knowledgeAliases: Map<string, Set<string>>
 }
+
+/** Origem do aprendizado quando a pessoa confirma um vínculo. `null` para vínculos automáticos. */
+type MatchKnowledgeSource = Extract<
+  KnowledgeSource,
+  'recurrence_link' | 'recurrence_approval'
+>
 
 function pairKey(occurrenceId: string, transactionId: string) {
   return `${occurrenceId}:${transactionId}`
@@ -158,20 +173,28 @@ async function loadReconciliationTypes() {
 }
 
 async function loadEngineState(): Promise<EngineState> {
-  const [recurrences, transactions, occurrences, matches, reconciliation] =
-    await Promise.all([
-      db.select().from(schema.recurrences),
-      db.select().from(schema.transactions),
-      db.select().from(schema.recurrenceOccurrences),
-      db.select().from(schema.recurrenceMatches),
-      loadReconciliationTypes(),
-    ])
+  const [
+    recurrences,
+    transactions,
+    occurrences,
+    matches,
+    reconciliation,
+    knowledgeAliases,
+  ] = await Promise.all([
+    db.select().from(schema.recurrences),
+    db.select().from(schema.transactions),
+    db.select().from(schema.recurrenceOccurrences),
+    db.select().from(schema.recurrenceMatches),
+    loadReconciliationTypes(),
+    loadRecurrenceKnowledge(),
+  ])
   return {
     recurrences,
     transactions,
     occurrences,
     matches,
     reconciliationByTransaction: reconciliation,
+    knowledgeAliases,
   }
 }
 
@@ -315,6 +338,7 @@ function settleMatch(
     recurrence: RecurrenceRow
     row: TransactionRow
     automatic: boolean
+    knowledgeSource: MatchKnowledgeSource | null
     companyTransaction: boolean
     score: number
     reason: string
@@ -368,6 +392,22 @@ function settleMatch(
         ...settled,
       })
       .run()
+  }
+  if (input.knowledgeSource) {
+    learnRecurrence(transaction, {
+      description: input.row.description,
+      amountCents: input.row.amountCents,
+      recurrenceId: input.recurrence.id,
+      source: input.knowledgeSource,
+    })
+    if (!input.companyTransaction) {
+      learnCategory(transaction, {
+        description: input.row.description,
+        amountCents: input.row.amountCents,
+        categoryId: input.occurrence.categoryId,
+        source: input.knowledgeSource,
+      })
+    }
   }
   if (input.recurrence.matchMode === 'single') {
     closeOccurrence(
@@ -584,6 +624,7 @@ async function settleSuggestedMatch(
       recurrence,
       row,
       automatic,
+      knowledgeSource: automatic ? null : 'recurrence_link',
       companyTransaction,
       score: match[0].score,
       reason: match[0].reason,
@@ -654,12 +695,15 @@ function learnFromHistory(input: {
   const learning: RecurrenceLearning = {
     confirmedCount: confirmedForRecurrence.length,
     aliases: [
-      ...learnedAliases({
-        recurrenceId: input.recurrence.id,
-        acceptedMatches: input.acceptedMatches,
-        occurrenceById: input.occurrenceById,
-        transactionById: input.transactionById,
-      }),
+      ...new Set([
+        ...learnedAliases({
+          recurrenceId: input.recurrence.id,
+          acceptedMatches: input.acceptedMatches,
+          occurrenceById: input.occurrenceById,
+          transactionById: input.transactionById,
+        }),
+        ...(input.state.knowledgeAliases.get(input.recurrence.id) ?? []),
+      ]),
     ],
     accountIds: [
       ...(input.recurrence.accountId ? [input.recurrence.accountId] : []),
@@ -1166,6 +1210,13 @@ export async function unlinkMatch(matchId: string) {
     throw new Error('A ocorrência ou recorrência não existe mais.')
   }
   db.transaction((transaction) => {
+    if (row) {
+      forgetRecurrence(transaction, {
+        description: row.description,
+        amountCents: row.amountCents,
+        recurrenceId: recurrences[0].id,
+      })
+    }
     if (
       match[0].categoryAppliedByMatch &&
       row?.categoryId === occurrence.categoryId
@@ -1246,6 +1297,8 @@ export async function skipOccurrence(occurrenceId: string) {
 export async function linkTransactions(input: {
   occurrenceId: string
   transactionIds: string[]
+  /** Como registrar o aprendizado; a aprovação de um candidato detectado usa `recurrence_approval`. */
+  knowledgeSource?: MatchKnowledgeSource
 }) {
   await ensureDatabase()
   const occurrence = await db
@@ -1313,6 +1366,7 @@ export async function linkTransactions(input: {
         recurrence,
         row: context.row,
         automatic: false,
+        knowledgeSource: input.knowledgeSource ?? 'recurrence_link',
         companyTransaction: context.companyTransaction,
         score: 100,
         reason: 'vinculado manualmente',
@@ -1451,6 +1505,9 @@ export async function detectRecurrenceCandidates(
       occurrenceById,
       transactionById,
     })) {
+      knownSignatures.add(alias)
+    }
+    for (const alias of state.knowledgeAliases.get(recurrence.id) ?? []) {
       knownSignatures.add(alias)
     }
   }
@@ -1595,6 +1652,7 @@ export async function approveDetectedRecurrence(
       await linkTransactions({
         occurrenceId: occurrence.id,
         transactionIds: [row.id],
+        knowledgeSource: 'recurrence_approval',
       })
       occurrence.status = 'matched'
       linked += 1

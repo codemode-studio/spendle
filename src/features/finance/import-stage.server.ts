@@ -1,9 +1,10 @@
+import { measureOperation } from './diagnostics.server'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { eq } from 'drizzle-orm'
 
-import { db, ensureDatabase } from '#/db/index.server'
+import { db, ensureDatabase, getImportsDirectory } from '#/db/index.server'
 import * as schema from '#/db/schema'
 import {
   duplicateReasonForOutcome,
@@ -22,6 +23,10 @@ import {
   suggestCategory,
 } from './categories.server'
 import type { CategorySuggestion } from './categories.server'
+import {
+  applyCategoryKnowledge,
+  loadCategoryKnowledge,
+} from './knowledge-base.server'
 import { transactionFingerprint } from './canonicalization.server'
 import {
   getLearnedCoverageTemplates,
@@ -253,7 +258,7 @@ async function readStageSource(
       : []
   const sourceFileId = existingFile[0]?.id ?? randomUUID()
   const importId = randomUUID()
-  const importsDirectory = resolve(process.cwd(), 'data', 'imports')
+  const importsDirectory = getImportsDirectory()
   await mkdir(importsDirectory, { recursive: true })
   const storagePath = resolve(importsDirectory, sha256)
   await writeFile(storagePath, buffer, { flag: 'wx' }).catch(async (error) => {
@@ -270,21 +275,24 @@ async function readStageSource(
     })
   }
 
+  const learnedCoverageTemplates = await getLearnedCoverageTemplates()
   let statement: StatementReadResult | null = null
   try {
-    statement = await readStatement({
-      buffer,
-      filename: input.file.name,
-      targetType: input.targetType,
-      targetCurrency: target.currency,
-      targetInstitution: target.institutionName,
-      targetIdentifiers: [
-        target.externalId,
-        ...cardInstruments.map((item) => item.lastFour),
-      ],
-      aiConsent: input.aiConsent,
-      learnedCoverageTemplates: await getLearnedCoverageTemplates(),
-    })
+    statement = await measureOperation('import.parse', { importId }, () =>
+      readStatement({
+        buffer,
+        filename: input.file.name,
+        targetType: input.targetType,
+        targetCurrency: target.currency,
+        targetInstitution: target.institutionName,
+        targetIdentifiers: [
+          target.externalId,
+          ...cardInstruments.map((item) => item.lastFour),
+        ],
+        aiConsent: input.aiConsent,
+        learnedCoverageTemplates,
+      }),
+    )
   } catch (error) {
     const failedStatement =
       error instanceof StatementReadError ? error.result : statement
@@ -392,207 +400,53 @@ async function applyAiCategorySuggestions(
 }
 
 export async function stageImport(input: StageImportInput) {
-  await ensureDatabase()
-  if (input.file.size <= 0 || input.file.size > MAX_FILE_SIZE) {
-    throw new Error('O arquivo deve ter no máximo 20 MB.')
-  }
-  const defaults = statementReaderDefaults(input.file.name, input.targetType)
-
-  const buffer = Buffer.from(await input.file.arrayBuffer())
-  const source = await readStageSource(input, buffer, defaults)
-  if (source.reused) return source.reused
-  const {
-    sourceFileId,
-    importId,
-    target,
-    statement,
-    identicalFileUsedElsewhere,
-  } = source
-  const parsed = statement.transactions
-  const { parser, documentKind, sourceTransactionCount } = statement
-  const {
-    openingBalanceCents,
-    openingBalanceAt,
-    closingBalanceCents,
-    closingBalanceType,
-    balanceAsOf,
-    dueDate: statementDueDate,
-  } = statement.controls
-  const {
-    periodStart: statementPeriodStart,
-    periodEnd: statementPeriodEnd,
-    activityStart,
-    activityEnd,
-    periodSource,
-    confidence: coverageConfidence,
-  } = statement.coverage
-  const {
-    institution: detectedInstitution,
-    lastFour: detectedLastFour,
-    currency: detectedCurrency,
-  } = statement.identity
-  const {
-    pdfType,
-    pdfConfidenceBps,
-    pageCount,
-    pagesNeedingOcrJson,
-    markdown,
-    positionedTextJson,
-    extractionDiagnosticsJson,
-    blockingReason: extractionBlockingReason,
-  } = statement.diagnostics
-  const targetFilter =
-    input.targetType === 'account'
-      ? eq(schema.transactions.accountId, input.targetId)
-      : eq(schema.transactions.creditCardId, input.targetId)
-  const existingTransactions = await db
-    .select({
-      id: schema.transactions.id,
-      importId: schema.transactions.importId,
-      fingerprint: schema.transactions.fingerprint,
-      externalId: schema.transactions.externalId,
-      postedAt: schema.transactions.postedAt,
-      amountCents: schema.transactions.amountCents,
-      description: schema.transactions.description,
-      normalizedDescription: schema.transactions.normalizedDescription,
-      currency: schema.transactions.currency,
-      status: schema.transactions.status,
-    })
-    .from(schema.transactions)
-    .where(targetFilter)
-  const prepared = await Promise.all(
-    parsed.map(async (item) => {
-      const fingerprint = transactionFingerprint(item)
-      let suggestion = await suggestCategory({
-        description: item.description,
-        amountCents: item.amountCents,
-        accountId: input.targetType === 'account' ? input.targetId : null,
-        creditCardId: input.targetType === 'card' ? input.targetId : null,
-      })
-      suggestion = applyTargetCategoryPolicy({
-        suggestion,
-        amountCents: item.amountCents,
-        description: item.description,
-        raw: item.raw,
-        purpose: target.purpose,
-        scopeName: target.scopeName,
-        scopeType: target.scopeType,
-      })
-      return { item, fingerprint, suggestion }
-    }),
-  )
-  const reliableCoverage = hasReliableCoverage({
-    periodStart: statementPeriodStart,
-    periodEnd: statementPeriodEnd,
-    periodSource,
-  })
-  const duplicateReasons = resolveImportObservationOutcomes({
-    observations: prepared.map(({ item, fingerprint }, index) => ({
-      id: String(index),
-      externalId: item.externalId,
-      fingerprint,
-    })),
-    transactions: existingTransactions.filter(
-      (transaction) =>
-        Boolean(transaction.externalId) ||
-        (reliableCoverage &&
-          transaction.postedAt >= statementPeriodStart! &&
-          transaction.postedAt <= statementPeriodEnd!),
-    ),
-  }).map(duplicateReasonForOutcome)
-
-  await applyHistoricalCategorySuggestions(prepared)
-
-  const aiWarning = await applyAiCategorySuggestions(prepared, input.targetType)
-
-  const summary = summarizeImport(parsed, sourceTransactionCount)
-  const accountAnchor =
-    input.targetType === 'account'
-      ? await db
-          .select({
-            balanceCents: schema.accounts.statementBalanceCents,
-            balanceAt: schema.accounts.statementBalanceAt,
-          })
-          .from(schema.accounts)
-          .where(eq(schema.accounts.id, input.targetId))
-          .limit(1)
-      : []
-  const anchor = accountAnchor.at(0)
-  const existingMovementCents = anchor?.balanceAt
-    ? existingTransactions
-        .filter(
-          (transaction) =>
-            transaction.postedAt > anchor.balanceAt! &&
-            (!balanceAsOf || transaction.postedAt <= balanceAsOf),
-        )
-        .reduce((sum, transaction) => sum + transaction.amountCents, 0)
-    : 0
-  const newMovementCents =
-    input.targetType === 'card'
-      ? prepared.reduce((sum, { item }) => sum + item.amountCents, 0)
-      : prepared
-          .filter(
-            ({ item }, index) =>
-              !duplicateReasons[index] &&
-              (!anchor?.balanceAt || item.postedAt > anchor.balanceAt) &&
-              (!balanceAsOf || item.postedAt <= balanceAsOf),
-          )
-          .reduce((sum, { item }) => sum + item.amountCents, 0)
-  const evaluatedAudit = evaluateImportAudit({
-    targetType: input.targetType,
-    sourceTransactionCount,
-    parsedTransactionCount: summary.parsedTransactionCount,
-    invalidTransactionCount: summary.invalidTransactionCount,
-    openingBalanceCents,
-    openingBalanceAt,
-    closingBalanceCents:
-      closingBalanceType === 'available' ? null : closingBalanceCents,
-    balanceAsOf,
-    statementPeriodStart,
-    anchorBalanceCents: anchor?.balanceCents ?? null,
-    anchorBalanceAt: anchor?.balanceAt ?? null,
-    existingMovementCents,
-    newMovementCents,
-    documentMovementCents: prepared.reduce(
-      (sum, { item }) => sum + item.amountCents,
-      0,
-    ),
-  })
-  const audit = extractionBlockingReason
-    ? {
-        reasonCode: 'blocked' as const,
-        status: 'divergent' as const,
-        expectedBalanceCents: evaluatedAudit.expectedBalanceCents,
-        balanceDifferenceCents: evaluatedAudit.balanceDifferenceCents,
-        message: extractionBlockingReason,
+  return measureOperation(
+    'import.stage',
+    { targetId: input.targetId },
+    async () => {
+      await ensureDatabase()
+      if (input.file.size <= 0 || input.file.size > MAX_FILE_SIZE) {
+        throw new Error('O arquivo deve ter no máximo 20 MB.')
       }
-    : identicalFileUsedElsewhere
-      ? {
-          ...evaluatedAudit,
-          reasonCode: IDENTICAL_FILE_CONFLICT.reasonCode,
-          status: 'divergent' as const,
-          message: IDENTICAL_FILE_CONFLICT.message,
-        }
-      : evaluatedAudit
-  const warnings = [
-    identicalFileUsedElsewhere ? IDENTICAL_FILE_CONFLICT.warning : null,
-    aiWarning,
-  ].filter(Boolean)
+      const defaults = statementReaderDefaults(
+        input.file.name,
+        input.targetType,
+      )
 
-  db.transaction((transaction) => {
-    transaction
-      .insert(schema.imports)
-      .values({
-        id: importId,
+      const buffer = Buffer.from(await input.file.arrayBuffer())
+      const source = await readStageSource(input, buffer, defaults)
+      if (source.reused) return source.reused
+      const {
         sourceFileId,
-        batchId: input.batchId ?? null,
-        accountId: input.targetType === 'account' ? input.targetId : null,
-        creditCardId: input.targetType === 'card' ? input.targetId : null,
-        parser,
-        documentKind,
-        detectedInstitution,
-        detectedLastFour,
-        detectedCurrency,
+        importId,
+        target,
+        statement,
+        identicalFileUsedElsewhere,
+      } = source
+      const parsed = statement.transactions
+      const { parser, documentKind, sourceTransactionCount } = statement
+      const {
+        openingBalanceCents,
+        openingBalanceAt,
+        closingBalanceCents,
+        closingBalanceType,
+        balanceAsOf,
+        dueDate: statementDueDate,
+      } = statement.controls
+      const {
+        periodStart: statementPeriodStart,
+        periodEnd: statementPeriodEnd,
+        activityStart,
+        activityEnd,
+        periodSource,
+        confidence: coverageConfidence,
+      } = statement.coverage
+      const {
+        institution: detectedInstitution,
+        lastFour: detectedLastFour,
+        currency: detectedCurrency,
+      } = statement.identity
+      const {
         pdfType,
         pdfConfidenceBps,
         pageCount,
@@ -600,139 +454,338 @@ export async function stageImport(input: StageImportInput) {
         markdown,
         positionedTextJson,
         extractionDiagnosticsJson,
+        blockingReason: extractionBlockingReason,
+      } = statement.diagnostics
+      const targetFilter =
+        input.targetType === 'account'
+          ? eq(schema.transactions.accountId, input.targetId)
+          : eq(schema.transactions.creditCardId, input.targetId)
+      const existingTransactions = await db
+        .select({
+          id: schema.transactions.id,
+          importId: schema.transactions.importId,
+          fingerprint: schema.transactions.fingerprint,
+          externalId: schema.transactions.externalId,
+          postedAt: schema.transactions.postedAt,
+          amountCents: schema.transactions.amountCents,
+          description: schema.transactions.description,
+          normalizedDescription: schema.transactions.normalizedDescription,
+          currency: schema.transactions.currency,
+          status: schema.transactions.status,
+        })
+        .from(schema.transactions)
+        .where(targetFilter)
+      const knowledge = await loadCategoryKnowledge(parsed)
+      const prepared = await Promise.all(
+        parsed.map(async (item) => {
+          const fingerprint = transactionFingerprint(item)
+          let suggestion = await suggestCategory({
+            description: item.description,
+            amountCents: item.amountCents,
+            accountId: input.targetType === 'account' ? input.targetId : null,
+            creditCardId: input.targetType === 'card' ? input.targetId : null,
+          })
+          suggestion = applyCategoryKnowledge(knowledge, item, suggestion)
+          suggestion = applyTargetCategoryPolicy({
+            suggestion,
+            amountCents: item.amountCents,
+            description: item.description,
+            raw: item.raw,
+            purpose: target.purpose,
+            scopeName: target.scopeName,
+            scopeType: target.scopeType,
+          })
+          return { item, fingerprint, suggestion }
+        }),
+      )
+      const reliableCoverage = hasReliableCoverage({
+        periodStart: statementPeriodStart,
+        periodEnd: statementPeriodEnd,
+        periodSource,
+      })
+      const duplicateReasons = resolveImportObservationOutcomes({
+        observations: prepared.map(({ item, fingerprint }, index) => ({
+          id: String(index),
+          externalId: item.externalId,
+          fingerprint,
+        })),
+        transactions: existingTransactions.filter(
+          (transaction) =>
+            Boolean(transaction.externalId) ||
+            (reliableCoverage &&
+              transaction.postedAt >= statementPeriodStart! &&
+              transaction.postedAt <= statementPeriodEnd!),
+        ),
+      }).map(duplicateReasonForOutcome)
+
+      await applyHistoricalCategorySuggestions(prepared)
+
+      const aiWarning = await applyAiCategorySuggestions(
+        prepared,
+        input.targetType,
+      )
+
+      const summary = summarizeImport(parsed, sourceTransactionCount)
+      const accountAnchor =
+        input.targetType === 'account'
+          ? await db
+              .select({
+                balanceCents: schema.accounts.statementBalanceCents,
+                balanceAt: schema.accounts.statementBalanceAt,
+              })
+              .from(schema.accounts)
+              .where(eq(schema.accounts.id, input.targetId))
+              .limit(1)
+          : []
+      const anchor = accountAnchor.at(0)
+      const existingMovementCents = anchor?.balanceAt
+        ? existingTransactions
+            .filter(
+              (transaction) =>
+                transaction.postedAt > anchor.balanceAt! &&
+                (!balanceAsOf || transaction.postedAt <= balanceAsOf),
+            )
+            .reduce((sum, transaction) => sum + transaction.amountCents, 0)
+        : 0
+      const newMovementCents =
+        input.targetType === 'card'
+          ? prepared.reduce((sum, { item }) => sum + item.amountCents, 0)
+          : prepared
+              .filter(
+                ({ item }, index) =>
+                  !duplicateReasons[index] &&
+                  (!anchor?.balanceAt || item.postedAt > anchor.balanceAt) &&
+                  (!balanceAsOf || item.postedAt <= balanceAsOf),
+              )
+              .reduce((sum, { item }) => sum + item.amountCents, 0)
+      const evaluatedAudit = evaluateImportAudit({
+        targetType: input.targetType,
+        sourceTransactionCount,
+        parsedTransactionCount: summary.parsedTransactionCount,
+        invalidTransactionCount: summary.invalidTransactionCount,
         openingBalanceCents,
         openingBalanceAt,
-        closingBalanceCents,
-        closingBalanceType,
+        closingBalanceCents:
+          closingBalanceType === 'available' ? null : closingBalanceCents,
         balanceAsOf,
-        ...summary,
-        activityStart: activityStart ?? summary.periodStart,
-        activityEnd: activityEnd ?? summary.periodEnd,
-        periodStart: statementPeriodStart ?? summary.periodStart,
-        periodEnd: statementPeriodEnd ?? summary.periodEnd,
-        periodSource,
-        coverageConfidence,
-        statementDueDate,
-        expectedBalanceCents: audit.expectedBalanceCents,
-        balanceDifferenceCents: audit.balanceDifferenceCents,
-        validationStatus: audit.status,
-        validationReason: audit.reasonCode,
-        validationMessage: audit.message,
-        aiConsent: input.aiConsent,
-        warning: warnings.join(' ') || null,
+        statementPeriodStart,
+        anchorBalanceCents: anchor?.balanceCents ?? null,
+        anchorBalanceAt: anchor?.balanceAt ?? null,
+        existingMovementCents,
+        newMovementCents,
+        documentMovementCents: prepared.reduce(
+          (sum, { item }) => sum + item.amountCents,
+          0,
+        ),
       })
-      .run()
-    if (
-      statementPeriodStart &&
-      statementPeriodEnd &&
-      (periodSource === 'metadata' || periodSource === 'filename')
-    ) {
-      setCoverageInterval(transaction, {
-        importId,
-        accountId: input.targetType === 'account' ? input.targetId : null,
-        creditCardId: input.targetType === 'card' ? input.targetId : null,
-        start: statementPeriodStart,
-        end: statementPeriodEnd,
-        source: periodSource,
-        confidence:
-          coverageConfidence === 'unknown' ? 'low' : coverageConfidence,
+      const audit = extractionBlockingReason
+        ? {
+            reasonCode: 'blocked' as const,
+            status: 'divergent' as const,
+            expectedBalanceCents: evaluatedAudit.expectedBalanceCents,
+            balanceDifferenceCents: evaluatedAudit.balanceDifferenceCents,
+            message: extractionBlockingReason,
+          }
+        : identicalFileUsedElsewhere
+          ? {
+              ...evaluatedAudit,
+              reasonCode: IDENTICAL_FILE_CONFLICT.reasonCode,
+              status: 'divergent' as const,
+              message: IDENTICAL_FILE_CONFLICT.message,
+            }
+          : evaluatedAudit
+      const warnings = [
+        identicalFileUsedElsewhere ? IDENTICAL_FILE_CONFLICT.warning : null,
+        aiWarning,
+      ].filter(Boolean)
+
+      db.transaction((transaction) => {
+        transaction
+          .insert(schema.imports)
+          .values({
+            id: importId,
+            sourceFileId,
+            batchId: input.batchId ?? null,
+            accountId: input.targetType === 'account' ? input.targetId : null,
+            creditCardId: input.targetType === 'card' ? input.targetId : null,
+            parser,
+            documentKind,
+            detectedInstitution,
+            detectedLastFour,
+            detectedCurrency,
+            pdfType,
+            pdfConfidenceBps,
+            pageCount,
+            pagesNeedingOcrJson,
+            markdown,
+            positionedTextJson,
+            extractionDiagnosticsJson,
+            openingBalanceCents,
+            openingBalanceAt,
+            closingBalanceCents,
+            closingBalanceType,
+            balanceAsOf,
+            ...summary,
+            activityStart: activityStart ?? summary.periodStart,
+            activityEnd: activityEnd ?? summary.periodEnd,
+            periodStart: statementPeriodStart ?? summary.periodStart,
+            periodEnd: statementPeriodEnd ?? summary.periodEnd,
+            periodSource,
+            coverageConfidence,
+            statementDueDate,
+            expectedBalanceCents: audit.expectedBalanceCents,
+            balanceDifferenceCents: audit.balanceDifferenceCents,
+            validationStatus: audit.status,
+            validationReason: audit.reasonCode,
+            validationMessage: audit.message,
+            aiConsent: input.aiConsent,
+            warning: warnings.join(' ') || null,
+          })
+          .run()
+        if (
+          statementPeriodStart &&
+          statementPeriodEnd &&
+          (periodSource === 'metadata' || periodSource === 'filename')
+        ) {
+          setCoverageInterval(transaction, {
+            importId,
+            accountId: input.targetType === 'account' ? input.targetId : null,
+            creditCardId: input.targetType === 'card' ? input.targetId : null,
+            start: statementPeriodStart,
+            end: statementPeriodEnd,
+            source: periodSource,
+            confidence:
+              coverageConfidence === 'unknown' ? 'low' : coverageConfidence,
+          })
+        }
+        for (const [
+          index,
+          { item, fingerprint, suggestion },
+        ] of prepared.entries()) {
+          const duplicateReason = duplicateReasons[index]
+          const evidence = item.raw as
+            { bounds?: { page?: number } & Record<string, unknown> } | undefined
+          transaction
+            .insert(schema.stagedTransactions)
+            .values({
+              id: randomUUID(),
+              importId,
+              externalId: item.externalId || null,
+              fingerprint,
+              postedAt: item.postedAt,
+              description: item.description,
+              normalizedDescription: normalizeDescription(item.description),
+              amountCents: item.amountCents,
+              currency: item.currency,
+              suggestedCategoryId: suggestion.categoryId,
+              counterpartyAccountId: suggestion.counterpartyAccountId ?? null,
+              suggestionConfidence: suggestion.confidence,
+              suggestionSource: suggestion.source,
+              duplicate: duplicateReason !== null,
+              duplicateReason,
+              rawJson: item.raw ? JSON.stringify(item.raw) : null,
+              sourcePage: evidence?.bounds?.page ?? null,
+              sourceBoundsJson: evidence?.bounds
+                ? JSON.stringify(evidence.bounds)
+                : null,
+            })
+            .run()
+        }
       })
-    }
-    for (const [
-      index,
-      { item, fingerprint, suggestion },
-    ] of prepared.entries()) {
-      const duplicateReason = duplicateReasons[index]
-      const evidence = item.raw as
-        { bounds?: { page?: number } & Record<string, unknown> } | undefined
-      transaction
-        .insert(schema.stagedTransactions)
-        .values({
-          id: randomUUID(),
-          importId,
-          externalId: item.externalId || null,
-          fingerprint,
-          postedAt: item.postedAt,
-          description: item.description,
-          normalizedDescription: normalizeDescription(item.description),
-          amountCents: item.amountCents,
-          currency: item.currency,
-          suggestedCategoryId: suggestion.categoryId,
-          counterpartyAccountId: suggestion.counterpartyAccountId ?? null,
-          suggestionConfidence: suggestion.confidence,
-          suggestionSource: suggestion.source,
-          duplicate: duplicateReason !== null,
-          duplicateReason,
-          rawJson: item.raw ? JSON.stringify(item.raw) : null,
-          sourcePage: evidence?.bounds?.page ?? null,
-          sourceBoundsJson: evidence?.bounds
-            ? JSON.stringify(evidence.bounds)
-            : null,
-        })
-        .run()
-    }
-  })
-  return { importId, reused: false }
+      return { importId, reused: false }
+    },
+  )
 }
 
 export async function stageImportBatch(input: StageImportBatchInput) {
-  await ensureDatabase()
-  if (!input.files.length) throw new Error('Selecione pelo menos um arquivo.')
-  if (input.files.length > 24) {
-    throw new Error('Envie no máximo 24 arquivos por lote.')
-  }
+  return measureOperation(
+    'import.batch',
+    { targetId: input.targetId },
+    async () => {
+      await ensureDatabase()
+      if (!input.files.length)
+        throw new Error('Selecione pelo menos um arquivo.')
+      if (input.files.length > 24) {
+        throw new Error('Envie no máximo 24 arquivos por lote.')
+      }
 
-  const batchId = randomUUID()
-  await db.insert(schema.importBatches).values({
-    id: batchId,
-    accountId: input.targetType === 'account' ? input.targetId : null,
-    creditCardId: input.targetType === 'card' ? input.targetId : null,
-  })
+      const batchId = randomUUID()
+      await db.insert(schema.importBatches).values({
+        id: batchId,
+        accountId: input.targetType === 'account' ? input.targetId : null,
+        creditCardId: input.targetType === 'card' ? input.targetId : null,
+      })
 
-  const results: Array<{ importId: string; reused: boolean }> = []
-  try {
-    for (const file of input.files) {
-      results.push(
-        await stageImport({
-          file,
-          targetType: input.targetType,
-          targetId: input.targetId,
-          aiConsent: input.aiConsent,
-          batchId,
-        }),
+      const results: Array<{ importId: string; reused: boolean }> = []
+      const skipped: Array<{ fileName: string; reason: string }> = []
+      try {
+        for (const file of input.files) {
+          try {
+            results.push(
+              await stageImport({
+                file,
+                targetType: input.targetType,
+                targetId: input.targetId,
+                aiConsent: input.aiConsent,
+                batchId,
+              }),
+            )
+          } catch (error) {
+            // A file without transactions is recorded as failed by stageImport
+            // but must not block the other files in the same batch.
+            if (
+              error instanceof StatementReadError &&
+              error.kind === 'empty_statement'
+            ) {
+              skipped.push({ fileName: file.name, reason: error.message })
+              continue
+            }
+            throw error
+          }
+        }
+        if (!results.length) {
+          throw new Error(
+            skipped.length === 1
+              ? skipped[0].reason
+              : 'Nenhum dos arquivos enviados tem lançamentos.',
+          )
+        }
+      } catch (error) {
+        await db
+          .update(schema.importBatches)
+          .set({ status: 'failed' })
+          .where(eq(schema.importBatches.id, batchId))
+        throw error
+      }
+
+      const allImportIds = [
+        ...new Set(results.map((result) => result.importId)),
+      ]
+      await reconcileCsvWithPdfControl({
+        importIds: allImportIds,
+        targetType: input.targetType,
+        targetId: input.targetId,
+      })
+      const batchCoverage = await refreshImportBatchCoverage({
+        batchId,
+        importIds: allImportIds,
+        mode: 'staged',
+      })
+      const requiresReview = shouldReviewStagedBatch(
+        results,
+        batchCoverage?.imports.map((item) => item.status) ?? [],
       )
-    }
-  } catch (error) {
-    await db
-      .update(schema.importBatches)
-      .set({ status: 'failed' })
-      .where(eq(schema.importBatches.id, batchId))
-    throw error
-  }
 
-  const allImportIds = [...new Set(results.map((result) => result.importId))]
-  await reconcileCsvWithPdfControl({
-    importIds: allImportIds,
-    targetType: input.targetType,
-    targetId: input.targetId,
-  })
-  const batchCoverage = await refreshImportBatchCoverage({
-    batchId,
-    importIds: allImportIds,
-    mode: 'staged',
-  })
-  const requiresReview = shouldReviewStagedBatch(
-    results,
-    batchCoverage?.imports.map((item) => item.status) ?? [],
+      return {
+        batchId,
+        importIds: results.map((result) => result.importId),
+        reused: results.filter((result) => result.reused).length,
+        requiresReview,
+        skipped,
+        gaps: batchCoverage?.gaps ?? [],
+      }
+    },
   )
-
-  return {
-    batchId,
-    importIds: results.map((result) => result.importId),
-    reused: results.filter((result) => result.reused).length,
-    requiresReview,
-    gaps: batchCoverage?.gaps ?? [],
-  }
 }
 
 export function shouldReviewStagedBatch(

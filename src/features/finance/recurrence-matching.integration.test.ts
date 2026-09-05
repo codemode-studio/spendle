@@ -172,7 +172,7 @@ describe('reconciliação de recorrências', () => {
       description: 'Spotify',
       direction: 'outflow',
       amountCents: 2_190,
-      categoryId: 'food',
+      categoryId: 'groceries',
     })
     const suggested = await getFinanceSnapshot('2026-08')
     const match = suggested.recurrences
@@ -220,7 +220,7 @@ describe('reconciliação de recorrências', () => {
 
     await finance.updateTransactionCategory({
       transactionId: match!.transactionId,
-      categoryId: 'food',
+      categoryId: 'groceries',
       saveRule: false,
     })
     const divergentAgain = await getFinanceSnapshot('2026-08')
@@ -502,7 +502,7 @@ describe('reconciliação de recorrências', () => {
       .slice(0, 10)
     const recurrence = await recurrenceMatching.createRecurrence({
       name: 'Mercado',
-      categoryId: 'food',
+      categoryId: 'groceries',
       amountCents: 300_000,
       currency: 'BRL',
       direction: 'expense',
@@ -520,7 +520,7 @@ describe('reconciliação de recorrências', () => {
         description,
         direction: 'outflow',
         amountCents,
-        categoryId: 'food',
+        categoryId: 'groceries',
       })
     const angeloni = await grocery('Angeloni Super Loja', 22_000)
     const imperatriz = await grocery('Supermercados Imperatriz', 50_000)
@@ -586,7 +586,7 @@ describe('reconciliação de recorrências', () => {
     // Editar a recorrência não pode apagar o envelope em andamento.
     await recurrenceMatching.updateRecurrence(recurrence.id, {
       name: 'Mercado e feira',
-      categoryId: 'food',
+      categoryId: 'groceries',
       amountCents: 320_000,
       currency: 'BRL',
       direction: 'expense',
@@ -745,7 +745,7 @@ describe('reconciliação de recorrências', () => {
   it('preserva vínculos aceitos e só muda a âncora quando o calendário muda', async () => {
     const recurrence = await recurrenceServer.createRecurrence({
       name: 'Envelope ancorado',
-      categoryId: 'food',
+      categoryId: 'groceries',
       amountCents: 80_000,
       currency: 'BRL',
       direction: 'expense',
@@ -762,7 +762,7 @@ describe('reconciliação de recorrências', () => {
       description: 'Mercado do futuro',
       direction: 'outflow',
       amountCents: 8_000,
-      categoryId: 'food',
+      categoryId: 'groceries',
     })
     const before = await getFinanceSnapshot('2027-01')
     const occurrence = before.recurrences
@@ -775,7 +775,7 @@ describe('reconciliação de recorrências', () => {
 
     await recurrenceServer.updateRecurrence(recurrence.id, {
       name: 'Envelope apenas renomeado',
-      categoryId: 'food',
+      categoryId: 'groceries',
       amountCents: 90_000,
       currency: 'BRL',
       direction: 'expense',
@@ -804,7 +804,7 @@ describe('reconciliação de recorrências', () => {
 
     await recurrenceServer.updateRecurrence(recurrence.id, {
       name: 'Envelope em novo calendário',
-      categoryId: 'food',
+      categoryId: 'groceries',
       amountCents: 90_000,
       currency: 'BRL',
       direction: 'expense',
@@ -864,7 +864,7 @@ describe('reconciliação de recorrências', () => {
   it('lista candidatos sem transações tomadas e prioriza a janela do envelope', async () => {
     const target = await recurrenceServer.createRecurrence({
       name: 'Compras do período',
-      categoryId: 'food',
+      categoryId: 'groceries',
       amountCents: 50_000,
       currency: 'BRL',
       direction: 'expense',
@@ -876,7 +876,7 @@ describe('reconciliação de recorrências', () => {
     })
     const takenRecurrence = await recurrenceServer.createRecurrence({
       name: 'Pagamento já usado',
-      categoryId: 'food',
+      categoryId: 'groceries',
       amountCents: 7_000,
       currency: 'BRL',
       direction: 'expense',
@@ -892,7 +892,7 @@ describe('reconciliação de recorrências', () => {
       description: 'Mercado na janela',
       direction: 'outflow',
       amountCents: 20_000,
-      categoryId: 'food',
+      categoryId: 'groceries',
     })
     const insideOther = await finance.createManualTransaction({
       targetType: 'account',
@@ -910,7 +910,7 @@ describe('reconciliação de recorrências', () => {
       description: 'Mercado fora da janela',
       direction: 'outflow',
       amountCents: 50_000,
-      categoryId: 'food',
+      categoryId: 'groceries',
     })
     const taken = await finance.createManualTransaction({
       targetType: 'account',
@@ -919,7 +919,7 @@ describe('reconciliação de recorrências', () => {
       description: 'Pagamento já usado',
       direction: 'outflow',
       amountCents: 7_000,
-      categoryId: 'food',
+      categoryId: 'groceries',
     })
     const snapshot = await getFinanceSnapshot('2027-03')
     const takenOccurrence = snapshot.recurrences
@@ -953,7 +953,7 @@ describe('reconciliação de recorrências', () => {
       candidates.find((candidate) => candidate.id === insideSame.id),
     ).toMatchObject({
       inWindow: true,
-      categoryName: 'Alimentação',
+      categoryName: 'Mercado',
       accountLabel: snapshot.accounts.find(
         (account) => account.id === testDatabase.ids.brlAccount,
       )?.name,
@@ -963,7 +963,7 @@ describe('reconciliação de recorrências', () => {
   it('retorna um candidato elegível depois dos 40 primeiros no ranking', async () => {
     const recurrence = await recurrenceServer.createRecurrence({
       name: 'Lista completa de candidatos',
-      categoryId: 'food',
+      categoryId: 'groceries',
       amountCents: 10_000,
       currency: 'USD',
       direction: 'expense',
@@ -983,7 +983,7 @@ describe('reconciliação de recorrências', () => {
       Array.from({ length: 41 }, (_, index) => ({
         id: `link-candidate-${index}`,
         accountId: testDatabase.ids.brlAccount,
-        categoryId: 'food',
+        categoryId: 'groceries',
         fingerprint: `link-candidate-${index}`,
         postedAt: '2030-01-10',
         description: `Candidato ${index}`,

@@ -232,6 +232,41 @@
       "when": 1788534036000,
       "tag": "0032_backfill_import_validation_reason",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1788623029937,
+      "tag": "0033_knowledge_base",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1788623429937,
+      "tag": "0034_backfill_knowledge_base",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1788623829937,
+      "tag": "0035_reclassify_food_categories",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1788634965470,
+      "tag": "0036_knowledge_base_patterns",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1788635365470,
+      "tag": "0037_knowledge_base_prefix_absorption",
+      "breakpoints": true
     }
   ]
 }

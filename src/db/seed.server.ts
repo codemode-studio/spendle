@@ -157,12 +157,16 @@ export async function seedDatabase(db: AppDatabase) {
     .values({ id: 'default' })
     .onConflictDoNothing()
 
+  const inactiveCategoryIds = new Set(['food'])
   const categorySeeds = [
     ['housing', 'Moradia', 'essential', '#2563eb', false],
     ['financing', 'Financiamentos', 'essential', '#1d4ed8', false],
     ['utilities', 'Contas e serviços', 'essential', '#0284c7', false],
-    ['food', 'Alimentação', 'essential', '#0d9488', false],
+    ['groceries', 'Mercado', 'essential', '#0d9488', false],
+    ['restaurants', 'Restaurantes', 'lifestyle', '#d97706', false],
     ['delivery', 'Delivery', 'lifestyle', '#f97316', false],
+    /** Substituída por Mercado, Restaurantes e Delivery; mantida inativa pelo histórico. */
+    ['food', 'Alimentação', 'essential', '#0d9488', false],
     ['transport', 'Transporte', 'essential', '#0891b2', false],
     ['health', 'Saúde', 'essential', '#dc2626', false],
     ['education', 'Educação', 'essential', '#7c3aed', false],
@@ -221,6 +225,7 @@ export async function seedDatabase(db: AppDatabase) {
         bucket,
         color,
         incomeBaseEligible,
+        active: !inactiveCategoryIds.has(id),
       })),
     )
     .onConflictDoNothing()

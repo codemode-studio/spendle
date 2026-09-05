@@ -74,6 +74,7 @@ import {
   resolveStatementExclusionFn,
   resolveTransactionCorrectionFn,
   stageImportFn,
+  identifyImportFilesFn,
   updateStagedTransactionCategoryFn,
 } from '#/features/finance/finance.functions'
 import type { getImportReviewSnapshotFn } from '#/features/finance/finance.functions'
@@ -119,7 +120,17 @@ function ImportPage() {
   const resolveStatementExclusion = useServerFn(resolveStatementExclusionFn)
   const updateStagedCategory = useServerFn(updateStagedTransactionCategoryFn)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [selectedTarget, setSelectedTarget] = useState('')
+  const identifyFiles = useServerFn(identifyImportFilesFn)
+  const [destinations, setDestinations] = useState<Array<{
+    target: string
+    message: string
+  }> | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const identifyMutation = useMutation({
+    mutationFn: identifyFiles,
+    onSuccess: setDestinations,
+    onError: (error) => toast.error(error.message),
+  })
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [aiConsent, setAiConsent] = useState(false)
   const [confirmedReviews, setConfirmedReviews] = useState<Set<string>>(
@@ -128,8 +139,41 @@ function ImportPage() {
   const invalidateImport = () => invalidateFinance(queryClient, 'ledger')
 
   const stageMutation = useMutation({
-    mutationFn: stageImport,
+    mutationFn: async () => {
+      const groups = new Map<string, File[]>()
+      selectedFiles.forEach((file, index) => {
+        const target = destinations?.[index]?.target
+        if (!target)
+          throw new Error('Identifique o destino de todos os arquivos.')
+        groups.set(target, [...(groups.get(target) ?? []), file])
+      })
+      const results = []
+      for (const [target, files] of groups) {
+        const separator = target.indexOf(':')
+        const form = new FormData()
+        form.set('targetType', target.slice(0, separator))
+        form.set('targetId', target.slice(separator + 1))
+        form.set('aiConsent', String(aiConsent))
+        files.forEach((file) => form.append('files', file))
+        results.push(await stageImport({ data: form }))
+      }
+      return {
+        importIds: results.flatMap((result) => result.importIds),
+        reused: results.reduce((total, result) => total + result.reused, 0),
+        requiresReview: results.some((result) => result.requiresReview),
+        skipped: results.flatMap((result) => result.skipped),
+      }
+    },
     onSuccess: async (result) => {
+      if (result.skipped.length) {
+        toast.warning(
+          result.skipped.length === 1
+            ? `${result.skipped[0].fileName} foi ignorado: ${result.skipped[0].reason}`
+            : `${result.skipped.length} arquivos sem lançamentos foram ignorados: ${result.skipped
+                .map((item) => item.fileName)
+                .join(', ')}.`,
+        )
+      }
       const processed = result.importIds.length
       const processedLabel =
         processed === 1 ? 'arquivo processado' : 'arquivos processados'
@@ -146,17 +190,19 @@ function ImportPage() {
             : 'Arquivo já importado. Nenhuma transação nova foi criada.',
       )
       await invalidateImport()
-      setSelectedTarget('')
+      setDestinations(null)
       setSelectedFiles([])
       setAiConsent(false)
       if (result.requiresReview) {
         void navigate({ search: { view: 'review' } })
       }
     },
-    onError: (error) =>
+    onError: async (error) => {
+      await invalidateImport()
       toast.error(
         error instanceof Error ? error.message : 'Falha na importação.',
-      ),
+      )
+    },
   })
   const commitMutation = useMutation({
     mutationFn: commitImport,
@@ -291,15 +337,46 @@ function ImportPage() {
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!selectedTarget || !selectedFiles.length) return
+    if (!selectedFiles.length) return
+    if (destinations) {
+      stageMutation.mutate()
+    } else {
+      const form = new FormData()
+      selectedFiles.forEach((file) => form.append('files', file))
+      identifyMutation.mutate({ data: form })
+    }
+  }
 
-    const [targetType, targetId] = selectedTarget.split(':')
-    const form = new FormData()
-    form.set('targetType', targetType)
-    form.set('targetId', targetId)
-    form.set('aiConsent', String(aiConsent))
-    selectedFiles.forEach((file) => form.append('files', file))
-    stageMutation.mutate({ data: form })
+  function addFiles(files: File[]) {
+    if (stageMutation.isPending || identifyMutation.isPending) return
+    const next = [...selectedFiles]
+    for (const file of files) {
+      if (
+        !next.some(
+          (existing) =>
+            existing.name === file.name &&
+            existing.size === file.size &&
+            existing.lastModified === file.lastModified,
+        )
+      )
+        next.push(file)
+    }
+    if (
+      next.length > 24 ||
+      next.some(
+        (file) =>
+          !file.size ||
+          file.size > 20 * 1024 * 1024 ||
+          !/\.(ofx|csv|pdf)$/i.test(file.name),
+      )
+    ) {
+      toast.error(
+        'Envie até 24 arquivos OFX, CSV ou PDF não vazios, de até 20 MB cada.',
+      )
+      return
+    }
+    setSelectedFiles(next)
+    setDestinations(null)
   }
 
   function setReviewConfirmed(importId: string, confirmed: boolean) {
@@ -316,7 +393,7 @@ function ImportPage() {
   )
 
   function startNewImport() {
-    setSelectedTarget('')
+    setDestinations(null)
     setSelectedFiles([])
     setAiConsent(false)
     void navigate({ search: { view: 'upload' } })
@@ -348,43 +425,26 @@ function ImportPage() {
         <Panel
           className="mx-auto max-w-2xl"
           title="Enviar arquivos"
-          description="Escolha uma conta ou cartão e selecione os extratos."
+          description="Envie extratos de diferentes contas e cartões. Vamos identificar o destino de cada arquivo."
         >
           <form onSubmit={submit}>
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="target">Conta ou cartão</FieldLabel>
-                <NativeSelect
-                  id="target"
-                  className="w-full"
-                  value={selectedTarget}
-                  onChange={(event) => setSelectedTarget(event.target.value)}
-                  required
-                >
-                  <NativeSelectOption value="">
-                    Selecione o destino do extrato
-                  </NativeSelectOption>
-                  {data.accounts.map((account) => (
-                    <NativeSelectOption
-                      key={account.id}
-                      value={`account:${account.id}`}
-                    >
-                      Conta · {formatInstrumentName(account.name)}
-                    </NativeSelectOption>
-                  ))}
-                  {data.cards.map((card) => (
-                    <NativeSelectOption key={card.id} value={`card:${card.id}`}>
-                      Cartão · {formatInstrumentName(card.name)}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-              </Field>
-
-              <Field>
                 <FieldLabel htmlFor="files">Arquivos</FieldLabel>
                 <label
                   htmlFor="files"
-                  className="flex min-h-32 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-5 py-6 text-center transition-colors hover:bg-muted/50 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50"
+                  onDragOver={(event) => {
+                    event.preventDefault()
+                    setDragging(true)
+                  }}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={(event) => {
+                    event.preventDefault()
+                    setDragging(false)
+                    addFiles(Array.from(event.dataTransfer.files))
+                  }}
+                  data-dragging={dragging}
+                  className="flex min-h-32 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed data-[dragging=true]:bg-muted data-[dragging=true]:border-primary px-5 py-6 text-center transition-colors hover:bg-muted/50 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50"
                 >
                   <span className="flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground">
                     <Upload className="size-4" />
@@ -392,7 +452,7 @@ function ImportPage() {
                   <span className="text-sm font-medium">
                     {selectedFiles.length
                       ? `${selectedFiles.length} ${selectedFiles.length === 1 ? 'arquivo selecionado' : 'arquivos selecionados'}`
-                      : 'Selecionar arquivos'}
+                      : 'Arraste arquivos aqui ou clique para selecionar'}
                   </span>
                   <span className="text-xs text-muted-foreground">
                     OFX, CSV ou PDF · até 24 arquivos · 20 MB cada
@@ -403,28 +463,92 @@ function ImportPage() {
                     className="sr-only"
                     accept=".ofx,.csv,.pdf,text/csv,application/pdf"
                     multiple
-                    onChange={(event) =>
-                      setSelectedFiles(
-                        Array.from(event.currentTarget.files ?? []),
-                      )
+                    disabled={
+                      identifyMutation.isPending || stageMutation.isPending
                     }
-                    required
+                    onChange={(event) => {
+                      addFiles(Array.from(event.currentTarget.files ?? []))
+                      event.currentTarget.value = ''
+                    }}
                   />
                 </label>
               </Field>
 
               {selectedFiles.length ? (
                 <ul className="divide-y overflow-hidden rounded-lg border">
-                  {selectedFiles.map((file) => (
+                  {selectedFiles.map((file, index) => (
                     <li
                       key={`${file.name}-${file.lastModified}`}
-                      className="flex min-w-0 items-center gap-3 px-3 py-2.5 text-sm"
+                      className="flex min-w-0 flex-wrap items-center gap-3 px-3 py-2.5 text-sm"
                     >
                       <FileSearch className="size-4 shrink-0 text-muted-foreground" />
                       <span className="truncate">{file.name}</span>
                       <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
                         {formatFileSize(file.size)}
                       </span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Remover ${file.name}`}
+                        disabled={
+                          identifyMutation.isPending || stageMutation.isPending
+                        }
+                        onClick={() => {
+                          setSelectedFiles((files) =>
+                            files.filter((_, i) => i !== index),
+                          )
+                          setDestinations(null)
+                        }}
+                      >
+                        <X />
+                      </Button>
+                      {destinations?.[index] ? (
+                        <Field className="w-full">
+                          <FieldLabel htmlFor={`destination-${index}`}>
+                            Conta ou cartão · {file.name}
+                          </FieldLabel>
+                          <FieldDescription>
+                            {destinations[index].message}
+                          </FieldDescription>
+                          <NativeSelect
+                            id={`destination-${index}`}
+                            value={destinations[index].target}
+                            required
+                            disabled={stageMutation.isPending}
+                            onChange={(event) =>
+                              setDestinations(
+                                (current) =>
+                                  current?.map((item, i) =>
+                                    i === index
+                                      ? { ...item, target: event.target.value }
+                                      : item,
+                                  ) ?? null,
+                              )
+                            }
+                          >
+                            <NativeSelectOption value="">
+                              Selecione o destino
+                            </NativeSelectOption>
+                            {data.accounts.map((account) => (
+                              <NativeSelectOption
+                                key={account.id}
+                                value={`account:${account.id}`}
+                              >
+                                Conta · {formatInstrumentName(account.name)}
+                              </NativeSelectOption>
+                            ))}
+                            {data.cards.map((card) => (
+                              <NativeSelectOption
+                                key={card.id}
+                                value={`card:${card.id}`}
+                              >
+                                Cartão · {formatInstrumentName(card.name)}
+                              </NativeSelectOption>
+                            ))}
+                          </NativeSelect>
+                        </Field>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
@@ -458,16 +582,24 @@ function ImportPage() {
                 size="lg"
                 disabled={
                   stageMutation.isPending ||
-                  !selectedTarget ||
+                  identifyMutation.isPending ||
+                  (destinations !== null &&
+                    destinations.some((item) => !item.target)) ||
                   !selectedFiles.length
                 }
               >
-                {stageMutation.isPending ? (
+                {stageMutation.isPending || identifyMutation.isPending ? (
                   <Spinner data-icon="inline-start" />
                 ) : (
                   <ArrowRight data-icon="inline-end" />
                 )}
-                {stageMutation.isPending ? 'Lendo arquivos…' : 'Continuar'}
+                {stageMutation.isPending
+                  ? 'Lendo arquivos…'
+                  : identifyMutation.isPending
+                    ? 'Identificando…'
+                    : destinations
+                      ? 'Revisar lançamentos'
+                      : 'Identificar arquivos'}
               </Button>
             </div>
           </form>
@@ -695,7 +827,8 @@ function ImportPage() {
                         <p>
                           O PDF e o lançamento atual usam o mesmo identificador,
                           mas registram moedas diferentes. Rejeite o lote,
-                          corrija a origem dos dados e importe a fatura novamente.
+                          corrija a origem dos dados e importe a fatura
+                          novamente.
                         </p>
                         {item.statementBlockedRows.map(
                           ({ observation, transaction }) => (
@@ -1006,6 +1139,11 @@ function ImportPage() {
                           {item.parsedTransactionCount} lançamentos
                         </span>
                       </div>
+                      {item.status === 'failed' && item.validationMessage ? (
+                        <p className="mt-2 text-xs text-destructive">
+                          {item.validationMessage}
+                        </p>
+                      ) : null}
                       {item.statementExclusions
                         .filter((exclusion) => !exclusion.reversedAt)
                         .map((exclusion) => (
@@ -1366,6 +1504,7 @@ const importStatusLabels: Record<string, string> = {
 const suggestionSourceLabels: Record<string, string> = {
   none: 'Sem sugestão',
   rule: 'Regra',
+  knowledge: 'Aprendizado',
   history: 'Histórico',
   heuristic: 'Heurística',
   ai: 'IA',

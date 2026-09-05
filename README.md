@@ -4,11 +4,12 @@ Aplicativo local para consolidar contas PF/PJ brasileiras, investimentos e cart�
 
 ## Executar
 
-Requer Node.js e pnpm. O servidor escuta somente em `127.0.0.1`.
+Use Node.js 22.22.0 (`.node-version`) e pnpm 9.15.9 (`packageManager`). O servidor escuta somente em `127.0.0.1`.
 
 ```bash
 cp .env.example .env.local
-pnpm install
+pnpm install --frozen-lockfile
+pnpm setup:check
 pnpm dev
 ```
 
@@ -47,7 +48,26 @@ pnpm verify        # executar toda a verificação
 - Vercel AI SDK opcional apenas para diagnóstico de PDFs não reconhecidos, com consentimento
 - Ledger imutável de fatos importados, pontos de controle de saldo e commit com tolerância zero
 - Duas pontas preservadas em transferências, pagamentos de cartão e distribuições de lucro
+- Base de conhecimento com as decisões humanas de categoria e recorrência por estabelecimento, reaproveitada nas próximas importações
 - Módulos independentes para leitura de extratos, canonicalização, cobertura, checkpoints e reconciliação
 - Read model dedicado para a revisão de importações, sem carregar o snapshot financeiro completo
 
 O escopo, as decisões e o mapa de arquitetura estão em [`plans/`](./plans/README.md).
+
+## Verificação com agentes
+
+`pnpm verify` executa tipos, lint, testes e build, também no CI. `pnpm test:pdf` usa um PDF sintético versionado e o extrator nativo, sem chave de IA. Os testes com extratos privados continuam opcionais, configurados pelas variáveis indicadas em `pdf-real-fixtures.integration.test.ts`.
+
+Para verificar a interface com o navegador integrado, siga a [skill browser-qa](.agents/skills/browser-qa/SKILL.md):
+
+```bash
+pnpm qa:start 3100       # banco e uploads sintéticos em uma nova pasta .qa/
+pnpm qa:start 3101 121   # outro servidor, com 121 despesas para paginação
+pnpm qa:inspect <pasta>  # leitura do estado do run
+pnpm qa:clean <pasta>    # remover um run depois de parar seu servidor
+pnpm bench              # tempos, contagens de SELECT e tamanho das respostas
+```
+
+Cada worktree usa seu próprio run e uma porta explícita. Não é preciso copiar `.env.local` ou dados reais. O servidor QA desativa IA e grava `server.log`, com duração e identificadores das operações de importação/reconciliação. `FINANCAS_DEBUG=1` ativa esses diagnósticos também no desenvolvimento normal.
+
+Os uploads ficam em `imports/` ao lado do arquivo SQLite configurado por `DATABASE_URL`; o padrão continua `data/imports`. Bancos já existentes mantêm os caminhos absolutos dos arquivos importados anteriormente.

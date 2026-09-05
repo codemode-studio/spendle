@@ -361,7 +361,16 @@ export const stagedTransactions = sqliteTable(
     ),
     suggestionConfidence: integer('suggestion_confidence').default(0),
     suggestionSource: text('suggestion_source', {
-      enum: ['none', 'rule', 'history', 'heuristic', 'ai', 'system', 'manual'],
+      enum: [
+        'none',
+        'rule',
+        'knowledge',
+        'history',
+        'heuristic',
+        'ai',
+        'system',
+        'manual',
+      ],
     })
       .notNull()
       .default('none'),
@@ -834,6 +843,71 @@ export const recurrenceMatches = sqliteTable(
     uniqueIndex('recurrence_match_accepted_transaction_idx')
       .on(table.transactionId)
       .where(sql`${table.status} in ('confirmed', 'auto_confirmed')`),
+  ],
+)
+
+/**
+ * Base de conhecimento: decisões humanas sobre categoria e recorrência,
+ * indexadas pela assinatura do estabelecimento (`merchantSignature`) e pela
+ * direção do valor. Sobrevive a limpezas e reimportações do ledger e alimenta
+ * as sugestões das próximas importações. Nunca aprende de heurística ou IA.
+ */
+export const knowledgeBase = sqliteTable(
+  'knowledge_base',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind', { enum: ['category', 'recurrence'] }).notNull(),
+    /** Assinatura completa do último exemplo (`merchantSignature`). */
+    signature: text('signature').notNull(),
+    /**
+     * Chave de casamento. Para categorias, `knowledgePattern` da descrição;
+     * para recorrências, a própria assinatura. Editável na aba Conhecimento.
+     */
+    pattern: text('pattern').notNull(),
+    /** `prefix` casa qualquer padrão que comece por este, no limite de token. Só para categorias. */
+    matchMode: text('match_mode', { enum: ['exact', 'prefix'] })
+      .notNull()
+      .default('exact'),
+    direction: text('direction', { enum: ['income', 'expense'] }).notNull(),
+    categoryId: text('category_id').references(() => categories.id, {
+      onDelete: 'cascade',
+    }),
+    recurrenceId: text('recurrence_id').references(() => recurrences.id, {
+      onDelete: 'cascade',
+    }),
+    /** Última descrição original que ensinou esta entrada. */
+    sampleDescription: text('sample_description').notNull(),
+    source: text('source', {
+      enum: [
+        'transaction_review',
+        'import_review',
+        'recurrence_approval',
+        'recurrence_link',
+        'knowledge_review',
+        'pattern_approval',
+      ],
+    }).notNull(),
+    /** Vezes que a mesma decisão foi reafirmada. Reinicia quando a decisão muda. */
+    confirmations: integer('confirmations').notNull().default(1),
+    /** Vezes que a decisão anterior foi substituída por outra. */
+    corrections: integer('corrections').notNull().default(0),
+    lastLearnedAt: integer('last_learned_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    createdAt,
+  },
+  (table) => [
+    uniqueIndex('knowledge_base_pattern_idx').on(
+      table.kind,
+      table.pattern,
+      table.matchMode,
+      table.direction,
+    ),
+    index('knowledge_base_recurrence_idx').on(table.recurrenceId),
+    check(
+      'knowledge_base_kind_payload',
+      sql`(${table.kind} = 'category' and ${table.categoryId} is not null and ${table.recurrenceId} is null) or (${table.kind} = 'recurrence' and ${table.recurrenceId} is not null and ${table.categoryId} is null)`,
+    ),
   ],
 )
 

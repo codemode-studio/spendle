@@ -109,7 +109,8 @@ export interface StatementReadResult {
   }
 }
 
-export type StatementReadErrorKind = 'identity_mismatch' | 'extraction_blocked'
+export type StatementReadErrorKind =
+  'identity_mismatch' | 'extraction_blocked' | 'empty_statement'
 
 export class StatementReadError extends Error {
   constructor(
@@ -872,10 +873,12 @@ export async function readStatement(
   try {
     assertStatementIdentity(result, input)
     if (!result.transactions.length) {
-      throw new Error(
+      throw new StatementReadError(
         extension === 'pdf' && !input.aiConsent
           ? 'Nenhuma transação foi reconhecida localmente. Autorize a IA para tentar este PDF.'
           : 'Nenhuma transação foi encontrada no arquivo.',
+        'empty_statement',
+        result,
       )
     }
   } catch (error) {

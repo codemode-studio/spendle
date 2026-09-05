@@ -42,7 +42,7 @@ import {
 } from '#/features/finance/finance.functions'
 import { InstrumentCard } from '#/features/finance/instrument-card'
 import {
-  financeSnapshotOptions,
+  configurationOptions,
   invalidateFinance,
 } from '#/features/finance/queries'
 import type {
@@ -76,7 +76,7 @@ type OwnershipScopeOption = Pick<
 >
 
 export function AccountsSection() {
-  const { data } = useSuspenseQuery(financeSnapshotOptions())
+  const { data } = useSuspenseQuery(configurationOptions())
   const queryClient = useQueryClient()
   const createAccount = useServerFn(createAccountFn)
   const updateAccount = useServerFn(updateAccountFn)

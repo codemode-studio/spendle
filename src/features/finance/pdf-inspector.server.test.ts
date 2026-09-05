@@ -95,9 +95,15 @@ describe('extração posicional de PDF', () => {
         20,
         500,
       ),
-      textItem('Fatura atual R$ 350,00', 2, 20, 100),
+      textItem('Fatura atual R$ 400,00', 2, 20, 100),
       textItem('Despesas da fatura', 3, 20, 550),
       textItem('CARTÃO 5364****3879', 3, 20, 520),
+      textItem(
+        '08 de abr. 2026 Compra capturada tarde (Parcela 01 de 02) - R$ 50,00',
+        3,
+        20,
+        500,
+      ),
       textItem(
         '20 de mar. 2026 Compra antiga (Parcela 02 de 03) - R$ 100,00',
         3,
@@ -117,15 +123,20 @@ describe('extração posicional de PDF', () => {
     expect(
       parseInterCardTransactions({ lines, currency: 'BRL' }),
     ).toMatchObject({
-      sourceTransactionCount: 2,
+      sourceTransactionCount: 3,
       controls: {
-        closingBalanceCents: 35_000,
+        closingBalanceCents: 40_000,
         balanceAsOf: '2026-05-08',
         periodStart: '2026-04-09',
         periodEnd: '2026-05-08',
         dueDate: '2026-05-15',
       },
       transactions: [
+        {
+          postedAt: '2026-04-09',
+          description: 'Compra capturada tarde (Parcela 01 de 02)',
+          amountCents: -5_000,
+        },
         {
           postedAt: '2026-04-20',
           description: 'Compra antiga (Parcela 02 de 03)',
@@ -214,6 +225,45 @@ describe('extração posicional de PDF', () => {
       lastFour: '6607',
       currency: 'BRL',
     })
+  })
+
+  it('aceita a fatura Inter paga antes do corte pelo total das despesas do mês', () => {
+    const lines = groupPositionedTextIntoLines([
+      textItem(
+        'Este é o valor que você precisa pagar nesse mês 15/09/2026',
+        1,
+        20,
+        500,
+      ),
+      textItem('Fatura atual R$ 0,00', 2, 20, 120),
+      textItem('Valor antecipado R$ 160,00', 2, 20, 100),
+      textItem('Despesas do mês R$ 150,00', 2, 20, 80),
+      textItem('Despesas da fatura', 3, 20, 550),
+      textItem('CARTÃO 5364****3879', 3, 20, 520),
+      textItem('06 de ago. 2026 PAGAMENTO ON LINE - + R$ 160,00', 3, 20, 480),
+      textItem('20 de jul. 2026 Mercado - R$ 100,00', 3, 20, 460),
+      textItem('15 de jul. 2026 Padaria - R$ 50,00', 3, 20, 440),
+      textItem('Data de corte: 08/09/2026', 7, 230, 530),
+    ])
+
+    expect(
+      parseInterCardTransactions({ lines, currency: 'BRL' }),
+    ).toMatchObject({
+      sourceTransactionCount: 2,
+      controls: {
+        closingBalanceCents: 15_000,
+        periodStart: '2026-07-09',
+        periodEnd: '2026-08-08',
+        dueDate: '2026-09-15',
+      },
+    })
+
+    expect(() =>
+      parseInterCardTransactions({
+        lines: lines.filter((line) => !/Padaria/.test(line.text)),
+        currency: 'BRL',
+      }),
+    ).toThrow('esperado 0 ou 15000, extraído 10000')
   })
 
   it('interpreta o agrupamento de entradas e saídas do extrato Nubank', () => {

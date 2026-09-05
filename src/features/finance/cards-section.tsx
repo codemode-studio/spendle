@@ -53,7 +53,7 @@ import {
 } from '#/features/finance/finance.functions'
 import { InstrumentCard } from '#/features/finance/instrument-card'
 import {
-  financeSnapshotOptions,
+  configurationOptions,
   invalidateFinance,
 } from '#/features/finance/queries'
 import type {
@@ -90,7 +90,7 @@ type StatementCardSnapshot = Pick<
 >
 
 export function CardsSection() {
-  const { data } = useSuspenseQuery(financeSnapshotOptions())
+  const { data } = useSuspenseQuery(configurationOptions())
   const queryClient = useQueryClient()
   const createCard = useServerFn(createCreditCardFn)
   const updateCard = useServerFn(updateCreditCardFn)

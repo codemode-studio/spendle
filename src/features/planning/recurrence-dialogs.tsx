@@ -22,7 +22,7 @@ import { formatShortDate as formatDate } from '#/domain/period'
 import { recurrenceLinkCandidateLimits } from '#/domain/recurrence-book'
 import { recurrenceLinkCandidatesOptions } from '#/features/finance/queries'
 import type {
-  FinanceSnapshot,
+  PlanningSnapshot,
   RecurrenceSnapshot,
 } from '#/features/finance/snapshot.types'
 import { cn } from '#/lib/utils'
@@ -231,7 +231,7 @@ function RecurrenceDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  data: FinanceSnapshot
+  data: PlanningSnapshot
   recurrence: RecurrenceSnapshot | undefined
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
   pending: boolean

@@ -408,7 +408,7 @@ describe('conflitos ao vivo em lotes e restaurações', () => {
 
   it('recusa o commit do CSV quando o PDF dependente conflita com o destino atual', async () => {
     const { db, ids, schema } = database
-    const csvPath = '/tmp/live-batch-commit.csv'
+    const csvPath = `${database.directory}/live-batch-commit.csv`
     await writeFile(
       csvPath,
       [

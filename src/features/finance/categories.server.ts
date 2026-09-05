@@ -9,7 +9,7 @@ import {
 } from '#/domain/reconciliation'
 
 export type SuggestionSource =
-  'none' | 'rule' | 'history' | 'heuristic' | 'ai' | 'system'
+  'none' | 'rule' | 'knowledge' | 'history' | 'heuristic' | 'ai' | 'system'
 
 export interface CategorySuggestion {
   categoryId: string
@@ -79,8 +79,15 @@ export async function suggestCategory(input: {
     [/aluguel|condominio|iptu/i, 'housing'],
     [/financiamento|consorcio|prestacao|emprestimo|crediario/i, 'financing'],
     [/energia|internet|telefone|agua|gas/i, 'utilities'],
-    [/^ifd\*|ifood|rappi|delivery/i, 'delivery'],
-    [/mercado|supermercado|padaria|restaurante/i, 'food'],
+    [/^ifd\*|ifood|99food|rappi|ze delivery|delivery/i, 'delivery'],
+    [
+      /\bmercado\b(?!\s*\*)(?!\s*(?:livre|pago))|supermercado|atacad|acougue|hortifruti|emporio/i,
+      'groceries',
+    ],
+    [
+      /restaurante|\bbar\b|boteco|hamburg|pizzaria|sushi|\bcafe\b|cafeteria|coffee|bakery|padaria|grill|brasa|churrasc|doces|sorvete|crepe|bistro|lanch|confeitaria/i,
+      'restaurants',
+    ],
     [/uber|posto|combustivel|estacionamento|pedagio/i, 'transport'],
     [/farmacia|hospital|clinica|medico|laboratorio/i, 'health'],
     [/escola|curso|faculdade|livro/i, 'education'],

@@ -16,10 +16,8 @@ import {
   refreshStatementAnchor,
 } from './checkpoint-chain.server'
 import { transactionFingerprint } from './canonicalization.server'
-import {
-  refreshReconciliationAfterCommit,
-  refreshReconciliationSuggestions,
-} from './reconciliation-refresh.server'
+import { learnCategory } from './knowledge-base.server'
+import { refreshReconciliationAfterCommit } from './reconciliation-refresh.server'
 import {
   noteTransactionCategoryChanged,
   refreshRecurrences,
@@ -351,6 +349,12 @@ export async function updateTransactionCategory(input: {
       transactionId: input.transactionId,
       categoryId: input.categoryId,
     })
+    learnCategory(tx, {
+      description: source.description,
+      amountCents: source.amountCents,
+      categoryId: input.categoryId,
+      source: 'transaction_review',
+    })
     if (counterpartyAccountId && source.accountId) {
       const direction = source.amountCents < 0 ? 'outgoing' : 'incoming'
       tx.insert(schema.categorizationRules)
@@ -512,6 +516,8 @@ export async function updateStagedTransactionCategory(input: {
   const staged = await db
     .select({
       id: schema.stagedTransactions.id,
+      description: schema.stagedTransactions.description,
+      amountCents: schema.stagedTransactions.amountCents,
       importStatus: schema.imports.status,
       sourceAccountId: schema.imports.accountId,
     })
@@ -551,15 +557,23 @@ export async function updateStagedTransactionCategory(input: {
     if (!counterparty[0]) throw new Error('Conta relacionada inválida.')
   }
 
-  await db
-    .update(schema.stagedTransactions)
-    .set({
-      suggestedCategoryId: input.categoryId,
-      counterpartyAccountId,
-      suggestionConfidence: 100,
-      suggestionSource: 'manual',
+  db.transaction((tx) => {
+    tx.update(schema.stagedTransactions)
+      .set({
+        suggestedCategoryId: input.categoryId,
+        counterpartyAccountId,
+        suggestionConfidence: 100,
+        suggestionSource: 'manual',
+      })
+      .where(eq(schema.stagedTransactions.id, input.stagedTransactionId))
+      .run()
+    learnCategory(tx, {
+      description: staged[0].description,
+      amountCents: staged[0].amountCents,
+      categoryId: input.categoryId,
+      source: 'import_review',
     })
-    .where(eq(schema.stagedTransactions.id, input.stagedTransactionId))
+  })
   return { success: true }
 }
 
@@ -658,8 +672,4 @@ export async function createInstallment(input: {
   }
   await db.insert(schema.installmentPlans).values(row)
   return row
-}
-
-export async function createReconciliationSuggestions() {
-  return refreshReconciliationSuggestions()
 }

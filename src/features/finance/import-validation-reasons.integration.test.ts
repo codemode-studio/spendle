@@ -16,6 +16,7 @@ import {
   replaceConflictingCheckpoint,
   retryImportFinalization,
   stageImport,
+  stageImportBatch,
 } from './import.server'
 import { getImportReviewSnapshot } from './import-review-read.server'
 
@@ -986,6 +987,81 @@ describe('persistência dos motivos de validação', () => {
       .where(eq(schema.transactions.id, 'different-id-transaction'))
       .limit(1)
     expect(transaction[0]?.status).toBe('excluded')
+  })
+
+  it('pula um CSV sem lançamentos e processa os demais arquivos do lote', async () => {
+    const { ids } = database
+    const emptyFile = new File(
+      ['Data,Valor,Identificador,Descrição\n'],
+      'NU_6607_01SET2027_03SET2027.csv',
+      { type: 'text/csv' },
+    )
+    const filledFile = new File(
+      [
+        [
+          'Data,Valor,Identificador,Descrição',
+          '2027-08-10,-10.00,csv-batch-skip-1,Compra',
+        ].join('\n'),
+      ],
+      'NU_6607_01AGO2027_31AGO2027.csv',
+      { type: 'text/csv' },
+    )
+
+    const result = await stageImportBatch({
+      files: [emptyFile, filledFile],
+      targetType: 'account',
+      targetId: ids.brlAccount,
+      aiConsent: false,
+    })
+
+    expect(result.importIds).toHaveLength(1)
+    expect(result.skipped).toEqual([
+      {
+        fileName: 'NU_6607_01SET2027_03SET2027.csv',
+        reason: 'Nenhuma transação foi encontrada no arquivo.',
+      },
+    ])
+
+    const snapshot = await getImportReviewSnapshot()
+    const skippedItem = snapshot.imports.find(
+      (candidate) =>
+        candidate.sourceFile?.originalName ===
+        'NU_6607_01SET2027_03SET2027.csv',
+    )
+    const stagedItem = snapshot.imports.find(
+      (candidate) => candidate.id === result.importIds[0],
+    )
+    for (const item of [skippedItem, stagedItem]) {
+      if (item?.sourceFile) {
+        await unlink(item.sourceFile.storagePath).catch(() => undefined)
+      }
+    }
+
+    expect(skippedItem).toMatchObject({
+      status: 'failed',
+      batchId: result.batchId,
+      validationMessage: 'Nenhuma transação foi encontrada no arquivo.',
+    })
+    expect(stagedItem).toMatchObject({
+      status: 'review',
+      batchId: result.batchId,
+      parsedTransactionCount: 1,
+    })
+
+    await expect(
+      stageImportBatch({
+        files: [
+          new File(
+            ['Data,Valor,Identificador,Descrição\n'],
+            'NU_6607_04SET2027_05SET2027.csv',
+            { type: 'text/csv' },
+          ),
+        ],
+        targetType: 'account',
+        targetId: ids.brlAccount,
+        aiConsent: false,
+      }),
+    ).rejects.toThrow('Nenhuma transação foi encontrada no arquivo.')
   })
 
   it('persiste conflito de destino quando o CSV pertence a outra conta', async () => {

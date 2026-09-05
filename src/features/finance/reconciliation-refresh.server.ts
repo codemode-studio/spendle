@@ -1,3 +1,4 @@
+import { measureOperation } from './diagnostics.server'
 import { randomUUID } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 
@@ -291,23 +292,25 @@ export type ReconciliationRefreshResult =
   | { status: 'deferred'; inserted: 0; message: string }
 
 export async function refreshReconciliationAfterCommit(): Promise<ReconciliationRefreshResult> {
-  try {
-    const inserted = await refreshReconciliationSuggestions()
-    const recurrence = await refreshRecurrences()
-    return {
-      status: 'refreshed',
-      inserted,
-      recurrenceSuggestions: recurrence.suggestionCount,
+  return measureOperation('reconciliation.refresh', {}, async () => {
+    try {
+      const inserted = await refreshReconciliationSuggestions()
+      const recurrence = await refreshRecurrences()
+      return {
+        status: 'refreshed',
+        inserted,
+        recurrenceSuggestions: recurrence.suggestionCount,
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Falha desconhecida na reconciliação.'
+      console.error(
+        'Reconciliation refresh deferred after durable commit:',
+        error,
+      )
+      return { status: 'deferred', inserted: 0, message }
     }
-  } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'Falha desconhecida na reconciliação.'
-    console.error(
-      'Reconciliation refresh deferred after durable commit:',
-      error,
-    )
-    return { status: 'deferred', inserted: 0, message }
-  }
+  })
 }

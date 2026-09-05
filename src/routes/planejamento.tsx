@@ -14,7 +14,7 @@ import {
   AlertDialogTitle,
 } from '#/components/ui/alert-dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
-import { financeSnapshotOptions } from '#/features/finance/queries'
+import { planningOptions } from '#/features/finance/queries'
 import {
   BudgetSection,
   ContributionDialog,
@@ -35,7 +35,7 @@ const planningSearchSchema = z.object({
 export const Route = createFileRoute('/planejamento')({
   validateSearch: planningSearchSchema,
   loader: ({ context }) =>
-    context.queryClient.ensureQueryData(financeSnapshotOptions()),
+    context.queryClient.ensureQueryData(planningOptions()),
   component: PlanningPage,
 })
 
@@ -43,7 +43,7 @@ function PlanningPage() {
   const { section } = Route.useSearch()
   const navigate = Route.useNavigate()
   const activeSection = section ?? 'budget'
-  const { data } = useSuspenseQuery(financeSnapshotOptions())
+  const { data } = useSuspenseQuery(planningOptions())
   const {
     allocation,
     closeMutation,
