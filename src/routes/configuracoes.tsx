@@ -86,9 +86,20 @@ function SettingsPage() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Preferências locais"
-        title="Configurações"
-        description="Família, contas, cartões, aprendizados e dados guardados neste computador."
+        title={
+          activeTab === 'contas'
+            ? 'Contas'
+            : activeTab === 'cartoes'
+              ? 'Cartões'
+              : 'Configurações'
+        }
+        description={
+          activeTab === 'contas'
+            ? 'Cadastre suas contas e confira os saldos.'
+            : activeTab === 'cartoes'
+              ? 'Organize cartões, faturas e vencimentos.'
+              : 'Preferências da família, categorias aprendidas e dados locais.'
+        }
       />
       <Tabs
         value={activeTab}

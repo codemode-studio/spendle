@@ -6,7 +6,6 @@ import {
   CalendarClock,
   Info,
   Landmark,
-  Plus,
   Send,
   Sparkles,
   Store,
@@ -15,8 +14,17 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { EmptyState, Page } from '#/components/ui'
+import { EmptyState, Page, Panel } from '#/components/ui'
 import { Button } from '#/components/ui/button'
+import {
+  Sheet,
+  SheetTrigger,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from '#/components/ui/sheet'
+import { GettingStarted } from './getting-started'
 import {
   Tooltip,
   TooltipContent,
@@ -53,45 +61,175 @@ export function Home({
   const view = useMemo(() => buildHomeView(snapshot), [snapshot])
   const insights = useMemo(() => buildInsights(view, formatCurrency), [view])
 
-  if (snapshot.accounts.length === 0) {
-    return (
-      <EmptyState
-        icon={Landmark}
-        title="Sem contas ainda"
-        description="Cadastre contas e importe extratos para o painel ganhar vida."
-        action={
-          <Button
-            nativeButton={false}
-            render={<Link to="/configuracoes" search={{ tab: 'contas' }} />}
-          >
-            Cadastrar conta <ArrowRight />
-          </Button>
-        }
-      />
-    )
-  }
-
+  const budget = snapshot.dashboard.monthlyCommitments
   return (
-    <div className="flex flex-col xl:grid xl:h-full xl:grid-cols-[360px_minmax(0,1fr)] xl:overflow-hidden 2xl:grid-cols-[400px_minmax(0,1fr)]">
-      <ActivityColumn
-        insights={insights}
-        assistantConfigured={assistantConfigured}
-      />
-      <main className="min-w-0 xl:overflow-y-auto">
-        <Page>
-          <Greeting snapshot={snapshot} />
-          <div className="space-y-4 sm:space-y-5">
-            <CashCard snapshot={snapshot} view={view} />
-            <StrategyCard snapshot={snapshot} />
-            <SpendingCard view={view} />
-            <div className="grid gap-4 sm:gap-5 md:grid-cols-2">
-              <MerchantsCard view={view} />
-              <CommitmentsCard view={view} />
-            </div>
+    <Page className="max-w-[1120px]">
+      <Greeting snapshot={snapshot} />
+      <div className="mb-6 flex flex-wrap gap-2">
+        <GettingStarted snapshot={snapshot} />
+        <Sheet>
+          <SheetTrigger render={<Button variant="outline" />}>
+            <Sparkles data-icon="inline-start" /> Assistente
+          </SheetTrigger>
+          <SheetContent
+            keepMounted
+            className="overflow-y-auto data-[side=right]:w-full sm:max-w-lg"
+          >
+            <SheetHeader className="pr-14">
+              <SheetTitle>Assistente</SheetTitle>
+              <SheetDescription>
+                Observações e perguntas sobre suas finanças.
+              </SheetDescription>
+            </SheetHeader>
+            <ActivityColumn
+              insights={insights}
+              assistantConfigured={assistantConfigured}
+            />
+          </SheetContent>
+        </Sheet>
+      </div>
+      {snapshot.accounts.length === 0 ? (
+        <EmptyState
+          icon={Landmark}
+          title="Comece pela sua primeira conta"
+          description="Cadastre uma conta e importe um extrato. Você confere os valores antes de salvar."
+          action={
+            <Button
+              nativeButton={false}
+              render={<Link to="/configuracoes" search={{ tab: 'contas' }} />}
+            >
+              Cadastrar conta <ArrowRight />
+            </Button>
+          }
+        />
+      ) : (
+        <div className="flex flex-col gap-6">
+          <div className="grid items-start gap-6 md:grid-cols-2">
+            <Panel
+              title="Caixa da família"
+              className="has-[details[open]]:md:col-span-2"
+              description="Saldo calculado a partir dos dados disponíveis em reais."
+            >
+              <p className="text-3xl font-semibold tracking-tight tabular-nums">
+                {formatCurrency(view.cashTodayCents)}
+              </p>
+              <details className="mt-5">
+                <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">
+                  Ver evolução e projeção
+                </summary>
+                <CashCard snapshot={snapshot} view={view} />
+              </details>
+            </Panel>
+            <Panel
+              className="has-[details[open]]:md:col-span-2"
+              title={`Compromissos de ${formatMonthName(snapshot.dashboard.currentMonth)}`}
+              description="Inclui despesas pagas, valores a pagar e estimativas."
+            >
+              <p className="text-3xl font-semibold tracking-tight tabular-nums">
+                {formatCurrency(budget.committedCents)}
+              </p>
+              <p className="mt-3 text-sm text-muted-foreground">
+                Margem estimada após metas:{' '}
+                {formatCurrency(budget.remainingAfterGoalsCents)}. Não é saldo
+                disponível.
+              </p>
+              {budget.warnings.length > 0 && (
+                <p className="mt-2 text-sm text-warning-foreground">
+                  {budget.warnings.length}{' '}
+                  {budget.warnings.length === 1
+                    ? 'limite de estimativa para conferir'
+                    : 'limites de estimativa para conferir'}{' '}
+                  nos detalhes.
+                </p>
+              )}
+              <details className="mt-5">
+                <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">
+                  Ver grupos, estimativas e composição
+                </summary>
+                <StrategyCard snapshot={snapshot} />
+              </details>
+            </Panel>
           </div>
-        </Page>
-      </main>
-    </div>
+          <Panel
+            title="Para revisar"
+            description="Confira as importações e a classificação dos lançamentos."
+          >
+            <div className="flex flex-wrap gap-3">
+              <Button
+                variant="outline"
+                nativeButton={false}
+                render={<Link to="/importar" />}
+              >
+                {snapshot.dashboard.reviewImportCount > 0
+                  ? `${snapshot.dashboard.reviewImportCount} importações para revisar`
+                  : 'Importar extrato'}{' '}
+                <ArrowRight />
+              </Button>
+              <Button
+                variant="ghost"
+                nativeButton={false}
+                render={
+                  <Link
+                    to="/transacoes"
+                    search={{ category: 'uncategorized' }}
+                  />
+                }
+              >
+                Ver lançamentos sem categoria <ArrowRight />
+              </Button>
+            </div>
+          </Panel>
+          <div className="grid items-start gap-6 md:grid-cols-2">
+            <Panel
+              title="Gastos por categoria"
+              description="Últimos 30 dias. Valores classificados; a cobertura pode ser parcial."
+            >
+              <div className="flex flex-col gap-4">
+                {view.categories30.items.slice(0, 4).map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between gap-4 text-sm"
+                  >
+                    <span className="truncate">{item.name}</span>
+                    <span className="font-medium tabular-nums">
+                      {formatCurrency(item.cents)}
+                    </span>
+                  </div>
+                ))}
+                {view.categories30.items.length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    Nenhum gasto classificado neste período.
+                  </p>
+                )}
+                {view.last30.uncategorizedCents > 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    Mais {formatCurrency(view.last30.uncategorizedCents)} em
+                    saídas sem categoria.
+                  </p>
+                )}
+                <Button
+                  variant="ghost"
+                  nativeButton={false}
+                  render={<Link to="/categorias" />}
+                >
+                  Ver categorias <ArrowRight />
+                </Button>
+              </div>
+            </Panel>
+            <CommitmentsCard view={view} />
+          </div>
+          <details>
+            <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">
+              Explorar gastos e maiores destinos
+            </summary>
+            <div className="mt-4 flex flex-col gap-6">
+              <SpendingCard view={view} />
+              <MerchantsCard view={view} />
+            </div>
+          </details>
+        </div>
+      )}
+    </Page>
   )
 }
 
@@ -111,7 +249,7 @@ function Greeting({ snapshot }: { snapshot: FinanceSnapshot }) {
   }).format(now)
 
   return (
-    <header className="mb-5 flex items-start justify-between gap-4 sm:mb-6">
+    <header className="mb-5 flex flex-wrap items-start justify-between gap-4 sm:mb-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl md:text-[2rem]">
           {salutation}, {name}
@@ -120,8 +258,8 @@ function Greeting({ snapshot }: { snapshot: FinanceSnapshot }) {
           {date.charAt(0).toUpperCase() + date.slice(1)}
         </p>
       </div>
-      <Button nativeButton={false} render={<Link to="/transacoes" />}>
-        <Plus /> Novo
+      <Button nativeButton={false} render={<Link to="/importar" />}>
+        Importar extrato <ArrowRight />
       </Button>
     </header>
   )
@@ -700,7 +838,7 @@ function CommitmentsCard({ view }: { view: HomeView }) {
         </p>
       ) : (
         <ul className="mt-4 divide-y">
-          {view.commitments30.slice(0, 8).map((item) => (
+          {view.commitments30.slice(0, 4).map((item) => (
             <li
               key={item.id}
               className="flex items-center justify-between gap-3 py-2.5"
@@ -723,17 +861,19 @@ function CommitmentsCard({ view }: { view: HomeView }) {
           ))}
         </ul>
       )}
-      {view.commitments30.length > 8 && (
+      {
         <Button
           variant="ghost"
           size="sm"
           className="mt-2 w-full"
           nativeButton={false}
-          render={<Link to="/planejamento" />}
+          render={
+            <Link to="/planejamento" search={{ section: 'recurrences' }} />
+          }
         >
-          Ver todos ({view.commitments30.length}) <ArrowRight />
+          Ver recorrências <ArrowRight />
         </Button>
-      )}
+      }
     </section>
   )
 }
@@ -809,7 +949,7 @@ function ActivityColumn({
   ]
 
   return (
-    <aside className="order-2 flex flex-col border-t bg-background xl:order-none xl:h-full xl:min-h-0 xl:border-t-0 xl:border-r">
+    <aside className="flex min-h-0 flex-col bg-background">
       <div className="flex shrink-0 items-center justify-between gap-3 px-panel pt-page pb-4">
         <h2 className="text-2xl font-semibold tracking-tight">Atividade</h2>
         <Button
@@ -838,7 +978,7 @@ function ActivityColumn({
             return (
               <Message
                 key={item.id}
-                className={collapsed ? 'max-xl:hidden' : undefined}
+                className={collapsed ? 'hidden' : undefined}
                 author="Assistente"
                 avatar={
                   <span
@@ -930,7 +1070,7 @@ function ActivityColumn({
           <button
             type="button"
             onClick={() => setShowAllInsights((value) => !value)}
-            className="w-full rounded-lg border py-2 text-xs font-medium text-muted-foreground hover:bg-muted xl:hidden pointer-coarse:py-3"
+            className="w-full rounded-lg border py-2 text-xs font-medium text-muted-foreground hover:bg-muted pointer-coarse:py-3"
           >
             {showAllInsights
               ? 'Mostrar menos'

@@ -6,6 +6,8 @@ import {
   Upload,
   WalletCards,
   Tags,
+  Landmark,
+  CalendarClock,
 } from 'lucide-react'
 import { Link, useRouterState } from '@tanstack/react-router'
 
@@ -16,6 +18,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
+  SidebarFooter,
   SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
@@ -31,9 +34,24 @@ const navigation = [
   { to: '/', label: 'Visão geral', icon: LayoutDashboard },
   { to: '/transacoes', label: 'Transações', icon: ArrowLeftRight },
   { to: '/categorias', label: 'Categorias', icon: Tags },
-  { to: '/importar', label: 'Importar', icon: Upload },
-  { to: '/planejamento', label: 'Planejamento', icon: PiggyBank },
-  { to: '/configuracoes', label: 'Configurações', icon: Settings },
+  {
+    to: '/configuracoes',
+    search: { tab: 'contas' },
+    label: 'Contas',
+    icon: Landmark,
+  },
+  {
+    to: '/planejamento',
+    search: { section: 'recurrences' },
+    label: 'Recorrências',
+    icon: CalendarClock,
+  },
+  {
+    to: '/planejamento',
+    search: { section: 'budget' },
+    label: 'Orçamento e metas',
+    icon: PiggyBank,
+  },
 ] as const
 
 export function AppShell({
@@ -42,6 +60,8 @@ export function AppShell({
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
+
+  const search = useRouterState({ select: (state) => state.location.search })
 
   return (
     <TooltipProvider>
@@ -69,15 +89,26 @@ export function AppShell({
               <SidebarGroupLabel>Organização</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  {navigation.map(({ to, label, icon: Icon }) => {
+                  {navigation.map((item) => {
+                    const { to, label, icon: Icon } = item
+                    const targetSearch =
+                      'search' in item ? item.search : undefined
                     const isActive =
-                      to === '/' ? pathname === '/' : pathname.startsWith(to)
+                      pathname === to &&
+                      (targetSearch && 'tab' in targetSearch
+                        ? search.tab === 'contas' || search.tab === 'cartoes'
+                        : targetSearch && 'section' in targetSearch
+                          ? targetSearch.section === 'recurrences'
+                            ? search.section === 'recurrences'
+                            : search.section !== 'recurrences'
+                          : true)
                     return (
-                      <SidebarMenuItem key={to}>
+                      <SidebarMenuItem key={label}>
                         <SidebarMenuButton
-                          render={<Link to={to} />}
+                          render={<Link to={to} search={targetSearch} />}
                           isActive={isActive}
                           tooltip={label}
+                          className="min-h-11"
                         >
                           <Icon />
                           <span>{label}</span>
@@ -89,6 +120,38 @@ export function AppShell({
               </SidebarGroupContent>
             </SidebarGroup>
           </SidebarContent>
+          <SidebarFooter>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  className="min-h-11"
+                  render={<Link to="/importar" />}
+                  isActive={pathname === '/importar'}
+                  tooltip="Importar extrato"
+                >
+                  <Upload />
+                  <span>Importar extrato</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  className="min-h-11"
+                  render={
+                    <Link to="/configuracoes" search={{ tab: 'geral' }} />
+                  }
+                  isActive={
+                    pathname === '/configuracoes' &&
+                    search.tab !== 'contas' &&
+                    search.tab !== 'cartoes'
+                  }
+                  tooltip="Configurações"
+                >
+                  <Settings />
+                  <span>Configurações</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarFooter>
           <SidebarRail />
         </Sidebar>
         <SidebarInset className="h-svh min-h-0 overflow-hidden md:h-[calc(100svh-1rem)] md:peer-data-[variant=inset]:shadow-none">

@@ -90,9 +90,14 @@ function PlanningPage() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Estratégia familiar"
-        title="Planejamento"
-        description="Defina o orçamento, acompanhe metas e organize recorrências."
+        title={
+          activeSection === 'recurrences' ? 'Recorrências' : 'Orçamento e metas'
+        }
+        description={
+          activeSection === 'recurrences'
+            ? 'Acompanhe receitas, contas recorrentes e próximos vencimentos.'
+            : 'Defina como dividir a renda e acompanhe seus objetivos.'
+        }
       />
       <Tabs
         value={activeSection}
