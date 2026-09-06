@@ -36,3 +36,11 @@ Referência: [Copilot Money no iPhone](https://mobbin.com/screens/0e7388f4-b89e-
 Corrigidas regras globais de borda e fonte que estavam fora de `@layer base` e anulavam as variantes dos componentes. Corrigido também o seletor de expansão dos resumos: avisos internos abertos não devem expandir um cartão cujo detalhe principal está fechado.
 
 QA no mesmo estado sintético, em 390 × 844 e 1440 × 1000: inspeção visual, abrir/fechar menu, navegar para Contas com fechamento automático, abas Transações/Categorias/Visão geral, recorrências, configurações e importação. Desktop mantém os dois resumos lado a lado. Nenhuma mutação financeira nesta rodada. `pnpm verify`: 449 testes aprovados e 10 ignorados; tipos, lint e build aprovados.
+
+## Estratégia como resumo financeiro
+
+Substituído o resumo de compromissos escondido por uma estratégia sempre visível na página inicial. Margem após metas e caixa aparecem juntos; barras mostram despesas versus limites e aportes pagos versus metas. O mesmo componente abre a página de orçamento. Renda e seleção de estratégia continuam editáveis, em uma seção própria. Composição e consumo por data permanecem acessíveis para conferência.
+
+O estado de apresentação distingue falta de renda para mês/metas, grupos excedidos, estimativas com ressalvas e ausência de renda de referência. Aportes previstos não completam as barras de metas. Os cálculos de compromissos existentes foram preservados.
+
+QA isolada em `.qa/run-zzrnBO`, porta 3102, com layouts de 390 × 844 e 1440 × 1000. Criada pelo navegador uma despesa sintética de R$ 40.000,00 em Lazer: margem após metas de -R$ 4.100,00, Estilo de vida R$ 28.000,00 acima do limite, caixa de -R$ 39.100,00. A página inicial e o orçamento mostraram a mesma falta de R$ 4.100,00; edição de renda/estratégia e comparação de consumo abriram corretamente. Nenhuma escrita no banco principal. `pnpm verify` passou: 453 testes aprovados, 10 ignorados, tipos/lint/build aprovados. Quatro testes novos cobrem os estados da leitura financeira. PDFs privados e IA real não foram executados.

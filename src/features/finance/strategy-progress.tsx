@@ -1,10 +1,9 @@
-import { useState } from 'react'
-import { SegmentedControl } from '#/components/segmented-control'
 import type { CommitmentBudget } from '#/domain/commitment-budget'
 import { useQuery } from '@tanstack/react-query'
 import { Info } from 'lucide-react'
 
-import { StatusBadge } from '#/components/ui'
+import { financialHealth } from '#/domain/financial-health'
+import { StatusBadge, ProgressBar } from '#/components/ui'
 import { Skeleton } from '#/components/ui/skeleton'
 import {
   Tooltip,
@@ -71,46 +70,179 @@ function todayIso() {
 export function StrategyProgressView({
   dashboard,
   today = todayIso(),
+  cashCents,
 }: {
   dashboard: StrategyDashboard
   today?: string
+  cashCents?: number
 }) {
-  const [view, setView] = useState('commitments')
   const budget = dashboard.monthlyCommitments
   return (
-    <div className="space-y-4">
-      <SegmentedControl
-        aria-label="Visão da estratégia"
-        value={view}
-        onValueChange={setView}
-        items={[
-          { value: 'commitments', label: 'Compromissos do mês' },
-          { value: 'consumption', label: 'Consumo por mês' },
-        ]}
-      />
-      {view === 'consumption' ? (
-        <>
-          <p className="text-sm text-muted-foreground">
-            Compras pelas datas dos lançamentos em{' '}
-            {formatMonth(dashboard.currentMonth)}. O pagamento de uma fatura não
-            conta como uma nova compra. Cobertura parcial pode reduzir os
-            valores observados.
-          </p>
-          <ConsumptionProgressView dashboard={dashboard} today={today} />
-          <details>
-            <summary className="cursor-pointer text-sm">
-              Ver meses anteriores
-            </summary>
-            <div className="mt-3">
-              <StrategyHistory />
-            </div>
-          </details>
-        </>
-      ) : budget ? (
-        <CommitmentProgress budget={budget} />
+    <div className="flex flex-col gap-5">
+      {budget ? (
+        <CommitmentOverview budget={budget} cashCents={cashCents} />
       ) : (
         <p>Os compromissos ainda não foram carregados.</p>
       )}
+      <details>
+        <summary className="flex min-h-11 cursor-pointer items-center text-sm text-muted-foreground">
+          Conferir lançamentos e premissas
+        </summary>
+        <div className="mt-3">
+          {budget && <CommitmentProgress budget={budget} />}
+        </div>
+      </details>
+      <details>
+        <summary className="flex min-h-11 cursor-pointer items-center text-sm text-muted-foreground">
+          Comparar consumo por data da compra
+        </summary>
+        <p className="my-3 text-sm text-muted-foreground">
+          Compras em {formatMonth(dashboard.currentMonth)}. Pagar a fatura não
+          conta como nova compra.
+        </p>
+        <ConsumptionProgressView dashboard={dashboard} today={today} />
+      </details>
+    </div>
+  )
+}
+
+function CommitmentOverview({
+  budget,
+  cashCents,
+}: {
+  budget: CommitmentBudget
+  cashCents?: number
+}) {
+  const health = financialHealth(budget)
+  const spending = budget.buckets.filter(
+    (b) => b.bucket === 'essential' || b.bucket === 'lifestyle',
+  )
+  const goals = budget.buckets.filter(
+    (b) => b.bucket === 'investment' || b.bucket === 'reserve',
+  )
+  const other = budget.buckets.find((b) => b.bucket === 'other')!
+  return (
+    <div className="flex flex-col gap-6">
+      <div>
+        <StatusBadge tone={health.tone}>{health.label}</StatusBadge>
+        <div className="mt-3 grid grid-cols-2 gap-4">
+          <div>
+            <p
+              className={cn(
+                'text-xl font-semibold tracking-tight whitespace-nowrap tabular-nums sm:text-2xl',
+                health.deficit && 'text-destructive',
+              )}
+            >
+              {budget.incomeCents > 0
+                ? formatCurrency(Math.abs(budget.remainingAfterGoalsCents))
+                : '—'}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {health.deficit ? 'faltam após as metas' : 'margem após as metas'}
+            </p>
+          </div>
+          {cashCents !== undefined && (
+            <div>
+              <p className="text-xl font-semibold tracking-tight whitespace-nowrap tabular-nums sm:text-2xl">
+                {formatCurrency(cashCents)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                caixa nos dados disponíveis
+              </p>
+            </div>
+          )}
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Renda de referência {formatCurrency(budget.incomeCents)} ·
+          Compromissos {formatCurrency(budget.committedCents)}
+        </p>
+        {health.incomplete && (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Dados parciais: a margem pode mudar com novos extratos e
+            estimativas.
+          </p>
+        )}
+      </div>
+      <div className="grid gap-6 md:grid-cols-2">
+        <div className="flex flex-col gap-5">
+          <h3 className="text-sm font-semibold">Despesas do mês</h3>
+          {spending.map((b) => (
+            <div key={b.bucket} className="flex flex-col gap-2">
+              <div className="flex items-baseline justify-between gap-2 text-sm">
+                <span>
+                  {bucketLabels[b.bucket as keyof typeof bucketLabels]}
+                </span>
+                <strong className="tabular-nums">
+                  {formatCurrency(b.committedCents)}
+                </strong>
+              </div>
+              <ProgressBar
+                value={b.committedCents}
+                max={b.targetCents}
+                className={cn(
+                  b.remainingCents < 0 &&
+                    '[&_[data-slot=progress-indicator]]:bg-destructive',
+                )}
+              />
+              <div className="flex flex-wrap justify-between gap-1 text-xs">
+                <span className="text-muted-foreground">
+                  Limite {formatCurrency(b.targetCents)}
+                </span>
+                <span
+                  className={cn(
+                    'font-medium',
+                    b.remainingCents < 0
+                      ? 'text-destructive'
+                      : 'text-muted-foreground',
+                  )}
+                >
+                  {formatCurrency(Math.abs(b.remainingCents))}{' '}
+                  {b.remainingCents < 0 ? 'acima' : 'restantes'}
+                </span>
+              </div>
+            </div>
+          ))}
+          {other.committedCents !== 0 && (
+            <p className="text-sm text-muted-foreground">
+              Fora dos grupos / a classificar:{' '}
+              {formatCurrency(other.committedCents)}
+            </p>
+          )}
+        </div>
+        <div className="flex flex-col gap-5">
+          <h3 className="text-sm font-semibold">Metas de aporte</h3>
+          {goals.map((b) => (
+            <div key={b.bucket} className="flex flex-col gap-2">
+              <div className="flex items-baseline justify-between gap-2 text-sm">
+                <span>
+                  {bucketLabels[b.bucket as keyof typeof bucketLabels]}
+                </span>
+                <strong className="tabular-nums">
+                  {formatCurrency(b.paidCents)}
+                </strong>
+              </div>
+              <ProgressBar value={b.paidCents} max={b.targetCents} />
+              <div className="flex flex-wrap justify-between gap-1 text-xs text-muted-foreground">
+                <span>Meta {formatCurrency(b.targetCents)}</span>
+                <span>
+                  {formatCurrency(Math.max(0, b.targetCents - b.paidCents))} a
+                  aportar
+                </span>
+              </div>
+              {b.dueCents + b.variableCents > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {formatCurrency(b.dueCents + b.variableCents)} previstos,
+                  ainda não pagos
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Despesas incluem valores pagos, a pagar e estimados. Margem da renda não
+        é saldo bancário.
+      </p>
     </div>
   )
 }

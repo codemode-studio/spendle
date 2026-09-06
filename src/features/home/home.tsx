@@ -61,7 +61,6 @@ export function Home({
   const view = useMemo(() => buildHomeView(snapshot), [snapshot])
   const insights = useMemo(() => buildInsights(view, formatCurrency), [view])
 
-  const budget = snapshot.dashboard.monthlyCommitments
   return (
     <Page className="max-w-[1120px]">
       <Greeting snapshot={snapshot} />
@@ -104,52 +103,13 @@ export function Home({
         />
       ) : (
         <div className="flex flex-col gap-6">
-          <div className="grid items-start gap-6 md:grid-cols-2">
-            <Panel
-              title="Caixa da família"
-              className="has-[[data-summary-detail][open]]:md:col-span-2"
-              description="Saldo calculado a partir dos dados disponíveis em reais."
-            >
-              <p className="text-3xl font-semibold tracking-tight tabular-nums">
-                {formatCurrency(view.cashTodayCents)}
-              </p>
-              <details data-summary-detail className="mt-5">
-                <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">
-                  Ver evolução e projeção
-                </summary>
-                <CashCard snapshot={snapshot} view={view} />
-              </details>
-            </Panel>
-            <Panel
-              className="has-[[data-summary-detail][open]]:md:col-span-2"
-              title={`Compromissos de ${formatMonthName(snapshot.dashboard.currentMonth)}`}
-              description="Inclui despesas pagas, valores a pagar e estimativas."
-            >
-              <p className="text-3xl font-semibold tracking-tight tabular-nums">
-                {formatCurrency(budget.committedCents)}
-              </p>
-              <p className="mt-3 text-sm text-muted-foreground">
-                Margem estimada após metas:{' '}
-                {formatCurrency(budget.remainingAfterGoalsCents)}. Não é saldo
-                disponível.
-              </p>
-              {budget.warnings.length > 0 && (
-                <p className="mt-2 text-sm text-warning-foreground">
-                  {budget.warnings.length}{' '}
-                  {budget.warnings.length === 1
-                    ? 'limite de estimativa para conferir'
-                    : 'limites de estimativa para conferir'}{' '}
-                  nos detalhes.
-                </p>
-              )}
-              <details data-summary-detail className="mt-5">
-                <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">
-                  Ver grupos, estimativas e composição
-                </summary>
-                <StrategyCard snapshot={snapshot} />
-              </details>
-            </Panel>
-          </div>
+          <StrategyCard snapshot={snapshot} cashCents={view.cashTodayCents} />
+          <details>
+            <summary className="flex min-h-11 cursor-pointer items-center text-sm text-muted-foreground">
+              Evolução e projeção do caixa
+            </summary>
+            <CashCard snapshot={snapshot} view={view} />
+          </details>
           <Panel
             title="Para revisar"
             description="Confira as importações e a classificação dos lançamentos."
@@ -588,17 +548,20 @@ function Hint({ text }: { text: string }) {
 
 // ─── Estratégia do mês ───────────────────────────────────────────────────────
 
-function StrategyCard({ snapshot }: { snapshot: FinanceSnapshot }) {
+function StrategyCard({
+  snapshot,
+  cashCents,
+}: {
+  snapshot: FinanceSnapshot
+  cashCents: number
+}) {
   return (
     <section className="min-w-0 rounded-xl border bg-card p-panel shadow-xs">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-sm font-medium text-muted-foreground">
-            Estratégia do mês
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Quanto da renda já está comprometido em{' '}
-            {formatMonthName(snapshot.dashboard.currentMonth)}.
+            {snapshot.dashboard.activeStrategy.name} ·{' '}
+            {formatMonthName(snapshot.dashboard.currentMonth)}
           </p>
         </div>
         <Button
@@ -611,7 +574,10 @@ function StrategyCard({ snapshot }: { snapshot: FinanceSnapshot }) {
         </Button>
       </div>
       <div className="mt-5">
-        <StrategyProgressView dashboard={snapshot.dashboard} />
+        <StrategyProgressView
+          dashboard={snapshot.dashboard}
+          cashCents={cashCents}
+        />
       </div>
     </section>
   )
