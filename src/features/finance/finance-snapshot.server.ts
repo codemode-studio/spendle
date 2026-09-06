@@ -1,3 +1,12 @@
+import { shiftDays } from '#/domain/period'
+import { cardBudgetLines } from '#/domain/card-budget'
+import {
+  buildCommitmentBudget,
+  commitmentBucket,
+} from '#/domain/commitment-budget'
+import type { CommitmentRecurrence } from '#/domain/commitment-budget'
+import { addRecurrencePeriod } from '#/domain/recurrence-schedule'
+import { knowledgeExactPatterns } from '#/domain/knowledge-pattern'
 import { readInterFutureControl } from './pdf-parsers/inter-future-control'
 import { readNubankFutureControl } from './pdf-parsers/nubank-future-control'
 import { desc, eq } from 'drizzle-orm'
@@ -9,6 +18,7 @@ import {
   addMonths,
   classifyInstallmentCommitment,
   summarizeCardStatements,
+  resolveCardCycle,
 } from '#/domain/credit-card'
 import { buildFinancialSummary } from '#/domain/financial-summary'
 import { familyTransactions, isFamilyScope } from '#/domain/ledger'
@@ -374,6 +384,86 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       dueDay: effectiveDueDay,
       referenceDate,
     })
+    const budgetStatements = statementSummary.statements.map((statement) => {
+      const cycle = cardStatementCycleRows.find(
+        (c) => c.creditCardId === card.id && c.dueDate === statement.dueDate,
+      )
+      const sourceImportId = statement.sourceImportId ?? cycle?.importId ?? null
+      const sourceDue = cardStatementCycleRows.find(
+        (c) => c.importId === sourceImportId,
+      )?.dueDate
+      const monthIndex = (date: string) =>
+        Number(date.slice(0, 4)) * 12 + Number(date.slice(5, 7))
+      const futureOffset =
+        statement.certainty === 'installment_schedule' && sourceDue
+          ? monthIndex(statement.dueDate) - monthIndex(sourceDue)
+          : 0
+      const plans = installmentRows.filter(
+        (p) =>
+          p.creditCardId === card.id &&
+          p.sourceTransactionId &&
+          transactionById.get(p.sourceTransactionId)?.importId ===
+            sourceImportId,
+      )
+      const purchases = transactions
+        .filter((t) => t.creditCardId === card.id && t.status !== 'excluded')
+        .map((t) => ({ ...t, bucket: t.category?.bucket ?? null }))
+      const details = sourceImportId
+        ? cardBudgetLines({
+            id: card.id + ':' + statement.dueDate,
+            dueDate: statement.dueDate,
+            totalCents: statement.amountCents,
+            importId: sourceImportId,
+            futureOffset,
+            purchases,
+            plans,
+            explicitInstallments:
+              futureControl && 'installments' in futureControl
+                ? futureControl.installments
+                : undefined,
+          })
+        : []
+      const lines = details.flatMap((line) => {
+        const splits = line.transactionId
+          ? transactionSplitRows.filter(
+              (split) => split.transactionId === line.transactionId,
+            )
+          : []
+        return splits.length
+          ? splits.map((split) => ({
+              ...line,
+              id: line.id + ':' + split.id,
+              cents: -split.amountCents,
+              categoryId: split.categoryId,
+              bucket: commitmentBucket(
+                categoriesById.get(split.categoryId)?.bucket ?? null,
+              ),
+            }))
+          : [line]
+      })
+      const paymentIds = reconciliationRows
+        .filter((g) => g.status === 'confirmed' && g.type === 'card_payment')
+        .flatMap((g) => {
+          const links = linksByGroup.get(g.id) ?? []
+          return links.some((l) =>
+            purchases.some(
+              (t) => t.id === l.transactionId && t.importId === sourceImportId,
+            ),
+          )
+            ? links.map((l) => l.transactionId)
+            : []
+        })
+      return {
+        id: card.id + ':' + statement.dueDate,
+        cardId: card.id,
+        name: card.name,
+        dueDate: statement.dueDate,
+        cents: statement.amountCents,
+        closed: statement.certainty === 'closed',
+        lines,
+        paymentIds,
+      }
+    })
     const latestCheckpoint =
       checkpointRows.find(
         (checkpoint) =>
@@ -389,6 +479,7 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
     const coverage = buildCoverage(card.id, 'card')
     return {
       ...card,
+      budgetStatements,
       dueDayEstimated: card.dueDay === null,
       instruments: cardInstrumentRows.filter(
         (instrument) => instrument.creditCardId === card.id,
@@ -834,6 +925,253 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
     budgetProjected.essential += financialSummary.budgetPending.essential
     budgetProjected.lifestyle += financialSummary.budgetPending.lifestyle
 
+    const internalIds = new Set(
+      reconciliationRows
+        .filter(
+          (g) =>
+            g.status === 'confirmed' &&
+            ['transfer', 'fx_transfer', 'profit_distribution'].includes(g.type),
+        )
+        .flatMap((g) =>
+          (linksByGroup.get(g.id) ?? []).map((l) => l.transactionId),
+        ),
+    )
+    const commitmentRecurrences: CommitmentRecurrence[] = []
+    const commitmentDataWarnings: string[] = []
+    const horizon = addMonths(currentMonth + '-01', 1)
+    for (const recurrence of recurrenceRows) {
+      if (!recurrence.active || recurrence.direction !== 'expense') continue
+      const instances = new Map(
+        (occurrencesByRecurrence.get(recurrence.id) ?? []).map((o) => [
+          o.expectedDate,
+          {
+            id: o.id,
+            date: o.expectedDate,
+            cents: o.expectedAmountCents,
+            status: o.status,
+            categoryId: o.categoryId,
+          },
+        ]),
+      )
+      for (
+        let date = recurrence.nextDate;
+        date < horizon;
+        date = addRecurrencePeriod(
+          date,
+          recurrence.frequency,
+          recurrence.scheduleAnchor,
+        )
+      ) {
+        if (
+          (date.startsWith(currentMonth) ||
+            (recurrence.creditCardId &&
+              date >= addMonths(currentMonth + '-01', -1))) &&
+          !instances.has(date)
+        )
+          instances.set(date, {
+            id: 'projected:' + recurrence.id + ':' + date,
+            date,
+            cents: recurrence.amountCents,
+            status: 'expected',
+            categoryId: recurrence.categoryId ?? 'uncategorized',
+          })
+      }
+      for (const o of instances.values()) {
+        const recurringCard = recurrence.creditCardId
+          ? cardRows.find((c) => c.id === recurrence.creditCardId)
+          : undefined
+        const dueDate = recurringCard
+          ? resolveCardCycle(
+              o.date,
+              recurringCard.closingDay,
+              recurringCard.dueDay ??
+                Math.min(28, recurringCard.closingDay + 7),
+            ).dueDate
+          : o.date
+        if (!dueDate.startsWith(currentMonth)) continue
+        const currentCategory = recurrence.categoryId ?? o.categoryId
+        if (currentCategory !== o.categoryId)
+          commitmentDataWarnings.push(
+            'A categoria da ocorrência de ' +
+              recurrence.name +
+              ' difere do cadastro atual. A estimativa usa o cadastro atual; o histórico foi preservado.',
+          )
+        commitmentRecurrences.push({
+          id: o.id,
+          name: recurrence.name,
+          date: dueDate,
+          chargeDate: recurringCard ? o.date : undefined,
+          cents: convertToBaseCurrency(o.cents, recurrence.currency),
+          nativeCents: o.cents,
+          currency: recurrence.currency,
+          categoryId: currentCategory,
+          bucket: categoriesById.get(currentCategory)?.bucket ?? null,
+          variable: recurrence.amountMode === 'variable',
+          categoryWide: ['groceries', 'delivery', 'restaurants'].includes(
+            currentCategory,
+          ),
+          status: o.status,
+          cardId: recurrence.creditCardId,
+          toleranceDays: recurrence.dateToleranceDays,
+          transactionIds: (matchesByOccurrence.get(o.id) ?? [])
+            .filter((m) => isAcceptedRecurrenceMatchStatus(m.status))
+            .map((m) => m.transactionId),
+          patterns: recurrenceKnowledgeRows
+            .filter((k) => k.recurrenceId === recurrence.id)
+            .flatMap((k) => knowledgeExactPatterns(k.description)),
+        })
+      }
+    }
+    const missingVariableEstimates: string[] = []
+    for (const categoryId of ['groceries', 'delivery']) {
+      if (
+        commitmentRecurrences.some(
+          (r) => r.categoryId === categoryId && r.variable,
+        )
+      )
+        continue
+      const category = categoriesById.get(categoryId)
+      if (!category) continue
+      const sources = [
+        ...accountRows
+          .filter(
+            (a) =>
+              a.currency === 'BRL' &&
+              a.purpose === 'operating' &&
+              transactionRows.some((t) => t.accountId === a.id),
+          )
+          .map((a) => ({ accountId: a.id, creditCardId: null })),
+        ...cardRows
+          .filter((c) => c.currency === 'BRL')
+          .map((c) => ({ accountId: null, creditCardId: c.id })),
+      ]
+      const comparable: Array<{ month: string; cents: number }> = []
+      for (let offset = 1; offset <= 6 && comparable.length < 2; offset++) {
+        const start = addMonths(currentMonth + '-01', -offset),
+          end = shiftDays(addMonths(start, 1), -1)
+        const covered =
+          sources.length > 0 &&
+          sources.every((source) => {
+            const intervals = coverageRows
+              .filter(
+                (row) =>
+                  row.accountId === source.accountId &&
+                  row.creditCardId === source.creditCardId &&
+                  importById.get(row.importId)?.status === 'committed',
+              )
+              .sort((a, b) => a.start.localeCompare(b.start))
+            let cursor = start
+            for (const interval of intervals) {
+              if (interval.end < cursor) continue
+              if (interval.start > cursor) return false
+              cursor = shiftDays(interval.end, 1)
+              if (cursor > end) return true
+            }
+            return false
+          })
+        if (!covered) continue
+        const cents = transactions
+          .filter(
+            (t) =>
+              t.categoryId === categoryId &&
+              t.status === 'confirmed' &&
+              t.currency === 'BRL' &&
+              t.postedAt >= start &&
+              t.postedAt <= end &&
+              !internalIds.has(t.id),
+          )
+          .reduce((n, t) => n - t.amountCents, 0)
+        comparable.push({ month: start.slice(0, 7), cents: Math.max(0, cents) })
+      }
+      if (comparable.length < 2) {
+        missingVariableEstimates.push(category.name)
+        continue
+      }
+      const cents = Math.round(
+        comparable.reduce((n, r) => n + r.cents, 0) / comparable.length,
+      )
+      commitmentRecurrences.push({
+        id: 'history:' + categoryId,
+        name:
+          category.name +
+          ' · média de ' +
+          comparable.map((r) => r.month).join(' e '),
+        date: currentMonth + '-01',
+        cents,
+        nativeCents: cents,
+        currency: 'BRL',
+        categoryId,
+        bucket: category.bucket,
+        variable: true,
+        categoryWide: true,
+        patterns: [],
+        transactionIds: [],
+        status: 'expected',
+        cardId: null,
+        toleranceDays: 0,
+      })
+    }
+    const monthlyCommitments = buildCommitmentBudget({
+      month: currentMonth,
+      today: referenceDate,
+      incomeCents: baseIncomeCents,
+      targets: budgetTargets,
+      transactions: transactions.map((t) => ({
+        id: t.id,
+        description: t.description,
+        date: t.postedAt,
+        cents: amountInBaseCurrency(t),
+        nativeCents: t.amountCents,
+        currency: t.currency,
+        categoryId: t.categoryId,
+        bucket: t.category?.bucket ?? null,
+        cardId: t.creditCardId,
+        importId: t.importId,
+        status: t.status,
+        excluded:
+          internalIds.has(t.id) ||
+          Boolean(t.counterpartyAccountId) ||
+          ['transfer', 'profit_distribution_income'].includes(
+            t.categoryId ?? '',
+          ) ||
+          (t.category?.bucket === 'excluded' &&
+            !['uncategorized', 'card_payment'].includes(t.categoryId ?? '')),
+      })),
+      statements: cards
+        .filter((c) => isFamilyScope(c.scope?.type))
+        .flatMap((c) =>
+          c.budgetStatements.flatMap((statement) => {
+            const cents = convertToBaseCurrency(statement.cents, c.currency)
+            if (cents === null) {
+              commitmentDataWarnings.push(
+                'Fatura sem conversão para a moeda-base; seu valor não entrou na margem.',
+              )
+              return []
+            }
+            return [
+              {
+                ...statement,
+                cents,
+                lines: statement.lines.map((line) => ({
+                  ...line,
+                  cents: convertToBaseCurrency(line.cents, c.currency) ?? 0,
+                })),
+              },
+            ]
+          }),
+        ),
+      recurrences: commitmentRecurrences,
+      coveragePartial: financialSummary.integrity.issues.length > 0,
+    })
+
+    monthlyCommitments.warnings.push(...new Set(commitmentDataWarnings))
+    if (missingVariableEstimates.length)
+      monthlyCommitments.warnings.push(
+        'Sem estimativa adicional para ' +
+          missingVariableEstimates.join(', ') +
+          ': faltam dois meses com cobertura completa ou uma recorrência variável cadastrada.',
+      )
+
     return {
       currentMonth,
       netWorthCents: financialSummary.netWorthCents,
@@ -852,6 +1190,7 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       originalAllocation,
       effectiveAllocation,
       budgetActual,
+      monthlyCommitments,
       budgetProjected,
       budgetTargets,
       integrity: financialSummary.integrity,

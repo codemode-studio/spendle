@@ -455,7 +455,7 @@ function StrategyCard({ snapshot }: { snapshot: FinanceSnapshot }) {
             Estratégia do mês
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Quanto de cada envelope já foi usado em{' '}
+            Quanto da renda já está comprometido em{' '}
             {formatMonthName(snapshot.dashboard.currentMonth)}.
           </p>
         </div>

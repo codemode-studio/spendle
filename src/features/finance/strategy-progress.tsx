@@ -1,3 +1,6 @@
+import { useState } from 'react'
+import { SegmentedControl } from '#/components/segmented-control'
+import type { CommitmentBudget } from '#/domain/commitment-budget'
 import { useQuery } from '@tanstack/react-query'
 import { Info } from 'lucide-react'
 
@@ -30,6 +33,7 @@ export type StrategyDashboard = {
   budgetTargets: BucketAmounts
   budgetActual: BucketAmounts
   budgetProjected: BucketAmounts
+  monthlyCommitments?: CommitmentBudget
 }
 
 const statusTone: Record<
@@ -65,6 +69,251 @@ function todayIso() {
  * esquerda dele está no ritmo, à direita está adiantado.
  */
 export function StrategyProgressView({
+  dashboard,
+  today = todayIso(),
+}: {
+  dashboard: StrategyDashboard
+  today?: string
+}) {
+  const [view, setView] = useState('commitments')
+  const budget = dashboard.monthlyCommitments
+  return (
+    <div className="space-y-4">
+      <SegmentedControl
+        aria-label="Visão da estratégia"
+        value={view}
+        onValueChange={setView}
+        items={[
+          { value: 'commitments', label: 'Compromissos do mês' },
+          { value: 'consumption', label: 'Consumo por mês' },
+        ]}
+      />
+      {view === 'consumption' ? (
+        <>
+          <p className="text-sm text-muted-foreground">
+            Compras pelas datas dos lançamentos em{' '}
+            {formatMonth(dashboard.currentMonth)}. O pagamento de uma fatura não
+            conta como uma nova compra. Cobertura parcial pode reduzir os
+            valores observados.
+          </p>
+          <ConsumptionProgressView dashboard={dashboard} today={today} />
+          <details>
+            <summary className="cursor-pointer text-sm">
+              Ver meses anteriores
+            </summary>
+            <div className="mt-3">
+              <StrategyHistory />
+            </div>
+          </details>
+        </>
+      ) : budget ? (
+        <CommitmentProgress budget={budget} />
+      ) : (
+        <p>Os compromissos ainda não foram carregados.</p>
+      )}
+    </div>
+  )
+}
+
+function CommitmentProgress({ budget }: { budget: CommitmentBudget }) {
+  const names = { ...bucketLabels, other: 'Fora dos envelopes / a classificar' }
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Despesas pagas e compromissos com vencimento em{' '}
+        {formatMonth(budget.month)}. A pagar inclui faturas, parcelas e
+        recorrências estimadas. Variáveis representam somente o restante da
+        estimativa após os valores já conhecidos.
+      </p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div>
+          <p className="text-xs text-muted-foreground">
+            Base de renda estimada
+          </p>
+          <p className="text-xl font-semibold tabular-nums">
+            {formatCurrency(budget.incomeCents)}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">
+            Comprometido, incluindo estimativas
+          </p>
+          <p className="text-xl font-semibold tabular-nums">
+            {formatCurrency(budget.committedCents)}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">
+            Margem estimada da renda
+          </p>
+          <p
+            className={cn(
+              'text-xl font-semibold tabular-nums',
+              budget.remainingCents < 0 && 'text-destructive',
+            )}
+          >
+            {formatCurrency(budget.remainingCents)}
+          </p>
+        </div>
+      </div>
+      <p className="text-sm">
+        <strong>
+          Margem após as metas de investimento e reserva:{' '}
+          {formatCurrency(budget.remainingAfterGoalsCents)}
+        </strong>
+        <span className="block text-xs text-muted-foreground">
+          Inclui {formatCurrency(budget.unfundedGoalsCents)} de metas de aporte
+          ainda não realizadas.
+        </span>
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[650px] text-sm">
+          <thead>
+            <tr className="border-b text-muted-foreground">
+              {[
+                'Grupo',
+                'Pago',
+                'A pagar',
+                'Variável estimado',
+                'Meta',
+                'Margem',
+              ].map((h) => (
+                <th key={h} className="px-2 py-2 text-right first:text-left">
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {budget.buckets.map((b) => (
+              <tr key={b.bucket} className="border-b last:border-0">
+                <th className="py-3 pr-3 text-left font-medium">
+                  {names[b.bucket]}
+                </th>
+                <td className="px-2 text-right tabular-nums">
+                  {formatCurrency(b.paidCents)}
+                </td>
+                <td className="px-2 text-right tabular-nums">
+                  {formatCurrency(b.dueCents)}
+                </td>
+                <td className="px-2 text-right tabular-nums">
+                  {formatCurrency(b.variableCents)}
+                </td>
+                <td className="px-2 text-right tabular-nums">
+                  {b.bucket === 'other' ? '—' : formatCurrency(b.targetCents)}
+                </td>
+                <td
+                  className={cn(
+                    'px-2 text-right tabular-nums',
+                    b.bucket !== 'other' &&
+                      b.remainingCents < 0 &&
+                      'text-destructive',
+                  )}
+                >
+                  {b.bucket === 'other'
+                    ? '—'
+                    : formatCurrency(b.remainingCents)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        A margem não é saldo bancário nem dinheiro garantido para gastar. Metas
+        de investimento e reserva ainda não realizadas continuam como objetivos;
+        compromissos dessas categorias entram apenas quando observados.
+      </p>
+      {budget.warnings.length > 0 && (
+        <details
+          open
+          className="rounded-lg border border-warning/30 p-3 text-sm"
+        >
+          <summary className="cursor-pointer font-medium">
+            Limites desta estimativa
+          </summary>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+            {budget.warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+      <details>
+        <summary className="cursor-pointer text-sm font-medium">
+          Parcelamentos fixos temporários
+        </summary>
+        <ul className="mt-3 space-y-2 text-sm">
+          {budget.lines
+            .filter((l) => l.temporaryUntil)
+            .map((l) => (
+              <li key={l.id}>
+                {l.description} · {formatCurrency(l.cents)} · parcela{' '}
+                {l.installment} · termina em{' '}
+                {formatMonth(l.temporaryUntil!.slice(0, 7))}
+              </li>
+            ))}
+          {!budget.lines.some((l) => l.temporaryUntil) && (
+            <li>
+              Nenhum parcelamento temporário identificado neste vencimento.
+            </li>
+          )}
+        </ul>
+      </details>
+      <details>
+        <summary className="cursor-pointer text-sm font-medium">
+          Conferir composição ({budget.lines.length} itens)
+        </summary>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full min-w-[620px] text-sm">
+            <thead>
+              <tr className="border-b">
+                <th className="p-2 text-left">Data</th>
+                <th className="p-2 text-left">Descrição / grupo</th>
+                <th className="p-2 text-right">Compromisso</th>
+                <th className="p-2 text-left">Base</th>
+              </tr>
+            </thead>
+            <tbody>
+              {budget.lines.map((l) => (
+                <tr key={l.id} className="border-b">
+                  <td className="p-2">
+                    {l.date.split('-').reverse().join('/')}
+                  </td>
+                  <td className="p-2">
+                    {l.description}
+                    <span className="block text-xs text-muted-foreground">
+                      {names[l.bucket]}
+                    </span>
+                    <span className="block text-xs text-muted-foreground">
+                      {l.transactionId
+                        ? 'Lançamento ' + l.transactionId
+                        : l.importId
+                          ? 'Documento ' + l.importId
+                          : ''}
+                    </span>
+                  </td>
+                  <td className="p-2 text-right tabular-nums">
+                    {formatCurrency(l.cents)}
+                  </td>
+                  <td className="p-2">
+                    {l.certainty === 'estimated'
+                      ? 'Estimativa'
+                      : l.certainty === 'scheduled'
+                        ? 'Parcela programada'
+                        : 'Documentado'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+  )
+}
+
+function ConsumptionProgressView({
   dashboard,
   today = todayIso(),
 }: {
@@ -181,7 +430,7 @@ function BucketRow({
         : `Faltam ${formatCurrency(item.remainingCents)}`
   const projection =
     item.kind === 'spending' && item.projectedCents > item.actualCents
-      ? `Previsão do mês: ${formatCurrency(item.projectedCents)}`
+      ? `Registrado + recorrências: ${formatCurrency(item.projectedCents)}`
       : null
 
   return (

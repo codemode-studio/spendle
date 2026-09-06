@@ -10,7 +10,7 @@ Data de corte: 08/09/2026
 |Saldo demais compras parceladas|R$ 7.749,72|
 |Saldo em aberto total|R$ 13.274,57|`
 it('separa próxima parcela do compromisso restante e confere os dois controles', () => {
-  expect(readInterFutureControl(document)).toEqual({
+  expect(readInterFutureControl(document)).toMatchObject({
     closingDate: '2026-09-08',
     nextCents: 552485,
     remainingCents: 774972,

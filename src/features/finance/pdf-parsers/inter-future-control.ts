@@ -89,6 +89,12 @@ export function readInterFutureControl(
       monthlyCents = amounts
   }
   return {
+    installments: movements.map((row, index) => ({
+      description: row[1].split(/\(Parcela/i)[0].trim(),
+      amountCents: toMinorUnits(row[2], 'BRL'),
+      current: plans[index]?.current ?? null,
+      total: plans[index]?.total ?? null,
+    })),
     monthlyCents,
     closingDate: `${date[3]}-${date[2]}-${date[1]}`,
     nextCents: next,

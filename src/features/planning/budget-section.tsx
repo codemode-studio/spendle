@@ -195,7 +195,7 @@ function BudgetSection({
 
       <Panel
         title="Acompanhamento da estratégia"
-        description="Metas de cada envelope contra o que já foi gasto ou aportado."
+        description="Compromissos por vencimento e consumo pelas datas dos lançamentos."
       >
         <StrategyProgressView dashboard={data.dashboard} />
         <h3 className="mt-6 mb-2 text-sm font-semibold">Meses anteriores</h3>
