@@ -28,3 +28,11 @@ URL: `http://127.0.0.1:3102`. Estado sintético independente em `.qa/run-zzrnBO`
 `pnpm setup:check`, `pnpm verify`, formatação dos arquivos alterados e `git diff --check` passaram. Vitest: 449 testes passaram, 10 ignorados, em 66 arquivos aprovados e dois ignorados. `pnpm bench` passou com dados sintéticos; página de transações com 4.000 registros fez 10 consultas e retornou 58.720 bytes.
 
 PDFs privados e chamadas reais de IA não foram executados nesta rodada. Não foi refeito no navegador o cenário de arquivo duplicado ou saldo divergente, pois as regras de importação não mudaram. A inspeção visual usou dados sintéticos, sem capturar dados financeiros pessoais. O estado inicial sem nenhuma conta não foi exercitado no navegador; a QA começou com uma conta sintética.
+
+## Ajuste do cabeçalho mobile
+
+Referência: [Copilot Money no iPhone](https://mobbin.com/screens/0e7388f4-b89e-4806-9a11-5627c7fcf3e1), consultada pelo MCP do Mobbin. Cabeçalho com marca central, menu, importação e navegação por abas. Saudação e ações secundárias menores. Menu com fechamento explícito e fechamento ao seguir um destino.
+
+Corrigidas regras globais de borda e fonte que estavam fora de `@layer base` e anulavam as variantes dos componentes. Corrigido também o seletor de expansão dos resumos: avisos internos abertos não devem expandir um cartão cujo detalhe principal está fechado.
+
+QA no mesmo estado sintético, em 390 × 844 e 1440 × 1000: inspeção visual, abrir/fechar menu, navegar para Contas com fechamento automático, abas Transações/Categorias/Visão geral, recorrências, configurações e importação. Desktop mantém os dois resumos lado a lado. Nenhuma mutação financeira nesta rodada. `pnpm verify`: 449 testes aprovados e 10 ignorados; tipos, lint e build aprovados.

@@ -56,9 +56,11 @@
   --sidebar-ring: oklch(0.64 0.17 155);
 }
 
-* {
-  box-sizing: border-box;
-  border-color: var(--border);
+@layer base {
+  * {
+    box-sizing: border-box;
+    border-color: var(--border);
+  }
 }
 html,
 body,
@@ -74,11 +76,13 @@ body {
   color: var(--text);
   -webkit-font-smoothing: antialiased;
 }
-button,
-input,
-select,
-textarea {
-  font: inherit;
+@layer base {
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
 }
 button,
 a {

@@ -65,10 +65,10 @@ export function Home({
   return (
     <Page className="max-w-[1120px]">
       <Greeting snapshot={snapshot} />
-      <div className="mb-6 flex flex-wrap gap-2">
+      <div className="mb-5 flex flex-wrap items-center gap-1 md:mb-6 md:gap-2">
         <GettingStarted snapshot={snapshot} />
         <Sheet>
-          <SheetTrigger render={<Button variant="outline" />}>
+          <SheetTrigger render={<Button variant="ghost" />}>
             <Sparkles data-icon="inline-start" /> Assistente
           </SheetTrigger>
           <SheetContent
@@ -107,13 +107,13 @@ export function Home({
           <div className="grid items-start gap-6 md:grid-cols-2">
             <Panel
               title="Caixa da família"
-              className="has-[details[open]]:md:col-span-2"
+              className="has-[[data-summary-detail][open]]:md:col-span-2"
               description="Saldo calculado a partir dos dados disponíveis em reais."
             >
               <p className="text-3xl font-semibold tracking-tight tabular-nums">
                 {formatCurrency(view.cashTodayCents)}
               </p>
-              <details className="mt-5">
+              <details data-summary-detail className="mt-5">
                 <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">
                   Ver evolução e projeção
                 </summary>
@@ -121,7 +121,7 @@ export function Home({
               </details>
             </Panel>
             <Panel
-              className="has-[details[open]]:md:col-span-2"
+              className="has-[[data-summary-detail][open]]:md:col-span-2"
               title={`Compromissos de ${formatMonthName(snapshot.dashboard.currentMonth)}`}
               description="Inclui despesas pagas, valores a pagar e estimativas."
             >
@@ -142,7 +142,7 @@ export function Home({
                   nos detalhes.
                 </p>
               )}
-              <details className="mt-5">
+              <details data-summary-detail className="mt-5">
                 <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">
                   Ver grupos, estimativas e composição
                 </summary>
@@ -249,16 +249,20 @@ function Greeting({ snapshot }: { snapshot: FinanceSnapshot }) {
   }).format(now)
 
   return (
-    <header className="mb-5 flex flex-wrap items-start justify-between gap-4 sm:mb-6">
+    <header className="mb-2 flex flex-wrap items-start justify-between gap-4 md:mb-4">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl md:text-[2rem]">
+        <h1 className="text-xl font-semibold tracking-tight md:text-[2rem]">
           {salutation}, {name}
         </h1>
-        <p className="mt-1 text-muted-foreground">
+        <p className="mt-1 text-sm text-muted-foreground">
           {date.charAt(0).toUpperCase() + date.slice(1)}
         </p>
       </div>
-      <Button nativeButton={false} render={<Link to="/importar" />}>
+      <Button
+        className="hidden md:inline-flex"
+        nativeButton={false}
+        render={<Link to="/importar" />}
+      >
         Importar extrato <ArrowRight />
       </Button>
     </header>

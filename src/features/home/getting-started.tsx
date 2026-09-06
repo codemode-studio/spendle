@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, ListChecks } from 'lucide-react'
 import { Button } from '#/components/ui/button'
 import { Panel } from '#/components/ui'
 import {
@@ -19,8 +19,8 @@ export function GettingStarted({ snapshot }: { snapshot: FinanceSnapshot }) {
   const hasTransactions = snapshot.transactions.length > 0
   return (
     <Sheet open={open} onOpenChange={setOpen}>
-      <SheetTrigger render={<Button variant="outline" />}>
-        Guia de configuração
+      <SheetTrigger render={<Button variant="ghost" />}>
+        <ListChecks data-icon="inline-start" /> Guia de configuração
       </SheetTrigger>
       <SheetContent className="overflow-y-auto data-[side=right]:w-full sm:max-w-lg">
         <SheetHeader className="pr-14">
