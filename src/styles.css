@@ -8,10 +8,10 @@
   --bg: #f5f7f4;
   --surface: #ffffff;
   --surface-2: #f8faf8;
-  --text: #142018;
-  --muted: oklch(0.97 0 0);
+  --text: #172438;
+  --muted: #eaf0f7;
   --line: #e3e9e4;
-  --accent: oklch(0.97 0 0);
+  --accent: #e3ebf5;
   --accent-strong: #155f38;
   --accent-soft: #e3f4e9;
   --blue: #3158a5;
@@ -22,38 +22,44 @@
   --red-soft: #fdecea;
   --shadow: 0 1px 2px rgb(20 32 24 / 4%), 0 12px 30px rgb(20 32 24 / 5%);
   --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --foreground: #172438;
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: #172438;
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.24 0.02 155);
+  --primary: #263f68;
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
-  --muted-foreground: oklch(0.556 0 0);
+  --muted-foreground: #596579;
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
   --success: oklch(0.48 0.13 151);
   --warning: oklch(0.58 0.14 75);
   --info: oklch(0.5 0.12 240);
-  --border: oklch(0.922 0 0);
+  --border: #dce3ec;
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.64 0.17 155);
+  --ring: #5675a2;
   --chart-1: oklch(0.64 0.17 155);
   --chart-2: oklch(0.53 0.12 240);
   --chart-3: oklch(0.64 0.12 75);
   --chart-4: oklch(0.5 0.13 305);
   --chart-5: oklch(0.58 0.16 28);
-  --radius: 0.75rem;
-  --sidebar: oklch(0.975 0.002 150);
-  --sidebar-foreground: oklch(0.3 0.02 150);
-  --sidebar-primary: oklch(0.64 0.17 155);
+  --radius: 1rem;
+  --sidebar: #edf2f9;
+  --sidebar-foreground: #34465f;
+  --sidebar-primary: #263f68;
   --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: oklch(0.93 0.004 150);
-  --sidebar-accent-foreground: oklch(0.18 0.02 150);
+  --sidebar-accent: #ffffffb8;
+  --sidebar-accent-foreground: #172438;
   --sidebar-border: oklch(0.9 0.005 150);
   --sidebar-ring: oklch(0.64 0.17 155);
+  --visual-ground: #edf2f9;
+  --visual-glow: #b5ccef;
+  --visual-glow-secondary: #ddd9ec;
+  --visual-panel: #ffffffb8;
+  --visual-shadow: 0 12px 36px -24px #36557b40, inset 0 1px 0 #ffffff;
+  --visual-edge: #ffffffe0;
 }
 
 @layer base {
@@ -196,5 +202,90 @@ a {
 @layer base {
   html {
     @apply font-sans;
+  }
+}
+
+/* Cristal: fundo contínuo e painéis translúcidos. */
+.crystal-shell {
+  background:
+    radial-gradient(ellipse at 0% 0%, var(--visual-glow) 0, transparent 48%),
+    radial-gradient(
+      ellipse at 100% 95%,
+      var(--visual-glow-secondary) 0,
+      transparent 48%
+    ),
+    var(--visual-ground);
+}
+.crystal-shell [data-slot='sidebar-inner'],
+.crystal-shell .crystal-inset {
+  background: transparent;
+}
+.crystal-shell [data-slot='sidebar-header'] {
+  padding: 1.5rem 0.75rem;
+}
+.crystal-shell [data-slot='sidebar-menu'] {
+  gap: 0.4rem;
+}
+.crystal-shell [data-slot='sidebar-menu-button'] {
+  border-radius: 0.85rem;
+  padding-inline: 0.85rem;
+}
+.crystal-shell [data-slot='sidebar-menu-button'][data-active='true'] {
+  box-shadow: var(--visual-shadow);
+  border: 1px solid var(--visual-edge);
+}
+
+.app-canvas {
+  background: transparent;
+}
+.app-canvas [data-slot='card'],
+.home-page section.bg-card {
+  border-color: var(--visual-edge);
+  background: var(--visual-panel);
+  box-shadow: var(--visual-shadow);
+  border-radius: var(--radius-2xl);
+}
+.home-page .cash-hero {
+  padding-block: 1rem 1.75rem;
+}
+.home-page .cash-hero h1 {
+  font-size: clamp(2rem, 4vw, 3.75rem);
+  line-height: 1.12;
+  font-weight: 500;
+  letter-spacing: -0.055em;
+  margin-top: 0.65rem;
+}
+
+.home-page .monthly-overview {
+  background: linear-gradient(115deg, #ffffffd9, var(--visual-panel));
+  backdrop-filter: blur(20px);
+}
+@media (max-width: 47.999rem) {
+  .mobile-glass-header {
+    background: #ffffffe6;
+    backdrop-filter: blur(18px);
+  }
+  .home-page .cash-hero {
+    align-items: start;
+    padding-block: 0.5rem 1rem;
+  }
+  .home-page .cash-hero h1 {
+    font-size: clamp(1.65rem, 6.8vw, 2.5rem);
+  }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  :root {
+    --visual-panel: #ffffff;
+    --visual-edge: var(--border);
+  }
+  .home-page .monthly-overview,
+  .mobile-glass-header {
+    background: #ffffff;
+    backdrop-filter: none;
+  }
+}
+@supports not (backdrop-filter: blur(1px)) {
+  .mobile-glass-header {
+    background: #ffffff;
   }
 }

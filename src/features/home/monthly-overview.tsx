@@ -95,6 +95,7 @@ export function MonthlyOverview({
 
   return (
     <Panel
+      className="monthly-overview"
       title="Mês a mês"
       action={
         <div className="flex items-center gap-1">

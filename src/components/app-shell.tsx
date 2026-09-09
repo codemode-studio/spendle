@@ -18,7 +18,6 @@ import {
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarFooter,
   SidebarInset,
@@ -26,7 +25,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-  SidebarRail,
   useSidebar,
 } from '#/components/ui/sidebar'
 import { Button } from '#/components/ui/button'
@@ -107,7 +105,6 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
           }}
         >
           <SidebarGroup>
-            <SidebarGroupLabel>Organização</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 {navigation.map((item) => {
@@ -179,10 +176,9 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>
-        <SidebarRail />
       </Sidebar>
-      <SidebarInset className="h-svh min-h-0 overflow-hidden md:h-[calc(100svh-1rem)] md:peer-data-[variant=inset]:shadow-none">
-        <header className="shrink-0 bg-background px-4 pt-2 pb-3 md:hidden">
+      <SidebarInset className="crystal-inset h-svh min-h-0 overflow-hidden md:h-[calc(100svh-1rem)] md:peer-data-[variant=inset]:shadow-none">
+        <header className="mobile-glass-header shrink-0 bg-background px-4 pt-2 pb-3 md:hidden">
           <div className="grid h-12 grid-cols-[44px_1fr_44px] items-center">
             <Button
               variant="ghost"
@@ -228,7 +224,7 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
             ))}
           </nav>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto bg-muted/30 [scrollbar-gutter:stable]">
+        <div className="app-canvas min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
           {children}
         </div>
       </SidebarInset>
@@ -241,7 +237,7 @@ export function AppShell({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <TooltipProvider>
-      <SidebarProvider>
+      <SidebarProvider className="crystal-shell">
         <AppLayout>{children}</AppLayout>
       </SidebarProvider>
       <Toaster position="top-right" />

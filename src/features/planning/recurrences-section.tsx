@@ -78,10 +78,10 @@ function RecurrencesSection({
       return (
         <div
           key={`group:${entry.group.id}`}
-          className="flex flex-wrap items-center justify-between gap-2 bg-muted/40 px-4 py-3"
+          className="flex flex-wrap items-center justify-between gap-2 bg-muted px-4 py-3"
         >
           <div>
-            <strong className="text-sm">{entry.group.name}</strong>
+            <strong className="text-base">{entry.group.name}</strong>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {entry.items.length}{' '}
               {entry.items.length === 1 ? 'recorrência' : 'recorrências'}
@@ -117,11 +117,11 @@ function RecurrencesSection({
       ? item.participantLabel || item.name
       : item.name
     return (
-      <div key={item.id} className="grid gap-3 p-4">
+      <div key={item.id} className="grid gap-3 bg-card p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <strong className="truncate text-sm">{displayName}</strong>
+              <strong className="truncate text-base">{displayName}</strong>
               <StatusBadge tone={item.active ? 'success' : 'neutral'}>
                 {item.active ? 'Ativa' : 'Pausada'}
               </StatusBadge>
@@ -436,7 +436,7 @@ function RecurrencesSection({
                     </span>
                   </div>
                   {section.rows.length ? (
-                    <div className="divide-y rounded-lg border">
+                    <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card shadow-xs">
                       {section.rows.map(renderRow)}
                     </div>
                   ) : (

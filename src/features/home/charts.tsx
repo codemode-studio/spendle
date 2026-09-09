@@ -47,12 +47,14 @@ const GRID = '#eef0f2'
 export function CashChart({
   points,
   todayIndex,
+  scenarioPoints,
   height: baseHeight = 232,
   formatCents,
   formatDate,
 }: {
   points: Array<CashPoint>
   todayIndex: number
+  scenarioPoints?: Array<CashPoint>
   height?: number
   formatCents: (cents: number) => string
   formatDate: (iso: string) => string
@@ -71,6 +73,7 @@ export function CashChart({
           width={measured}
           points={points}
           todayIndex={todayIndex}
+          scenarioPoints={scenarioPoints}
           height={height}
           formatCents={formatCents}
           formatDate={formatDate}
@@ -86,6 +89,7 @@ function CashChartBody({
   width,
   points,
   todayIndex,
+  scenarioPoints,
   height,
   formatCents,
   formatDate,
@@ -95,6 +99,7 @@ function CashChartBody({
   width: number
   points: Array<CashPoint>
   todayIndex: number
+  scenarioPoints?: Array<CashPoint>
   height: number
   formatCents: (cents: number) => string
   formatDate: (iso: string) => string
@@ -109,6 +114,8 @@ function CashChartBody({
     p.lowCents ?? p.balanceCents,
     p.highCents ?? p.balanceCents,
   ])
+  if (scenarioPoints)
+    values.push(...scenarioPoints.map((point) => point.balanceCents))
   const rawMin = Math.min(0, ...values)
   const rawMax = Math.max(...values, 1)
   const step = niceStep(rawMax - rawMin, 4)
@@ -171,7 +178,7 @@ function CashChartBody({
     setHover(Math.max(0, Math.min(points.length - 1, i)))
   }
 
-  const active = hover ?? todayIndex
+  const active = Math.min(hover ?? todayIndex, points.length - 1)
   const activePoint = points[active]
   const reference = points[todayIndex]
   const delta = activePoint.balanceCents - reference.balanceCents
@@ -210,13 +217,33 @@ function CashChartBody({
             </span>
           )}
         </div>
+        {scenarioPoints && active > todayIndex && (
+          <div className="mt-1 font-semibold text-primary">
+            Com ajustes {formatCents(scenarioPoints[active].balanceCents)}
+          </div>
+        )}
       </div>
       <svg
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+            event.preventDefault()
+            setHover(
+              Math.max(
+                0,
+                Math.min(
+                  points.length - 1,
+                  active + (event.key === 'ArrowRight' ? 1 : -1),
+                ),
+              ),
+            )
+          }
+        }}
         width={width}
         height={height}
         role="img"
         aria-label="Caixa da família: histórico e projeção"
-        className="block touch-none"
+        className="block touch-pan-y"
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
       >
@@ -249,6 +276,16 @@ function CashChartBody({
           strokeLinejoin="round"
           strokeLinecap="round"
         />
+        {scenarioPoints && (
+          <path
+            d={line(scenarioPoints.slice(todayIndex), todayIndex)}
+            fill="none"
+            stroke="var(--primary)"
+            strokeWidth={2.5}
+            strokeDasharray="6 4"
+            strokeLinejoin="round"
+          />
+        )}
         <path
           d={pastPath}
           fill="none"

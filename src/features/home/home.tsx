@@ -10,11 +10,9 @@ import {
   CreditCard,
   ArrowDownLeft,
   ArrowUpRight,
-  Info,
   Landmark,
   Send,
   Sparkles,
-  Store,
   ThumbsDown,
   ThumbsUp,
 } from 'lucide-react'
@@ -30,13 +28,8 @@ import {
   SheetTitle,
 } from '#/components/ui/sheet'
 import { MonthlyOverview } from './monthly-overview'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '#/components/ui/tooltip'
 import { formatCurrency } from '#/domain/currency'
-import { formatLongDate, formatShortDate, todayIso } from '#/domain/period'
+import { todayIso } from '#/domain/period'
 import type { FinanceSnapshot } from '#/features/finance/snapshot.types'
 import { cn } from '#/lib/utils'
 import {
@@ -44,8 +37,9 @@ import {
   generateFortnightAnalysisFn,
 } from './analysis.functions'
 import type { FortnightAnalysis } from './analysis.server'
-import { CashChart, CategoryBar } from './charts'
-import { buildHomeView, buildInsights, projectCash } from './insights'
+import { CategoryBar } from './charts'
+import { ForecastOutlook } from './forecast-outlook'
+import { buildHomeView, buildInsights } from './insights'
 import type { HomeView, Insight } from './insights'
 
 // ─── Página ──────────────────────────────────────────────────────────────────
@@ -62,10 +56,10 @@ export function Home({
   const insights = useMemo(() => buildInsights(view, formatCurrency), [view])
 
   return (
-    <Page className="max-w-[1120px]">
+    <Page className="home-page max-w-[1120px]">
       <CashHeader snapshot={snapshot} analysis={showAnalysis}>
         <Button
-          variant="ghost"
+          variant="outline"
           aria-label={showAnalysis ? 'Voltar à visão geral' : 'Previsão'}
           title={showAnalysis ? 'Voltar à visão geral' : 'Previsão'}
           className="max-sm:size-11 max-sm:p-0"
@@ -91,7 +85,7 @@ export function Home({
           </SheetTrigger>
           <SheetContent
             keepMounted
-            className="min-h-0 overflow-hidden data-[side=right]:h-dvh data-[side=right]:w-full sm:max-w-lg"
+            className="min-h-0 overflow-hidden data-[side=right]:h-dvh data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
           >
             <ActivityColumn
               insights={insights}
@@ -116,11 +110,7 @@ export function Home({
         />
       ) : showAnalysis ? (
         <div className="flex flex-col gap-6">
-          <CashCard snapshot={snapshot} view={view} />
-          <div className="grid items-start gap-6 lg:grid-cols-2">
-            <SpendingCard view={view} />
-            <MerchantsCard view={view} />
-          </div>
+          <ForecastOutlook snapshot={snapshot} view={view} />
         </div>
       ) : (
         <div className="flex flex-col gap-6">
@@ -157,7 +147,7 @@ function CashHeader({
   const cash = snapshot.dashboard.familyMonth.cashFlow.cashCents
 
   return (
-    <header className="mb-6 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+    <header className="cash-hero mb-6 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
       <div className="min-w-0">
         <p className="text-sm text-muted-foreground">
           {analysis ? 'Visão geral' : 'Caixa atual'}
@@ -174,518 +164,6 @@ function CashHeader({
         {children}
       </div>
     </header>
-  )
-}
-
-// ─── Caixa da família ────────────────────────────────────────────────────────
-
-function DeltaText({ cents, base }: { cents: number; base: number }) {
-  const ratio = base !== 0 ? cents / Math.abs(base) : null
-  const positive = cents >= 0
-  return (
-    <span
-      className={
-        positive ? 'font-medium text-emerald-700' : 'font-medium text-red-700'
-      }
-    >
-      {positive ? '+' : '−'}
-      {formatCurrency(Math.abs(cents))}
-      {ratio !== null &&
-        ` (${positive ? '+' : '−'}${Math.abs(ratio * 100).toFixed(1)}%)`}
-    </span>
-  )
-}
-
-function CashCard({
-  snapshot,
-  view,
-}: {
-  snapshot: FinanceSnapshot
-  view: HomeView
-}) {
-  const [range, setRange] = useState<90 | 180>(90)
-  const cash = useMemo(
-    () => (range === 90 ? view.cash : projectCash(snapshot, range)),
-    [range, snapshot, view.cash],
-  )
-  const todayPoint = cash.points[cash.todayIndex]
-  const monthAgo = cash.points[Math.max(cash.todayIndex - 30, 0)]
-  const delta = todayPoint.balanceCents - monthAgo.balanceCents
-  const spendingDelta =
-    view.last30.spendingCents - view.previous30.spendingCents
-
-  return (
-    <section className="min-w-0 rounded-xl border bg-card p-panel shadow-xs">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium text-muted-foreground">
-            Caixa da família
-          </p>
-          <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums sm:text-4xl">
-            {formatCurrency(view.cashTodayCents)}
-          </p>
-          <p className="mt-1.5 text-sm text-muted-foreground">
-            <DeltaText cents={delta} base={monthAgo.balanceCents} /> vs. 30 dias
-            atrás
-          </p>
-        </div>
-        <div className="flex rounded-lg border bg-muted/40 p-0.5 text-xs font-medium">
-          {([90, 180] as const).map((value) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setRange(value)}
-              className={`rounded-md px-2.5 py-1 transition-colors pointer-coarse:min-h-11 pointer-coarse:px-4 ${
-                range === value
-                  ? 'bg-background text-foreground shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {value === 90 ? '3 meses' : '6 meses'}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="mt-6">
-        <CashChart
-          points={cash.points}
-          todayIndex={cash.todayIndex}
-          formatCents={formatCurrency}
-          formatDate={formatLongDate}
-        />
-      </div>
-      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1.5">
-          <span className="h-0.5 w-3 rounded-full bg-[#1f9d63]" />
-          Real
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="h-0.5 w-3 rounded-full bg-[#b9c0c9]" />
-          Projeção
-          <Hint
-            text={`Cenário de 60 dias com recorrências previstas, faturas conhecidas e reserva para novas compras em conta e cartão de ${formatCurrency(cash.dailyVariableCents)} por dia. A média usa os últimos 60 dias importados, excluindo parcelas identificadas e aportes.`}
-          />
-        </span>
-        <span>
-          Em 30 dias{' '}
-          <strong className="font-semibold text-foreground tabular-nums">
-            {formatCurrency(cash.in30Cents)}
-          </strong>
-        </span>
-        {cash.lowPoint && cash.lowPoint.balanceCents < view.cashTodayCents && (
-          <span>
-            Mínimo{' '}
-            <strong className="font-semibold text-foreground tabular-nums">
-              {formatCurrency(cash.lowPoint.balanceCents)}
-            </strong>{' '}
-            em {formatShortDate(cash.lowPoint.date)}
-          </span>
-        )}
-      </div>
-
-      <p className="mt-3 text-xs text-muted-foreground">
-        Projeção com receitas previstas e compras no cartão desde a compra.
-        Depende dos extratos e recorrências registrados.
-      </p>
-
-      <section className="mt-4 text-sm">
-        <h3 className="font-medium">
-          Premissas deste cenário · {cash.assumptions.days} dias
-        </h3>
-        <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
-          <dt>Caixa inicial em reais</dt>
-          <dd className="text-right">
-            {formatCurrency(cash.assumptions.startingCents)}
-          </dd>
-          <dt>Receitas cadastradas, ainda estimadas</dt>
-          <dd className="text-right">
-            + {formatCurrency(cash.assumptions.estimatedIncomeCents)}
-          </dd>
-          <dt>Faturas fechadas</dt>
-          <dd className="text-right">
-            − {formatCurrency(cash.assumptions.closedCardCents)}
-          </dd>
-          <dt>Parcelas futuras conhecidas</dt>
-          <dd className="text-right">
-            − {formatCurrency(cash.assumptions.scheduledCardCents)}
-          </dd>
-          <dt>Outros valores de cartão estimados</dt>
-          <dd className="text-right">
-            − {formatCurrency(cash.assumptions.estimatedCardCents)}
-          </dd>
-          <dt>Recorrências estimadas</dt>
-          <dd className="text-right">
-            − {formatCurrency(cash.assumptions.estimatedRecurrenceCents)}
-          </dd>
-          <dt>Repetição estimada do consumo histórico</dt>
-          <dd className="text-right">
-            − {formatCurrency(cash.assumptions.historicalEstimateCents)}
-          </dd>
-        </dl>
-        {cash.recurringEstimateTransactionIds.length > 0 && (
-          <p className="mt-3 text-xs text-muted-foreground">
-            {cash.recurringEstimateTransactionIds.length} pagamentos históricos
-            descontados da estimativa para evitar duplicidade.
-          </p>
-        )}
-        {cash.observedAdvancePayments.length > 0 && (
-          <div className="mt-4">
-            <p className="font-medium">Pagamentos antecipados observados</p>
-            <ul className="mt-2 space-y-2 text-xs">
-              {cash.observedAdvancePayments.map((payment) => (
-                <li key={payment.occurrenceId}>
-                  {payment.name} · {formatCurrency(payment.cents)} em{' '}
-                  {formatShortDate(payment.paidDate)}, antes do vencimento de{' '}
-                  {formatShortDate(payment.dueDate)}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Já descontados da projeção; vínculo pendente de confirmação.
-            </p>
-          </div>
-        )}
-        {cash.largestHistoricalExpenses.length > 0 && (
-          <div className="mt-4">
-            <p className="font-medium">Maiores pagamentos incluídos na média</p>
-            <ul className="mt-2 space-y-2 text-xs">
-              {cash.largestHistoricalExpenses.map((expense) => (
-                <li key={expense.id}>
-                  {formatShortDate(expense.date)} · {expense.description} ·{' '}
-                  {formatCurrency(expense.cents)}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-3 text-xs text-muted-foreground">
-              Histórico de 60 dias; repetição não confirmada.
-            </p>
-          </div>
-        )}
-      </section>
-
-      <dl className="mt-5 grid grid-cols-2 gap-4 border-t pt-5 lg:grid-cols-4">
-        <Stat
-          label="Patrimônio líquido"
-          value={formatCurrency(view.netWorthCents)}
-          hint="Contas, investimentos e cartões, em BRL."
-        />
-        <Stat
-          label="Receitas classificadas · 30 dias"
-          value={formatCurrency(view.last30.incomeCents)}
-          detail={
-            view.comparisonReady.month ? (
-              <DeltaText
-                cents={view.last30.incomeCents - view.previous30.incomeCents}
-                base={view.previous30.incomeCents}
-              />
-            ) : (
-              <span className="text-xs text-muted-foreground">
-                Valores classificados; comparação parcial
-              </span>
-            )
-          }
-        />
-        <Stat
-          label="Gastos classificados · 30 dias"
-          value={formatCurrency(view.last30.spendingCents)}
-          hint={`${formatCurrency(view.last30.uncategorizedCents)} em saídas ainda sem categoria, além deste valor.`}
-          detail={
-            view.last30.uncategorizedCents > 0 ? (
-              <span className="text-xs text-muted-foreground">
-                Mais {formatCurrency(view.last30.uncategorizedCents)} em saídas
-                a classificar
-              </span>
-            ) : view.comparisonReady.month ? (
-              <DeltaText
-                cents={-spendingDelta}
-                base={view.previous30.spendingCents}
-              />
-            ) : (
-              <span className="text-xs text-muted-foreground">
-                Cobertura parcial
-              </span>
-            )
-          }
-        />
-        <Stat
-          label="Fôlego"
-          value={
-            view.runwayMonths === null
-              ? '—'
-              : `${view.runwayMonths.toFixed(1)} meses`
-          }
-          hint="Estimativa: caixa + reserva dividido pela média de gastos classificados e saídas a classificar dos últimos 90 dias."
-        />
-      </dl>
-      {view.accountInflows30.length > 0 && (
-        <section className="mt-5 border-t pt-4 text-sm">
-          <h3 className="font-medium">
-            Entradas em contas por moeda · últimos 30 dias
-          </h3>
-          <ul className="mt-3 space-y-2">
-            {view.accountInflows30.map((entry) => (
-              <li key={entry.currency}>
-                <strong>{formatCurrency(entry.cents, entry.currency)}</strong>
-                {' · '}
-                {entry.transactionIds.length} lançamentos
-                {entry.uncategorizedCount > 0 &&
-                  ` · ${entry.uncategorizedCount} ainda sem categoria`}
-              </li>
-            ))}
-          </ul>
-          <p className="mt-3 text-xs text-muted-foreground">
-            Moedas preservadas separadamente, sem conversão estimada.
-            Transferências próprias confirmadas não entram novamente. Estes
-            créditos podem incluir rendimentos e estornos; não são todos receita
-            recorrente.
-          </p>
-        </section>
-      )}
-    </section>
-  )
-}
-
-function Stat({
-  label,
-  value,
-  detail,
-  hint,
-}: {
-  label: string
-  value: string
-  detail?: React.ReactNode
-  hint?: string
-}) {
-  return (
-    <div>
-      <dt className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
-        {label}
-        {hint && <Hint text={hint} />}
-      </dt>
-      <dd className="mt-1 text-lg font-semibold tracking-tight tabular-nums">
-        {value}
-      </dd>
-      {detail && (
-        <dd className="mt-0.5 text-xs text-muted-foreground">{detail}</dd>
-      )}
-    </div>
-  )
-}
-
-/** Explicação sob demanda: um ícone pequeno, o texto só aparece no hover ou foco. */
-function Hint({ text }: { text: string }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        aria-label="Como este número é calculado"
-        className="inline-flex size-4 items-center justify-center rounded-full text-muted-foreground/70 hover:text-foreground pointer-coarse:size-6"
-      >
-        <Info className="size-3.5" />
-      </TooltipTrigger>
-      <TooltipContent className="max-w-64 text-xs leading-snug">
-        {text}
-      </TooltipContent>
-    </Tooltip>
-  )
-}
-
-// ─── Para onde foi o dinheiro ────────────────────────────────────────────────
-
-function SpendingCard({ view }: { view: HomeView }) {
-  const { categories30: breakdown, last30, previous30 } = view
-  const ratio =
-    view.comparisonReady.month && previous30.spendingCents > 0
-      ? (last30.spendingCents - previous30.spendingCents) /
-        previous30.spendingCents
-      : null
-
-  return (
-    <section className="min-w-0 rounded-xl border bg-card p-panel shadow-xs">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium text-muted-foreground">
-            Gastos por categoria · 30 dias
-          </p>
-          <div className="mt-1 flex items-center gap-2.5">
-            <p className="text-2xl font-semibold tracking-tight tabular-nums">
-              {formatCurrency(breakdown.totalCents)}
-            </p>
-            {ratio !== null && (
-              <span
-                className={`rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${
-                  ratio > 0.02
-                    ? 'bg-red-100 text-red-700'
-                    : ratio < -0.02
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : 'bg-muted text-muted-foreground'
-                }`}
-              >
-                {ratio > 0 ? '+' : ''}
-                {Math.round(ratio * 100)}%
-              </span>
-            )}
-            <span className="text-xs text-muted-foreground">
-              {view.comparisonReady.month
-                ? 'vs. 30 dias anteriores'
-                : 'Classificação ou cobertura parcial'}
-            </span>
-          </div>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          nativeButton={false}
-          render={<Link to="/categorias" />}
-        >
-          Detalhes
-        </Button>
-      </div>
-
-      {breakdown.items.length === 0 ? (
-        <p className="mt-6 text-sm text-muted-foreground">
-          Nenhum gasto categorizado nos últimos 30 dias.
-        </p>
-      ) : (
-        <>
-          <div className="mt-5">
-            <CategoryBar items={breakdown.items} />
-          </div>
-
-          <table className="mt-4 w-full text-sm">
-            <thead>
-              <tr className="border-b text-xs font-medium text-muted-foreground">
-                <th className="pb-2 text-left font-medium">Categoria</th>
-                <th className="pb-2 text-right font-medium">%</th>
-                <th className="pb-2 text-right font-medium">Gasto</th>
-                <th className="hidden pb-2 text-right font-medium sm:table-cell">
-                  vs. média
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {breakdown.items.map((item) => (
-                <tr key={item.id} className="border-b last:border-b-0">
-                  <td className="py-2.5">
-                    <span className="flex items-center gap-2.5">
-                      <span
-                        className="flex size-6 shrink-0 items-center justify-center rounded-md"
-                        style={{ background: `${item.color}1f` }}
-                      >
-                        <span
-                          className="size-2 rounded-full"
-                          style={{ background: item.color }}
-                        />
-                      </span>
-                      <span className="truncate">{item.name}</span>
-                      <span className="hidden text-xs text-muted-foreground sm:inline">
-                        {item.count}
-                      </span>
-                    </span>
-                  </td>
-                  <td className="py-2.5 text-right tabular-nums text-muted-foreground">
-                    {Math.round(item.share * 100)}%
-                  </td>
-                  <td className="py-2.5 text-right font-medium tabular-nums">
-                    {formatCurrency(item.cents)}
-                  </td>
-                  <td className="hidden py-2.5 text-right tabular-nums sm:table-cell">
-                    {!view.comparisonReady.categories ||
-                    item.deltaRatio === null ? (
-                      <span className="text-muted-foreground">
-                        {item.referenceCents === 0 ? 'novo' : '—'}
-                      </span>
-                    ) : (
-                      <span
-                        className={
-                          item.deltaRatio > 0.1
-                            ? 'font-medium text-red-700'
-                            : item.deltaRatio < -0.1
-                              ? 'font-medium text-emerald-700'
-                              : 'text-muted-foreground'
-                        }
-                      >
-                        {item.deltaRatio > 0 ? '+' : ''}
-                        {Math.round(item.deltaRatio * 100)}%
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {last30.uncategorizedCents > 0 && (
-                <tr className="text-muted-foreground">
-                  <td className="py-2.5">
-                    <span className="flex items-center gap-2.5">
-                      <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted">
-                        <span className="size-2 rounded-full bg-muted-foreground/40" />
-                      </span>
-                      <span className="truncate">Sem categoria</span>
-                      <span className="hidden text-xs sm:inline">
-                        {last30.uncategorizedCount}
-                      </span>
-                    </span>
-                  </td>
-                  <td className="py-2.5 text-right tabular-nums">—</td>
-                  <td className="py-2.5 text-right font-medium tabular-nums">
-                    {formatCurrency(last30.uncategorizedCents)}
-                  </td>
-                  <td className="hidden py-2.5 text-right sm:table-cell">
-                    fora do total
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </>
-      )}
-    </section>
-  )
-}
-
-// ─── Maiores destinos e compromissos ─────────────────────────────────────────
-
-function MerchantsCard({ view }: { view: HomeView }) {
-  return (
-    <section className="min-w-0 rounded-xl border bg-card p-panel shadow-xs">
-      <div className="flex items-center gap-2">
-        <Store className="size-4 text-muted-foreground" />
-        <h2 className="text-sm font-medium text-muted-foreground">
-          Maiores destinos · 30 dias
-        </h2>
-      </div>
-      {view.merchants30.length === 0 ? (
-        <p className="mt-4 text-sm text-muted-foreground">
-          Sem gastos no período.
-        </p>
-      ) : (
-        <ul className="mt-4 divide-y">
-          {view.merchants30.map((merchant) => (
-            <li
-              key={merchant.key}
-              className="flex items-center justify-between gap-3 py-2.5"
-            >
-              <div className="flex min-w-0 items-center gap-2.5">
-                <span
-                  className="size-2 shrink-0 rounded-full"
-                  style={{ background: merchant.color }}
-                />
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">
-                    {merchant.name}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {merchant.categoryName} · {merchant.count}×
-                  </p>
-                </div>
-              </div>
-              <span className="shrink-0 text-sm font-semibold tabular-nums">
-                {formatCurrency(merchant.cents)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
   )
 }
 
