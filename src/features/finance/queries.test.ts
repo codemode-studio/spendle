@@ -9,6 +9,7 @@ const queries = {
   january: financeQueryKeys.snapshot('2026-01'),
   february: financeQueryKeys.snapshot('2026-02'),
   configuration: ['finance', 'read', 'configuration'],
+  onboarding: financeQueryKeys.onboarding(),
   transactions: ['finance', 'read', 'transactions', { page: 2 }],
   knowledge: financeQueryKeys.knowledgeBase(),
   imports: financeQueryKeys.importReview(),
@@ -22,6 +23,7 @@ const reads = [
   'january',
   'february',
   'configuration',
+  'onboarding',
   'transactions',
   'knowledge',
 ]

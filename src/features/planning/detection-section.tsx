@@ -68,7 +68,7 @@ function DetectedRecurrencesPanel({ data }: { data: PlanningSnapshot }) {
   return (
     <Panel
       title="Recorrências detectadas"
-      description="Pagamentos que se repetem nos seus extratos. Ajuste o que precisar e aprove para virarem recorrências com os pagamentos passados já conciliados."
+      description="Ao aprovar, os pagamentos anteriores também serão conciliados."
     >
       {detection.isPending ? (
         <div className="grid gap-3 lg:grid-cols-2">

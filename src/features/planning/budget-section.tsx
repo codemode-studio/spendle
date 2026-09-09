@@ -32,10 +32,6 @@ import { ToggleGroup, ToggleGroupItem } from '#/components/ui/toggle-group'
 import { formatCurrency } from '#/domain/currency'
 import { percentFromBps, strategyPresets } from '#/domain/finance'
 import { formatMonthLong as formatMonth } from '#/domain/period'
-import {
-  StrategyHistory,
-  StrategyProgressView,
-} from '#/features/finance/strategy-progress'
 import type { PlanningSnapshot } from '#/features/finance/snapshot.types'
 
 type Allocation = Record<
@@ -77,146 +73,121 @@ function BudgetSection({
   return (
     <div className="grid gap-4">
       <Panel
-        title={data.dashboard.activeStrategy.name}
-        description={formatMonth(data.dashboard.currentMonth)}
+        title="Base do orçamento"
+        description="Valor mensal usado para calcular os envelopes."
       >
-        <StrategyProgressView dashboard={data.dashboard} />
+        <form
+          onSubmit={submitIncome}
+          className="flex flex-col gap-3 sm:flex-row sm:items-end"
+        >
+          <Field className="max-w-sm flex-1">
+            <FieldLabel>Renda mensal de referência</FieldLabel>
+            <Input
+              name="income"
+              defaultValue={(data.settings.monthlyIncomeTargetCents / 100)
+                .toFixed(2)
+                .replace('.', ',')}
+              required
+            />
+          </Field>
+          <Button type="submit" variant="outline" disabled={settingsPending}>
+            {settingsPending && <Spinner data-icon="inline-start" />}
+            Salvar base
+          </Button>
+        </form>
       </Panel>
-      <details>
-        <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">
-          Editar renda e estratégia
-        </summary>
-        <div className="mt-3 grid gap-4">
-          <Panel
-            title="Base do orçamento"
-            description="Valor mensal usado para calcular os envelopes."
-          >
-            <form
-              onSubmit={submitIncome}
-              className="flex flex-col gap-3 sm:flex-row sm:items-end"
-            >
-              <Field className="max-w-sm flex-1">
-                <FieldLabel>Renda mensal de referência</FieldLabel>
+
+      <Panel
+        title="Estratégia do mês"
+        description={`Base atual: ${formatCurrency(data.dashboard.baseIncomeCents)}.`}
+      >
+        <NativeSelect
+          value={selectedId}
+          onChange={(event) => selectStrategy(event.target.value)}
+          className="w-full md:hidden"
+          aria-label="Selecionar estratégia"
+        >
+          {data.strategies.map((strategy) => (
+            <NativeSelectOption key={strategy.id} value={strategy.id}>
+              {strategy.name}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        <ToggleGroup
+          value={[selectedId]}
+          onValueChange={(values) => values[0] && selectStrategy(values[0])}
+          className="hidden w-full grid-cols-2 items-stretch md:grid xl:grid-cols-4"
+          spacing={2}
+        >
+          {data.strategies.map((strategy) => {
+            const preset = strategyPresets[strategy.template]
+            return (
+              <ToggleGroupItem
+                key={strategy.id}
+                value={strategy.id}
+                variant="outline"
+                className="h-auto min-h-28 w-full min-w-0 shrink flex-col items-start justify-start overflow-hidden p-4 text-left whitespace-normal"
+              >
+                <strong className="w-full leading-snug">{strategy.name}</strong>
+                <span className="w-full flex-1 text-pretty text-xs leading-relaxed font-normal text-muted-foreground">
+                  {preset.description}
+                </span>
+                <span className="mt-2 w-full text-xs leading-none tabular-nums">
+                  {percentFromBps(strategy.essentialBps)} ·{' '}
+                  {percentFromBps(strategy.lifestyleBps)} ·{' '}
+                  {percentFromBps(strategy.investmentBps)} ·{' '}
+                  {percentFromBps(strategy.reserveBps)}
+                </span>
+              </ToggleGroupItem>
+            )
+          })}
+        </ToggleGroup>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {(['essential', 'lifestyle', 'investment', 'reserve'] as const).map(
+            (bucket) => (
+              <Field key={bucket}>
+                <FieldLabel htmlFor={`allocation-${bucket}`}>
+                  {bucket === 'essential'
+                    ? 'Essenciais'
+                    : bucket === 'lifestyle'
+                      ? 'Estilo de vida'
+                      : bucket === 'investment'
+                        ? 'Investimentos'
+                        : 'Reserva'}{' '}
+                  (%)
+                </FieldLabel>
                 <Input
-                  name="income"
-                  defaultValue={(data.settings.monthlyIncomeTargetCents / 100)
-                    .toFixed(2)
-                    .replace('.', ',')}
-                  required
+                  id={`allocation-${bucket}`}
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={allocation[bucket] / 100}
+                  onChange={(event) =>
+                    setAllocation((current) => ({
+                      ...current,
+                      [bucket]: Math.round(Number(event.target.value) * 100),
+                    }))
+                  }
                 />
               </Field>
-              <Button
-                type="submit"
-                variant="outline"
-                disabled={settingsPending}
-              >
-                {settingsPending && <Spinner data-icon="inline-start" />}
-                Salvar base
-              </Button>
-            </form>
-          </Panel>
-
-          <Panel
-            title="Estratégia do mês"
-            description={`Base atual: ${formatCurrency(data.dashboard.baseIncomeCents)}.`}
-          >
-            <NativeSelect
-              value={selectedId}
-              onChange={(event) => selectStrategy(event.target.value)}
-              className="w-full md:hidden"
-              aria-label="Selecionar estratégia"
-            >
-              {data.strategies.map((strategy) => (
-                <NativeSelectOption key={strategy.id} value={strategy.id}>
-                  {strategy.name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-            <ToggleGroup
-              value={[selectedId]}
-              onValueChange={(values) => values[0] && selectStrategy(values[0])}
-              className="hidden w-full grid-cols-2 items-stretch md:grid xl:grid-cols-4"
-              spacing={2}
-            >
-              {data.strategies.map((strategy) => {
-                const preset = strategyPresets[strategy.template]
-                return (
-                  <ToggleGroupItem
-                    key={strategy.id}
-                    value={strategy.id}
-                    variant="outline"
-                    className="h-auto min-h-28 w-full min-w-0 shrink flex-col items-start justify-start overflow-hidden p-4 text-left whitespace-normal"
-                  >
-                    <strong className="w-full leading-snug">
-                      {strategy.name}
-                    </strong>
-                    <span className="w-full flex-1 text-pretty text-xs leading-relaxed font-normal text-muted-foreground">
-                      {preset.description}
-                    </span>
-                    <span className="mt-2 w-full text-xs leading-none tabular-nums">
-                      {percentFromBps(strategy.essentialBps)} ·{' '}
-                      {percentFromBps(strategy.lifestyleBps)} ·{' '}
-                      {percentFromBps(strategy.investmentBps)} ·{' '}
-                      {percentFromBps(strategy.reserveBps)}
-                    </span>
-                  </ToggleGroupItem>
-                )
-              })}
-            </ToggleGroup>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {(
-                ['essential', 'lifestyle', 'investment', 'reserve'] as const
-              ).map((bucket) => (
-                <Field key={bucket}>
-                  <FieldLabel htmlFor={`allocation-${bucket}`}>
-                    {bucket === 'essential'
-                      ? 'Essenciais'
-                      : bucket === 'lifestyle'
-                        ? 'Estilo de vida'
-                        : bucket === 'investment'
-                          ? 'Investimentos'
-                          : 'Reserva'}{' '}
-                    (%)
-                  </FieldLabel>
-                  <Input
-                    id={`allocation-${bucket}`}
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.01"
-                    value={allocation[bucket] / 100}
-                    onChange={(event) =>
-                      setAllocation((current) => ({
-                        ...current,
-                        [bucket]: Math.round(Number(event.target.value) * 100),
-                      }))
-                    }
-                  />
-                </Field>
-              ))}
-            </div>
-            {totalBps !== 10_000 && (
-              <p className="mt-3 text-sm text-destructive">
-                A soma atual é {percentFromBps(totalBps)}. Ajuste para 100%.
-              </p>
-            )}
-            <Button
-              className="mt-4"
-              onClick={saveStrategy}
-              disabled={strategyPending || totalBps !== 10_000}
-            >
-              {strategyPending && <Spinner data-icon="inline-start" />}
-              Salvar estratégia
-            </Button>
-          </Panel>
+            ),
+          )}
         </div>
-      </details>
-      <details>
-        <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">
-          Meses anteriores
-        </summary>
-        <StrategyHistory />
-      </details>
+        {totalBps !== 10_000 && (
+          <p className="mt-3 text-sm text-destructive">
+            A soma atual é {percentFromBps(totalBps)}. Ajuste para 100%.
+          </p>
+        )}
+        <Button
+          className="mt-4"
+          onClick={saveStrategy}
+          disabled={strategyPending || totalBps !== 10_000}
+        >
+          {strategyPending && <Spinner data-icon="inline-start" />}
+          Salvar estratégia
+        </Button>
+      </Panel>
       <Panel
         title={`Fechamento de ${formatMonth(data.dashboard.currentMonth).toLocaleLowerCase('pt-BR')}`}
         description="Preserva o retrato do orçamento deste mês."
@@ -309,7 +280,6 @@ function GoalsSection({
     <div className="grid gap-4">
       <Panel
         title="Metas financeiras"
-        description="Objetivos com valor, progresso e prazo."
         action={
           <div className="flex gap-2">
             <Button

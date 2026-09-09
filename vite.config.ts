@@ -15,7 +15,14 @@ const config = defineConfig({
     ],
   },
   ssr: { external: ['@firecrawl/pdf-inspector'] },
-  plugins: [devtools(), tailwindcss(), tanstackStart(), viteReact()],
+  plugins: [
+    // Vite forwards browser errors to the terminal. Piping server logs back to
+    // the browser creates a feedback loop that can fill the disk with logs.
+    devtools({ consolePiping: { enabled: false } }),
+    tailwindcss(),
+    tanstackStart(),
+    viteReact(),
+  ],
 })
 
 export default config

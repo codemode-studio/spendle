@@ -1,5 +1,10 @@
 import { baseAmount } from '#/domain/ledger'
-import { transactionFiltersSchema } from '#/features/finance/transactions.filters'
+import {
+  transactionSearchDefaults,
+  transactionSearchSchema,
+  transactionSearchToFilters,
+  parseAmountInput,
+} from '#/features/finance/transactions.search'
 import {
   ArrowLeftRight,
   Check,
@@ -15,11 +20,14 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from '@tanstack/react-query'
-import { createFileRoute, Link } from '@tanstack/react-router'
+import {
+  createFileRoute,
+  Link,
+  stripSearchParams,
+} from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import { Fragment, useDeferredValue, useMemo, useState } from 'react'
+import { Fragment, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { z } from 'zod'
 
 import {
   Page,
@@ -65,7 +73,7 @@ import {
   TableRow,
 } from '#/components/ui/table'
 import { formatInstrumentName } from '#/domain/finance'
-import { formatCurrency, toMinorUnits as toCents } from '#/domain/currency'
+import { formatCurrency } from '#/domain/currency'
 import { formatDayLabel, formatPeriod } from '#/domain/period'
 import {
   applyKnowledgeSyncFn,
@@ -82,16 +90,12 @@ import {
 import { groupCategoryOptions } from '#/domain/categories'
 import { cn } from '#/lib/utils'
 
-const transactionsSearchSchema = z.object({
-  category: z.string().optional().catch(undefined),
-})
-
 export const Route = createFileRoute('/transacoes')({
-  validateSearch: transactionsSearchSchema,
-  loader: ({ context }) =>
-    context.queryClient.ensureQueryData(
-      transactionsPageOptions(transactionFiltersSchema.parse({})),
-    ),
+  validateSearch: transactionSearchSchema,
+  search: { middlewares: [stripSearchParams(transactionSearchDefaults)] },
+  loaderDeps: ({ search }) => transactionSearchToFilters(search),
+  loader: ({ context, deps }) =>
+    context.queryClient.ensureQueryData(transactionsPageOptions(deps)),
   component: TransactionsPage,
 })
 
@@ -107,60 +111,54 @@ function TransactionsPage() {
   const [syncPlan, setSyncPlan] = useState<Awaited<
     ReturnType<typeof previewKnowledgeSync>
   > | null>(null)
-  const [search, setSearch] = useState('')
-  const [target, setTarget] = useState('all')
-  const { category: initialCategory } = Route.useSearch()
-  const [onlyUncategorized, setOnlyUncategorized] = useState(
-    initialCategory === 'uncategorized',
-  )
-  const [categoryFilter, setCategoryFilter] = useState(
-    initialCategory && initialCategory !== 'uncategorized'
-      ? initialCategory
-      : 'all',
-  )
-  const [direction, setDirection] = useState<'all' | 'in' | 'out'>('all')
-  const [minAmount, setMinAmount] = useState('')
-  const [maxAmount, setMaxAmount] = useState('')
+  const urlState = Route.useSearch()
+  const navigate = Route.useNavigate()
+  const setUrlState = (
+    updates: Partial<typeof urlState> | null,
+    options?: { replace: boolean },
+  ) =>
+    navigate({
+      search: (previous) =>
+        updates === null
+          ? transactionSearchDefaults
+          : { ...previous, ...updates },
+      replace: options?.replace,
+      resetScroll: false,
+    })
+  const { search, target, direction, minAmount, maxAmount } = urlState
+  const onlyUncategorized = urlState.category === 'uncategorized'
+  const categoryFilter = onlyUncategorized ? 'all' : urlState.category
   const minCents = parseAmountInput(minAmount)
   const maxCents = parseAmountInput(maxAmount)
-  const [pagination, setPagination] = useState({ key: '', page: 0 })
-  const filterKey = JSON.stringify([
-    search,
-    target,
-    categoryFilter,
-    onlyUncategorized,
-    direction,
-    minCents,
-    maxCents,
-  ])
-  const page = pagination.key === filterKey ? pagination.page : 0
+  const updateFilters = (updates: Partial<typeof urlState>) =>
+    void setUrlState({ ...updates, page: 1 })
+  const setSearch = (value: string) =>
+    void setUrlState({ search: value, page: 1 }, { replace: true })
+  const setTarget = (value: string) => updateFilters({ target: value })
+  const setCategoryFilter = (value: string) =>
+    updateFilters({ category: value })
+  const setMinAmount = (value: string) =>
+    void setUrlState({ minAmount: value, page: 1 }, { replace: true })
+  const setMaxAmount = (value: string) =>
+    void setUrlState({ maxAmount: value, page: 1 }, { replace: true })
   const filters = useMemo(
-    () => ({
-      search,
-      target,
-      category: categoryFilter,
-      onlyUncategorized,
-      direction,
-      minCents,
-      maxCents,
-      page,
-    }),
-    [
-      search,
-      target,
-      categoryFilter,
-      onlyUncategorized,
-      direction,
-      minCents,
-      maxCents,
-      page,
-    ],
+    () => transactionSearchToFilters(urlState),
+    [urlState],
   )
   const deferredFilters = useDeferredValue(filters)
   const { data, isFetching } = useSuspenseQuery(
     transactionsPageOptions(deferredFilters),
   )
   const changingPage = isFetching || deferredFilters !== filters
+  useEffect(() => {
+    if (!changingPage && data.page !== filters.page) {
+      void navigate({
+        search: (previous) => ({ ...previous, page: data.page + 1 }),
+        replace: true,
+        resetScroll: false,
+      })
+    }
+  }, [changingPage, data.page, filters.page, navigate])
   const hasActiveFilters =
     search !== '' ||
     target !== 'all' ||
@@ -169,21 +167,14 @@ function TransactionsPage() {
     direction !== 'all' ||
     minCents !== null ||
     maxCents !== null
-  const clearFilters = () => {
-    setSearch('')
-    setTarget('all')
-    setOnlyUncategorized(false)
-    setCategoryFilter('all')
-    setDirection('all')
-    setMinAmount('')
-    setMaxAmount('')
-  }
-  const clearAdvancedFilters = () => {
-    setTarget('all')
-    setCategoryFilter('all')
-    setMinAmount('')
-    setMaxAmount('')
-  }
+  const clearFilters = () => void setUrlState(null)
+  const clearAdvancedFilters = () =>
+    updateFilters({
+      target: 'all',
+      category: onlyUncategorized ? 'uncategorized' : 'all',
+      minAmount: '',
+      maxAmount: '',
+    })
   const segment = onlyUncategorized ? 'uncategorized' : direction
   const advancedFilterCount =
     Number(target !== 'all') +
@@ -342,10 +333,7 @@ function TransactionsPage() {
           : minCents !== null
             ? `≥ ${formatCurrency(minCents, 'BRL')}`
             : `≤ ${formatCurrency(maxCents ?? 0, 'BRL')}`,
-      clear: () => {
-        setMinAmount('')
-        setMaxAmount('')
-      },
+      clear: () => updateFilters({ minAmount: '', maxAmount: '' }),
     },
   ].filter((chip): chip is Exclude<typeof chip, false> => Boolean(chip))
   const suggestedReconciliations = data.reconciliations.filter(
@@ -500,13 +488,16 @@ function TransactionsPage() {
                 value={segment}
                 onValueChange={(value) => {
                   if (value === 'uncategorized') {
-                    setOnlyUncategorized(true)
-                    setDirection('all')
-                    setCategoryFilter('all')
+                    updateFilters({
+                      category: 'uncategorized',
+                      direction: 'all',
+                    })
                     return
                   }
-                  setOnlyUncategorized(false)
-                  setDirection(value as 'all' | 'in' | 'out')
+                  updateFilters({
+                    category: onlyUncategorized ? 'all' : categoryFilter,
+                    direction: value as 'all' | 'in' | 'out',
+                  })
                 }}
                 items={[
                   { value: 'all', label: 'Tudo' },
@@ -585,7 +576,6 @@ function TransactionsPage() {
                         value={categoryFilter}
                         onChange={(event) => {
                           setCategoryFilter(event.target.value)
-                          setOnlyUncategorized(false)
                         }}
                         className="w-full"
                       >
@@ -826,9 +816,7 @@ function TransactionsPage() {
                 variant="outline"
                 size="sm"
                 disabled={changingPage || data.page === 0}
-                onClick={() =>
-                  setPagination({ key: filterKey, page: data.page - 1 })
-                }
+                onClick={() => void setUrlState({ page: data.page })}
               >
                 Anterior
               </Button>
@@ -838,9 +826,7 @@ function TransactionsPage() {
                 disabled={
                   changingPage || (data.page + 1) * 50 >= data.filteredCount
                 }
-                onClick={() =>
-                  setPagination({ key: filterKey, page: data.page + 1 })
-                }
+                onClick={() => void setUrlState({ page: data.page + 2 })}
               >
                 Próxima
               </Button>
@@ -1044,17 +1030,6 @@ function TransactionsPage() {
 }
 
 // ─── Apresentação ────────────────────────────────────────────────────────────
-
-/** Aceita "1500", "1.500,50" ou "R$ 1500". Vazio ou inválido vira null. */
-function parseAmountInput(text: string): number | null {
-  const trimmed = text.trim()
-  if (!trimmed) return null
-  try {
-    return Math.abs(toCents(trimmed))
-  } catch {
-    return null
-  }
-}
 
 function AmountCell({
   amountCents,

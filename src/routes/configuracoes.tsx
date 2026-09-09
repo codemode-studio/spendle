@@ -56,9 +56,29 @@ import {
   configurationOptions,
   invalidateFinance,
   knowledgeBaseOptions,
+  planningOptions,
 } from '#/features/finance/queries'
 
-const settingsTabs = ['geral', 'contas', 'cartoes', 'conhecimento'] as const
+import { PlanningSettings } from '#/features/planning/planning-settings'
+
+const settingsTabs = [
+  'geral',
+  'contas',
+  'cartoes',
+  'orcamento',
+  'metas',
+  'recorrencias',
+  'conhecimento',
+] as const
+const settingsLabels = {
+  geral: 'Geral',
+  contas: 'Contas',
+  cartoes: 'Cartões',
+  orcamento: 'Orçamento',
+  metas: 'Metas',
+  recorrencias: 'Recorrências',
+  conhecimento: 'Conhecimento',
+} as const
 type SettingsTab = (typeof settingsTabs)[number]
 
 const settingsSearchSchema = z.object({
@@ -71,6 +91,9 @@ export const Route = createFileRoute('/configuracoes')({
   loader: ({ context, deps }) =>
     Promise.all([
       context.queryClient.ensureQueryData(configurationOptions()),
+      deps.tab && ['orcamento', 'metas', 'recorrencias'].includes(deps.tab)
+        ? context.queryClient.ensureQueryData(planningOptions())
+        : null,
       deps.tab === 'conhecimento'
         ? context.queryClient.ensureQueryData(knowledgeBaseOptions())
         : null,
@@ -80,8 +103,8 @@ export const Route = createFileRoute('/configuracoes')({
 
 function SettingsPage() {
   const { tab } = Route.useSearch()
+  const activeTab = tab ?? 'geral'
   const navigate = Route.useNavigate()
-  const activeTab: SettingsTab = tab ?? 'geral'
 
   return (
     <Page>
@@ -92,13 +115,6 @@ function SettingsPage() {
             : activeTab === 'cartoes'
               ? 'Cartões'
               : 'Configurações'
-        }
-        description={
-          activeTab === 'contas'
-            ? 'Cadastre suas contas e confira os saldos.'
-            : activeTab === 'cartoes'
-              ? 'Organize cartões, faturas e vencimentos.'
-              : 'Preferências da família, categorias aprendidas e dados locais.'
         }
       />
       <Tabs
@@ -112,23 +128,36 @@ function SettingsPage() {
         }
         className="gap-6"
       >
+        <NativeSelect
+          aria-label="Área das configurações"
+          value={activeTab}
+          onChange={(event) =>
+            void navigate({
+              search: { tab: event.target.value as SettingsTab },
+            })
+          }
+          className="w-full md:hidden"
+        >
+          {settingsTabs.map((value) => (
+            <NativeSelectOption key={value} value={value}>
+              {settingsLabels[value]}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
         <TabsList
           variant="line"
           aria-label="Áreas das configurações"
-          className="h-9 w-full justify-start overflow-x-auto overflow-y-hidden border-b px-0 pb-1"
+          className="hidden h-11 w-full justify-start overflow-x-auto overflow-y-hidden border-b md:flex"
         >
-          <TabsTrigger value="geral" className="min-w-28 flex-none px-4">
-            Geral
-          </TabsTrigger>
-          <TabsTrigger value="contas" className="min-w-28 flex-none px-4">
-            Contas
-          </TabsTrigger>
-          <TabsTrigger value="cartoes" className="min-w-28 flex-none px-4">
-            Cartões
-          </TabsTrigger>
-          <TabsTrigger value="conhecimento" className="min-w-28 flex-none px-4">
-            Conhecimento
-          </TabsTrigger>
+          {settingsTabs.map((value) => (
+            <TabsTrigger
+              key={value}
+              value={value}
+              className="min-h-11 flex-none px-3"
+            >
+              {settingsLabels[value]}
+            </TabsTrigger>
+          ))}
         </TabsList>
         <TabsContent value="geral">
           <GeneralSettings />
@@ -138,6 +167,15 @@ function SettingsPage() {
         </TabsContent>
         <TabsContent value="cartoes">
           <CardsSection />
+        </TabsContent>
+        <TabsContent value="orcamento">
+          <PlanningSettings activeSection="budget" />
+        </TabsContent>
+        <TabsContent value="metas">
+          <PlanningSettings activeSection="goals" />
+        </TabsContent>
+        <TabsContent value="recorrencias">
+          <PlanningSettings activeSection="recurrences" />
         </TabsContent>
         <TabsContent value="conhecimento">
           <KnowledgeBaseSection />
@@ -225,7 +263,6 @@ function GeneralSettings() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel
           title="Família e empresas"
-          description="Proprietários usados para separar contas e patrimônio."
           action={
             <Button
               type="button"
@@ -293,10 +330,7 @@ function GeneralSettings() {
         </Panel>
       </div>
 
-      <Panel
-        title="Dados locais"
-        description="Manutenção dos dados financeiros deste computador."
-      >
+      <Panel title="Dados locais">
         <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-col gap-1">
             <strong className="text-sm">Limpar transações e importações</strong>

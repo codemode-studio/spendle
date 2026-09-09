@@ -17,7 +17,7 @@
     "db:studio": "drizzle-kit studio",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --exclude 'data/**'",
     "test:watch": "vitest",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
     "format": "prettier --write . && eslint --fix",

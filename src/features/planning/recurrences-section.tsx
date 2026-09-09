@@ -15,7 +15,7 @@ import {
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 
-import { EmptyState, Panel, ProgressBar, StatusBadge } from '#/components/ui'
+import { EmptyState, ProgressBar, StatusBadge } from '#/components/ui'
 import { Button } from '#/components/ui/button'
 import {
   Tooltip,
@@ -69,15 +69,7 @@ function RecurrencesSection({
   completeOccurrence: (occurrenceId: string) => void
 }) {
   const [linkRecurrenceId, setLinkRecurrenceId] = useState<string | null>(null)
-  const {
-    active,
-    missingConversionCount,
-    monthlyIncome,
-    monthlyExpense,
-    monthlyFixedExpense,
-    monthlyVariableExpense,
-    sections,
-  } = buildRecurrenceGroups(data, {
+  const { missingConversionCount, sections } = buildRecurrenceGroups(data, {
     today: new Date().toISOString().slice(0, 10),
   })
 
@@ -372,33 +364,6 @@ function RecurrencesSection({
 
   return (
     <div className="grid gap-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <Panel>
-          <p className="text-xs text-muted-foreground">Receitas mensais</p>
-          <strong className="mt-1 block text-lg tabular-nums text-success">
-            {formatCurrency(monthlyIncome)}
-          </strong>
-        </Panel>
-        <Panel>
-          <p className="text-xs text-muted-foreground">
-            Despesas previstas por mês
-          </p>
-          <strong className="mt-1 block text-lg tabular-nums text-destructive">
-            {formatCurrency(monthlyExpense)}
-          </strong>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Fixas cadastradas: {formatCurrency(monthlyFixedExpense)}
-            <br />
-            Variáveis estimadas: {formatCurrency(monthlyVariableExpense)}
-          </p>
-        </Panel>
-        <Panel className="col-span-2 sm:col-span-1">
-          <p className="text-xs text-muted-foreground">Recorrências ativas</p>
-          <strong className="mt-1 block text-lg tabular-nums">
-            {active.length}
-          </strong>
-        </Panel>
-      </div>
       {missingConversionCount > 0 && (
         <p className="text-xs text-warning-foreground">
           {missingConversionCount} recorrência(s) sem cotação para BRL não
@@ -493,6 +458,7 @@ function RecurrencesSection({
         )}
       </section>
       <LinkPaymentDialog
+        categories={data.categories}
         key={linkRecurrenceId ?? 'none'}
         recurrence={
           data.recurrences.find((item) => item.id === linkRecurrenceId) ?? null

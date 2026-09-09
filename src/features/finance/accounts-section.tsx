@@ -132,15 +132,16 @@ export function AccountsSection() {
     })
   }
 
-  const currencies = new Set(data.accounts.map((account) => account.currency))
+  const activeAccounts = data.accounts.filter((account) => account.active)
+  const currencies = new Set(activeAccounts.map((account) => account.currency))
   const groups = [
     {
       title: 'Movimentação',
-      accounts: data.accounts.filter((account) => !isInvestment(account)),
+      accounts: activeAccounts.filter((account) => !isInvestment(account)),
     },
     {
       title: 'Investimentos',
-      accounts: data.accounts.filter(isInvestment),
+      accounts: activeAccounts.filter(isInvestment),
     },
   ].filter((group) => group.accounts.length > 0)
 
@@ -148,7 +149,6 @@ export function AccountsSection() {
     <div className="grid gap-6">
       <SectionHeader
         title="Contas"
-        description="Saldos por conta, proprietário e moeda."
         action={
           <Button
             type="button"
@@ -236,7 +236,7 @@ export function AccountsSection() {
           <EmptyState
             icon={Building2}
             title="Cadastre sua primeira conta"
-            description="Adicione contas PF ou PJ antes de importar extratos OFX e PDF."
+            description="Contas pessoais e empresariais."
           />
         </Panel>
       )}

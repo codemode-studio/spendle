@@ -29,12 +29,16 @@ import { cn } from '#/lib/utils'
 
 function LinkPaymentDialog({
   recurrence,
+  categories,
   pending,
   open,
   onOpenChange,
   onLink,
 }: {
   recurrence: RecurrenceSnapshot | null
+  categories: Array<
+    Pick<PlanningSnapshot['categories'][number], 'id' | 'name' | 'bucket'>
+  >
   pending: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -42,6 +46,12 @@ function LinkPaymentDialog({
 }) {
   const multiple = recurrence?.matchMode === 'aggregate'
   const [search, setSearch] = useState('')
+  const [categoryId, setCategoryId] = useState('all')
+  const filterCategories = categories.filter((category) =>
+    recurrence?.direction === 'income'
+      ? category.bucket === 'income'
+      : category.bucket === 'essential' || category.bucket === 'lifestyle',
+  )
   const [occurrenceId, setOccurrenceId] = useState<string | null>(null)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const toggleTransaction = (id: string) =>
@@ -74,13 +84,20 @@ function LinkPaymentDialog({
     return (candidatesQuery.data ?? [])
       .filter(
         (candidate) =>
+          categoryId === 'all' ||
+          (categoryId === 'uncategorized'
+            ? !candidate.categoryId || candidate.categoryId === 'uncategorized'
+            : candidate.categoryId === categoryId),
+      )
+      .filter(
+        (candidate) =>
           !query || normalizeDescription(candidate.description).includes(query),
       )
       .slice(
         0,
         recurrenceLinkCandidateLimits[multiple ? 'aggregate' : 'single'],
       )
-  }, [candidatesQuery.data, multiple, search])
+  }, [candidatesQuery.data, multiple, search, categoryId])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -117,15 +134,37 @@ function LinkPaymentDialog({
             ))}
           </NativeSelect>
         )}
-        <div className="relative">
-          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Buscar por descrição…"
-            aria-label="Buscar transação"
-            className="pl-8 md:pl-8"
-          />
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Buscar por descrição…"
+              aria-label="Buscar transação"
+              className="pl-8 md:pl-8"
+            />
+          </div>
+          <NativeSelect
+            aria-label="Filtrar por categoria"
+            value={categoryId}
+            onChange={(event) => {
+              setCategoryId(event.target.value)
+              setSelectedIds([])
+            }}
+          >
+            <NativeSelectOption value="all">
+              Todas as categorias
+            </NativeSelectOption>
+            {filterCategories.map((category) => (
+              <NativeSelectOption key={category.id} value={category.id}>
+                {category.name}
+              </NativeSelectOption>
+            ))}
+            <NativeSelectOption value="uncategorized">
+              Sem categoria
+            </NativeSelectOption>
+          </NativeSelect>
         </div>
         <div className="max-h-80 overflow-y-auto rounded-lg border">
           {candidatesQuery.isPending ? (
@@ -138,8 +177,8 @@ function LinkPaymentDialog({
             </p>
           ) : candidates.length === 0 ? (
             <p className="p-4 text-sm text-muted-foreground">
-              Nenhuma transação compatível. Confira a busca ou importe o extrato
-              do período.
+              Nenhuma transação compatível. Confira os filtros ou importe o
+              extrato do período.
             </p>
           ) : (
             <ul className="divide-y">

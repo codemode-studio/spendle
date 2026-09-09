@@ -104,8 +104,8 @@ type ImportFlow = 'upload' | 'review'
 
 function ImportPage() {
   const { view } = Route.useSearch()
-  const navigate = Route.useNavigate()
   const flow: ImportFlow = view ?? 'upload'
+  const navigate = Route.useNavigate()
   const { data } = useSuspenseQuery(importReviewOptions())
   const queryClient = useQueryClient()
   const stageImport = useServerFn(stageImportFn)
@@ -404,7 +404,6 @@ function ImportPage() {
       <PageHeader
         eyebrow="OFX, CSV e PDF"
         title="Importar extratos"
-        description="Envie os arquivos e revise os lançamentos antes de consolidar."
         actions={
           <Button
             type="button"
@@ -425,7 +424,7 @@ function ImportPage() {
         <Panel
           className="mx-auto max-w-2xl"
           title="Enviar arquivos"
-          description="Envie extratos de diferentes contas e cartões. Vamos identificar o destino de cada arquivo."
+          description="OFX e PDF · contas e cartões"
         >
           <form onSubmit={submit}>
             <FieldGroup>
@@ -608,7 +607,6 @@ function ImportPage() {
         <Panel
           className="mx-auto max-w-5xl"
           title="Revisar lançamentos"
-          description="Confira a auditoria e as categorias antes de consolidar."
           action={
             <Button
               type="button"

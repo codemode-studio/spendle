@@ -1,9 +1,18 @@
 import type { CommitmentBudget } from '#/domain/commitment-budget'
+import type { FamilyMonth } from '#/domain/family-month'
 import { useQuery } from '@tanstack/react-query'
-import { Info } from 'lucide-react'
+import {
+  CircleCheck,
+  CircleHelp,
+  CircleX,
+  Info,
+  ShieldCheck,
+  TrendingUp,
+  TriangleAlert,
+} from 'lucide-react'
 
 import { financialHealth } from '#/domain/financial-health'
-import { StatusBadge, ProgressBar } from '#/components/ui'
+import { ProgressBar } from '#/components/ui'
 import { Skeleton } from '#/components/ui/skeleton'
 import {
   Tooltip,
@@ -18,7 +27,6 @@ import {
 } from '#/domain/strategy-progress'
 import type {
   BucketAmounts,
-  BucketStatus,
   StrategyBucketProgress,
 } from '#/domain/strategy-progress'
 import { cn } from '#/lib/utils'
@@ -33,29 +41,13 @@ export type StrategyDashboard = {
   budgetActual: BucketAmounts
   budgetProjected: BucketAmounts
   monthlyCommitments?: CommitmentBudget
-}
-
-const statusTone: Record<
-  BucketStatus,
-  'success' | 'warning' | 'danger' | 'info' | 'neutral'
-> = {
-  on_track: 'success',
-  attention: 'warning',
-  over: 'danger',
-  done: 'success',
-  behind: 'danger',
+  familyMonth?: FamilyMonth
 }
 
 const overallLabel = {
   on_track: 'Dentro da estratégia',
   attention: 'Precisa de atenção',
   over: 'Estourou um envelope',
-} as const
-
-const overallTone = {
-  on_track: 'success',
-  attention: 'warning',
-  over: 'danger',
 } as const
 
 function todayIso() {
@@ -71,37 +63,42 @@ export function StrategyProgressView({
   dashboard,
   today = todayIso(),
   cashCents,
+  detailed = false,
 }: {
   dashboard: StrategyDashboard
   today?: string
   cashCents?: number
+  detailed?: boolean
 }) {
   const budget = dashboard.monthlyCommitments
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-6">
       {budget ? (
-        <CommitmentOverview budget={budget} cashCents={cashCents} />
+        <CommitmentOverview
+          budget={budget}
+          cashCents={cashCents}
+          month={dashboard.familyMonth}
+          actual={dashboard.budgetActual}
+        />
       ) : (
-        <p>Os compromissos ainda não foram carregados.</p>
+        <p>Orçamento indisponível.</p>
       )}
-      <details>
-        <summary className="flex min-h-11 cursor-pointer items-center text-sm text-muted-foreground">
-          Conferir lançamentos e premissas
-        </summary>
-        <div className="mt-3">
-          {budget && <CommitmentProgress budget={budget} />}
-        </div>
-      </details>
-      <details>
-        <summary className="flex min-h-11 cursor-pointer items-center text-sm text-muted-foreground">
-          Comparar consumo por data da compra
-        </summary>
-        <p className="my-3 text-sm text-muted-foreground">
-          Compras em {formatMonth(dashboard.currentMonth)}. Pagar a fatura não
-          conta como nova compra.
-        </p>
-        <ConsumptionProgressView dashboard={dashboard} today={today} />
-      </details>
+      {detailed && (
+        <>
+          <section className="border-t pt-6">
+            <h2 className="mb-4 text-lg font-semibold">
+              Composição do orçamento
+            </h2>
+            {budget && <CommitmentProgress budget={budget} />}
+          </section>
+          <section className="border-t pt-6">
+            <h2 className="mb-4 text-lg font-semibold">
+              Compras de {formatMonth(dashboard.currentMonth)}
+            </h2>
+            <ConsumptionProgressView dashboard={dashboard} today={today} />
+          </section>
+        </>
+      )}
     </div>
   )
 }
@@ -109,63 +106,178 @@ export function StrategyProgressView({
 function CommitmentOverview({
   budget,
   cashCents,
+  month,
+  actual,
 }: {
   budget: CommitmentBudget
   cashCents?: number
+  month?: FamilyMonth
+  actual: BucketAmounts
 }) {
-  const health = financialHealth(budget)
-  const spending = budget.buckets.filter(
-    (b) => b.bucket === 'essential' || b.bucket === 'lifestyle',
-  )
-  const goals = budget.buckets.filter(
-    (b) => b.bucket === 'investment' || b.bucket === 'reserve',
-  )
-  const other = budget.buckets.find((b) => b.bucket === 'other')!
+  const flow = month?.cashFlow
+  const legacyHealth = financialHealth(budget)
+  const health = month
+    ? {
+        deficit: flow
+          ? (flow.closingCashCents ?? 0) < 0
+          : month.plannedBalanceCents < 0,
+        incomplete:
+          (flow ? flow.cashCents === null : month.plannedIncomeCents <= 0) ||
+          !month.hasData ||
+          month.warnings.length > 0,
+        spendingOver: month.expenses.filter(
+          (b) => b.targetCents !== null && b.cents > b.targetCents,
+        ),
+        label: flow
+          ? flow.cashCents === null
+            ? 'Saldo não disponível para esta data'
+            : `${formatCurrency(flow.cashCents)} em caixa + ${formatCurrency(flow.expectedIncomeCents)} a entrar − ${formatCurrency(flow.remainingExpenseCents)} a pagar`
+          : month.forecasting
+            ? `Renda base ${formatCurrency(month.plannedIncomeCents)} − despesas previstas ${formatCurrency(month.expenseCents)}`
+            : `Renda confirmada ${formatCurrency(month.incomeCents)} − despesas registradas ${formatCurrency(month.expenseCents)}`,
+      }
+    : legacyHealth
+  const needsAttention =
+    health.spendingOver.length > 0 ||
+    (month !== undefined &&
+      (flow?.afterGoalsCents ?? month.balanceAfterGoalsCents) < 0)
+  const HealthIcon = health.deficit
+    ? CircleX
+    : health.incomplete
+      ? CircleHelp
+      : needsAttention
+        ? TriangleAlert
+        : CircleCheck
+  const headline = health.deficit
+    ? 'Precisamos ajustar o caixa'
+    : flow
+      ? flow.cashCents === null
+        ? 'Saldo não disponível'
+        : (flow.afterGoalsCents ?? 0) < 0
+          ? 'As metas precisam de ajuste'
+          : 'O mês deve terminar com saldo'
+      : health.incomplete
+        ? 'Projeção a conferir'
+        : month && month.balanceAfterGoalsCents < 0
+          ? 'As metas precisam de ajuste'
+          : month
+            ? month.forecasting
+              ? 'O mês deve terminar com saldo'
+              : 'Caixa registrado no fim do mês'
+            : health.spendingOver.length > 0
+              ? 'Vamos cuidar dos gastos'
+              : 'Estamos no caminho'
+  const spending = month
+    ? month.expenses
+        .filter((b) => b.bucket !== 'other')
+        .map((b) => ({
+          ...b,
+          committedCents: b.cents,
+          targetCents: b.targetCents ?? 0,
+          remainingCents: (b.targetCents ?? 0) - b.cents,
+        }))
+    : budget.buckets.filter(
+        (b) => b.bucket === 'essential' || b.bucket === 'lifestyle',
+      )
+  const goals = budget.buckets
+    .filter((b) => b.bucket === 'investment' || b.bucket === 'reserve')
+    .map((b) => ({
+      ...b,
+      paidCents: month
+        ? actual[b.bucket as 'investment' | 'reserve']
+        : b.paidCents,
+    }))
+  const other = month?.expenses.find((b) => b.bucket === 'other')?.cents ?? 0
+  const balance =
+    flow?.cashCents ??
+    month?.plannedBalanceCents ??
+    budget.remainingAfterGoalsCents
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <StatusBadge tone={health.tone}>{health.label}</StatusBadge>
-        <div className="mt-3 grid grid-cols-2 gap-4">
+      <div className="grid items-center gap-6 border-b pb-6 lg:grid-cols-[1.4fr_1fr]">
+        <div className="flex items-start gap-4">
+          <HealthIcon
+            aria-hidden="true"
+            strokeWidth={1.5}
+            className={cn(
+              'mt-1 size-9 shrink-0 sm:size-16',
+              health.deficit
+                ? 'text-destructive'
+                : health.incomplete
+                  ? 'text-muted-foreground'
+                  : needsAttention
+                    ? 'text-warning'
+                    : 'text-success',
+            )}
+          />
           <div>
-            <p
-              className={cn(
-                'text-xl font-semibold tracking-tight whitespace-nowrap tabular-nums sm:text-2xl',
-                health.deficit && 'text-destructive',
-              )}
-            >
-              {budget.incomeCents > 0
-                ? formatCurrency(Math.abs(budget.remainingAfterGoalsCents))
-                : '—'}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {health.deficit ? 'faltam após as metas' : 'margem após as metas'}
-            </p>
+            <h2 className="text-xl font-medium tracking-tight sm:text-3xl">
+              {headline}
+            </h2>
+            {(month ||
+              !health.incomplete ||
+              health.deficit ||
+              health.spendingOver.length > 0) && (
+              <p className="mt-2 max-w-md text-sm leading-relaxed text-muted-foreground">
+                {health.label}.
+              </p>
+            )}
           </div>
-          {cashCents !== undefined && (
-            <div>
-              <p className="text-xl font-semibold tracking-tight whitespace-nowrap tabular-nums sm:text-2xl">
-                {formatCurrency(cashCents)}
+        </div>
+        <div className="flex flex-col gap-2 lg:border-l lg:pl-6">
+          <p className="text-xs text-muted-foreground">
+            {flow
+              ? 'Caixa'
+              : health.deficit
+                ? 'Falta para cobrir o mês'
+                : 'Margem estimada após as metas'}
+          </p>
+          <p
+            className={cn(
+              'text-3xl font-medium tracking-tight tabular-nums sm:text-4xl',
+              (flow ? (flow.cashCents ?? 0) < 0 : health.deficit) &&
+                'text-destructive',
+            )}
+          >
+            {flow
+              ? flow.cashCents === null
+                ? 'Sem saldo registrado'
+                : formatCurrency(flow.cashCents)
+              : formatCurrency(Math.abs(balance))}
+          </p>
+          {flow ? (
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Previsto no fim do mês:{' '}
+              {flow.closingCashCents === null
+                ? 'indisponível'
+                : formatCurrency(flow.closingCashCents)}
+            </p>
+          ) : (
+            cashCents !== undefined && (
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Caixa {formatCurrency(cashCents)}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                caixa nos dados disponíveis
-              </p>
-            </div>
+            )
           )}
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          Renda de referência {formatCurrency(budget.incomeCents)} ·
-          Compromissos {formatCurrency(budget.committedCents)}
-        </p>
-        {health.incomplete && (
-          <p className="mt-2 text-sm text-muted-foreground">
-            Dados parciais: a margem pode mudar com novos extratos e
-            estimativas.
-          </p>
-        )}
       </div>
       <div className="grid gap-6 md:grid-cols-2">
         <div className="flex flex-col gap-5">
-          <h3 className="text-sm font-semibold">Despesas do mês</h3>
+          <div>
+            <h3 className="text-sm font-semibold">
+              {month && !month.forecasting
+                ? 'Despesas registradas'
+                : 'Despesas do mês'}
+            </h3>
+            {month && (
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {formatCurrency(month.knownExpenseCents)} em contas e compras
+                {month.estimatedExpenseCents !== 0 &&
+                  ` + ${formatCurrency(month.estimatedExpenseCents)} em estimativas`}
+                .
+              </p>
+            )}
+          </div>
           {spending.map((b) => (
             <div key={b.bucket} className="flex flex-col gap-2">
               <div className="flex items-baseline justify-between gap-2 text-sm">
@@ -202,47 +314,125 @@ function CommitmentOverview({
               </div>
             </div>
           ))}
-          {other.committedCents !== 0 && (
-            <p className="text-sm text-muted-foreground">
-              Fora dos grupos / a classificar:{' '}
-              {formatCurrency(other.committedCents)}
-            </p>
+          {other !== 0 && (
+            <div className="flex items-baseline justify-between gap-2 text-sm">
+              <span>Outras despesas</span>
+              <strong className="tabular-nums">{formatCurrency(other)}</strong>
+            </div>
           )}
         </div>
         <div className="flex flex-col gap-5">
-          <h3 className="text-sm font-semibold">Metas de aporte</h3>
+          <div>
+            <h3 className="text-sm font-semibold">Metas de aporte</h3>
+          </div>
           {goals.map((b) => (
             <div key={b.bucket} className="flex flex-col gap-2">
-              <div className="flex items-baseline justify-between gap-2 text-sm">
-                <span>
-                  {bucketLabels[b.bucket as keyof typeof bucketLabels]}
-                </span>
-                <strong className="tabular-nums">
-                  {formatCurrency(b.paidCents)}
-                </strong>
+              <div className="flex items-center gap-3">
+                <GoalRing
+                  value={b.paidCents}
+                  target={b.targetCents}
+                  reserve={b.bucket === 'reserve'}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+                    <span>
+                      {bucketLabels[b.bucket as keyof typeof bucketLabels]}
+                    </span>
+                    <strong className="tabular-nums">
+                      {formatCurrency(b.paidCents)}
+                    </strong>
+                  </div>
+                  <div className="mt-1 flex flex-wrap justify-between gap-1 text-xs text-muted-foreground">
+                    <span>
+                      {b.targetCents <= 0
+                        ? 'Sem meta'
+                        : `Meta ${formatCurrency(b.targetCents)}`}
+                    </span>
+                    <span>
+                      {b.targetCents > 0 && b.paidCents >= b.targetCents
+                        ? 'Concluída'
+                        : 'Aportado'}
+                    </span>
+                  </div>
+                </div>
               </div>
-              <ProgressBar value={b.paidCents} max={b.targetCents} />
-              <div className="flex flex-wrap justify-between gap-1 text-xs text-muted-foreground">
-                <span>Meta {formatCurrency(b.targetCents)}</span>
-                <span>
-                  {formatCurrency(Math.max(0, b.targetCents - b.paidCents))} a
-                  aportar
-                </span>
-              </div>
-              {b.dueCents + b.variableCents > 0 && (
+              {(month
+                ? b.targetCents > b.paidCents
+                : b.dueCents + b.variableCents > 0) && (
                 <p className="text-xs text-muted-foreground">
-                  {formatCurrency(b.dueCents + b.variableCents)} previstos,
-                  ainda não pagos
+                  Falta guardar:{' '}
+                  {formatCurrency(
+                    month
+                      ? Math.max(0, b.targetCents - b.paidCents)
+                      : b.dueCents + b.variableCents,
+                  )}
                 </p>
               )}
             </div>
           ))}
+          {month && (!flow || flow.afterGoalsCents !== null) && (
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {(flow?.afterGoalsCents ?? month.balanceAfterGoalsCents) < 0
+                ? `Para pagar as despesas e cumprir as metas, faltam ${formatCurrency(-(flow?.afterGoalsCents ?? month.balanceAfterGoalsCents))}.`
+                : `Depois das despesas e das metas, ${month.forecasting ? 'devem sobrar' : 'sobram'} ${formatCurrency(flow?.afterGoalsCents ?? month.balanceAfterGoalsCents)}.`}
+            </p>
+          )}
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">
-        Despesas incluem valores pagos, a pagar e estimados. Margem da renda não
-        é saldo bancário.
-      </p>
+    </div>
+  )
+}
+
+export function GoalRing({
+  value,
+  target,
+  reserve,
+}: {
+  value: number
+  target: number
+  reserve: boolean
+}) {
+  const percent =
+    target > 0 ? Math.min(100, Math.max(0, (value / target) * 100)) : 0
+  const Icon = reserve ? ShieldCheck : TrendingUp
+  return (
+    <div
+      className="relative size-12 shrink-0"
+      role="img"
+      aria-label={`${Math.round(percent)}% da meta de ${reserve ? 'reserva' : 'investimentos'}`}
+    >
+      <svg
+        viewBox="0 0 48 48"
+        className="size-full -rotate-90"
+        aria-hidden="true"
+      >
+        <circle
+          cx="24"
+          cy="24"
+          r="20"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="3"
+          className="text-muted"
+        />
+        <circle
+          cx="24"
+          cy="24"
+          r="20"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="3"
+          pathLength="100"
+          strokeDasharray={`${percent} 100`}
+          opacity={percent > 0 ? 1 : 0}
+          strokeLinecap="round"
+          className="text-success"
+        />
+      </svg>
+      <Icon
+        aria-hidden="true"
+        className="absolute top-3.5 left-3.5 size-5 text-muted-foreground"
+      />
     </div>
   )
 }
@@ -357,24 +547,17 @@ function CommitmentProgress({ budget }: { budget: CommitmentBudget }) {
         compromissos dessas categorias entram apenas quando observados.
       </p>
       {budget.warnings.length > 0 && (
-        <details
-          open
-          className="rounded-lg border border-warning/30 p-3 text-sm"
-        >
-          <summary className="cursor-pointer font-medium">
-            Limites desta estimativa
-          </summary>
+        <section className="rounded-lg border border-warning/30 p-3 text-sm">
+          <h3 className="font-medium">Limites desta estimativa</h3>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
             {budget.warnings.map((w) => (
               <li key={w}>{w}</li>
             ))}
           </ul>
-        </details>
+        </section>
       )}
-      <details>
-        <summary className="cursor-pointer text-sm font-medium">
-          Parcelamentos fixos temporários
-        </summary>
+      <section className="border-t pt-4">
+        <h3 className="text-sm font-medium">Parcelamentos fixos temporários</h3>
         <ul className="mt-3 space-y-2 text-sm">
           {budget.lines
             .filter((l) => l.temporaryUntil)
@@ -391,11 +574,11 @@ function CommitmentProgress({ budget }: { budget: CommitmentBudget }) {
             </li>
           )}
         </ul>
-      </details>
-      <details>
-        <summary className="cursor-pointer text-sm font-medium">
+      </section>
+      <section className="border-t pt-4">
+        <h3 className="text-sm font-medium">
           Conferir composição ({budget.lines.length} itens)
-        </summary>
+        </h3>
         <div className="mt-3 overflow-x-auto">
           <table className="w-full min-w-[620px] text-sm">
             <thead>
@@ -440,7 +623,7 @@ function CommitmentProgress({ budget }: { budget: CommitmentBudget }) {
             </tbody>
           </table>
         </div>
-      </details>
+      </section>
     </div>
   )
 }
@@ -469,14 +652,11 @@ function ConsumptionProgressView({
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-        <StatusBadge tone={overallTone[progress.overall]}>
-          {overallLabel[progress.overall]}
-        </StatusBadge>
+        <span className="font-medium">{overallLabel[progress.overall]}</span>
         <span className="text-muted-foreground">
           {progress.dayOfMonth !== null &&
             `Dia ${progress.dayOfMonth} de ${progress.daysInMonth} · `}
-          {dashboard.activeStrategy.name}
-          {' · gastos '}
+          {'Gastos '}
           <span className="font-medium text-foreground tabular-nums">
             {formatCurrency(progress.spending.actualCents)}
           </span>
@@ -574,9 +754,9 @@ function BucketRow({
     >
       <div className="flex items-start justify-between gap-2">
         <span className="min-w-0 text-sm font-medium">{item.label}</span>
-        <StatusBadge className="shrink-0" tone={statusTone[item.status]}>
+        <span className="text-right text-xs text-muted-foreground">
           {bucketStatusLabels[item.status]}
-        </StatusBadge>
+        </span>
       </div>
       <p className="mt-2 text-xl font-semibold tracking-tight tabular-nums">
         {formatCurrency(item.actualCents)}
@@ -657,8 +837,7 @@ export function StrategyHistory({ months = 3 }: { months?: number }) {
               <td className="py-2.5">
                 <span className="font-medium">{formatMonth(row.month)}</span>
                 <span className="block text-xs text-muted-foreground">
-                  {row.strategyName}
-                  {row.closed ? ' · fechado' : ''}
+                  {row.closed ? 'Fechado' : ''}
                 </span>
               </td>
               <td className="py-2.5 text-right tabular-nums">

@@ -1,3 +1,9 @@
+import { buildFamilyMonth } from '#/domain/family-month'
+import { confirmedAccountIncome } from '#/domain/account-income'
+import {
+  buildMonthlyCashFlow,
+  recordedBalanceAt,
+} from '#/domain/monthly-cash-flow'
 import { shiftDays } from '#/domain/period'
 import { cardBudgetLines } from '#/domain/card-budget'
 import {
@@ -353,9 +359,78 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
             }),
           )
         : []
+    // A reliable open CSV observes this cycle; the previous PDF only forecasts it.
+    // Keep closed controls authoritative and leave partial CSV windows as provisional evidence.
+    const observedStatements = new Map<
+      string,
+      {
+        closingDate: string
+        dueDate: string
+        totalCents: number
+        certainty: 'open'
+        sourceImportId: string
+        transactionIds: string[]
+      }
+    >()
+    for (const source of importRows
+      .filter(
+        (row) =>
+          row.creditCardId === card.id &&
+          row.status === 'committed' &&
+          row.parser === 'csv' &&
+          row.closingBalanceCents === null &&
+          row.periodStart &&
+          row.periodEnd &&
+          (row.periodSource === 'user' ||
+            row.periodSource === 'metadata' ||
+            row.periodSource === 'filename'),
+      )
+      .sort((a, b) => (a.periodEnd ?? '').localeCompare(b.periodEnd ?? ''))) {
+      const cycle = resolveCardCycle(
+        source.periodEnd!,
+        card.closingDay,
+        effectiveDueDay,
+      )
+      const previousClosing = cardStatementCycleRows
+        .filter(
+          (c) =>
+            c.creditCardId === card.id &&
+            c.closingDate &&
+            c.closingDate < source.periodStart!,
+        )
+        .map((c) => c.closingDate!)
+        .sort()
+        .at(-1)
+      const expectedStart = shiftDays(
+        previousClosing ?? addMonths(cycle.closingDate, -1),
+        1,
+      )
+      if (source.periodStart !== expectedStart) continue
+      const observed = transactionRows.filter(
+        (t) =>
+          t.creditCardId === card.id &&
+          t.status !== 'excluded' &&
+          t.postedAt >= source.periodStart! &&
+          t.postedAt <= source.periodEnd! &&
+          !['card_payment', 'transfer'].includes(t.categoryId ?? '') &&
+          !/pagamento\s+(?:de\s+)?(?:fatura|recebido)/i.test(t.description),
+      )
+      if (!observed.length) continue
+      observedStatements.set(cycle.dueDate, {
+        ...cycle,
+        totalCents: Math.max(
+          0,
+          -observed.reduce((sum, row) => sum + row.amountCents, 0),
+        ),
+        certainty: 'open',
+        sourceImportId: source.id,
+        transactionIds: observed.map((row) => row.id),
+      })
+    }
     const statementSummary = summarizeCardStatements({
       documentedStatements: [
         ...scheduledStatements,
+        ...observedStatements.values(),
         ...cardStatementCycleRows.flatMap((cycle) =>
           cycle.creditCardId === card.id &&
           cycle.status !== 'open' &&
@@ -416,6 +491,10 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
             importId: sourceImportId,
             futureOffset,
             purchases,
+            includedTransactionIds:
+              statement.certainty === 'open'
+                ? observedStatements.get(statement.dueDate)?.transactionIds
+                : undefined,
             plans,
             explicitInstallments:
               futureControl && 'installments' in futureControl
@@ -804,6 +883,15 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       }
       projectedRecurrenceAmountByOccurrenceId.set(occurrence.id, converted)
     }
+    const confirmedIncome = confirmedAccountIncome({
+      month: currentMonth,
+      transactions: transactions.map((transaction) => ({
+        ...transaction,
+        baseAmountCents: amountInBaseCurrency(transaction),
+        bucket: transaction.category?.bucket ?? null,
+      })),
+      reconciliations: reconciliationsForSummary,
+    })
     const financialSummary = buildFinancialSummary({
       month: currentMonth,
       transactions: transactions.map((transaction) => {
@@ -1165,6 +1253,10 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
     })
 
     monthlyCommitments.warnings.push(...new Set(commitmentDataWarnings))
+    if (confirmedIncome.missingConversionCount > 0)
+      monthlyCommitments.warnings.push(
+        `${confirmedIncome.missingConversionCount} recebimento(s) sem conversão de moeda; a renda confirmada está incompleta.`,
+      )
     if (missingVariableEstimates.length)
       monthlyCommitments.warnings.push(
         'Sem estimativa adicional para ' +
@@ -1172,10 +1264,223 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
           ': faltam dois meses com cobertura completa ou uma recorrência variável cadastrada.',
       )
 
+    const familyMonth = buildFamilyMonth({
+      month: currentMonth,
+      referenceMonth: referenceDate.slice(0, 7),
+      closed: selectedBudget?.closed ?? false,
+      incomeCents: confirmedIncome.cents,
+      plannedIncomeCents: baseIncomeCents,
+      targets: budgetTargets,
+      saved: financialSummary.budgetActual,
+      budget: monthlyCommitments,
+    })
+    const monthStart = currentMonth + '-01'
+    const monthEnd = shiftDays(addMonths(monthStart, 1), -1)
+    const cashDate = monthEnd < referenceDate ? monthEnd : referenceDate
+    const cashAccounts = accounts.filter(
+      (a) => a.active && a.purpose === 'operating',
+    )
+    const cashAccountIds = new Set(cashAccounts.map((a) => a.id))
+    const cashMovements = transactionRows.filter(
+      (t) =>
+        t.accountId &&
+        cashAccountIds.has(t.accountId) &&
+        t.status === 'confirmed',
+    )
+    const convertCash = (cents: number, currency: string, date: string) => {
+      if (cents === 0 || currency === settings.baseCurrency) return cents
+      const rate = exchangeRateRows.find(
+        (r) =>
+          r.date <= date &&
+          r.fromCurrency === currency &&
+          r.toCurrency === settings.baseCurrency,
+      )
+      if (rate)
+        return convertMinorUnitsAtRate(
+          cents,
+          currency,
+          settings.baseCurrency,
+          rate.rateMicros,
+        )
+      const inverse = exchangeRateRows.find(
+        (r) =>
+          r.date <= date &&
+          r.toCurrency === currency &&
+          r.fromCurrency === settings.baseCurrency,
+      )
+      return inverse
+        ? convertMinorUnitsAtRate(
+            cents,
+            currency,
+            settings.baseCurrency,
+            Math.round(1_000_000_000_000 / inverse.rateMicros),
+          )
+        : null
+    }
+    const cashAt = (date: string): number | null => {
+      let sum = 0
+      for (const account of cashAccounts) {
+        const anchors = checkpointRows
+          .filter(
+            (c) =>
+              c.accountId === account.id && c.reviewState !== 'invalidated',
+          )
+          .map((c) => ({ date: c.asOf, cents: c.balanceCents }))
+        if (
+          account.statementBalanceAt &&
+          account.statementBalanceCents !== null
+        )
+          anchors.push({
+            date: account.statementBalanceAt,
+            cents: account.statementBalanceCents,
+          })
+        const native =
+          date === referenceDate
+            ? account.balanceCents
+            : recordedBalanceAt({
+                date,
+                initialCents: account.initialBalanceCents,
+                anchors,
+                movements: cashMovements
+                  .filter((t) => t.accountId === account.id)
+                  .map((t) => ({ date: t.postedAt, cents: t.amountCents })),
+              })
+        if (native === null) return null
+        const converted = convertCash(native, account.currency, date)
+        if (converted === null) return null
+        sum += converted
+      }
+      return sum
+    }
+    // Own transfers between operating accounts move money without changing consolidated cash.
+    const ownCashTransferIds = new Set(
+      reconciliationsForSummary
+        .filter(
+          (g) =>
+            g.status === 'confirmed' &&
+            ['transfer', 'fx_transfer', 'profit_distribution'].includes(
+              g.type,
+            ) &&
+            g.transactionIds.every((id) =>
+              cashAccountIds.has(transactionById.get(id)?.accountId ?? ''),
+            ),
+        )
+        .flatMap((g) => g.transactionIds),
+    )
+    let receivedCents = 0
+    let paidCents = 0
+    for (const t of cashMovements) {
+      if (
+        t.postedAt < monthStart ||
+        t.postedAt > cashDate ||
+        ownCashTransferIds.has(t.id)
+      )
+        continue
+      const cents = amountInBaseCurrency(transactionById.get(t.id)!)
+      if (cents === null) continue
+      if (cents > 0) receivedCents += cents
+      else paidCents -= cents
+    }
+    let expectedIncomeCents = 0
+    const coveredPendingIds = new Set<string>()
+    for (const recurrence of recurrenceRows) {
+      if (
+        !recurrence.active ||
+        recurrence.direction !== 'income' ||
+        recurrence.creditCardId ||
+        ['transfer', 'profit_distribution_income'].includes(
+          recurrence.categoryId ?? '',
+        ) ||
+        (recurrence.accountId && !cashAccountIds.has(recurrence.accountId))
+      )
+        continue
+      const instances = new Map(
+        (occurrencesByRecurrence.get(recurrence.id) ?? []).map((o) => [
+          o.expectedDate,
+          {
+            id: o.id,
+            date: o.expectedDate,
+            cents: o.expectedAmountCents,
+            status: o.status,
+          },
+        ]),
+      )
+      for (
+        let date = recurrence.nextDate;
+        date <= monthEnd;
+        date = addRecurrencePeriod(
+          date,
+          recurrence.frequency,
+          recurrence.scheduleAnchor,
+        )
+      ) {
+        if (date >= monthStart && !instances.has(date))
+          instances.set(date, {
+            id: '',
+            date,
+            cents: recurrence.amountCents,
+            status: 'expected',
+          })
+      }
+      for (const o of instances.values()) {
+        if (
+          o.status !== 'expected' ||
+          o.date < referenceDate ||
+          o.date < monthStart ||
+          o.date > monthEnd
+        )
+          continue
+        const pending = projectedPendingByOccurrenceId.get(o.id)
+        if (pending) coveredPendingIds.add(pending.id)
+        expectedIncomeCents += pending
+          ? (amountInBaseCurrency(pending) ?? 0)
+          : (convertToBaseCurrency(o.cents, recurrence.currency) ?? 0)
+      }
+    }
+    for (const t of transactions) {
+      if (
+        t.status === 'pending' &&
+        t.accountId &&
+        cashAccountIds.has(t.accountId) &&
+        t.amountCents > 0 &&
+        !ownCashTransferIds.has(t.id) &&
+        !(
+          t.counterpartyAccountId && cashAccountIds.has(t.counterpartyAccountId)
+        ) &&
+        !(t.categoryId === 'transfer' && !t.counterpartyAccountId) &&
+        t.postedAt >= referenceDate &&
+        t.postedAt >= monthStart &&
+        t.postedAt <= monthEnd &&
+        !coveredPendingIds.has(t.id)
+      )
+        expectedIncomeCents += amountInBaseCurrency(t) ?? 0
+    }
+    const cashFlow = buildMonthlyCashFlow({
+      forecasting: familyMonth.forecasting,
+      openingCashCents: cashAt(shiftDays(monthStart, -1)),
+      cashCents:
+        currentMonth > referenceDate.slice(0, 7) ? null : cashAt(cashDate),
+      receivedCents,
+      paidCents,
+      expectedIncomeCents,
+      remainingExpenseCents: Math.max(
+        0,
+        familyMonth.lines.reduce((sum, l) => sum + l.cents - l.paidCents, 0),
+      ),
+      goalRemainingCents: familyMonth.savingsRemainingCents,
+    })
     return {
       currentMonth,
       netWorthCents: financialSummary.netWorthCents,
       currentIncomeCents: financialSummary.currentIncomeCents,
+      confirmedIncomeCents: confirmedIncome.cents,
+      familyMonth: {
+        ...familyMonth,
+        cashFlow,
+        hasData:
+          familyMonth.hasData ||
+          (cashFlow.cashCents !== null && cashFlow.cashCents !== 0),
+      },
       currentExpenseCents: financialSummary.currentExpenseCents,
       reviewTransactionCount: stagedRows.filter(
         (staged) => importById.get(staged.importId)?.status === 'review',
@@ -1314,6 +1619,7 @@ export async function getStrategyHistory(input: { months: number }) {
     result.push({
       month,
       strategyName: dashboard.activeStrategy.name,
+      familyMonth: { ...dashboard.familyMonth, lines: [] },
       baseIncomeCents: dashboard.baseIncomeCents,
       incomeCents: dashboard.currentIncomeCents,
       targets: dashboard.budgetTargets,

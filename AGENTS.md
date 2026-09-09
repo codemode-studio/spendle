@@ -8,6 +8,14 @@
 - `knowledge_base` learns only from explicit human decisions (category chosen in review or in the transaction list, recurrence confirmed or approved). Never write to it from heuristics, implicit history, automatic matches or AI. When adding a new human decision path, route it through `knowledge-base.server.ts`. Data migrations may use the SQL functions `normalize_description`, `merchant_signature` and `knowledge_pattern` registered in `connection.server.ts`; they are unavailable to `drizzle-kit migrate`. Knowledge prefixes are never created automatically; only the person or an approved migration list creates them. Reapplying the base to existing transactions goes through `knowledge-sync.server.ts` (entry-scoped after a base edit, full sync only from the Transações button with preview).
 - Scope UI types to the read model they need. Invalidation of financial reads includes configuration, planning, categories and paginated transactions; optimistic category edits must also cover cached transaction pages.
 
+## UI e UX autoexplicativas
+
+- Em cada área, componente e estado, a pessoa deve reconhecer o que está vendo, o que pode fazer e o resultado da ação pela hierarquia visual, posição, ícones, gráficos e feedback.
+- Prefira gráficos e indicadores para comparações, progresso, limites e metas. Use rótulos curtos para distinguir valores, períodos e realizado versus previsto; remova legendas e parágrafos que apenas repetem o que o elemento já comunica.
+- Análises do assistente aparecem junto ao conteúdo relevante com o ícone de brilhos, sem rótulos como `Análise do assistente · IA` e sem um card interno só para o texto. Use espaçamento e tipografia para organizar o conteúdo.
+- Preserve nomes acessíveis nos controles de ícone, navegação por teclado e identificação dos estados além da cor. Mensagens de erro ou ausência de dados devem indicar uma ação útil.
+- Ao verificar uma mudança de UI, confira cada elemento afetado em desktop e celular: propósito, ação, estado e resultado precisam ser compreensíveis sem uma explicação externa. Corrija a apresentação antes de acrescentar texto de ajuda.
+
 <!-- intent-skills:start -->
 
 # TanStack Intent - before editing files, run the matching guidance command.

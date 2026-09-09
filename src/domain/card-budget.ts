@@ -23,6 +23,7 @@ export function cardBudgetLines(input: {
   totalCents: number
   importId: string | null
   futureOffset: number
+  includedTransactionIds?: string[]
   purchases: Purchase[]
   plans: Plan[]
   explicitInstallments?: Array<{
@@ -70,7 +71,9 @@ export function cardBudgetLines(input: {
   if (input.futureOffset === 0) {
     for (const purchase of input.purchases) {
       if (
-        purchase.importId !== input.importId ||
+        (input.includedTransactionIds
+          ? !input.includedTransactionIds.includes(purchase.id)
+          : purchase.importId !== input.importId) ||
         ['card_payment', 'transfer'].includes(purchase.categoryId ?? '') ||
         /pagamento (recebido|em)/i.test(purchase.description)
       )

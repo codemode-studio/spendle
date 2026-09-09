@@ -114,7 +114,7 @@ export function KnowledgeBaseSection() {
     return (
       <Panel
         title="Base de conhecimento"
-        description="Decisões suas sobre categorias e recorrências, reaproveitadas nas próximas importações."
+        description="Suas escolhas nas próximas importações."
       >
         <EmptyState
           icon={BookOpen}
@@ -129,7 +129,7 @@ export function KnowledgeBaseSection() {
     <div className="grid gap-4">
       <Panel
         title="Categorias aprendidas"
-        description="Cada padrão guarda a última categoria que você escolheu. Um prefixo vale para todo estabelecimento que comece por ele; o padrão exato sempre vence. Heurística e IA não escrevem aqui."
+        description="Suas categorias salvas. Padrões exatos têm prioridade sobre prefixos."
       >
         {categoryEntries.length ? (
           <div className="overflow-x-auto">
@@ -215,7 +215,7 @@ export function KnowledgeBaseSection() {
 
       <Panel
         title="Recorrências aprendidas"
-        description="Estabelecimentos vinculados a uma recorrência ao confirmar ou aprovar um pagamento. Desvincular o pagamento remove a entrada."
+        description="Vínculos salvos ao confirmar pagamentos."
       >
         {recurrenceEntries.length ? (
           <div className="overflow-x-auto">

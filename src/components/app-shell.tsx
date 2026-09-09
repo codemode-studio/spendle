@@ -33,6 +33,7 @@ import { Button } from '#/components/ui/button'
 import { cn } from '#/lib/utils'
 import { TooltipProvider } from '#/components/ui/tooltip'
 import { Toaster } from '#/components/ui/sonner'
+import { OnboardingCard } from '#/features/home/onboarding-card'
 
 const navigation = [
   { to: '/', label: 'Visão geral', icon: LayoutDashboard },
@@ -45,14 +46,14 @@ const navigation = [
     icon: Landmark,
   },
   {
-    to: '/planejamento',
-    search: { section: 'recurrences' },
+    to: '/configuracoes',
+    search: { tab: 'recorrencias' },
     label: 'Recorrências',
     icon: CalendarClock,
   },
   {
-    to: '/planejamento',
-    search: { section: 'budget' },
+    to: '/configuracoes',
+    search: { tab: 'orcamento' },
     label: 'Orçamento e metas',
     icon: PiggyBank,
   },
@@ -115,13 +116,13 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
                     'search' in item ? item.search : undefined
                   const isActive =
                     pathname === to &&
-                    (targetSearch && 'tab' in targetSearch
-                      ? search.tab === 'contas' || search.tab === 'cartoes'
-                      : targetSearch && 'section' in targetSearch
-                        ? targetSearch.section === 'recurrences'
-                          ? search.section === 'recurrences'
-                          : search.section !== 'recurrences'
-                        : true)
+                    (targetSearch
+                      ? targetSearch.tab === 'contas'
+                        ? search.tab === 'contas' || search.tab === 'cartoes'
+                        : targetSearch.tab === 'orcamento'
+                          ? search.tab === 'orcamento' || search.tab === 'metas'
+                          : search.tab === targetSearch.tab
+                      : true)
                   return (
                     <SidebarMenuItem key={label}>
                       <SidebarMenuButton
@@ -145,6 +146,7 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
             if ((event.target as HTMLElement).closest('a')) setOpenMobile(false)
           }}
         >
+          <OnboardingCard />
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
@@ -164,7 +166,10 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
                 isActive={
                   pathname === '/configuracoes' &&
                   search.tab !== 'contas' &&
-                  search.tab !== 'cartoes'
+                  search.tab !== 'cartoes' &&
+                  search.tab !== 'orcamento' &&
+                  search.tab !== 'metas' &&
+                  search.tab !== 'recorrencias'
                 }
                 tooltip="Configurações"
               >
@@ -205,19 +210,20 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
             </Button>
           </div>
           <nav aria-label="Navegação principal" className="mt-2 flex gap-1">
-            {navigation.slice(0, 3).map(({ to, label }) => (
+            {navigation.slice(0, 3).map(({ to, label, icon: Icon }) => (
               <Link
                 key={to}
                 to={to}
                 aria-current={pathname === to ? 'page' : undefined}
                 className={cn(
-                  'flex min-h-11 flex-1 items-center justify-center rounded-full px-2 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring',
+                  'flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-1 text-xs font-medium whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-ring',
                   pathname === to
-                    ? 'bg-primary text-primary-foreground'
+                    ? 'bg-muted text-foreground'
                     : 'text-muted-foreground hover:bg-muted',
                 )}
               >
-                {label}
+                <Icon aria-hidden="true" className="size-4 shrink-0" />
+                {to === '/' ? 'Início' : label}
               </Link>
             ))}
           </nav>

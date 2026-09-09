@@ -44,7 +44,7 @@ export function PageHeader({
 }: {
   eyebrow?: string
   title: string
-  description: string
+  description?: string
   actions?: React.ReactNode
 }) {
   return (
@@ -56,9 +56,11 @@ export function PageHeader({
         <h1 className="font-heading mt-0.5 text-2xl font-semibold tracking-tight sm:text-3xl md:text-[2rem]">
           {title}
         </h1>
-        <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          {description}
-        </p>
+        {description && (
+          <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+            {description}
+          </p>
+        )}
       </div>
       {actions && <div className="flex flex-wrap gap-2 md:pt-1">{actions}</div>}
     </header>
@@ -204,6 +206,7 @@ export function ProgressBar({
 
 export function StatusBadge({
   tone = 'neutral',
+  className,
   ...props
 }: Omit<React.ComponentProps<typeof Badge>, 'variant'> & {
   tone?: 'neutral' | 'success' | 'warning' | 'danger' | 'info'
@@ -217,6 +220,12 @@ export function StatusBadge({
             ? 'outline'
             : tone
       }
+      className={cn(
+        tone !== 'danger' &&
+          tone !== 'warning' &&
+          'h-auto rounded-none border-0 bg-transparent px-0 py-0 font-normal text-muted-foreground',
+        className,
+      )}
       {...props}
     />
   )

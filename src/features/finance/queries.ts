@@ -2,6 +2,8 @@ import type { TransactionFilters } from './transactions.filters'
 import { queryOptions, skipToken } from '@tanstack/react-query'
 import type { QueryClient, QueryKey } from '@tanstack/react-query'
 
+import { getOnboardingStatusFn } from '#/features/home/onboarding.functions'
+
 import { assistantQueryKeys } from '#/features/home/query-keys'
 
 import {
@@ -22,6 +24,7 @@ export const financeQueryKeys = {
   all: ['finance'] as const,
   snapshot: (month?: string) =>
     [...financeQueryKeys.all, 'read', 'snapshot', month ?? 'current'] as const,
+  onboarding: () => [...financeQueryKeys.all, 'read', 'onboarding'] as const,
   snapshots: () => [...financeQueryKeys.all, 'read', 'snapshot'] as const,
   importReview: () => [...financeQueryKeys.all, 'imports', 'review'] as const,
   knowledgeBase: () =>
@@ -233,4 +236,11 @@ export const categoryTransactionsOptions = () =>
     queryKey: [...financeQueryKeys.all, 'read', 'categories'],
     queryFn: () => getCategoryTransactionsFn(),
     staleTime: 15_000,
+  })
+
+export const onboardingOptions = () =>
+  queryOptions({
+    queryKey: financeQueryKeys.onboarding(),
+    queryFn: () => getOnboardingStatusFn(),
+    staleTime: 60_000,
   })

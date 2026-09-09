@@ -23,7 +23,7 @@ export interface CardInstallmentPlan {
 export type InstallmentCommitmentType = 'short_installment' | 'temporary_fixed'
 
 export interface CardStatementSummary {
-  certainty?: 'closed' | 'installment_schedule'
+  certainty?: 'closed' | 'installment_schedule' | 'open'
   sourceImportId?: string
   dueDate: string
   closingDate: string
@@ -172,7 +172,7 @@ export function summarizeCardStatements(input: {
     closingDate: string
     dueDate: string
     totalCents: number
-    certainty?: 'closed' | 'installment_schedule'
+    certainty?: 'closed' | 'installment_schedule' | 'open'
     sourceImportId?: string
   }>
 }) {

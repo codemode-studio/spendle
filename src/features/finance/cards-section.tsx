@@ -149,7 +149,6 @@ export function CardsSection() {
     <div className="grid gap-6">
       <SectionHeader
         title="Cartões de crédito"
-        description="Faturas, limites e calendário de vencimentos."
         action={
           <Button
             type="button"
@@ -233,7 +232,7 @@ export function CardsSection() {
           <EmptyState
             icon={CreditCard}
             title="Nenhum cartão cadastrado"
-            description="Cadastre seus cartões para organizar faturas e identificar pagamentos automaticamente."
+            description="Adicione um cartão para acompanhar as faturas."
           />
         </Panel>
       )}
@@ -310,10 +309,7 @@ export function CardsSection() {
         ))}
 
       {data.installmentPlans.length > 0 && (
-        <Panel
-          title="Histórico de parcelas identificadas"
-          description="Uma compra pode aparecer em várias faturas. O calendário acima reúne os compromissos futuros."
-        >
+        <Panel title="Histórico de parcelas identificadas">
           <Table>
             <TableHeader>
               <TableRow>

@@ -64,26 +64,25 @@ export function CashChart({
     measured !== null && measured < 480
       ? Math.round(baseHeight * 0.8)
       : baseHeight
-  if (measured === null) {
-    return <div ref={ref} style={{ height }} aria-hidden="true" />
-  }
   return (
-    <CashChartBody
-      containerRef={ref}
-      width={measured}
-      points={points}
-      todayIndex={todayIndex}
-      height={height}
-      formatCents={formatCents}
-      formatDate={formatDate}
-      hover={hover}
-      setHover={setHover}
-    />
+    <div ref={ref} className="w-full" style={{ minHeight: height }}>
+      {measured !== null && (
+        <CashChartBody
+          width={measured}
+          points={points}
+          todayIndex={todayIndex}
+          height={height}
+          formatCents={formatCents}
+          formatDate={formatDate}
+          hover={hover}
+          setHover={setHover}
+        />
+      )}
+    </div>
   )
 }
 
 function CashChartBody({
-  containerRef,
   width,
   points,
   todayIndex,
@@ -93,7 +92,6 @@ function CashChartBody({
   hover,
   setHover,
 }: {
-  containerRef: React.RefObject<HTMLDivElement | null>
   width: number
   points: Array<CashPoint>
   todayIndex: number
@@ -180,7 +178,7 @@ function CashChartBody({
   const tooltipLeft = Math.min(Math.max(x(active), 90), width - 90)
 
   return (
-    <div ref={containerRef} className="relative w-full select-none">
+    <div className="relative w-full select-none">
       <div
         className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-xl border border-border bg-background px-3 py-2 text-xs shadow-sm"
         style={{ left: tooltipLeft, top: 0 }}

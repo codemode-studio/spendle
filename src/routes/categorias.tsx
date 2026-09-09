@@ -75,10 +75,7 @@ function CategoriesPage() {
   const maxShare = analysis.items[0]?.share ?? 0
 
   const setPeriod = (value: string) =>
-    void navigate({
-      search: { periodo: value as PeriodKey },
-      replace: true,
-    })
+    void navigate({ search: { periodo: value as PeriodKey }, replace: true })
 
   return (
     <Page>
@@ -200,10 +197,7 @@ function CategoriesPage() {
         )}
       </Panel>
 
-      <Panel
-        title="Por categoria"
-        description="Clique numa categoria para destacá-la no gráfico; a seta abre os lançamentos."
-      >
+      <Panel title="Por categoria">
         {analysis.items.length === 0 && analysis.uncategorizedCount === 0 ? (
           <EmptyState
             icon={Tags}

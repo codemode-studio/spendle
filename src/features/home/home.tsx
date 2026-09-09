@@ -3,7 +3,13 @@ import { useMutation } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
   ArrowRight,
-  CalendarClock,
+  ArrowLeft,
+  ChartNoAxesCombined,
+  ChartPie,
+  CalendarDays,
+  CreditCard,
+  ArrowDownLeft,
+  ArrowUpRight,
   Info,
   Landmark,
   Send,
@@ -15,29 +21,22 @@ import {
 import { toast } from 'sonner'
 
 import { EmptyState, Page, Panel } from '#/components/ui'
-import { Button } from '#/components/ui/button'
+import { Button, buttonVariants } from '#/components/ui/button'
 import {
   Sheet,
   SheetTrigger,
   SheetContent,
   SheetHeader,
   SheetTitle,
-  SheetDescription,
 } from '#/components/ui/sheet'
-import { GettingStarted } from './getting-started'
+import { MonthlyOverview } from './monthly-overview'
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '#/components/ui/tooltip'
 import { formatCurrency } from '#/domain/currency'
-import {
-  formatLongDate,
-  formatMonthName,
-  formatShortDate,
-  todayIso,
-} from '#/domain/period'
-import { StrategyProgressView } from '#/features/finance/strategy-progress'
+import { formatLongDate, formatShortDate, todayIso } from '#/domain/period'
 import type { FinanceSnapshot } from '#/features/finance/snapshot.types'
 import { cn } from '#/lib/utils'
 import {
@@ -58,40 +57,54 @@ export function Home({
   snapshot: FinanceSnapshot
   assistantConfigured: boolean
 }) {
+  const [showAnalysis, setShowAnalysis] = useState(false)
   const view = useMemo(() => buildHomeView(snapshot), [snapshot])
   const insights = useMemo(() => buildInsights(view, formatCurrency), [view])
 
   return (
     <Page className="max-w-[1120px]">
-      <Greeting snapshot={snapshot} />
-      <div className="mb-5 flex flex-wrap items-center gap-1 md:mb-6 md:gap-2">
-        <GettingStarted snapshot={snapshot} />
+      <CashHeader snapshot={snapshot} analysis={showAnalysis}>
+        <Button
+          variant="ghost"
+          aria-label={showAnalysis ? 'Voltar à visão geral' : 'Previsão'}
+          title={showAnalysis ? 'Voltar à visão geral' : 'Previsão'}
+          className="max-sm:size-11 max-sm:p-0"
+          onClick={() => setShowAnalysis(!showAnalysis)}
+        >
+          {showAnalysis ? <ArrowLeft /> : <ChartNoAxesCombined />}
+          <span className="hidden sm:inline">
+            {showAnalysis ? 'Voltar' : 'Previsão'}
+          </span>
+        </Button>
         <Sheet>
-          <SheetTrigger render={<Button variant="ghost" />}>
-            <Sparkles data-icon="inline-start" /> Assistente
+          <SheetTrigger
+            render={
+              <Button
+                variant="outline"
+                aria-label="Assistente"
+                title="Assistente"
+                className="max-sm:size-11 max-sm:p-0"
+              />
+            }
+          >
+            <Sparkles /> <span className="hidden sm:inline">Assistente</span>
           </SheetTrigger>
           <SheetContent
             keepMounted
-            className="overflow-y-auto data-[side=right]:w-full sm:max-w-lg"
+            className="min-h-0 overflow-hidden data-[side=right]:h-dvh data-[side=right]:w-full sm:max-w-lg"
           >
-            <SheetHeader className="pr-14">
-              <SheetTitle>Assistente</SheetTitle>
-              <SheetDescription>
-                Observações e perguntas sobre suas finanças.
-              </SheetDescription>
-            </SheetHeader>
             <ActivityColumn
               insights={insights}
               assistantConfigured={assistantConfigured}
             />
           </SheetContent>
         </Sheet>
-      </div>
+      </CashHeader>
       {snapshot.accounts.length === 0 ? (
         <EmptyState
           icon={Landmark}
           title="Comece pela sua primeira conta"
-          description="Cadastre uma conta e importe um extrato. Você confere os valores antes de salvar."
+          description="Adicione a conta que deseja acompanhar."
           action={
             <Button
               nativeButton={false}
@@ -101,92 +114,29 @@ export function Home({
             </Button>
           }
         />
+      ) : showAnalysis ? (
+        <div className="flex flex-col gap-6">
+          <CashCard snapshot={snapshot} view={view} />
+          <div className="grid items-start gap-6 lg:grid-cols-2">
+            <SpendingCard view={view} />
+            <MerchantsCard view={view} />
+          </div>
+        </div>
       ) : (
         <div className="flex flex-col gap-6">
-          <StrategyCard snapshot={snapshot} cashCents={view.cashTodayCents} />
-          <details>
-            <summary className="flex min-h-11 cursor-pointer items-center text-sm text-muted-foreground">
-              Evolução e projeção do caixa
-            </summary>
-            <CashCard snapshot={snapshot} view={view} />
-          </details>
-          <Panel
-            title="Para revisar"
-            description="Confira as importações e a classificação dos lançamentos."
-          >
-            <div className="flex flex-wrap gap-3">
-              <Button
-                variant="outline"
-                nativeButton={false}
-                render={<Link to="/importar" />}
-              >
-                {snapshot.dashboard.reviewImportCount > 0
-                  ? `${snapshot.dashboard.reviewImportCount} importações para revisar`
-                  : 'Importar extrato'}{' '}
-                <ArrowRight />
-              </Button>
-              <Button
-                variant="ghost"
-                nativeButton={false}
-                render={
-                  <Link
-                    to="/transacoes"
-                    search={{ category: 'uncategorized' }}
-                  />
-                }
-              >
-                Ver lançamentos sem categoria <ArrowRight />
-              </Button>
-            </div>
-          </Panel>
-          <div className="grid items-start gap-6 md:grid-cols-2">
-            <Panel
-              title="Gastos por categoria"
-              description="Últimos 30 dias. Valores classificados; a cobertura pode ser parcial."
-            >
-              <div className="flex flex-col gap-4">
-                {view.categories30.items.slice(0, 4).map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex items-center justify-between gap-4 text-sm"
-                  >
-                    <span className="truncate">{item.name}</span>
-                    <span className="font-medium tabular-nums">
-                      {formatCurrency(item.cents)}
-                    </span>
-                  </div>
-                ))}
-                {view.categories30.items.length === 0 && (
-                  <p className="text-sm text-muted-foreground">
-                    Nenhum gasto classificado neste período.
-                  </p>
-                )}
-                {view.last30.uncategorizedCents > 0 && (
-                  <p className="text-sm text-muted-foreground">
-                    Mais {formatCurrency(view.last30.uncategorizedCents)} em
-                    saídas sem categoria.
-                  </p>
-                )}
-                <Button
-                  variant="ghost"
-                  nativeButton={false}
-                  render={<Link to="/categorias" />}
-                >
-                  Ver categorias <ArrowRight />
-                </Button>
-              </div>
-            </Panel>
+          <MonthlyOverview
+            dashboard={snapshot.dashboard}
+            assistantConfigured={assistantConfigured}
+            currentClosed={snapshot.monthlyBudgets.some(
+              (budget) =>
+                budget.month === snapshot.dashboard.currentMonth &&
+                budget.closed,
+            )}
+          />
+          <div className="grid items-stretch gap-6 md:grid-cols-2">
+            <CategorySummaryCard view={view} />
             <CommitmentsCard view={view} />
           </div>
-          <details>
-            <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">
-              Explorar gastos e maiores destinos
-            </summary>
-            <div className="mt-4 flex flex-col gap-6">
-              <SpendingCard view={view} />
-              <MerchantsCard view={view} />
-            </div>
-          </details>
         </div>
       )}
     </Page>
@@ -195,36 +145,34 @@ export function Home({
 
 // ─── Cabeçalho ───────────────────────────────────────────────────────────────
 
-function Greeting({ snapshot }: { snapshot: FinanceSnapshot }) {
-  const now = new Date()
-  const hour = now.getHours()
-  const salutation =
-    hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite'
-  const person = snapshot.scopes.find((scope) => scope.type === 'person')
-  const name = person?.name.split(' ')[0] ?? 'família'
-  const date = new Intl.DateTimeFormat('pt-BR', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-  }).format(now)
+function CashHeader({
+  snapshot,
+  children,
+  analysis,
+}: {
+  snapshot: FinanceSnapshot
+  children: React.ReactNode
+  analysis: boolean
+}) {
+  const cash = snapshot.dashboard.familyMonth.cashFlow.cashCents
 
   return (
-    <header className="mb-2 flex flex-wrap items-start justify-between gap-4 md:mb-4">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight md:text-[2rem]">
-          {salutation}, {name}
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {date.charAt(0).toUpperCase() + date.slice(1)}
+    <header className="mb-6 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+      <div className="min-w-0">
+        <p className="text-sm text-muted-foreground">
+          {analysis ? 'Visão geral' : 'Caixa atual'}
         </p>
+        <h1 className="text-2xl font-semibold tracking-tight tabular-nums md:text-[2rem]">
+          {analysis
+            ? 'Previsão'
+            : cash == null
+              ? 'Sem saldo registrado'
+              : formatCurrency(cash)}
+        </h1>
       </div>
-      <Button
-        className="hidden md:inline-flex"
-        nativeButton={false}
-        render={<Link to="/importar" />}
-      >
-        Importar extrato <ArrowRight />
-      </Button>
+      <div className="flex shrink-0 items-center justify-end gap-1 sm:gap-2">
+        {children}
+      </div>
     </header>
   )
 }
@@ -337,16 +285,14 @@ function CashCard({
       </div>
 
       <p className="mt-3 text-xs text-muted-foreground">
-        Cenário estimado, incluindo receitas cadastradas ainda não recebidas.
-        Novas compras no cartão comprometem o saldo desde a compra, antes do
-        pagamento da fatura. A projeção depende da cobertura dos extratos e dos
-        vínculos das recorrências; não é uma previsão exata do saldo bancário.
+        Projeção com receitas previstas e compras no cartão desde a compra.
+        Depende dos extratos e recorrências registrados.
       </p>
 
-      <details className="mt-4 text-sm">
-        <summary className="cursor-pointer font-medium">
+      <section className="mt-4 text-sm">
+        <h3 className="font-medium">
           Premissas deste cenário · {cash.assumptions.days} dias
-        </summary>
+        </h3>
         <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
           <dt>Caixa inicial em reais</dt>
           <dd className="text-right">
@@ -377,11 +323,12 @@ function CashCard({
             − {formatCurrency(cash.assumptions.historicalEstimateCents)}
           </dd>
         </dl>
-        <p className="mt-3 text-xs text-muted-foreground">
-          {cash.recurringEstimateTransactionIds.length} pagamentos históricos
-          reconhecidos pela KB já estão representados nas recorrências. Essa
-          identificação ajusta apenas a estimativa; não confirma pagamentos.
-        </p>
+        {cash.recurringEstimateTransactionIds.length > 0 && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            {cash.recurringEstimateTransactionIds.length} pagamentos históricos
+            descontados da estimativa para evitar duplicidade.
+          </p>
+        )}
         {cash.observedAdvancePayments.length > 0 && (
           <div className="mt-4">
             <p className="font-medium">Pagamentos antecipados observados</p>
@@ -395,8 +342,7 @@ function CashCard({
               ))}
             </ul>
             <p className="mt-2 text-xs text-muted-foreground">
-              Esses valores não são reservados novamente neste cenário. O
-              vínculo no cadastro continua aguardando confirmação.
+              Já descontados da projeção; vínculo pendente de confirmação.
             </p>
           </div>
         )}
@@ -412,13 +358,11 @@ function CashCard({
               ))}
             </ul>
             <p className="mt-3 text-xs text-muted-foreground">
-              Um pagamento isolado pode aumentar muito esta estimativa. A lista
-              mostra observações dos últimos 60 dias, não novas contas a pagar
-              nem despesas cuja repetição foi confirmada.
+              Histórico de 60 dias; repetição não confirmada.
             </p>
           </div>
         )}
-      </details>
+      </section>
 
       <dl className="mt-5 grid grid-cols-2 gap-4 border-t pt-5 lg:grid-cols-4">
         <Stat
@@ -475,10 +419,10 @@ function CashCard({
         />
       </dl>
       {view.accountInflows30.length > 0 && (
-        <details className="mt-5 border-t pt-4 text-sm">
-          <summary className="cursor-pointer font-medium">
+        <section className="mt-5 border-t pt-4 text-sm">
+          <h3 className="font-medium">
             Entradas em contas por moeda · últimos 30 dias
-          </summary>
+          </h3>
           <ul className="mt-3 space-y-2">
             {view.accountInflows30.map((entry) => (
               <li key={entry.currency}>
@@ -496,7 +440,7 @@ function CashCard({
             créditos podem incluir rendimentos e estornos; não são todos receita
             recorrente.
           </p>
-        </details>
+        </section>
       )}
     </section>
   )
@@ -543,43 +487,6 @@ function Hint({ text }: { text: string }) {
         {text}
       </TooltipContent>
     </Tooltip>
-  )
-}
-
-// ─── Estratégia do mês ───────────────────────────────────────────────────────
-
-function StrategyCard({
-  snapshot,
-  cashCents,
-}: {
-  snapshot: FinanceSnapshot
-  cashCents: number
-}) {
-  return (
-    <section className="min-w-0 rounded-xl border bg-card p-panel shadow-xs">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium text-muted-foreground">
-            {snapshot.dashboard.activeStrategy.name} ·{' '}
-            {formatMonthName(snapshot.dashboard.currentMonth)}
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          nativeButton={false}
-          render={<Link to="/planejamento" search={{ section: 'budget' }} />}
-        >
-          Ajustar
-        </Button>
-      </div>
-      <div className="mt-5">
-        <StrategyProgressView
-          dashboard={snapshot.dashboard}
-          cashCents={cashCents}
-        />
-      </div>
-    </section>
   )
 }
 
@@ -782,69 +689,193 @@ function MerchantsCard({ view }: { view: HomeView }) {
   )
 }
 
+const summaryCardClass =
+  '[&_[data-slot=card-content]]:flex [&_[data-slot=card-content]]:flex-1 [&_[data-slot=card-content]]:flex-col [&_[data-slot=card-content]]:gap-5 [&_[data-slot=card-header]]:grid-cols-[1fr_auto] [&_[data-slot=card-header]]:grid-rows-1 [&_[data-slot=card-action]]:col-start-2 [&_[data-slot=card-action]]:row-start-1 [&_[data-slot=card-action]]:mt-0'
+
+function CategorySummaryCard({ view }: { view: HomeView }) {
+  const breakdown = view.categories30
+  return (
+    <Panel
+      title="Gastos por categoria"
+      className={summaryCardClass}
+      action={
+        <ChartPie aria-hidden="true" className="size-5 text-muted-foreground" />
+      }
+    >
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <p className="text-3xl font-semibold tracking-tight tabular-nums">
+          {formatCurrency(breakdown.totalCents)}
+        </p>
+        <span className="text-xs text-muted-foreground">30 dias</span>
+      </div>
+      {breakdown.items.length > 0 ? (
+        <>
+          <CategoryBar items={breakdown.items} />
+          <ul className="divide-y">
+            {breakdown.items.slice(0, 5).map((item) => (
+              <li
+                key={item.id}
+                className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 py-3 first:pt-0"
+              >
+                <span
+                  aria-hidden="true"
+                  className="flex size-9 items-center justify-center rounded-xl"
+                  style={{ background: `${item.color}1f` }}
+                >
+                  <span
+                    className="size-2.5 rounded-full"
+                    style={{ background: item.color }}
+                  />
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium" title={item.name}>
+                    {item.name}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {Math.round(item.share * 100)}%
+                  </p>
+                </div>
+                <span className="whitespace-nowrap text-sm font-semibold tabular-nums">
+                  {formatCurrency(item.cents)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 py-6 text-muted-foreground">
+          <ChartPie
+            aria-hidden="true"
+            className="size-10 text-muted-foreground/40"
+            strokeWidth={1.25}
+          />
+          <p className="text-sm">Nenhum gasto classificado.</p>
+        </div>
+      )}
+      {view.last30.uncategorizedCents > 0 && (
+        <div className="flex flex-wrap justify-between gap-2 border-t pt-3 text-xs text-muted-foreground">
+          <span>Sem categoria</span>
+          <span className="tabular-nums">
+            {formatCurrency(view.last30.uncategorizedCents)}
+          </span>
+        </div>
+      )}
+      <Link
+        to="/categorias"
+        className={buttonVariants({
+          variant: 'ghost',
+          size: 'default',
+          className: 'mt-auto w-full',
+        })}
+      >
+        Ver categorias <ArrowRight data-icon="inline-end" />
+      </Link>
+    </Panel>
+  )
+}
+
 function CommitmentsCard({ view }: { view: HomeView }) {
   const due = view.commitments30.filter((item) => item.amountCents < 0)
   const dueCents = due.reduce((sum, item) => sum + -item.amountCents, 0)
   return (
-    <section className="min-w-0 rounded-xl border bg-card p-panel shadow-xs">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <CalendarClock className="size-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-muted-foreground">
-            Próximos 30 dias
-          </h2>
-        </div>
-        <span className="text-xs text-muted-foreground">
-          a pagar{' '}
-          <span className="font-semibold text-foreground tabular-nums">
-            {formatCurrency(dueCents)}
-          </span>
-        </span>
+    <Panel
+      title="Próximos 30 dias"
+      className={summaryCardClass}
+      action={
+        <CalendarDays
+          aria-hidden="true"
+          className="size-5 text-muted-foreground"
+        />
+      }
+    >
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <p className="text-3xl font-semibold tracking-tight tabular-nums">
+          {formatCurrency(dueCents)}
+        </p>
+        <span className="text-xs text-muted-foreground">a pagar</span>
       </div>
       {view.commitments30.length === 0 ? (
-        <p className="mt-4 text-sm text-muted-foreground">
-          Nenhum vencimento previsto. Cadastre recorrências para ganhar
-          previsibilidade.
-        </p>
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 py-6 text-muted-foreground">
+          <CalendarDays
+            aria-hidden="true"
+            className="size-10 text-muted-foreground/40"
+            strokeWidth={1.25}
+          />
+          <p className="text-sm">Nenhum vencimento previsto.</p>
+        </div>
       ) : (
-        <ul className="mt-4 divide-y">
-          {view.commitments30.slice(0, 4).map((item) => (
-            <li
-              key={item.id}
-              className="flex items-center justify-between gap-3 py-2.5"
-            >
-              <div className="flex min-w-0 items-center gap-3">
-                <span className="w-14 shrink-0 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
-                  {formatShortDate(item.date)}
-                </span>
-                <p className="truncate text-sm font-medium">{item.name}</p>
-              </div>
-              <span
-                className={`shrink-0 text-sm font-semibold tabular-nums ${
-                  item.amountCents > 0 ? 'text-emerald-700' : ''
-                }`}
+        <ul className="divide-y">
+          {view.commitments30.slice(0, 5).map((item) => {
+            const incoming = item.amountCents > 0
+            const Icon = incoming
+              ? ArrowDownLeft
+              : item.kind === 'statement'
+                ? CreditCard
+                : ArrowUpRight
+            const date = new Date(`${item.date}T12:00:00`)
+            const month = new Intl.DateTimeFormat('pt-BR', { month: 'short' })
+              .format(date)
+              .replace('.', '')
+            return (
+              <li
+                key={item.id}
+                className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 py-3 first:pt-0"
               >
-                {item.amountCents > 0 ? '+' : '−'}
-                {formatCurrency(Math.abs(item.amountCents))}
-              </span>
-            </li>
-          ))}
+                <time
+                  dateTime={item.date}
+                  className="flex size-10 shrink-0 flex-col items-center justify-center rounded-xl bg-muted text-foreground"
+                >
+                  <span className="text-sm leading-none font-semibold tabular-nums">
+                    {date.getDate()}
+                  </span>
+                  <span className="mt-0.5 text-[10px] leading-none text-muted-foreground">
+                    {month}
+                  </span>
+                </time>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium" title={item.name}>
+                    {item.name}
+                  </p>
+                  <p
+                    className={cn(
+                      'mt-1 flex items-center gap-1 text-xs',
+                      incoming ? 'text-success' : 'text-muted-foreground',
+                    )}
+                  >
+                    <Icon aria-hidden="true" className="size-3" />
+                    {incoming
+                      ? 'A receber'
+                      : item.kind === 'statement'
+                        ? 'Fatura'
+                        : 'A pagar'}
+                  </p>
+                </div>
+                <span
+                  className={cn(
+                    'whitespace-nowrap text-sm font-semibold tabular-nums',
+                    incoming && 'text-success',
+                  )}
+                >
+                  {incoming ? '+' : ''}
+                  {formatCurrency(Math.abs(item.amountCents))}
+                </span>
+              </li>
+            )
+          })}
         </ul>
       )}
-      {
-        <Button
-          variant="ghost"
-          size="sm"
-          className="mt-2 w-full"
-          nativeButton={false}
-          render={
-            <Link to="/planejamento" search={{ section: 'recurrences' }} />
-          }
-        >
-          Ver recorrências <ArrowRight />
-        </Button>
-      }
-    </section>
+      <Link
+        to="/configuracoes"
+        search={{ tab: 'recorrencias' }}
+        className={buttonVariants({
+          variant: 'ghost',
+          size: 'default',
+          className: 'mt-auto w-full',
+        })}
+      >
+        Ver recorrências <ArrowRight data-icon="inline-end" />
+      </Link>
+    </Panel>
   )
 }
 
@@ -873,9 +904,6 @@ function ActivityColumn({
   const [conversation, setConversation] = useState<Array<FeedItem>>([])
   const [question, setQuestion] = useState('')
   const [reactions, setReactions] = useState<Record<string, 'up' | 'down'>>({})
-  const [showAllInsights, setShowAllInsights] = useState(false)
-  const collapsedCount = 3
-  const hiddenInsights = Math.max(insights.length - collapsedCount, 0)
 
   const push = (item: FeedItem) =>
     setConversation((current) => [...current, item])
@@ -919,9 +947,11 @@ function ActivityColumn({
   ]
 
   return (
-    <aside className="flex min-h-0 flex-col bg-background">
-      <div className="flex shrink-0 items-center justify-between gap-3 px-panel pt-page pb-4">
-        <h2 className="text-2xl font-semibold tracking-tight">Atividade</h2>
+    <aside className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
+      <SheetHeader className="shrink-0 flex-row flex-wrap items-center justify-between gap-3 pr-14">
+        <SheetTitle className="text-xl font-semibold tracking-tight">
+          Atividade
+        </SheetTitle>
         <Button
           variant="outline"
           size="sm"
@@ -933,22 +963,25 @@ function ActivityColumn({
           />
           {analysis.isPending ? 'Analisando…' : 'Análise da quinzena'}
         </Button>
-      </div>
+      </SheetHeader>
 
-      <div className="space-y-5 px-panel pb-panel sm:space-y-6 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
+      <div
+        aria-label="Conversa com o assistente"
+        role="region"
+        tabIndex={0}
+        className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-panel pb-panel sm:space-y-6"
+      >
         {feed.length === 0 && (
           <p className="text-sm text-muted-foreground">
             Importe extratos para o assistente começar a observar seus gastos.
           </p>
         )}
-        {feed.map((item, index) => {
+        {feed.map((item) => {
           if (item.kind === 'insight') {
             const reaction = reactions[item.id]
-            const collapsed = !showAllInsights && index >= collapsedCount
             return (
               <Message
                 key={item.id}
-                className={collapsed ? 'hidden' : undefined}
                 author="Assistente"
                 avatar={
                   <span
@@ -1036,17 +1069,6 @@ function ActivityColumn({
             </Message>
           )
         })}
-        {hiddenInsights > 0 && (
-          <button
-            type="button"
-            onClick={() => setShowAllInsights((value) => !value)}
-            className="w-full rounded-lg border py-2 text-xs font-medium text-muted-foreground hover:bg-muted pointer-coarse:py-3"
-          >
-            {showAllInsights
-              ? 'Mostrar menos'
-              : `Ver mais ${hiddenInsights} ${hiddenInsights === 1 ? 'observação' : 'observações'}`}
-          </button>
-        )}
         {(ask.isPending || analysis.isPending) && (
           <Message author="Assistente" avatar={<AssistantAvatar />}>
             <p className="animate-pulse text-muted-foreground">
@@ -1056,7 +1078,10 @@ function ActivityColumn({
         )}
       </div>
 
-      <form onSubmit={submitQuestion} className="shrink-0 border-t p-panel">
+      <form
+        onSubmit={submitQuestion}
+        className="shrink-0 border-t bg-background p-panel pb-[max(var(--spacing-panel),env(safe-area-inset-bottom))]"
+      >
         <div className="flex items-center gap-2 rounded-xl border bg-background px-3 py-1.5 shadow-xs focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40">
           <input
             value={question}
