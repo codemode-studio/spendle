@@ -12,6 +12,7 @@ import {
   updateKnowledgePattern,
 } from './knowledge-base.server'
 import * as recurrence from './recurrence.server'
+import { applyKnowledgeSync, planKnowledgeSync } from './knowledge-sync.server'
 
 function ofxStatement(
   rows: Array<{ id: string; date: string; amount: string; name: string }>,
@@ -144,6 +145,212 @@ describe('base de conhecimento das importações', () => {
     })
 
     expect(await knowledgeEntries('category')).toEqual([])
+  })
+
+  it('shares matching across staging and sync while preserving each flow’s eligibility and human decisions', async () => {
+    const c = database.ids.categories
+    const entries = [
+      {
+        id: 'short',
+        pattern: 'loja',
+        matchMode: 'prefix' as const,
+        categoryId: c.family,
+        direction: 'expense' as const,
+      },
+      {
+        id: 'long',
+        pattern: 'loja bairro',
+        matchMode: 'prefix' as const,
+        categoryId: c.housing,
+        direction: 'expense' as const,
+      },
+      {
+        id: 'exact',
+        pattern: 'loja bairro central',
+        matchMode: 'exact' as const,
+        categoryId: c.shopping,
+        direction: 'expense' as const,
+      },
+      {
+        id: 'income',
+        pattern: 'loja bairro central',
+        matchMode: 'exact' as const,
+        categoryId: c.leisure,
+        direction: 'income' as const,
+      },
+      {
+        id: 'pix',
+        pattern: 'locadora exemplo',
+        matchMode: 'exact' as const,
+        categoryId: c.housing,
+        direction: 'expense' as const,
+      },
+      {
+        id: 'installment',
+        pattern: 'sephora store',
+        matchMode: 'exact' as const,
+        categoryId: c.personalCare,
+        direction: 'expense' as const,
+      },
+    ]
+    // Synthetic previously approved human decisions, including two explicit prefixes.
+    await db.insert(schema.knowledgeBase).values(
+      entries.map((entry) => ({
+        ...entry,
+        kind: 'category' as const,
+        signature: entry.pattern,
+        sampleDescription: entry.pattern,
+        source: 'pattern_approval' as const,
+      })),
+    )
+    await db.insert(schema.categorizationRules).values({
+      id: 'explicit',
+      pattern: 'loja regra',
+      categoryId: c.insurance,
+    })
+    const cases = [
+      {
+        id: 'short',
+        name: 'LOJA OUTRA',
+        amount: '-10.01',
+        category: c.family,
+        confidence: 92,
+      },
+      {
+        id: 'long',
+        name: 'LOJA BAIRRO NORTE',
+        amount: '-10.02',
+        category: c.housing,
+        confidence: 92,
+      },
+      {
+        id: 'exact',
+        name: 'LOJA BAIRRO CENTRAL',
+        amount: '-10.03',
+        category: c.shopping,
+        confidence: 98,
+      },
+      {
+        id: 'income',
+        name: 'LOJA BAIRRO CENTRAL',
+        amount: '10.04',
+        category: c.leisure,
+        confidence: 98,
+      },
+      {
+        id: 'pix',
+        name: 'Pix enviado: "Cp :12345678-LOCADORA EXEMPLO"',
+        amount: '-10.05',
+        category: c.housing,
+        confidence: 98,
+      },
+      {
+        id: 'installment',
+        name: 'SEPHORA STORE - Parcela 3/6',
+        amount: '-10.06',
+        category: c.personalCare,
+        confidence: 98,
+      },
+      {
+        id: 'no-token',
+        name: 'LOJAX QUALQUER',
+        amount: '-10.07',
+        category: c.uncategorized,
+        confidence: 0,
+      },
+      {
+        id: 'explicit',
+        name: 'LOJA REGRA',
+        amount: '-10.08',
+        category: c.insurance,
+        confidence: 100,
+      },
+    ]
+    await db.insert(schema.transactions).values(
+      cases.map((item) => ({
+        id: item.id,
+        accountId: database.ids.brlAccount,
+        postedAt: '2026-08-01',
+        description: item.name,
+        normalizedDescription: item.name.toLowerCase(),
+        amountCents: Math.round(Number(item.amount) * 100),
+        currency: 'BRL',
+        categoryId: c.uncategorized,
+        fingerprint: item.id,
+      })),
+    )
+    await db.insert(schema.transactions).values(
+      ['transfer', 'payment', 'counterparty'].map((id) => ({
+        id,
+        accountId: database.ids.brlAccount,
+        postedAt: '2026-08-01',
+        description: 'LOJA OUTRA',
+        normalizedDescription: 'loja outra',
+        amountCents: -1000,
+        currency: 'BRL',
+        fingerprint: id,
+        categoryId:
+          id === 'transfer'
+            ? c.transfer
+            : id === 'payment'
+              ? c.cardPayment
+              : c.uncategorized,
+        counterpartyAccountId:
+          id === 'counterparty' ? database.ids.brlAccount : null,
+      })),
+    )
+    const beforeKnowledge = await db.select().from(schema.knowledgeBase)
+    const { importId } = await stageImport({
+      file: ofxStatement(
+        cases.map((item) => ({ ...item, date: '2026-08-10' })),
+      ),
+      targetType: 'account',
+      targetId: database.ids.brlAccount,
+      aiConsent: false,
+    })
+    const staged = await stagedRowsOf(importId)
+    const beforeTransactions = await db.select().from(schema.transactions)
+    const plan = await planKnowledgeSync()
+    for (const item of cases) {
+      const row = staged.find((entry) => entry.externalId === item.id)
+      expect(row, item.id).toMatchObject({ suggestedCategoryId: item.category })
+      if (!['explicit', 'no-token'].includes(item.id)) {
+        expect(row).toMatchObject({
+          suggestionSource: 'knowledge',
+          suggestionConfidence: item.confidence,
+        })
+        expect(
+          plan.changes.find((change) => change.transactionId === item.id),
+        ).toMatchObject({ entryId: item.id, toCategoryId: item.category })
+      }
+    }
+    expect(
+      staged.find((row) => row.externalId === 'explicit')?.suggestionSource,
+    ).toBe('rule')
+    expect(
+      plan.changes.find((change) => change.transactionId === 'explicit')
+        ?.toCategoryId,
+    ).toBe(c.family)
+    expect(
+      plan.changes.some((change) =>
+        ['transfer', 'payment', 'counterparty', 'no-token'].includes(
+          change.transactionId,
+        ),
+      ),
+    ).toBe(false)
+    expect(await db.select().from(schema.transactions)).toEqual(
+      beforeTransactions,
+    )
+    expect(
+      (await planKnowledgeSync({ entryId: 'long' })).changes.map(
+        (change) => change.transactionId,
+      ),
+    ).toEqual(['long'])
+    await applyKnowledgeSync()
+    expect(await stagedRowsOf(importId)).toEqual(staged)
+    expect(await db.select().from(schema.knowledgeBase)).toEqual(
+      beforeKnowledge,
+    )
   })
 
   it('sugere a categoria aprendida na próxima importação, acima da heurística', async () => {

@@ -1,27 +1,22 @@
-# MVP local
+# Escopo local
 
 ## Entregue
 
-- Dashboard familiar consolidado, Contas, Cartões, Transações, Importar, Planejamento e Configurações.
-- Entidades PF/PJ brasileiras, contas por finalidade e cartões em navegação separada.
-- SQLite/Drizzle com migrações, invariantes de destino único e seed das contas, cartões e instrumentos conhecidos.
-- OFX e CSV determinísticos; PDF classificado e extraído localmente pelo `pdf-inspector` em Markdown e texto posicionado.
-- Revisão por lote, originais por SHA-256, evidência por página/coordenadas, duplicidade por arquivo/FITID/fingerprint e commit revalidado.
-- Auditoria de saldo inicial + movimentos = saldo final, total de fatura e pontos de controle datados, sempre com tolerância zero.
+- Visão geral de caixa mensal, categorias e previsão com simulação de 30, 60 e 90 dias.
+- Contas PF/PJ, cartões, transações e importação. Orçamento, metas e recorrências em Configurações; a rota antiga de Planejamento redireciona para essas seções.
+- SQLite/Drizzle, migrações e contas por finalidade. Investimentos e cripto podem ser acompanhados por contas e saldos manuais.
+- OFX/CSV determinísticos e extração local de PDF. Revisão por lote, originais por SHA-256, evidência por página e reconciliação de saldo/fatura.
 - Sugestões reversíveis de transferência, distribuição de lucro, câmbio, pagamento de cartão e estorno.
-- Contêineres manuais separados para BTG compartilhada, investimentos no Inter e futura visibilidade de cripto.
-- Estratégias Equilibrada, Patrimonial, Agressiva e Independência, personalizáveis em basis points, com reativação manual dos aportes à reserva.
-- Base conservadora de renda, reserva em meses de essenciais, redirecionamento para investimentos e objetivos com aportes.
-- Cartões com ciclo de fechamento/vencimento, fatura atual e próxima, limite comprometido e calendário de faturas.
-- Parcelas cadastráveis e detectadas automaticamente em descrições como `02/10`, com projeção das cobranças futuras.
-- Recorrências cadastráveis.
+- Estratégias Equilibrada, Patrimonial, Agressiva e Independência, renda-base conservadora, reserva e objetivos com aportes.
+- Ciclos de cartão, limites, faturas e parcelas futuras. Detecção de parcelas em descrições como `02/10`.
+- Recorrências com ocorrências, vínculos e envelopes. Base de conhecimento de decisões humanas, com prévia de sincronização.
+- Assistente opcional, condicionado à configuração e ao consentimento.
 
-## Aceite
+## Critérios de aceite
 
-- Funciona sem chave de IA em `127.0.0.1`.
-- Transferências e pagamentos de cartão confirmados usam categorias excluídas e não duplicam despesas.
-- Faturamento PJ não entra no orçamento familiar; distribuição só vira renda quando classificada como renda familiar.
-- Transferências para contas de reserva/investimento são aportes, não gastos.
-- Meses fechados guardam um snapshot da estratégia e dos percentuais efetivos.
-- `pnpm verify` conclui typecheck, lint, testes e build.
-- Um lote divergente ou apenas parcialmente verificável não pode ser consolidado por confirmação manual.
+- Funciona localmente sem chave de IA.
+- Divergência de saldo bloqueia a consolidação. Importação sem checkpoint pode exigir revisão manual e confirmação do período; não passa a ter saldo verificado. Ver [ADR 001](adrs/001-import-continuity-and-reconciliation.md).
+- Transferências e pagamentos de cartão preservam as duas pontas e não duplicam despesas. Aportes são movimentos patrimoniais.
+- Faturamento PJ não entra na renda-base familiar. A classificação e o escopo determinam a elegibilidade de distribuições.
+- Meses fechados preservam estratégia e percentuais efetivos.
+- `pnpm verify` executa tipos, lint, testes e build. Cobertura de navegador e testes privados constam nos [relatos de QA](../docs/README.md).

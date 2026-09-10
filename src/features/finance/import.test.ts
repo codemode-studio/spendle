@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  assignStatementValueMatches,
+  matchStatementValueSubset,
   sameStatementValues,
 } from '#/domain/canonicalization'
 import {
@@ -113,14 +113,12 @@ describe('controle complementar CSV/PDF', () => {
       },
     ]
 
-    const assignments = assignStatementValueMatches(definitivePdf, pendingCsv)
+    const assignments = matchStatementValueSubset(definitivePdf, pendingCsv)
 
-    expect(assignments).toEqual([
-      {
-        observation: definitivePdf[0],
-        transaction: pendingCsv[0],
-      },
-    ])
+    expect(assignments).toEqual({
+      matches: [{ observation: definitivePdf[0], transaction: pendingCsv[0] }],
+      unmatched: [],
+    })
   })
 
   it('não confunde IDs bancários diferentes com a mesma data e valor', () => {
@@ -133,7 +131,7 @@ describe('controle complementar CSV/PDF', () => {
       },
     ]
     expect(
-      assignStatementValueMatches(
+      matchStatementValueSubset(
         [
           {
             externalId: 'E2',
@@ -146,7 +144,7 @@ describe('controle complementar CSV/PDF', () => {
       ),
     ).toBeNull()
     expect(
-      assignStatementValueMatches(
+      matchStatementValueSubset(
         [
           {
             postedAt: '2026-08-03',
@@ -156,7 +154,19 @@ describe('controle complementar CSV/PDF', () => {
         ],
         canonical,
       ),
-    ).not.toBeNull()
+    ).toEqual({
+      matches: [
+        {
+          observation: {
+            postedAt: '2026-08-03',
+            amountCents: -12_345,
+            currency: 'BRL',
+          },
+          transaction: canonical[0],
+        },
+      ],
+      unmatched: [],
+    })
   })
 })
 

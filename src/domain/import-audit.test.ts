@@ -3,13 +3,12 @@ import { describe, expect, it } from 'vitest'
 import {
   canCommitImportAudit,
   classifyImportReviewGuidance,
-  effectiveValidationReason,
+  getEffectiveImportValidationState,
   evaluateImportAudit,
   getImportBalanceReview,
   getImportCoverageProvenance,
   identifyDuplicateReasons,
   nextValidationState,
-  resolveImportReviewReason,
   summarizeImport,
   hasImportDestinationConflict,
 } from './import-audit'
@@ -67,16 +66,6 @@ describe('auditoria de importação', () => {
       'destination_conflict',
     ],
     [
-      'conflito de destino vivo sobre motivo pronto persistido',
-      {
-        validationStatus: 'imported' as const,
-        validationReason: 'ready' as const,
-        validationMessage: null,
-        hasDestinationConflict: true,
-      },
-      'destination_conflict',
-    ],
-    [
       'arquivo idêntico vivo sobre motivo pronto persistido',
       {
         validationStatus: 'imported' as const,
@@ -108,7 +97,17 @@ describe('auditoria de importação', () => {
       'balance_mismatch',
     ],
   ])('deriva o motivo efetivo de %s', (_, row, expected) => {
-    expect(effectiveValidationReason(row)).toBe(expected)
+    const state = getEffectiveImportValidationState(row)
+    const canRemediate = expected === 'balance_mismatch'
+    expect(state).toMatchObject({
+      reason: expected,
+      committable: false,
+      remediation: {
+        links: canRemediate,
+        exclusions: canRemediate,
+        checkpointReplacement: canRemediate,
+      },
+    })
   })
 
   describe('orientação da revisão', () => {
@@ -241,34 +240,117 @@ describe('auditoria de importação', () => {
     })
 
     it.each([
-      ['blocked', 'ready', 'blocked'],
-      ['identical_file', 'needs_balance', 'identical_file'],
-      ['destination_conflict', 'ready', 'destination_conflict'],
-      ['ready', 'destination_conflict', 'destination_conflict'],
-      ['ready', 'identical_file', 'identical_file'],
-      ['statement_match_candidates', 'ready', 'ready'],
-      [
-        'missing_statement_transactions',
-        'statement_match_candidates',
-        'statement_match_candidates',
-      ],
-      ['pending_correction', 'needs_balance', 'needs_balance'],
-      ['needs_manual_review', 'ready', 'ready'],
-      ['needs_balance', 'ready', 'ready'],
-      ['balance_mismatch', 'ready', 'ready'],
-      [null, 'needs_balance', 'needs_balance'],
-    ] satisfies Array<
-      [
-        ImportAuditReasonCode | null,
-        ImportAuditReasonCode,
-        ImportAuditReasonCode,
-      ]
-    >)(
-      'resolve a precedência entre motivo persistido %s e derivado %s',
-      (stored, derived, expected) => {
-        expect(resolveImportReviewReason({ stored, derived })).toBe(expected)
+      ['blocked', 'reconciled'],
+      ['identical_file', 'imported'],
+      ['destination_conflict', 'reconciled'],
+    ] as const)(
+      'mantém o bloqueio %s mesmo com status %s',
+      (validationReason, validationStatus) => {
+        expect(
+          getEffectiveImportValidationState({
+            accountId: 'account-1',
+            validationReason,
+            validationStatus,
+            validationMessage: null,
+          }),
+        ).toMatchObject({
+          reason: validationReason,
+          committable: false,
+          remediation: {
+            links: false,
+            exclusions: false,
+            checkpointReplacement: false,
+          },
+        })
       },
     )
+
+    it('bloqueia um destino incompatível mesmo com motivo pronto persistido', () => {
+      expect(
+        getEffectiveImportValidationState(
+          {
+            accountId: 'account-1',
+            validationReason: 'ready',
+            validationStatus: 'imported',
+            validationMessage: null,
+          },
+          { hasDestinationConflict: true },
+        ),
+      ).toMatchObject({
+        status: 'divergent',
+        reason: 'destination_conflict',
+        committable: false,
+        remediation: {
+          links: false,
+          exclusions: false,
+          checkpointReplacement: false,
+        },
+      })
+    })
+
+    it.each([
+      'statement_match_candidates',
+      'needs_manual_review',
+      'needs_balance',
+      'balance_mismatch',
+    ] as const)(
+      'libera o motivo corrigível %s após conciliação',
+      (validationReason) => {
+        expect(
+          getEffectiveImportValidationState({
+            accountId: 'account-1',
+            validationReason,
+            validationStatus: 'reconciled',
+            validationMessage: null,
+          }),
+        ).toMatchObject({
+          reason: 'ready',
+          committable: true,
+          remediation: {
+            links: true,
+            exclusions: true,
+            checkpointReplacement: true,
+          },
+        })
+      },
+    )
+
+    it.each(['pending_correction', null] as const)(
+      'pede saldo após aceitar importação com motivo anterior %s',
+      (validationReason) => {
+        expect(
+          getEffectiveImportValidationState({
+            accountId: 'account-1',
+            validationReason,
+            validationStatus: 'imported',
+            validationMessage: null,
+            closingBalanceCents: null,
+          }),
+        ).toMatchObject({ reason: 'needs_balance', committable: true })
+      },
+    )
+
+    it('mostra candidatos encontrados para lançamentos antes ausentes', () => {
+      expect(
+        getEffectiveImportValidationState(
+          {
+            creditCardId: 'card-1',
+            validationReason: 'missing_statement_transactions',
+            validationStatus: 'divergent',
+            validationMessage: null,
+          },
+          { hasStatementMatchCandidates: true },
+        ),
+      ).toMatchObject({
+        reason: 'statement_match_candidates',
+        committable: false,
+        remediation: {
+          links: true,
+          exclusions: true,
+          checkpointReplacement: true,
+        },
+      })
+    })
 
     it.each(['blocked', 'identical_file', 'destination_conflict'] as const)(
       'mantém o bloqueio forte %s durante uma reavaliação lateral',

@@ -1,4 +1,4 @@
-# Arquitetura do domínio de importação
+# Arquitetura
 
 O fluxo de importação é organizado por responsabilidade, com decisões de
 domínio separadas de leitura de arquivos, persistência e apresentação.
@@ -82,31 +82,26 @@ Na preparação de um lote, a base substitui apenas sugestões sem origem ou
 heurísticas (`suggestionSource = 'knowledge'`, confiança 98 para padrão exato e
 92 para prefixo); regras explícitas, transferências aprendidas e políticas de
 destino continuam prevalecendo.
+`loadCategoryKnowledge` devolve um resolvedor com índices e precedência privados.
+O lote limita a leitura exata aos padrões de suas observações; a sincronização
+consulta a base completa. Ambos usam o mesmo matching de direção, alternativas
+exatas e prefixo mais longo. A política de substituição continua no fluxo:
+`applyCategoryKnowledge` preserva sugestões fortes, enquanto a sincronização
+protege transferências, pagamentos de fatura e contrapartes.
+
 Categorias de sistema (`uncategorized`, `transfer`, `card_payment`) nunca são
 aprendidas. Os aliases de recorrência entram nas assinaturas conhecidas da
 detecção e no matching; desvincular um pagamento remove o alias, e excluir a
 recorrência ou a categoria apaga as entradas por cascata.
 
-A migração `0034_backfill_knowledge_base.sql` reconstruiu a base a partir das
-decisões já registradas (revisões de lote com origem `manual`, lançamentos cuja
-categoria final difere de uma sugestão concreta, lançamentos manuais com
-categoria e vínculos de recorrência com status `confirmed`). Ela depende da
-função SQL `merchant_signature`, registrada em `connection.server.ts`, portanto
-roda pelo `ensureDatabase()`, pelo doctor e pelo QA, não pelo CLI do drizzle-kit.
-A aba **Conhecimento** em Configurações (`knowledge-base-section.tsx`) lista as
-entradas, permite corrigir a categoria aprendida, editar o padrão e esquecer uma
-entrada. `knowledge-sync.server.ts` reaplica a base aos lançamentos: corrigir a
-categoria ou o padrão de uma entrada sincroniza só os lançamentos daquela
-entrada, e o botão **Sincronizar com a base** em Transações calcula uma prévia
-completa antes de aplicar. Transferências, pagamentos de fatura e lançamentos com
-contraparte nunca mudam por sincronização.
+A aba Conhecimento permite corrigir, editar padrões e esquecer entradas.
+`knowledge-sync.server.ts` sincroniza apenas a entrada editada; a sincronização
+completa parte de Transações, com prévia. Transferências, pagamentos de fatura
+e contrapartes são protegidos.
 
-A migração `0035_reclassify_food_categories.sql` substituiu Alimentação (inativa,
-mantida pelo histórico) por Mercado, Restaurantes e Delivery, com listas explícitas
-de estabelecimentos e atualização de lotes, parcelas, splits, categorias anteriores
-de vínculos e da base de conhecimento. A prévia somente leitura fica em
-`scripts/preview-food-reclassification.ts`; o plano está em
-`plans/reclassificacao-comida-e-kb.md`.
+As migrações da base usam funções SQL registradas em `connection.server.ts`,
+indisponíveis no CLI do Drizzle. A migração `0034` reconstruiu decisões humanas
+registradas; `0035` a `0037` estão resumidas no [registro de categorias e padrões](reclassificacao-comida-e-kb.md).
 
 ## Lançamento (read model)
 
@@ -117,6 +112,28 @@ transferências internas. Também calcula os mapas de gasto atual e anterior por
 categoria. As features podem acrescentar séries mensais ou agrupar "Outras",
 mas não repetem esses predicados.
 
+A leitura de Categorias vem de `category-ledger.server.ts`. Ela carrega escopos,
+lançamentos com conta/cartão/categoria e vínculos de reconciliação em três
+consultas. `familyTransactions` continua decidindo inclusão, conversão e exclusão
+de transferências; essa leitura não monta o dashboard nem calcula projeções.
+`getCategoryTransactions` permanece reexportado por `finance-snapshot.server.ts`.
+O benchmark compara essa leitura com o caminho anterior pelo snapshot completo.
+
+## Previsão de caixa
+
+`src/domain/monthly-cash-flow.ts` recebe fatos financeiros, mês, data de referência
+e compromissos do mês. O módulo seleciona contas operacionais ativas, reconstrói
+saldos, converte moedas, exclui transferências próprias dos recebimentos e
+pagamentos, e combina recorrências e pendências sem contar duas vezes uma
+ocorrência persistida. Cotações dos saldos respeitam a data; projeções mantêm a
+cotação mais recente, e movimentos realizados mantêm o valor-base persistido.
+
+`pendingRecurrencePayments` fornece o mesmo matching de pendências ao orçamento
+e ao caixa. Não grava vínculos. O snapshot permanece responsável pela montagem
+do orçamento e seus compromissos; entrega esses dados a `buildMonthlyCashFlow`.
+Reconstrução histórica e aritmética dos totais são detalhes internos testados
+pela leitura do caixa a partir dos fatos.
+
 ## Período de análise
 
 `src/domain/period.ts` concentra intervalos inclusivos em datas ISO, janelas
@@ -126,26 +143,16 @@ aceitam uma data opcional, o que mantém testes e análises reproduzíveis.
 
 ## Banco de dados e testes
 
-`src/db/connection.server.ts` abre uma conexão Drizzle/SQLite a partir de uma
-URL. Em produção, `src/db/index.server.ts` só cria essa conexão no primeiro uso
-de `db` ou `ensureDatabase()`. O caminho continua vindo de `DATABASE_URL`, com
-`./data/financas.db` como padrão. O `db` exportado é um proxy tipado, portanto os
-módulos de servidor mantêm o mesmo import e resolvem a conexão ativa ao executar
-cada operação.
+`connection.server.ts` abre Drizzle/SQLite. O proxy `db` de `index.server.ts`
+resolve a conexão no primeiro uso. `ensureDatabase()` executa migrações, seed,
+reparo de proveniência e verificação de chaves estrangeiras uma vez por conexão.
+O caminho padrão é `data/financas.db`.
 
-`ensureDatabase()` inicializa cada conexão uma vez. A sequência continua sendo
-migração dos arquivos em `drizzle/`, seed, reparo de proveniência e verificação
-de chaves estrangeiras. O seed de produção fica em `src/db/seed.server.ts`.
-
-Testes usam `openTestDatabase({ seed })` de `src/test/database.ts`. A função cria
-um diretório temporário exclusivo, instala a conexão antes de qualquer consulta,
-roda as mesmas migrações e retorna `{ db, schema, close, ids }`. O seed `minimal`
-é o padrão e fornece IDs estáveis para três escopos, uma conta BRL, um cartão e
-as categorias usadas pelos testes. Casos que verificam os dados iniciais reais
-pedem `seed: 'production'`. `resetTestDatabase()` fecha e remove o arquivo atual,
-abre outro com o mesmo tipo de seed e devolve o novo objeto de acesso. Cada
-arquivo de teste usa seu próprio banco, então o paralelismo padrão do Vitest não
-compartilha arquivos SQLite.
+`openTestDatabase({ seed })`, em `src/test/database.ts`, instala uma conexão
+isolada e retorna `{ db, schema, close, ids }`. O diretório temporário também
+recebe uploads. O seed padrão `minimal` fornece IDs estáveis; `production`
+verifica os dados iniciais reais. `resetTestDatabase()` recria o banco com o
+mesmo seed. Cada arquivo de teste tem seu próprio SQLite.
 
 ## Regras de dependência
 

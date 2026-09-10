@@ -299,68 +299,71 @@ export function forgetRecurrence(
     .run()
 }
 
-export interface CategoryKnowledgeEntry {
+type KnowledgeItem = { description: string; amountCents: number }
+
+interface CategoryKnowledgeEntry {
+  id: string
   categoryId: string
   confirmations: number
+  matchMode: KnowledgeMatchMode
 }
 
-export interface CategoryKnowledge {
-  exact: ReadonlyMap<string, CategoryKnowledgeEntry>
-  /** Prefixos aprovados, do mais longo para o mais curto. */
-  prefixes: ReadonlyArray<{
-    pattern: string
-    direction: KnowledgeDirection
-    entry: CategoryKnowledgeEntry
-  }>
-}
+export type CategoryKnowledge = (
+  item: KnowledgeItem,
+) => CategoryKnowledgeEntry | null
 
-/** Carrega, em duas consultas, as categorias aprendidas para os lançamentos informados. */
+/**
+ * Carrega o matching das decisões humanas. Na preparação, limita os padrões
+ * exatos aos itens do lote; a sincronização usa a base completa.
+ * Índices e precedência ficam privados ao conhecimento.
+ */
 export async function loadCategoryKnowledge(
-  items: Array<{ description: string; amountCents: number }>,
+  items?: Array<KnowledgeItem>,
 ): Promise<CategoryKnowledge> {
-  const patterns = [
-    ...new Set(
-      items.flatMap((item) => {
-        const key = knowledgeKey(item)
-        return key ? knowledgeExactPatterns(item.description) : []
-      }),
-    ),
-  ]
-  const exact = new Map<string, CategoryKnowledgeEntry>()
+  const patterns = items
+    ? [
+        ...new Set(
+          items.flatMap((item) =>
+            knowledgeKey(item) ? knowledgeExactPatterns(item.description) : [],
+          ),
+        ),
+      ]
+    : undefined
+  const selection = {
+    id: table.id,
+    pattern: table.pattern,
+    direction: table.direction,
+    categoryId: table.categoryId,
+    confirmations: table.confirmations,
+    matchMode: table.matchMode,
+  }
   const [exactRows, prefixRows] = await Promise.all([
-    patterns.length
-      ? db
-          .select({
-            pattern: table.pattern,
-            direction: table.direction,
-            categoryId: table.categoryId,
-            confirmations: table.confirmations,
-          })
+    patterns?.length === 0
+      ? []
+      : db
+          .select(selection)
           .from(table)
           .where(
             and(
               eq(table.kind, 'category'),
               eq(table.matchMode, 'exact'),
-              inArray(table.pattern, patterns),
+              patterns ? inArray(table.pattern, patterns) : undefined,
             ),
-          )
-      : [],
+          ),
     db
-      .select({
-        pattern: table.pattern,
-        direction: table.direction,
-        categoryId: table.categoryId,
-        confirmations: table.confirmations,
-      })
+      .select(selection)
       .from(table)
       .where(and(eq(table.kind, 'category'), eq(table.matchMode, 'prefix'))),
   ])
+  const exact = new Map<string, CategoryKnowledgeEntry>()
   for (const row of exactRows) {
-    if (!row.categoryId) continue
-    exact.set(lookupKey(row), {
-      categoryId: row.categoryId,
-      confirmations: row.confirmations,
-    })
+    if (row.categoryId)
+      exact.set(lookupKey(row), {
+        id: row.id,
+        categoryId: row.categoryId,
+        confirmations: row.confirmations,
+        matchMode: row.matchMode,
+      })
   }
   const prefixes = prefixRows
     .flatMap((row) =>
@@ -370,53 +373,54 @@ export async function loadCategoryKnowledge(
               pattern: row.pattern,
               direction: row.direction,
               entry: {
+                id: row.id,
                 categoryId: row.categoryId,
                 confirmations: row.confirmations,
+                matchMode: row.matchMode,
               },
             },
           ]
         : [],
     )
     .sort((left, right) => right.pattern.length - left.pattern.length)
-  return { exact, prefixes }
+
+  return (item) => {
+    const key = knowledgeKey(item)
+    if (!key) return null
+    const direct = knowledgeExactPatterns(item.description)
+      .map((pattern) =>
+        exact.get(lookupKey({ pattern, direction: key.direction })),
+      )
+      .find((entry) => entry !== undefined)
+    return (
+      direct ??
+      prefixes.find(
+        (candidate) =>
+          candidate.direction === key.direction &&
+          matchesKnowledgePrefix(key.pattern, candidate.pattern),
+      )?.entry ??
+      null
+    )
+  }
 }
 
-/**
- * Substitui sugestões fracas (nenhuma ou heurística) pela decisão aprendida:
- * padrão exato primeiro, depois o prefixo mais longo. Regras explícitas,
- * transferências aprendidas e políticas de sistema continuam valendo mais.
- */
+/** Só substitui sugestões fracas; regras explícitas e transferências prevalecem. */
 export function applyCategoryKnowledge(
   knowledge: CategoryKnowledge,
-  item: { description: string; amountCents: number },
+  item: KnowledgeItem,
   suggestion: CategorySuggestion,
 ): CategorySuggestion {
   if (suggestion.source !== 'none' && suggestion.source !== 'heuristic') {
     return suggestion
   }
-  const key = knowledgeKey(item)
-  if (!key) return suggestion
-  const exact = knowledgeExactPatterns(item.description)
-    .map((pattern) =>
-      knowledge.exact.get(lookupKey({ pattern, direction: key.direction })),
-    )
-    .find((entry) => entry !== undefined)
-  if (exact) {
-    return {
-      categoryId: exact.categoryId,
-      confidence: KNOWLEDGE_SUGGESTION_CONFIDENCE,
-      source: 'knowledge',
-    }
-  }
-  const prefix = knowledge.prefixes.find(
-    (candidate) =>
-      candidate.direction === key.direction &&
-      matchesKnowledgePrefix(key.pattern, candidate.pattern),
-  )
-  if (!prefix) return suggestion
+  const entry = knowledge(item)
+  if (!entry) return suggestion
   return {
-    categoryId: prefix.entry.categoryId,
-    confidence: KNOWLEDGE_PREFIX_CONFIDENCE,
+    categoryId: entry.categoryId,
+    confidence:
+      entry.matchMode === 'exact'
+        ? KNOWLEDGE_SUGGESTION_CONFIDENCE
+        : KNOWLEDGE_PREFIX_CONFIDENCE,
     source: 'knowledge',
   }
 }

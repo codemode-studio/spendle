@@ -1,5 +1,7 @@
 # Decisões
 
+Decisões de produto não implicam que todos os recortes já estejam implementados. Veja o [escopo entregue](01-mvp.md) e as [questões de produto](adrs/002-family-financial-control-experience.md).
+
 ## Produto
 
 - Interface em português; identificadores do código em inglês.
@@ -51,10 +53,10 @@
 - TanStack Start/Router/Query, TypeScript, pnpm, Drizzle e SQLite.
 - shadcn preset `base-nova` sobre Base UI; componentes locais podem ser adaptados sem trocar os primitives.
 - Todo banco, arquivo, segredo e chamada a provedor fica em código de servidor.
-- Originais ficam em `data/imports/<sha256>`, fora de `public/` e do Git.
+- Originais ficam em `imports/<sha256>` ao lado do SQLite configurado, fora de `public/` e do Git. O padrão é `data/imports`.
 - OFX e CSV são fontes estruturadas. PDF usa `@firecrawl/pdf-inspector` para classificação, Markdown e coordenadas; o parser antigo existe somente como comparação diagnóstica.
 - Um CSV pode usar o PDF equivalente como controle quando todas as datas, valores, moedas e multiplicidades conferem. Só uma fonte gera transações.
 - Originais e extrações são imutáveis. Falhas, divergências e PDFs usados apenas como evidência permanecem auditáveis.
-- O provedor de IA só recebe o arquivo após consentimento explícito e nunca torna o lote automaticamente confiável.
+- Envio de documentos ou briefings à IA exige consentimento explícito. A resposta nunca torna o lote automaticamente confiável nem alimenta a base de conhecimento.
 - Modelos de IA são acessados pelo OpenRouter usando identificadores `provider/model`; o saldo, roteamento e consumo ficam centralizados nesse serviço.
 - Saídas de IA passam por Zod e sempre ficam sujeitas à revisão humana.

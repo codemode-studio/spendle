@@ -95,9 +95,14 @@ describe('limpeza de transações e importações', () => {
     expect(await db.select().from(schema.recurrences)).toMatchObject([
       { id: created.id, name: 'Netflix' },
     ])
-    expect(await db.select().from(schema.recurrenceOccurrences)).toMatchObject([
-      { recurrenceId: created.id, status: 'expected', resolvedAt: null },
-    ])
+    const occurrences = await db.select().from(schema.recurrenceOccurrences)
+    expect(
+      occurrences.find((occurrence) => occurrence.id === match.occurrenceId),
+    ).toMatchObject({
+      recurrenceId: created.id,
+      status: 'expected',
+      resolvedAt: null,
+    })
     expect(await db.select().from(schema.knowledgeBase)).toMatchObject([
       { id: 'knowledge-netflix', recurrenceId: created.id },
     ])

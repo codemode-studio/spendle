@@ -625,7 +625,7 @@ describe('reconciliação de recorrências', () => {
     ).toHaveLength(5)
   })
 
-  it('receita: desfaz vínculo automático antigo com transferência própria sem alterar a KB', async () => {
+  it('receita: permite vincular manualmente a entrada de distribuição de lucro sem alterar sua categoria', async () => {
     const today = new Date().toISOString().slice(0, 10)
     const companyAccount = await finance.createAccount({
       name: 'Conta empresarial de teste',
@@ -737,12 +737,47 @@ describe('reconciliação de recorrências', () => {
         )
         .map((match) => [match.transactionId, match.status]),
     ).toEqual([])
-    await expect(
-      recurrenceMatching.linkTransactions({
-        occurrenceId: occurrence!.id,
-        transactionIds: [inflow.id],
-      }),
-    ).rejects.toThrow()
+    const [inflowBeforeLink] = await db
+      .select()
+      .from(schema.transactions)
+      .where(eq(schema.transactions.id, inflow.id))
+    const categoryKnowledgeBefore = knowledgeBefore.filter(
+      (item) => item.categoryId === 'profit_distribution_income',
+    )
+    const candidates = await recurrenceMatching.listLinkCandidates({
+      occurrenceId: occurrence!.id,
+      today,
+    })
+    expect(candidates.map((candidate) => candidate.id)).toContain(inflow.id)
+    expect(candidates.map((candidate) => candidate.id)).not.toContain(
+      outflow.id,
+    )
+
+    await recurrenceMatching.linkTransactions({
+      occurrenceId: occurrence!.id,
+      transactionIds: [inflow.id],
+    })
+
+    const [linkedMatch] = await db
+      .select()
+      .from(schema.recurrenceMatches)
+      .where(eq(schema.recurrenceMatches.id, 'stale-auto-income'))
+    expect(linkedMatch.status).toBe('confirmed')
+    expect(linkedMatch.categoryConflict).toBe(false)
+    expect(linkedMatch.categoryAppliedByMatch).toBe(false)
+    const [linkedInflow] = await db
+      .select()
+      .from(schema.transactions)
+      .where(eq(schema.transactions.id, inflow.id))
+    expect(linkedInflow.categoryId).toBe(inflowBeforeLink.categoryId)
+
+    const knowledgeAfter = await db.select().from(schema.knowledgeBase)
+    expect(knowledgeAfter.length).toBe(knowledgeBefore.length + 1)
+    expect(
+      knowledgeAfter.filter(
+        (item) => item.categoryId === 'profit_distribution_income',
+      ),
+    ).toEqual(categoryKnowledgeBefore)
     await expect(
       recurrenceMatching.linkTransactions({
         occurrenceId: occurrence!.id,

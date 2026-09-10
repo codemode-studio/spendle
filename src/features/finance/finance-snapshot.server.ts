@@ -2,7 +2,7 @@ import { buildFamilyMonth } from '#/domain/family-month'
 import { confirmedAccountIncome } from '#/domain/account-income'
 import {
   buildMonthlyCashFlow,
-  recordedBalanceAt,
+  pendingRecurrencePayments,
 } from '#/domain/monthly-cash-flow'
 import { shiftDays } from '#/domain/period'
 import { cardBudgetLines } from '#/domain/card-budget'
@@ -27,7 +27,7 @@ import {
   resolveCardCycle,
 } from '#/domain/credit-card'
 import { buildFinancialSummary } from '#/domain/financial-summary'
-import { familyTransactions, isFamilyScope } from '#/domain/ledger'
+import { isFamilyScope } from '#/domain/ledger'
 import {
   allocationAmount,
   calculateConservativeBase,
@@ -40,7 +40,6 @@ import {
 import {
   describeRecurrence,
   isAcceptedRecurrenceMatchStatus,
-  pendingTransactionCoversRecurrence,
 } from '#/domain/recurrence-book'
 
 function groupRows<T>(rows: T[], key: (row: T) => string) {
@@ -625,10 +624,24 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       : null
   }
 
+  const cashFacts = {
+    accounts: accountRows,
+    transactions,
+    scopes,
+    recurrences: recurrenceRows,
+    occurrences: recurrenceOccurrenceRows,
+    checkpoints: checkpointRows,
+    exchangeRates: exchangeRateRows,
+    baseCurrency: settings.baseCurrency,
+  }
+
   function dashboard(selectedMonth?: string) {
     const currentMonth = selectedMonth ?? referenceDate.slice(0, 7)
     const amountInBaseCurrency = (
-      transaction: (typeof transactions)[number],
+      transaction: Pick<
+        (typeof transactions)[number],
+        'currency' | 'amountCents' | 'baseCurrency' | 'baseAmountCents'
+      >,
     ) => {
       if (transaction.currency === settings.baseCurrency) {
         return transaction.amountCents
@@ -786,67 +799,15 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
         (link) => link.transactionId,
       ),
     }))
-    const projectedPendingTransactionIds = new Set<string>()
-    const projectedPendingByOccurrenceId = new Map<
-      string,
-      (typeof transactions)[number]
-    >()
-    const pendingFamilyTransactions = transactions.filter((transaction) => {
-      const ownershipScopeId =
-        transaction.account?.ownershipScopeId ??
-        transaction.creditCard?.ownershipScopeId
-      const scopeType = ownershipScopeId
-        ? scopeById.get(ownershipScopeId)?.type
-        : null
-      return transaction.status === 'pending' && isFamilyScope(scopeType)
+    const projectedPendingByOccurrenceId = pendingRecurrencePayments({
+      ...cashFacts,
+      month: currentMonth,
     })
-    for (const occurrence of recurrenceOccurrenceRows
-      .filter(
-        (item) =>
-          item.status === 'expected' &&
-          item.expectedDate.startsWith(currentMonth),
-      )
-      .sort((left, right) =>
-        left.expectedDate.localeCompare(right.expectedDate),
-      )) {
-      const recurrence = recurrenceById.get(occurrence.recurrenceId)
-      if (!recurrence?.active) continue
-      const pendingMatch = pendingFamilyTransactions.find(
-        (transaction) =>
-          !projectedPendingTransactionIds.has(transaction.id) &&
-          pendingTransactionCoversRecurrence({
-            recurrenceName: recurrence.name,
-            categoryId: occurrence.categoryId,
-            rule: {
-              expectedDate: occurrence.expectedDate,
-              expectedAmountCents: occurrence.expectedAmountCents,
-              currency: occurrence.currency,
-              direction: occurrence.direction,
-              amountMode: recurrence.amountMode,
-              destinationMode: recurrence.destinationMode,
-              accountId: recurrence.accountId,
-              creditCardId: recurrence.creditCardId,
-              dateToleranceDays: recurrence.dateToleranceDays,
-              amountToleranceBps: recurrence.amountToleranceBps,
-            },
-            transaction: {
-              id: transaction.id,
-              postedAt: transaction.postedAt,
-              amountCents: transaction.amountCents,
-              currency: transaction.currency,
-              description: transaction.description,
-              status: transaction.status,
-              accountId: transaction.accountId,
-              creditCardId: transaction.creditCardId,
-              categoryId: transaction.categoryId,
-            },
-          }),
-      )
-      if (pendingMatch) {
-        projectedPendingTransactionIds.add(pendingMatch.id)
-        projectedPendingByOccurrenceId.set(occurrence.id, pendingMatch)
-      }
-    }
+    const projectedPendingTransactionIds = new Set(
+      [...projectedPendingByOccurrenceId.values()].map(
+        (transaction) => transaction.id,
+      ),
+    )
     const projectedRecurrenceAmountByOccurrenceId = new Map<string, number>()
     let missingRecurrenceProjectionConversionCount = 0
     for (const occurrence of recurrenceOccurrenceRows) {
@@ -1274,200 +1235,12 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       saved: financialSummary.budgetActual,
       budget: monthlyCommitments,
     })
-    const monthStart = currentMonth + '-01'
-    const monthEnd = shiftDays(addMonths(monthStart, 1), -1)
-    const cashDate = monthEnd < referenceDate ? monthEnd : referenceDate
-    const cashAccounts = accounts.filter(
-      (a) => a.active && a.purpose === 'operating',
-    )
-    const cashAccountIds = new Set(cashAccounts.map((a) => a.id))
-    const cashMovements = transactionRows.filter(
-      (t) =>
-        t.accountId &&
-        cashAccountIds.has(t.accountId) &&
-        t.status === 'confirmed',
-    )
-    const convertCash = (cents: number, currency: string, date: string) => {
-      if (cents === 0 || currency === settings.baseCurrency) return cents
-      const rate = exchangeRateRows.find(
-        (r) =>
-          r.date <= date &&
-          r.fromCurrency === currency &&
-          r.toCurrency === settings.baseCurrency,
-      )
-      if (rate)
-        return convertMinorUnitsAtRate(
-          cents,
-          currency,
-          settings.baseCurrency,
-          rate.rateMicros,
-        )
-      const inverse = exchangeRateRows.find(
-        (r) =>
-          r.date <= date &&
-          r.toCurrency === currency &&
-          r.fromCurrency === settings.baseCurrency,
-      )
-      return inverse
-        ? convertMinorUnitsAtRate(
-            cents,
-            currency,
-            settings.baseCurrency,
-            Math.round(1_000_000_000_000 / inverse.rateMicros),
-          )
-        : null
-    }
-    const cashAt = (date: string): number | null => {
-      let sum = 0
-      for (const account of cashAccounts) {
-        const anchors = checkpointRows
-          .filter(
-            (c) =>
-              c.accountId === account.id && c.reviewState !== 'invalidated',
-          )
-          .map((c) => ({ date: c.asOf, cents: c.balanceCents }))
-        if (
-          account.statementBalanceAt &&
-          account.statementBalanceCents !== null
-        )
-          anchors.push({
-            date: account.statementBalanceAt,
-            cents: account.statementBalanceCents,
-          })
-        const native =
-          date === referenceDate
-            ? account.balanceCents
-            : recordedBalanceAt({
-                date,
-                initialCents: account.initialBalanceCents,
-                anchors,
-                movements: cashMovements
-                  .filter((t) => t.accountId === account.id)
-                  .map((t) => ({ date: t.postedAt, cents: t.amountCents })),
-              })
-        if (native === null) return null
-        const converted = convertCash(native, account.currency, date)
-        if (converted === null) return null
-        sum += converted
-      }
-      return sum
-    }
-    // Own transfers between operating accounts move money without changing consolidated cash.
-    const ownCashTransferIds = new Set(
-      reconciliationsForSummary
-        .filter(
-          (g) =>
-            g.status === 'confirmed' &&
-            ['transfer', 'fx_transfer', 'profit_distribution'].includes(
-              g.type,
-            ) &&
-            g.transactionIds.every((id) =>
-              cashAccountIds.has(transactionById.get(id)?.accountId ?? ''),
-            ),
-        )
-        .flatMap((g) => g.transactionIds),
-    )
-    let receivedCents = 0
-    let paidCents = 0
-    for (const t of cashMovements) {
-      if (
-        t.postedAt < monthStart ||
-        t.postedAt > cashDate ||
-        ownCashTransferIds.has(t.id)
-      )
-        continue
-      const cents = amountInBaseCurrency(transactionById.get(t.id)!)
-      if (cents === null) continue
-      if (cents > 0) receivedCents += cents
-      else paidCents -= cents
-    }
-    let expectedIncomeCents = 0
-    const coveredPendingIds = new Set<string>()
-    for (const recurrence of recurrenceRows) {
-      if (
-        !recurrence.active ||
-        recurrence.direction !== 'income' ||
-        recurrence.creditCardId ||
-        ['transfer', 'profit_distribution_income'].includes(
-          recurrence.categoryId ?? '',
-        ) ||
-        (recurrence.accountId && !cashAccountIds.has(recurrence.accountId))
-      )
-        continue
-      const instances = new Map(
-        (occurrencesByRecurrence.get(recurrence.id) ?? []).map((o) => [
-          o.expectedDate,
-          {
-            id: o.id,
-            date: o.expectedDate,
-            cents: o.expectedAmountCents,
-            status: o.status,
-          },
-        ]),
-      )
-      for (
-        let date = recurrence.nextDate;
-        date <= monthEnd;
-        date = addRecurrencePeriod(
-          date,
-          recurrence.frequency,
-          recurrence.scheduleAnchor,
-        )
-      ) {
-        if (date >= monthStart && !instances.has(date))
-          instances.set(date, {
-            id: '',
-            date,
-            cents: recurrence.amountCents,
-            status: 'expected',
-          })
-      }
-      for (const o of instances.values()) {
-        if (
-          o.status !== 'expected' ||
-          o.date < referenceDate ||
-          o.date < monthStart ||
-          o.date > monthEnd
-        )
-          continue
-        const pending = projectedPendingByOccurrenceId.get(o.id)
-        if (pending) coveredPendingIds.add(pending.id)
-        expectedIncomeCents += pending
-          ? (amountInBaseCurrency(pending) ?? 0)
-          : (convertToBaseCurrency(o.cents, recurrence.currency) ?? 0)
-      }
-    }
-    for (const t of transactions) {
-      if (
-        t.status === 'pending' &&
-        t.accountId &&
-        cashAccountIds.has(t.accountId) &&
-        t.amountCents > 0 &&
-        !ownCashTransferIds.has(t.id) &&
-        !(
-          t.counterpartyAccountId && cashAccountIds.has(t.counterpartyAccountId)
-        ) &&
-        !(t.categoryId === 'transfer' && !t.counterpartyAccountId) &&
-        t.postedAt >= referenceDate &&
-        t.postedAt >= monthStart &&
-        t.postedAt <= monthEnd &&
-        !coveredPendingIds.has(t.id)
-      )
-        expectedIncomeCents += amountInBaseCurrency(t) ?? 0
-    }
     const cashFlow = buildMonthlyCashFlow({
-      forecasting: familyMonth.forecasting,
-      openingCashCents: cashAt(shiftDays(monthStart, -1)),
-      cashCents:
-        currentMonth > referenceDate.slice(0, 7) ? null : cashAt(cashDate),
-      receivedCents,
-      paidCents,
-      expectedIncomeCents,
-      remainingExpenseCents: Math.max(
-        0,
-        familyMonth.lines.reduce((sum, l) => sum + l.cents - l.paidCents, 0),
-      ),
-      goalRemainingCents: familyMonth.savingsRemainingCents,
+      ...cashFacts,
+      month: currentMonth,
+      referenceDate,
+      commitments: familyMonth,
+      reconciliations: reconciliationsForSummary,
     })
     return {
       currentMonth,
@@ -1655,7 +1428,4 @@ export async function getPlanningSnapshot() {
   }
 }
 
-export async function getCategoryTransactions() {
-  const reader = await createFinanceReader()
-  return familyTransactions(reader.snapshot())
-}
+export { getCategoryTransactions } from './category-ledger.server'

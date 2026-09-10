@@ -114,8 +114,9 @@ function parseInterCardStatement(input: {
       .map((line) => line.bounds.page),
   )
   const transactions: PdfParserTransaction[] = []
+  // Some Inter PDFs encode the visual separator as the font glyph U+E054.
   const rowPattern =
-    /^(\d{2}) de (jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\. (\d{4}) (.+?) - (\+\s+)?R\$\s*((?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})$/i
+    /^(\d{2}) de (jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\. (\d{4}) (.+?) [-\uE054] (\+\s+)?R\$\s*((?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})$/i
 
   const orderedLines = [...input.lines].sort((left, right) =>
     left.bounds.page !== right.bounds.page
@@ -170,7 +171,32 @@ function parseInterCardStatement(input: {
       ? [monthlyExpensesCents]
       : []),
   ]
-  if (!transactions.length || !acceptedTotals.includes(calculatedTotal)) {
+  // Inter can report gross purchases under "Despesas do mês" and include
+  // both statement credits and payments in "Valor antecipado". Validate the
+  // gross purchases and the summary equation independently; keep each credit
+  // as a positive transaction and never fabricate the remaining payment.
+  const anticipatedLine = input.lines.find((line) =>
+    /^valor antecipado\s+R\$/i.test(line.text),
+  )
+  const anticipatedCents = anticipatedLine
+    ? parseTrailingMoney(anticipatedLine, input.currency)
+    : null
+  const creditsCents = transactions.reduce(
+    (sum, transaction) => sum + Math.max(transaction.amountCents, 0),
+    0,
+  )
+  const grossPurchasesCents = calculatedTotal + creditsCents
+  const reconciledGrossExpenses =
+    monthlyExpensesCents !== null &&
+    anticipatedCents !== null &&
+    creditsCents > 0 &&
+    anticipatedCents >= creditsCents &&
+    grossPurchasesCents === monthlyExpensesCents &&
+    statementTotalCents + anticipatedCents === monthlyExpensesCents
+  if (
+    !transactions.length ||
+    (!acceptedTotals.includes(calculatedTotal) && !reconciledGrossExpenses)
+  ) {
     throw new Error(
       `As compras da fatura Inter não fecham: esperado ${acceptedTotals.join(' ou ')}, extraído ${calculatedTotal}.`,
     )

@@ -1,9 +1,13 @@
 # Filtro de categoria ao vincular recorrência
 
-08/09/2026. Filtro local na lista de candidatos, combinado com descrição antes do limite de resultados. Receitas oferecem categorias de receita; despesas seguem as categorias de essenciais e estilo de vida usadas no cadastro da recorrência. Todas as categorias e Sem categoria disponíveis. Trocar categoria limpa a seleção de lançamentos.
+08/09/2026. QA sintética `.qa/run-I0rsRO`, porta 3117, em Configurações → Recorrências.
 
-Testes de componente verificam ambos os tipos, busca combinada, candidato além do limite inicial e limpeza da seleção. Nenhuma regra de conciliação do servidor foi alterada.
+O filtro combina categoria e descrição antes do limite de candidatos. Receitas oferecem categorias de receita; despesas, as categorias usadas no cadastro. Trocar categoria limpa a seleção.
 
-Browser QA: http://127.0.0.1:3117/configuracoes?tab=recorrencias, `.qa/run-I0rsRO`. Recorrências, ocorrências e dois lançamentos sintéticos preparados via SQL. Pela UI, aberto vínculo da receita, selecionada Distribuição de lucros, selecionado Teste lucro e acionado Vincular e conciliar. Observado R$ 1.000,00 de R$ 1.000,00 e 1 lançamento. Aberto vínculo da despesa, conferida ausência de categorias de receita e filtrado Mercado, exibindo Teste mercado de R$ 100,00. Desktop 1280×800 e celular 390×844; sem overflow e botões de rodapé dentro da janela. Preparação SQL não foi contada como mutation UI; vinculação foi feita no navegador.
+Fixture preparado por SQL com recorrências, ocorrências e dois lançamentos. Pelo navegador:
 
-`pnpm setup:check`, testes focados e `pnpm verify` passaram. Nenhum dado principal modificado.
+- Receita: selecionada Distribuição de lucros e vinculado Teste lucro. Resultado: R$ 1.000,00 de R$ 1.000,00, um lançamento.
+- Despesa: categorias de receita ausentes; Mercado exibiu Teste mercado de R$ 100,00. Vínculo de despesa não registrado nesta rodada.
+- Desktop 1280 × 800 e celular 390 × 844: sem rolagem horizontal, botões de rodapé dentro da janela.
+
+Testes cobriram ambos os tipos, busca combinada, candidato além do limite e limpeza da seleção. `pnpm setup:check`, testes focados e `pnpm verify` passaram. A preparação SQL não contou como mutação pela interface.

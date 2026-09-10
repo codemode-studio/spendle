@@ -1,138 +1,101 @@
-# Glossário financeiro e de importação
+# Glossário
 
 ## Atividade observada
 
-Intervalo entre a primeira e a última transação presentes em um arquivo. Não
-prova que o arquivo cobre somente esse intervalo nem que houve lacuna nos dias
-sem movimento.
+Intervalo entre a primeira e a última transação do arquivo. Não prova cobertura nem lacunas.
 
 ## Aporte em conta de investimento
 
-Transferência interna cujo destino é uma conta com finalidade de investimento.
-O aporte movimenta patrimônio entre contas próprias e, por isso, não é receita
-nem despesa. A compra ou valorização posterior do ativo é registrada
-separadamente.
+Transferência para conta própria de investimento. Movimenta patrimônio, sem criar receita, despesa ou rendimento.
 
 ## Checkpoint de saldo
 
-Saldo de uma conta ou cartão em uma data de referência, acompanhado do tipo do
-saldo e da fonte da evidência. É a âncora usada para reconciliar o razão.
+Saldo datado de conta ou cartão, com tipo e evidência. Serve de referência para reconciliação.
 
 ## Cobertura
 
-Conjunto de intervalos que documentos ou integrações declaram representar para
-uma conta. Cobertura não significa saldo reconciliado.
+União dos períodos declarados pelos documentos de uma conta. Não comprova saldo reconciliado.
 
 ## Data de autorização
 
-Momento em que uma compra foi autorizada. Pode ser anterior à data em que o
-lançamento se torna definitivo.
+Data em que a compra foi autorizada, que pode anteceder a postagem.
 
 ## Data postada
 
-Data em que a instituição efetivou o lançamento no razão. É a data principal
-para reconciliação, preservando a data de autorização como metadado.
+Data em que a instituição efetivou o lançamento. Referência principal da reconciliação.
 
 ## Despesa fixa temporária
 
-Compra parcelada em quatro ou mais vezes. Ela compromete um valor mensal fixo,
-mas termina na última parcela. Não é uma recorrência: o número de cobranças já
-foi contratado e o app projeta somente as parcelas restantes.
+Compra em quatro ou mais parcelas. Tem término contratado; não cria recorrência.
 
 ## Envelope de recorrência
 
-Recorrência com `matchMode` igual a `aggregate`. Cada ocorrência representa um
-período aberto que pode reunir vários lançamentos confirmados. O período fecha
-com a soma realizada quando termina ou quando a pessoa o conclui.
+Recorrência com `matchMode = aggregate`. Cada período reúne vários lançamentos e fecha com a soma realizada.
 
 ## Fatura aberta
 
-Ciclo de cartão ainda sujeito a novos lançamentos e correções. Seus dados são
-provisórios.
+Ciclo ainda sujeito a lançamentos e correções; dados provisórios.
 
 ## Fatura fechada
 
-Documento definitivo de um ciclo de cartão, com total, fechamento e vencimento.
-Pode funcionar como checkpoint quando o total fecha contra os lançamentos.
+Ciclo definitivo com total, fechamento e vencimento. Pode fornecer checkpoint se o total conferir.
 
 ## Idempotência
 
-Propriedade que permite repetir uma importação sem alterar o resultado depois da
-primeira aplicação. Em termos práticos, arquivos sobrepostos adicionam somente
-lançamentos realmente novos.
+Repetir a importação não muda o resultado. Arquivos sobrepostos adicionam apenas lançamentos novos.
 
 ## Identificador externo
 
-Código fornecido pela instituição para uma transação. Deve ser escopado pela
-conta e pela fonte; não é necessariamente único globalmente.
+Código de transação fornecido pela instituição, limitado à conta e à fonte.
 
 ## Janela declarada
 
-Período que o documento ou o usuário afirma ter sido exportado. Pode vir de
-metadados estruturados, do nome do arquivo ou de confirmação manual.
+Período exportado informado por metadados, nome reconhecido ou confirmação humana.
 
 ## Lacuna
 
-Intervalo não coberto entre duas janelas declaradas confiáveis. Ausência de
-transações em certos dias não constitui lacuna.
+Intervalo entre janelas declaradas confiáveis sem cobertura. Dias sem transações não bastam para indicar lacuna.
 
 ## Lançamento canônico
 
-Representação única usada pelo razão e pelos relatórios. Pode estar apoiada por
-várias observações importadas.
+Registro único usado no razão e nos relatórios, apoiado por uma ou mais observações.
 
 ## Margem livre projetada
 
-Parte da renda futura que ainda não está comprometida por despesas recorrentes,
-parcelas contratadas, metas e outros compromissos conhecidos. É uma projeção e
-não um saldo bancário.
+Renda futura menos compromissos e metas. É uma projeção, não saldo bancário.
 
 ## Multiplicidade
 
-Quantidade de ocorrências legítimas com os mesmos atributos. Deduplicação deve
-preservar, por exemplo, duas compras iguais realizadas no mesmo dia.
+Quantidade legítima de registros iguais. Duas compras iguais no mesmo dia continuam sendo duas compras.
 
 ## Observação importada
 
-Linha ou item bruto extraído de uma fonte. É imutável e mantém referência ao
-arquivo, parser, versão e evidência original.
+Linha bruta imutável, vinculada ao arquivo, parser, versão e evidência.
 
 ## Ocorrência
 
-Instância datada de uma recorrência. Registra o valor esperado, a moeda, a
-categoria e o estado daquele período, além dos lançamentos sugeridos ou
-confirmados que o realizaram.
+Período de uma recorrência, com valor esperado, moeda, categoria, estado e lançamentos vinculados.
 
 ## Reconciliação
 
-Prova de que o saldo calculado a partir de um checkpoint e dos lançamentos
-postados coincide com outro saldo bancário datado. A diferença deve ser zero.
+Conferência de saldo por checkpoints e movimentos postados, com diferença zero.
 
 ## Recorrência
 
-Regra para uma receita ou despesa que se repete em calendário mensal ou anual.
-Ela guarda a próxima data, a âncora do calendário e as tolerâncias usadas para
-encontrar lançamentos reais sem transformar parcelamentos em recorrências.
+Regra mensal ou anual de receita ou despesa, com calendário e tolerâncias para vincular lançamentos reais.
 
 ## Saldo disponível
 
-Valor que o banco permite usar naquele momento. Pode considerar limites,
-bloqueios e lançamentos pendentes; não deve ser misturado com saldo contábil sem
-uma regra explícita.
+Valor liberado pelo banco, que pode incluir limites e bloqueios. Não equivale necessariamente ao saldo contábil.
 
 ## Saldo lançado ou contábil
 
-Saldo composto por transações já postadas pela instituição. É normalmente a
-referência adequada para reconciliar um razão de transações postadas.
+Saldo de transações postadas; referência usual para reconciliar o razão.
 
 ## Transferência interna
 
-Movimentação entre dois instrumentos pertencentes ao mesmo conjunto financeiro.
-As duas pontas permanecem em seus respectivos ledgers, são vinculadas e não
-viram receita nem despesa.
+Movimento entre instrumentos próprios, com ambas as pontas vinculadas e preservadas. Não cria receita ou despesa.
 
 ## Vazamento financeiro
 
-Sinal explicável de que um gasto merece investigação, como aumento contra o
-histórico, estouro de limite, cobrança esquecida ou acúmulo de compromissos. Não
-é uma categoria contábil e não implica que a despesa seja inútil.
+Sinal de gasto a investigar, com evidência e comparação. Não é categoria contábil nem julgamento sobre a despesa.

@@ -387,14 +387,6 @@ export function sameStatementValues(
   return Boolean(result && !result.unmatched.length)
 }
 
-export function assignStatementValueMatches<
-  TObservation extends StatementValue,
-  TTransaction extends StatementValue,
->(observations: TObservation[], transactions: TTransaction[]) {
-  const result = matchStatementValueSubset(observations, transactions)
-  return result && !result.unmatched.length ? result.matches : null
-}
-
 export function matchOptionalStatementValues<
   TObservation extends StatementValue,
   TTransaction extends StatementValue,
@@ -488,69 +480,4 @@ export function findTransactionsAbsentFromStatement<
   return unmatchedTransactions.filter(
     (transaction) => !changedTransactions.has(transaction),
   )
-}
-
-export function resolveCanonicalAssignments<
-  TObservation extends CanonicalIdentity & { id: string },
-  TTransaction extends CanonicalIdentity & { id: string },
->(input: {
-  observations: TObservation[]
-  transactions: TTransaction[]
-  duplicateReasons: DuplicateReason[]
-  preassigned?: ReadonlyMap<string, string>
-}) {
-  const assignments = new Map(input.preassigned ?? [])
-  const usedTransactionIds = new Set(assignments.values())
-
-  for (const [index, observation] of input.observations.entries()) {
-    if (!observation.externalId || assignments.has(observation.id)) continue
-    const reason = input.duplicateReasons[index]
-    const match =
-      reason === 'external_id'
-        ? input.transactions.find(
-            (candidate) => candidate.externalId === observation.externalId,
-          )
-        : reason === 'fingerprint_overlap'
-          ? input.transactions.find(
-              (candidate) =>
-                !candidate.externalId &&
-                !usedTransactionIds.has(candidate.id) &&
-                candidate.fingerprint === observation.fingerprint,
-            )
-          : null
-    if (!match) continue
-    assignments.set(observation.id, match.id)
-    usedTransactionIds.add(match.id)
-  }
-
-  for (const [index, observation] of input.observations.entries()) {
-    if (
-      observation.externalId ||
-      input.duplicateReasons[index] !== 'fingerprint_overlap'
-    ) {
-      continue
-    }
-    const match = input.transactions.find(
-      (candidate) =>
-        !usedTransactionIds.has(candidate.id) &&
-        candidate.fingerprint === observation.fingerprint,
-    )
-    if (!match) continue
-    assignments.set(observation.id, match.id)
-    usedTransactionIds.add(match.id)
-  }
-
-  return assignments
-}
-
-export function canonicalEvidenceKind(input: {
-  controlled: boolean
-  duplicateReason: DuplicateReason
-}) {
-  if (input.controlled) return 'statement_control' as const
-  if (input.duplicateReason === 'external_id') return 'external_id' as const
-  if (input.duplicateReason === 'fingerprint_overlap') {
-    return 'exact_overlap' as const
-  }
-  return 'created' as const
 }

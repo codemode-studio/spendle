@@ -278,15 +278,6 @@ export function getEffectiveImportValidationState(
   }
 }
 
-export function effectiveValidationReason(
-  row: ImportValidationReasonRow & { hasDestinationConflict?: boolean },
-): ImportAuditReasonCode | null {
-  return effectivePersistedValidationReason(
-    row,
-    row.hasDestinationConflict ?? false,
-  )
-}
-
 export function nextValidationState<
   T extends ImportValidationReasonRow,
 >(input: { current: ImportValidationReasonRow; evaluated: T }): T {
@@ -355,13 +346,6 @@ export interface ImportReviewGuidanceInput {
   hasStatementCurrencyMismatch?: boolean
   hasMissingStatementTransactions: boolean
   hasBalanceConflict: boolean
-}
-
-export function resolveImportReviewReason(input: {
-  stored: ImportAuditReasonCode | null
-  derived: ImportAuditReasonCode
-}): ImportAuditReasonCode {
-  return preferImportReviewReason(input.stored, input.derived)
 }
 
 function derivedImportReviewReason(

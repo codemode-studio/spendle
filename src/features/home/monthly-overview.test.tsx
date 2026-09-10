@@ -11,7 +11,6 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MonthlyOverview } from './monthly-overview'
 import { buildFamilyMonth } from '#/domain/family-month'
-import { buildMonthlyCashFlow } from '#/domain/monthly-cash-flow'
 import { buildCommitmentBudget } from '#/domain/commitment-budget'
 import type { StrategyDashboard } from '#/features/finance/strategy-progress'
 
@@ -212,7 +211,7 @@ describe('monthly overview', () => {
       monthlyCommitments: budget,
       familyMonth: {
         ...familyMonth,
-        cashFlow: buildMonthlyCashFlow({
+        cashFlow: {
           forecasting: true,
           openingCashCents: 50000,
           cashCents: 50000,
@@ -221,7 +220,10 @@ describe('monthly overview', () => {
           expectedIncomeCents: 20000,
           remainingExpenseCents: 15024,
           goalRemainingCents: 40000,
-        }),
+          closingCashCents: 54976,
+          afterGoalsCents: 14976,
+          unexplainedChangeCents: 0,
+        },
       },
     }
     fetchHistory.mockResolvedValue([
@@ -230,7 +232,7 @@ describe('monthly overview', () => {
         familyMonth: {
           ...consistent.familyMonth,
           forecasting: false,
-          cashFlow: buildMonthlyCashFlow({
+          cashFlow: {
             forecasting: false,
             openingCashCents: 10000,
             cashCents: 50000,
@@ -239,7 +241,10 @@ describe('monthly overview', () => {
             expectedIncomeCents: 0,
             remainingExpenseCents: 0,
             goalRemainingCents: 0,
-          }),
+            closingCashCents: 50000,
+            afterGoalsCents: 50000,
+            unexplainedChangeCents: 0,
+          },
         },
       },
     ])

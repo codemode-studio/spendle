@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { openTestDatabase } from '#/test/database'
 import type { TestDatabase } from '#/test/database'
 import {
+  getCategoryTransactions,
   getConfigurationSnapshot,
   getFinanceSnapshot,
   getStrategyHistory,
@@ -10,6 +11,7 @@ import {
 import { getTransactionsPage } from './transactions.server'
 import { transactionFiltersSchema } from './transactions.filters'
 import { stageImport } from './import-stage.server'
+import { familyTransactions } from '#/domain/ledger'
 
 let database: TestDatabase | undefined
 afterEach(() => {
@@ -68,6 +70,101 @@ describe('bounded financial reads', () => {
     const config = await getConfigurationSnapshot()
     expect(config).not.toHaveProperty('transactions')
     expect(config.accounts).toEqual((await getFinanceSnapshot()).accounts)
+  })
+
+  it('reads the category ledger without calculating budgets, preserving order, FX, refunds and both transfer sides', async () => {
+    const queries: string[] = []
+    database = await openTestDatabase({
+      onQuery: (query) => queries.push(query),
+    })
+    const { db, schema: s, ids } = database
+    const row = (
+      id: string,
+      extra: Partial<typeof s.transactions.$inferInsert> = {},
+    ) => ({
+      id,
+      fingerprint: id,
+      accountId: ids.brlAccount,
+      postedAt: '2026-08-01',
+      description: id,
+      normalizedDescription: id,
+      amountCents: -101,
+      currency: 'BRL',
+      categoryId: ids.categories.groceries,
+      ...extra,
+    })
+    await db
+      .insert(s.transactions)
+      .values([
+        row('expense'),
+        row('refund', { amountCents: 1 }),
+        row('converted', { currency: 'USD', baseAmountCents: -507 }),
+        row('unconverted', { currency: 'USD' }),
+        row('pending', { status: 'pending' }),
+        row('excluded', { status: 'excluded' }),
+        row('card', { accountId: null, creditCardId: ids.card }),
+        row('unknown', { categoryId: null }),
+        row('system-unknown', { categoryId: ids.categories.uncategorized }),
+        row('payment', { categoryId: ids.categories.cardPayment }),
+        row('counterparty', { counterpartyAccountId: ids.brlAccount }),
+        row('transfer-out'),
+        row('transfer-in', { amountCents: 101 }),
+        row('suggested-transfer'),
+      ])
+    await db.insert(s.reconciliationGroups).values([
+      { id: 'own', type: 'transfer', status: 'confirmed', confidence: 100 },
+      {
+        id: 'suggested',
+        type: 'transfer',
+        status: 'suggested',
+        confidence: 50,
+      },
+    ])
+    await db.insert(s.reconciliationLinks).values([
+      {
+        id: 'out',
+        groupId: 'own',
+        transactionId: 'transfer-out',
+        role: 'source',
+      },
+      {
+        id: 'in',
+        groupId: 'own',
+        transactionId: 'transfer-in',
+        role: 'target',
+      },
+      {
+        id: 'suggestion',
+        groupId: 'suggested',
+        transactionId: 'suggested-transfer',
+        role: 'source',
+      },
+    ])
+    const before = await db.select().from(s.transactions)
+    const expected = familyTransactions(await getFinanceSnapshot())
+    queries.length = 0
+    const result = await getCategoryTransactions()
+    expect(result).toEqual(expected)
+    expect(result.map((entry) => entry.id).sort()).toEqual([
+      'card',
+      'converted',
+      'expense',
+      'refund',
+      'suggested-transfer',
+      'system-unknown',
+      'unknown',
+    ])
+    expect(result.find((entry) => entry.id === 'converted')?.amountCents).toBe(
+      -507,
+    )
+    expect(result.find((entry) => entry.id === 'refund')?.amountCents).toBe(1)
+    expect(queries).toHaveLength(3)
+    expect(queries.every((query) => /^select\b/i.test(query))).toBe(true)
+    expect(queries.join(' ')).not.toMatch(
+      /monthly_budgets|exchange_rates|imports|recurrences|investment_goals|card_statement_cycles/,
+    )
+    expect(await db.select().from(s.transactions)).toEqual(before)
+    expect(await db.select().from(s.knowledgeBase)).toEqual([])
   })
 
   it('reads once for history and keeps closed-month allocations frozen', async () => {

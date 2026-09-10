@@ -492,9 +492,12 @@ export async function inspectPdfStatement(
       markdownTextLength,
       positionedToRawRatio,
       markdownToRawRatio,
+      // Institutional parsers consume positioned text, not Markdown. Keep the
+      // Markdown check for unknown layouts that may need fallback extraction.
       suspiciousTextLoss:
         rawTextLength > 200 &&
-        (positionedToRawRatio < 0.72 || markdownToRawRatio < 0.72),
+        (positionedToRawRatio < 0.72 ||
+          (!parserResult && markdownToRawRatio < 0.72)),
     },
   }
 }

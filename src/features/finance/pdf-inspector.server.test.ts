@@ -87,69 +87,82 @@ describe('extração posicional de PDF', () => {
     expect(nubankCard?.id).toBe('nubank/card-statement/v1')
   })
 
-  it('lê compras do Inter, ignora o pagamento e reposiciona parcelas antigas', () => {
-    const lines = groupPositionedTextIntoLines([
-      textItem(
-        'Este é o valor que você precisa pagar nesse mês 15/05/2026',
-        1,
-        20,
-        500,
-      ),
-      textItem('Fatura atual R$ 400,00', 2, 20, 100),
-      textItem('Despesas da fatura', 3, 20, 550),
-      textItem('CARTÃO 5364****3879', 3, 20, 520),
-      textItem(
-        '08 de abr. 2026 Compra capturada tarde (Parcela 01 de 02) - R$ 50,00',
-        3,
-        20,
-        500,
-      ),
-      textItem(
-        '20 de mar. 2026 Compra antiga (Parcela 02 de 03) - R$ 100,00',
-        3,
-        20,
-        480,
-      ),
-      textItem('09 de abr. 2026 PAGAMENTO ON LINE - + R$ 500,00', 3, 20, 460),
-      textItem(
-        '10 de abr. 2026 PAGAMENTO*Estetica T (Parcela 01 de 03) - R$ 250,00',
-        3,
-        20,
-        440,
-      ),
-      textItem('Data de corte: 08/06/2026', 7, 230, 530),
-    ])
+  it.each(['-', '\uE054'])(
+    'lê compras do Inter com separador %s, ignora o pagamento e reposiciona parcelas antigas',
+    (separator) => {
+      const lines = groupPositionedTextIntoLines(
+        [
+          textItem(
+            'Este é o valor que você precisa pagar nesse mês 15/05/2026',
+            1,
+            20,
+            500,
+          ),
+          textItem('Fatura atual R$ 400,00', 2, 20, 100),
+          textItem('Despesas da fatura', 3, 20, 550),
+          textItem('CARTÃO 5364****3879', 3, 20, 520),
+          textItem(
+            '08 de abr. 2026 Compra capturada tarde (Parcela 01 de 02) - R$ 50,00',
+            3,
+            20,
+            500,
+          ),
+          textItem(
+            '20 de mar. 2026 Compra antiga (Parcela 02 de 03) - R$ 100,00',
+            3,
+            20,
+            480,
+          ),
+          textItem(
+            '09 de abr. 2026 PAGAMENTO ON LINE - + R$ 500,00',
+            3,
+            20,
+            460,
+          ),
+          textItem(
+            '10 de abr. 2026 PAGAMENTO*Estetica T (Parcela 01 de 03) - R$ 250,00',
+            3,
+            20,
+            440,
+          ),
+          textItem('Data de corte: 08/06/2026', 7, 230, 530),
+        ].map((item) => ({
+          ...item,
+          text: item.text.replace(' - ', ` ${separator} `),
+        })),
+      )
 
-    expect(
-      parseInterCardTransactions({ lines, currency: 'BRL' }),
-    ).toMatchObject({
-      sourceTransactionCount: 3,
-      controls: {
-        closingBalanceCents: 40_000,
-        balanceAsOf: '2026-05-08',
-        periodStart: '2026-04-09',
-        periodEnd: '2026-05-08',
-        dueDate: '2026-05-15',
-      },
-      transactions: [
-        {
-          postedAt: '2026-04-09',
-          description: 'Compra capturada tarde (Parcela 01 de 02)',
-          amountCents: -5_000,
+      expect(
+        parseInterCardTransactions({ lines, currency: 'BRL' }),
+      ).toMatchObject({
+        sourceTransactionCount: 3,
+        controls: {
+          closingBalanceCents: 40_000,
+          balanceAsOf: '2026-05-08',
+          periodStart: '2026-04-09',
+          periodEnd: '2026-05-08',
+          dueDate: '2026-05-15',
         },
-        {
-          postedAt: '2026-04-20',
-          description: 'Compra antiga (Parcela 02 de 03)',
-          amountCents: -10_000,
-        },
-        {
-          postedAt: '2026-04-10',
-          description: 'PAGAMENTO*Estetica T (Parcela 01 de 03)',
-          amountCents: -25_000,
-        },
-      ],
-    })
-  })
+        transactions: [
+          {
+            postedAt: '2026-04-09',
+            description: 'Compra capturada tarde (Parcela 01 de 02)',
+            amountCents: -5_000,
+          },
+          {
+            postedAt: '2026-04-20',
+            description: 'Compra antiga (Parcela 02 de 03)',
+            amountCents: -10_000,
+          },
+          {
+            postedAt: '2026-04-10',
+            description: 'PAGAMENTO*Estetica T (Parcela 01 de 03)',
+            amountCents: -25_000,
+          },
+        ],
+      })
+    },
+  )
 
   it('lê compras e outros lançamentos do Nubank sem importar o pagamento', () => {
     const lines = groupPositionedTextIntoLines([
@@ -225,6 +238,58 @@ describe('extração posicional de PDF', () => {
       lastFour: '6607',
       currency: 'BRL',
     })
+  })
+
+  it('reconcilia despesas brutas do Inter preservando créditos e antecipações', () => {
+    const items = [
+      textItem(
+        'Este é o valor que você precisa pagar nesse mês 15/09/2026',
+        1,
+        20,
+        500,
+      ),
+      textItem('Fatura atual R$ 120,00', 2, 20, 120),
+      textItem('Valor antecipado R$ 30,00', 2, 20, 100),
+      textItem('Despesas do mês R$ 150,00', 2, 20, 80),
+      textItem('Despesas da fatura', 3, 20, 550),
+      textItem('20 de ago. 2026 Compra A \uE054 R$ 100,00', 3, 20, 480),
+      textItem('21 de ago. 2026 Compra B \uE054 R$ 50,00', 3, 20, 460),
+      textItem(
+        '22 de ago. 2026 CRED PARC LOJ PARCELA \uE054 + R$ 20,00',
+        3,
+        20,
+        440,
+      ),
+      textItem('Data de corte: 08/10/2026', 7, 230, 530),
+    ]
+    const parse = (values: typeof items) =>
+      parseInterCardTransactions({
+        lines: groupPositionedTextIntoLines(values),
+        currency: 'BRL',
+      })
+    const result = parse(items)
+    expect(
+      result.transactions.map((transaction) => transaction.amountCents),
+    ).toEqual([-10_000, -5_000, 2_000])
+    expect(result.controls.closingBalanceCents).toBe(13_000)
+    expect(result.sourceTransactionCount).toBe(3)
+    for (const [before, after] of [
+      ['Compra B \uE054 R$ 50,00', 'Compra B \uE054 R$ 49,99'],
+      ['Valor antecipado R$ 30,00', 'Valor antecipado R$ 29,99'],
+      ['Despesas do mês R$ 150,00', 'Despesas do mês R$ 150,01'],
+    ]) {
+      expect(() =>
+        parse(
+          items.map((item) => ({
+            ...item,
+            text: item.text.replace(before, after),
+          })),
+        ),
+      ).toThrow('não fecham')
+    }
+    expect(() =>
+      parse(items.filter((item) => !item.text.includes('Compra B'))),
+    ).toThrow('não fecham')
   })
 
   it('aceita a fatura Inter paga antes do corte pelo total das despesas do mês', () => {

@@ -1,24 +1,13 @@
-# Visão mensal com gráficos e análise do assistente
+# Gráficos mensais e assistente
 
-Verificação em 08/09/2026 no checkout local, com alterações anteriores preservadas.
+08/09/2026. QA sintética `.qa/run-XnY9nZ`, porta 3117; desktop 1280 × 800 e celular 390 × 844.
 
-- URL sintética: http://127.0.0.1:3117.
-- Banco e arquivos isolados: `.qa/run-XnY9nZ`.
-- `pnpm setup:check`: passou.
-- Pelo navegador integrado, criei a saída manual `Teste gráfico setembro`, R$ 10,00, categoria Mercado, na conta sintética. A lista mostrou -R$ 10,00 e a visão geral atualizou o caixa para -R$ 10,00, essenciais para R$ 10,00 e saídas realizadas para R$ 10,00. Não há pagamentos pendentes desse lançamento já pago.
-- Setembro selecionado por padrão. Cabeçalho mostra Caixa atual; saudação e resumo com ícone removidos. Botão Previsão abre a tela com esse título.
-- Verificação em 1280×800 e 390×844. Sem overflow horizontal em 390 px. Análise do assistente sem borda/fundo/card próprio. Textos Soma dos saldos e Detalhes dos cálculos ausentes.
-- Click do conector retornou erro de automação. Interações seguiram pelo DOM da página com preview_evaluate, incluindo preenchimento do formulário, seleção da categoria e envio. Nenhuma mutation foi substituída por SQL.
-- Console apresentou erros do preload do Electron ao abrir o navegador, antes das interações; não foram erros da aplicação.
+Pelo formulário, criada despesa Mercado de R$ 10,00. Lista mostrou -R$ 10,00; visão geral mostrou caixa de -R$ 10,00, essenciais e saídas de R$ 10,00, sem pagamento pendente. Recarga preservou o lançamento e selecionou setembro.
 
-Testes focados cobrem limites históricos, preservação dos centavos, excesso individual sem compensar com outro grupo, barras e anéis, previsão após metas, consentimento para IA, briefing agregado do mês solicitado, ausência de chamadas quando desativada e isolamento de respostas atrasadas entre meses. Chamadas reais ao provedor de IA não foram exercidas no QA, onde IA é desativada. Testes do assistente usam provedor simulado.
+Navegador confirmou botão Previsão, gráfico com linha zero, análise do assistente sem card ou rótulo visível próprio e ausência de rolagem horizontal. Após falha do conector de clique, as interações usaram eventos DOM na página. Não houve escrita SQL substituindo o formulário.
 
-O gráfico usa escala monetária comum e linha zero; caixas negativos ficam abaixo dela. Os indicadores de excesso de despesas são independentes do saldo final. A IA recebe agregados em centavos lidos no servidor, sem descrições de lançamentos, e o cache distingue mês e números apresentados.
+Testes cobriram limites históricos, centavos, excesso por grupo, barras e anéis, previsão após metas, consentimento de IA, agregados do mês e isolamento de respostas atrasadas. Provedor de IA simulado; chamadas reais não exercitadas.
 
-`pnpm bench`: histórico de 12 meses com 28 consultas e 16.343 bytes; nenhum novo cálculo de banco foi introduzido nos gráficos. Os lançamentos, importações e dados financeiros principais não foram alterados por este trabalho.
+`pnpm verify` passou: tipos, lint, build, 480 testes aprovados e 10 privados/condicionais pulados. Benchmark do histórico de 12 meses: 28 consultas e 16.343 bytes. Ambiente encerrado e removido.
 
-Atualização final: removido também o rótulo visível do assistente, mantendo o nome acessível da seção. Após reload no navegador, setembro voltou selecionado e os R$ 10,00 persistiram. A diretriz de UI autoexplicativa foi registrada no AGENTS.md.
-
-Validação final: `pnpm verify` passou, com typecheck, lint, 480 testes aprovados e build. Dez testes de fixtures privadas/condicionais permaneceram pulados. Run sintético encerrado e removido com `pnpm qa:clean`.
-
-Legenda simplificada para Caixa final. Verificada em 1280×800 e 390×844 no navegador integrado, URL 3117, run sintético `.qa/run-lraQx1`: novo texto presente, antigo ausente, sem overflow móvel. `pnpm setup:check` e `pnpm verify` passaram.
+A legenda Caixa final foi conferida em outra rodada, `.qa/run-lraQx1`, nas mesmas dimensões, sem rolagem horizontal. `pnpm setup:check` e `pnpm verify` passaram.

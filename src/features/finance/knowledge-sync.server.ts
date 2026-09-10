@@ -13,13 +13,9 @@ import { and, eq, isNull, ne } from 'drizzle-orm'
 
 import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
-import {
-  knowledgeExactPatterns,
-  matchesKnowledgePrefix,
-} from '#/domain/knowledge-pattern'
 import type { KnowledgeMatchMode } from '#/domain/knowledge-pattern'
 import {
-  knowledgeKey,
+  loadCategoryKnowledge,
   reviewKnowledgeCategory,
   updateKnowledgePattern,
 } from './knowledge-base.server'
@@ -45,63 +41,13 @@ export interface KnowledgeSyncPlan {
   changes: KnowledgeSyncChange[]
 }
 
-interface ResolvedEntry {
-  id: string
-  categoryId: string
-}
-
-async function loadResolver() {
-  const rows = await db
-    .select({
-      id: schema.knowledgeBase.id,
-      pattern: schema.knowledgeBase.pattern,
-      matchMode: schema.knowledgeBase.matchMode,
-      direction: schema.knowledgeBase.direction,
-      categoryId: schema.knowledgeBase.categoryId,
-    })
-    .from(schema.knowledgeBase)
-    .where(eq(schema.knowledgeBase.kind, 'category'))
-  const exact = new Map<string, ResolvedEntry>()
-  const prefixes: Array<{
-    pattern: string
-    direction: 'income' | 'expense'
-    entry: ResolvedEntry
-  }> = []
-  for (const row of rows) {
-    if (!row.categoryId) continue
-    const entry = { id: row.id, categoryId: row.categoryId }
-    const mode: KnowledgeMatchMode = row.matchMode
-    if (mode === 'exact') {
-      exact.set(`${row.pattern}|${row.direction}`, entry)
-    } else {
-      prefixes.push({ pattern: row.pattern, direction: row.direction, entry })
-    }
-  }
-  prefixes.sort((left, right) => right.pattern.length - left.pattern.length)
-  return (item: { description: string; amountCents: number }) => {
-    const key = knowledgeKey(item)
-    if (!key) return null
-    const direct = knowledgeExactPatterns(item.description)
-      .map((pattern) => exact.get(`${pattern}|${key.direction}`))
-      .find((entry) => entry !== undefined)
-    if (direct) return direct
-    return (
-      prefixes.find(
-        (prefix) =>
-          prefix.direction === key.direction &&
-          matchesKnowledgePrefix(key.pattern, prefix.pattern),
-      )?.entry ?? null
-    )
-  }
-}
-
 /** Calcula o que a sincronização mudaria, sem escrever nada. */
 export async function planKnowledgeSync(
   options: { entryId?: string } = {},
 ): Promise<KnowledgeSyncPlan> {
   await ensureDatabase()
   const [resolve, transactions, categories] = await Promise.all([
-    loadResolver(),
+    loadCategoryKnowledge(),
     db
       .select({
         id: schema.transactions.id,

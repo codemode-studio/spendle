@@ -1,25 +1,29 @@
 # Backlog
 
-## Segurança e colaboração
+Itens adiados, sem ordem de execução ou prazo definido.
 
-- Autenticação, convite da esposa, papéis e trilha de auditoria.
-- Deploy, banco remoto, criptografia em repouso, backups e recuperação.
+## Acesso e operação
+
+- Autenticação, convites, papéis e trilha de auditoria.
+- Deploy, banco remoto e criptografia em repouso.
+- Rotina de backup e recuperação pela interface. Backups locais usados em migrações não substituem esse fluxo.
+- Exclusão de arquivos originais pela interface e política de retenção.
 
 ## Fiscal e empresarial
 
 - Tributação PF/PJ brasileira, provisões e calendário fiscal.
-- Empresa dos EUA, obrigações, custos, contas e relatórios próprios.
+- Empresa dos EUA, contas e obrigações próprias.
 - Exportações contábeis.
 
-## Integrações e automação
+## Integrações
 
 - Open Finance e integrações bancárias.
-- OCR local para documentos digitalizados e adaptadores por instituição.
+- OCR local para documentos digitalizados e novos adaptadores por instituição.
 - Carteira de ativos, rentabilidade e cotações.
 - Alertas, notificações e automações de fechamento.
 
-## Qualidade futura
+## Cobertura de testes
 
-- Suíte E2E completa com arquivos anonimizados de diferentes bancos.
-- Revisão assistida de falsos positivos e aprendizagem por estabelecimento.
-- Exclusão de arquivos originais pela interface e política de retenção.
+Ampliar fixtures anonimizadas de bancos e formatos. As lacunas de navegador já identificadas estão em [docs](../docs/README.md); o procedimento vigente usa navegador integrado, sem adicionar um framework E2E só para essas verificações.
+
+Aprendizado por estabelecimento já foi entregue pela base de conhecimento. Heurísticas e IA não aprendem decisões automaticamente.

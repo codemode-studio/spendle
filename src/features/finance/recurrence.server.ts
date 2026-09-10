@@ -340,6 +340,7 @@ function settleMatch(
     automatic: boolean
     knowledgeSource: MatchKnowledgeSource | null
     companyTransaction: boolean
+    preserveReconciledCategory?: boolean
     score: number
     reason: string
     evidenceJson: string
@@ -348,9 +349,11 @@ function settleMatch(
   const resolvedAt = new Date()
   const categoryCanBeApplied =
     !input.companyTransaction &&
+    !input.preserveReconciledCategory &&
     (!input.row.categoryId || input.row.categoryId === 'uncategorized')
   const categoryConflict =
     !input.companyTransaction &&
+    !input.preserveReconciledCategory &&
     Boolean(
       input.row.categoryId &&
       input.row.categoryId !== 'uncategorized' &&
@@ -400,7 +403,7 @@ function settleMatch(
       recurrenceId: input.recurrence.id,
       source: input.knowledgeSource,
     })
-    if (!input.companyTransaction) {
+    if (!input.companyTransaction && !input.preserveReconciledCategory) {
       learnCategory(transaction, {
         description: input.row.description,
         amountCents: input.row.amountCents,
@@ -467,12 +470,23 @@ type TransactionLinkIssue =
   | 'reconciliation'
   | 'accepted'
 
+function isProfitDistributionIncome(input: {
+  direction: OccurrenceRow['direction']
+  reconciliationTypes: ReadonlySet<RecurrenceReconciliationType> | null
+}) {
+  return (
+    input.direction === 'income' &&
+    input.reconciliationTypes?.has('profit_distribution') === true
+  )
+}
+
 function transactionLinkIssue(input: {
   transaction: TransactionRow | undefined
   currency: string
   direction: OccurrenceRow['direction']
   reconciliationTypes: ReadonlySet<RecurrenceReconciliationType> | null
   accepted: boolean
+  allowProfitDistribution?: boolean
 }): TransactionLinkIssue | null {
   const transaction = input.transaction
   if (!transaction) return 'missing'
@@ -484,7 +498,8 @@ function transactionLinkIssue(input: {
     !transactionEligibleForRecurrence({
       counterpartyAccountId: transaction.counterpartyAccountId,
       reconciliationTypes: input.reconciliationTypes,
-    })
+    }) &&
+    !(input.allowProfitDistribution && isProfitDistributionIncome(input))
   ) {
     return 'reconciliation'
   }
@@ -496,6 +511,7 @@ function assertTransactionCanBeLinked(input: {
   occurrence: OccurrenceRow
   reconciliationTypes: ReadonlySet<RecurrenceReconciliationType> | null
   accepted: boolean
+  allowProfitDistribution?: boolean
 }) {
   const transaction = input.transaction
   const issue = transactionLinkIssue({
@@ -504,6 +520,7 @@ function assertTransactionCanBeLinked(input: {
     direction: input.occurrence.direction,
     reconciliationTypes: input.reconciliationTypes,
     accepted: input.accepted,
+    allowProfitDistribution: input.allowProfitDistribution,
   })
   if (issue === null) {
     if (!transaction) throw new Error('Transação não encontrada.')
@@ -609,10 +626,11 @@ async function settleSuggestedMatch(
   const recurrence = assertOccurrenceCanBeLinked(recurrences[0], occurrence)
   const reconciliation =
     reconciliationByTransaction ?? (await loadReconciliationTypes())
+  const reconciliationTypes = reconciliation.get(row.id) ?? null
   assertTransactionCanBeLinked({
     transaction: row,
     occurrence,
-    reconciliationTypes: reconciliation.get(row.id) ?? null,
+    reconciliationTypes,
     accepted: false,
   })
   const companyTransaction = await transactionBelongsToCompany(row)
@@ -626,6 +644,10 @@ async function settleSuggestedMatch(
       automatic,
       knowledgeSource: automatic ? null : 'recurrence_link',
       companyTransaction,
+      preserveReconciledCategory: isProfitDistributionIncome({
+        direction: occurrence.direction,
+        reconciliationTypes,
+      }),
       score: match[0].score,
       reason: match[0].reason,
       evidenceJson: match[0].evidenceJson,
@@ -1391,10 +1413,12 @@ export async function linkTransactions(input: {
   const rowById = new Map(rows.map((row) => [row.id, row]))
   const contexts = await Promise.all(
     transactionIds.map(async (transactionId) => {
+      const reconciliationTypes = reconciliation.get(transactionId) ?? null
       const row = assertTransactionCanBeLinked({
         transaction: rowById.get(transactionId),
         occurrence: occurrence[0],
-        reconciliationTypes: reconciliation.get(transactionId) ?? null,
+        reconciliationTypes,
+        allowProfitDistribution: true,
         accepted: matches.some(
           (match) =>
             match.transactionId === transactionId &&
@@ -1409,6 +1433,10 @@ export async function linkTransactions(input: {
             match.occurrenceId === input.occurrenceId,
         ),
         companyTransaction: await transactionBelongsToCompany(row),
+        preserveReconciledCategory: isProfitDistributionIncome({
+          direction: occurrence[0].direction,
+          reconciliationTypes,
+        }),
       }
     }),
   )
@@ -1424,6 +1452,7 @@ export async function linkTransactions(input: {
         automatic: false,
         knowledgeSource: input.knowledgeSource ?? 'recurrence_link',
         companyTransaction: context.companyTransaction,
+        preserveReconciledCategory: context.preserveReconciledCategory,
         score: 100,
         reason: 'vinculado manualmente',
         evidenceJson: JSON.stringify({ manual: true }),
@@ -1482,10 +1511,14 @@ export async function listLinkCandidates(input: {
         row.currency !== occurrence[0].currency ||
         Math.sign(row.amountCents) !== expectedSign ||
         takenIds.has(row.id) ||
-        !transactionEligibleForRecurrence({
+        (!transactionEligibleForRecurrence({
           counterpartyAccountId: row.counterpartyAccountId,
           reconciliationTypes: reconciliation.get(row.id) ?? null,
-        })
+        }) &&
+          !isProfitDistributionIncome({
+            direction: occurrence[0].direction,
+            reconciliationTypes: reconciliation.get(row.id) ?? null,
+          }))
       ) {
         return []
       }

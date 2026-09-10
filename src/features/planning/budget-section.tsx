@@ -1,4 +1,4 @@
-import { Check, PiggyBank, Plus, Target } from 'lucide-react'
+import { ArrowRight, Check, PiggyBank, Plus, Target } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
 import type * as React from 'react'
 
@@ -32,7 +32,10 @@ import { ToggleGroup, ToggleGroupItem } from '#/components/ui/toggle-group'
 import { formatCurrency } from '#/domain/currency'
 import { percentFromBps, strategyPresets } from '#/domain/finance'
 import { formatMonthLong as formatMonth } from '#/domain/period'
+import { transactionSearchDefaults } from '#/features/finance/transactions.search'
 import type { PlanningSnapshot } from '#/features/finance/snapshot.types'
+import { buildClosingIssuePresentations } from './closing-issues'
+import type { ClosingIssueDestination } from './closing-issues'
 
 type Allocation = Record<
   'essential' | 'lifestyle' | 'investment' | 'reserve',
@@ -70,6 +73,33 @@ function BudgetSection({
   settingsPending: boolean
   closePending: boolean
 }) {
+  const closingIssues = buildClosingIssuePresentations(data, {
+    today: new Date().toISOString().slice(0, 10),
+  })
+  const closingIssueAction = (destination: ClosingIssueDestination) => {
+    if (destination === 'accounts') {
+      return <Link to="/configuracoes" search={{ tab: 'contas' }} />
+    }
+    if (destination === 'imports') {
+      return <Link to="/importar" search={{ view: 'review' }} />
+    }
+    if (destination === 'recurrences') {
+      return <Link to="/configuracoes" search={{ tab: 'recorrencias' }} />
+    }
+    if (destination === 'uncategorized') {
+      return (
+        <Link
+          to="/transacoes"
+          search={{
+            ...transactionSearchDefaults,
+            category: 'uncategorized',
+          }}
+        />
+      )
+    }
+    return <Link to="/transacoes" search={transactionSearchDefaults} />
+  }
+
   return (
     <div className="grid gap-4">
       <Panel
@@ -208,27 +238,41 @@ function BudgetSection({
             Este mês já está fechado.
           </p>
         ) : pendingCount ? (
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="grid gap-3">
             <p className="text-sm text-muted-foreground">
-              Revise importações e conciliações antes de fechar.
+              Resolva os itens abaixo para liberar o fechamento.
             </p>
-            {data.dashboard.reviewTransactionCount > 0 ? (
-              <Button
-                nativeButton={false}
-                variant="outline"
-                render={<Link to="/importar" search={{ view: 'review' }} />}
-              >
-                Revisar importação
-              </Button>
-            ) : (
-              <Button
-                nativeButton={false}
-                variant="outline"
-                render={<Link to="/transacoes" />}
-              >
-                Revisar conciliações
-              </Button>
-            )}
+            <ul className="divide-y divide-border overflow-hidden rounded-lg border">
+              {closingIssues.map((issue) => (
+                <li
+                  key={issue.code}
+                  className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <StatusBadge tone="warning">{issue.count}</StatusBadge>
+                      <span className="text-sm font-medium">{issue.label}</span>
+                    </div>
+                    {issue.detail && (
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        {issue.detail}
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    nativeButton={false}
+                    variant="outline"
+                    size="sm"
+                    className="w-full shrink-0 sm:w-auto"
+                    aria-label={`${issue.actionLabel}: ${issue.label}`}
+                    render={closingIssueAction(issue.destination)}
+                  >
+                    {issue.actionLabel}
+                    <ArrowRight data-icon="inline-end" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
           </div>
         ) : (
           <AlertDialog>

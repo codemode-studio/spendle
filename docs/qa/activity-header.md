@@ -1,11 +1,9 @@
 # Cabeçalho e observações do assistente
 
-08/09/2026, checkout local. UI verificada no navegador integrado em http://127.0.0.1:3117, banco sintético `.qa/run-X0Qa6Q`.
+08/09/2026. QA sintética `.qa/run-X0Qa6Q`, porta 3117.
 
-- Painel aberto pelo botão Assistente em 1280×800 e 320×740.
-- Um único cabeçalho, com título acessível Atividade e botão Análise da quinzena. Em 320 px o botão passa para a segunda linha, sem sobrepor o fechamento.
-- Título Assistente e descrição antiga removidos do cabeçalho. Feed e formulário permanecem no painel.
-- Botão Ver mais removido, junto ao estado e à condição que ocultavam observações após a terceira. O cenário sintético contém uma observação; sua renderização foi conferida no navegador. Não foram feitas chamadas de IA, desativada no QA.
-- `pnpm setup:check` passou. Nenhum dado financeiro principal foi modificado.
+O navegador confirmou um único cabeçalho Atividade, com botão Análise da quinzena, em 1280 × 800 e 320 × 740. No celular, o botão passou à segunda linha sem sobrepor o fechamento.
 
-`pnpm verify` final passou: typecheck, lint, 480 testes aprovados, 10 pulados e build. Servidor sintético encerrado e diretório removido com `pnpm qa:clean`.
+O botão Ver mais foi removido. O cenário tinha apenas uma observação, portanto não verificou a exibição de mais de três itens. IA desativada no QA.
+
+`pnpm setup:check` e `pnpm verify` passaram: 480 testes aprovados e 10 pulados. Ambiente encerrado e removido.

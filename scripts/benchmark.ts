@@ -1,8 +1,10 @@
 import { performance } from 'node:perf_hooks'
+import { familyTransactions } from '../src/domain/ledger'
 import { buildReconciliationSuggestions } from '../src/domain/reconciliation'
 import { openTestDatabase } from '../src/test/database'
 import {
   getFinanceSnapshot,
+  getCategoryTransactions,
   getConfigurationSnapshot,
   getStrategyHistory,
 } from '../src/features/finance/finance-snapshot.server'
@@ -58,6 +60,11 @@ try {
   for (const [operation, read] of [
     ['fullSnapshot', () => getFinanceSnapshot()],
     ['configuration', () => getConfigurationSnapshot()],
+    [
+      'categoriesViaSnapshot',
+      async () => familyTransactions(await getFinanceSnapshot()),
+    ],
+    ['categories', () => getCategoryTransactions()],
     [
       'transactionsPage',
       () => getTransactionsPage(transactionFiltersSchema.parse({})),
