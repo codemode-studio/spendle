@@ -4,7 +4,6 @@ import {
   PiggyBank,
   Settings,
   Upload,
-  WalletCards,
   Tags,
   Landmark,
   CalendarClock,
@@ -32,6 +31,7 @@ import { cn } from '#/lib/utils'
 import { TooltipProvider } from '#/components/ui/tooltip'
 import { Toaster } from '#/components/ui/sonner'
 import { OnboardingCard } from '#/features/home/onboarding-card'
+import { SpendleLockup } from '#/components/spendle-logo'
 
 const navigation = [
   { to: '/', label: 'Visão geral', icon: LayoutDashboard },
@@ -65,30 +65,26 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
 
   const search = useRouterState({ select: (state) => state.location.search })
 
+  if (pathname === '/marca') {
+    return (
+      <main className="brand-guide-shell min-h-svh overflow-y-auto">
+        {children}
+      </main>
+    )
+  }
+
   return (
     <>
       <Sidebar collapsible="icon" variant="inset">
-        <SidebarHeader className="flex-row items-center">
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                size="lg"
-                tooltip="Spendle"
-                render={<Link to="/" />}
-                onClick={() => setOpenMobile(false)}
-              >
-                <span className="flex size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-                  <WalletCards />
-                </span>
-                <span className="flex min-w-0 flex-col leading-none">
-                  <strong className="truncate">Spendle</strong>
-                  <span className="truncate text-xs text-sidebar-foreground/55">
-                    Finanças
-                  </span>
-                </span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
+        <SidebarHeader className="flex-row items-center justify-between">
+          <Link
+            to="/"
+            aria-label="Ir para a visão geral"
+            className="flex min-h-11 min-w-0 flex-1 items-center rounded-lg px-1.5 outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:min-h-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
+            onClick={() => setOpenMobile(false)}
+          >
+            <SpendleLockup wordmarkClassName="group-data-[collapsible=icon]:hidden" />
+          </Link>
           <Button
             variant="ghost"
             size="icon"
@@ -126,7 +122,6 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
                         render={<Link to={to} search={targetSearch} />}
                         isActive={isActive}
                         tooltip={label}
-                        className="min-h-11"
                       >
                         <Icon />
                         <span>{label}</span>
@@ -147,7 +142,6 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
-                className="min-h-11"
                 render={<Link to="/importar" />}
                 isActive={pathname === '/importar'}
                 tooltip="Importar extrato"
@@ -158,7 +152,6 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
             </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton
-                className="min-h-11"
                 render={<Link to="/configuracoes" search={{ tab: 'geral' }} />}
                 isActive={
                   pathname === '/configuracoes' &&
@@ -191,9 +184,10 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
             </Button>
             <Link
               to="/"
-              className="justify-self-center text-lg font-semibold tracking-tight"
+              aria-label="Ir para a visão geral"
+              className="justify-self-center"
             >
-              Spendle<span className="text-primary">.</span>
+              <SpendleLockup />
             </Link>
             <Button
               variant="ghost"

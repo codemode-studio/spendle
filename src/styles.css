@@ -207,6 +207,8 @@ a {
 
 /* Cristal: fundo contínuo e painéis translúcidos. */
 .crystal-shell {
+  --sidebar-row-height: 44px;
+  --sidebar-row-gap: 0.25rem;
   background:
     radial-gradient(ellipse at 0% 0%, var(--visual-glow) 0, transparent 48%),
     radial-gradient(
@@ -221,18 +223,82 @@ a {
   background: transparent;
 }
 .crystal-shell [data-slot='sidebar-header'] {
-  padding: 1.5rem 0.75rem;
+  padding: 1rem 0.75rem 0.75rem;
 }
 .crystal-shell [data-slot='sidebar-menu'] {
-  gap: 0.4rem;
+  gap: var(--sidebar-row-gap);
 }
 .crystal-shell [data-slot='sidebar-menu-button'] {
-  border-radius: 0.85rem;
-  padding-inline: 0.85rem;
+  min-height: var(--sidebar-row-height);
+  border-radius: 0.625rem;
+  padding-inline: 0.75rem;
 }
 .crystal-shell [data-slot='sidebar-menu-button'][data-active='true'] {
-  box-shadow: var(--visual-shadow);
-  border: 1px solid var(--visual-edge);
+  background: rgb(255 255 255 / 52%);
+  box-shadow: none;
+  border: 0;
+}
+
+@media (min-width: 48rem) {
+  .crystal-shell {
+    --sidebar-row-height: 36px;
+    --sidebar-row-gap: 0.125rem;
+  }
+
+  .crystal-shell [data-slot='sidebar-header'] {
+    padding: 0.875rem 0.5rem 0.625rem;
+  }
+}
+
+.spendle-logo {
+  display: block;
+  flex: none;
+  background-color: currentColor;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+}
+.spendle-logo--wordmark {
+  mask-image: url('/spendle-wordmark.svg');
+  -webkit-mask-image: url('/spendle-wordmark.svg');
+}
+.spendle-logo--brandmark {
+  mask-image: url('/spendle-brandmark.svg');
+  -webkit-mask-image: url('/spendle-brandmark.svg');
+}
+.spendle-tile {
+  color: var(--sidebar-primary-foreground);
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--sidebar-primary), white 14%),
+    var(--sidebar-primary) 70%
+  );
+  box-shadow:
+    inset 0 1px 0 0 rgb(255 255 255 / 22%),
+    0 0 0 1px rgb(23 36 56 / 8%),
+    0 1px 2px rgb(23 36 56 / 22%);
+}
+.brand-atmosphere {
+  background:
+    radial-gradient(
+      ellipse 70% 115% at 0% 0%,
+      rgb(181 204 239 / 75%),
+      transparent 62%
+    ),
+    radial-gradient(
+      ellipse 65% 120% at 100% 100%,
+      rgb(221 217 236 / 65%),
+      transparent 62%
+    ),
+    #edf2f9;
+}
+.brand-guide-shell {
+  width: 100%;
+  flex: 1 1 0%;
+  background: var(--visual-ground);
 }
 
 .app-canvas {

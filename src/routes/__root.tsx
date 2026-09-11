@@ -41,6 +41,11 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
     ],
     links: [
       {
+        rel: 'icon',
+        href: '/spendle-brandmark.svg',
+        type: 'image/svg+xml',
+      },
+      {
         rel: 'stylesheet',
         href: appCss,
       },
