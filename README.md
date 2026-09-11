@@ -1,4 +1,4 @@
-# Finanças da Família
+# Spendle
 
 Aplicativo local para consolidar contas PF/PJ brasileiras, investimentos e cartões, provar saldos contra extratos bancários e reconciliar transferências.
 

@@ -73,7 +73,7 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
             <SidebarMenuItem>
               <SidebarMenuButton
                 size="lg"
-                tooltip="Família Finanças"
+                tooltip="Spendle"
                 render={<Link to="/" />}
                 onClick={() => setOpenMobile(false)}
               >
@@ -81,7 +81,7 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
                   <WalletCards />
                 </span>
                 <span className="flex min-w-0 flex-col leading-none">
-                  <strong className="truncate">Família</strong>
+                  <strong className="truncate">Spendle</strong>
                   <span className="truncate text-xs text-sidebar-foreground/55">
                     Finanças
                   </span>
@@ -193,7 +193,7 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
               to="/"
               className="justify-self-center text-lg font-semibold tracking-tight"
             >
-              Família<span className="text-primary">.</span>
+              Spendle<span className="text-primary">.</span>
             </Link>
             <Button
               variant="ghost"

@@ -32,11 +32,11 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
         content: 'width=device-width, initial-scale=1',
       },
       {
-        title: 'Família Finanças',
+        title: 'Spendle',
       },
       {
         name: 'description',
-        content: 'Controle financeiro familiar e empresarial local.',
+        content: 'Finanças da família em um só lugar.',
       },
     ],
     links: [
