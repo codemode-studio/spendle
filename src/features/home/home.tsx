@@ -28,6 +28,8 @@ import {
   SheetTitle,
 } from '#/components/ui/sheet'
 import { MonthlyOverview } from './monthly-overview'
+import { ReviewCard } from './review-card'
+import { pendingReviewItems } from './review'
 import { formatCurrency } from '#/domain/currency'
 import { todayIso } from '#/domain/period'
 import type { FinanceSnapshot } from '#/features/finance/snapshot.types'
@@ -114,6 +116,7 @@ export function Home({
         </div>
       ) : (
         <div className="flex flex-col gap-6">
+          <ReviewCard items={pendingReviewItems(snapshot)} />
           <MonthlyOverview
             dashboard={snapshot.dashboard}
             assistantConfigured={assistantConfigured}
