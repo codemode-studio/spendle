@@ -114,6 +114,10 @@ export function usePlanningController(data: PlanningSnapshot) {
           ? `${formatMonth(result.month, { capitalize: true })} já estava fechado.`
           : `${formatMonth(result.month, { capitalize: true })} foi fechado.`,
       )
+      if ('analysisError' in result && result.analysisError)
+        toast.error(
+          'Mês fechado. A análise falhou; tente novamente no Assistente.',
+        )
       void invalidateBudgetClose()
     },
     onError: showError,

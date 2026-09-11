@@ -743,6 +743,8 @@ export async function clearTransactionData() {
     transaction.delete(schema.imports).run()
     transaction.delete(schema.importBatches).run()
     transaction.delete(schema.sourceFiles).run()
+    transaction.delete(schema.initialAnalysis).run()
+    transaction.delete(schema.monthlyReports).run()
     transaction.delete(schema.monthlyBudgets).run()
     transaction
       .update(schema.accounts)

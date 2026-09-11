@@ -1,23 +1,27 @@
 import { useQuery } from '@tanstack/react-query'
 import { Sparkles } from 'lucide-react'
 import { Button } from '#/components/ui/button'
+import { AnalysisCard } from './analysis-card'
 import { generateMonthlyAnalysisFn } from './analysis.functions'
 
 export function MonthlyAssistant({
   month,
   revision,
   configured,
+  closed = false,
 }: {
   month: string
   revision: string
   configured: boolean
+  closed?: boolean
 }) {
   const analysis = useQuery({
-    queryKey: ['monthly-assistant', month, revision],
+    queryKey: ['monthly-assistant', month, closed, revision],
     queryFn: () => generateMonthlyAnalysisFn({ data: { month } }),
-    enabled: configured,
+    enabled: configured && closed,
     staleTime: Infinity,
-    retry: false,
+    retry: 1,
+    retryDelay: 1500,
     refetchOnWindowFocus: false,
   })
   return (
@@ -34,6 +38,11 @@ export function MonthlyAssistant({
           <p className="text-sm">
             Ative o assistente em Configurações para receber uma análise deste
             mês.
+          </p>
+        ) : !closed ? (
+          <p className="text-sm">
+            A análise será gerada ao fechar este mês em Orçamento e metas. Use o
+            chat para perguntas pontuais.
           </p>
         ) : analysis.isPending ? (
           <p className="text-sm">
@@ -52,12 +61,14 @@ export function MonthlyAssistant({
               Tentar novamente
             </Button>
           </div>
+        ) : !analysis.data ? (
+          <p className="text-sm">
+            A análise será gerada ao fechar este mês em Orçamento e metas. Use o
+            chat para perguntas pontuais.
+          </p>
         ) : (
           <>
-            <h4 className="text-sm font-semibold">{analysis.data.headline}</h4>
-            <p className="mt-1 text-sm leading-relaxed">
-              {analysis.data.summary}
-            </p>
+            <AnalysisCard analysis={analysis.data} />
           </>
         )}
       </div>

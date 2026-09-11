@@ -267,6 +267,20 @@
       "when": 1788635365470,
       "tag": "0037_knowledge_base_prefix_absorption",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1789139000000,
+      "tag": "0038_monthly_reports",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1789139000001,
+      "tag": "0039_initial_analysis",
+      "breakpoints": true
     }
   ]
 }

@@ -177,6 +177,16 @@ export async function closeCurrentBudget() {
         eligibleIncomeCents: snapshot.dashboard.currentIncomeCents,
       },
     })
-  return { month, alreadyClosed: false }
+  // Falha da IA não desfaz o fechamento; a tela permite tentar novamente.
+  const { getAssistantStatus, generateMonthlyAnalysis } =
+    await import('../home/analysis.server')
+  let analysisError = false
+  if ((await getAssistantStatus()).configured) {
+    try {
+      await generateMonthlyAnalysis(month)
+    } catch {
+      analysisError = true
+    }
+  }
+  return { month, alreadyClosed: false, analysisError }
 }
-

@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
+import { useEffect, useMemo, useState } from 'react'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
   ArrowRight,
@@ -13,8 +13,6 @@ import {
   Landmark,
   Send,
   Sparkles,
-  ThumbsDown,
-  ThumbsUp,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -31,18 +29,18 @@ import { MonthlyOverview } from './monthly-overview'
 import { ReviewCard } from './review-card'
 import { pendingReviewItems } from './review'
 import { formatCurrency } from '#/domain/currency'
-import { todayIso } from '#/domain/period'
 import type { FinanceSnapshot } from '#/features/finance/snapshot.types'
 import { cn } from '#/lib/utils'
 import {
   askFinanceQuestionFn,
-  generateFortnightAnalysisFn,
+  getLatestMonthlyAnalysisFn,
 } from './analysis.functions'
-import type { FortnightAnalysis } from './analysis.server'
+import type { MonthlyAnalysis, ConversationMessage } from './analysis.server'
+import { AnalysisCard } from './analysis-card'
 import { CategoryBar } from './charts'
 import { ForecastOutlook } from './forecast-outlook'
-import { buildHomeView, buildInsights } from './insights'
-import type { HomeView, Insight } from './insights'
+import { buildHomeView } from './insights'
+import type { HomeView } from './insights'
 
 // ─── Página ──────────────────────────────────────────────────────────────────
 
@@ -55,7 +53,6 @@ export function Home({
 }) {
   const [showAnalysis, setShowAnalysis] = useState(false)
   const view = useMemo(() => buildHomeView(snapshot), [snapshot])
-  const insights = useMemo(() => buildInsights(view, formatCurrency), [view])
 
   return (
     <Page className="home-page max-w-[1120px]">
@@ -90,7 +87,11 @@ export function Home({
             className="min-h-0 overflow-hidden data-[side=right]:h-dvh data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
           >
             <ActivityColumn
-              insights={insights}
+              closedMonths={snapshot.monthlyBudgets
+                .filter((budget) => budget.closed)
+                .map((budget) => budget.month)
+                .sort()
+                .join(',')}
               assistantConfigured={assistantConfigured}
             />
           </SheetContent>
@@ -363,47 +364,73 @@ function CommitmentsCard({ view }: { view: HomeView }) {
 // ─── Coluna de atividade (assistente) ────────────────────────────────────────
 
 type FeedItem =
-  | { id: string; kind: 'insight'; insight: Insight }
   | { id: string; kind: 'question'; text: string }
   | { id: string; kind: 'answer'; text: string }
-  | { id: string; kind: 'analysis'; analysis: FortnightAnalysis; at: string }
-
-const toneStyles: Record<Insight['tone'], string> = {
-  alert: 'bg-red-100 text-red-700',
-  warn: 'bg-amber-100 text-amber-700',
-  good: 'bg-emerald-100 text-emerald-700',
-  neutral: 'bg-sky-100 text-sky-700',
-}
+  | {
+      id: string
+      kind: 'analysis'
+      analysis: MonthlyAnalysis
+      at: string
+      initial: boolean
+    }
 
 function ActivityColumn({
-  insights,
   assistantConfigured,
+  closedMonths,
 }: {
-  insights: Array<Insight>
+  closedMonths: string
   assistantConfigured: boolean
 }) {
   const [conversation, setConversation] = useState<Array<FeedItem>>([])
   const [question, setQuestion] = useState('')
-  const [reactions, setReactions] = useState<Record<string, 'up' | 'down'>>({})
 
   const push = (item: FeedItem) =>
-    setConversation((current) => [...current, item])
+    setConversation((current) => {
+      const next = [...current, item].slice(-20)
+      try {
+        localStorage.setItem(
+          'finance-assistant-conversation',
+          JSON.stringify(next),
+        )
+      } catch {
+        /* Armazenamento indisponível. */
+      }
+      return next
+    })
 
-  const analysis = useMutation({
-    mutationFn: () => generateFortnightAnalysisFn(),
-    onSuccess: (data) =>
-      push({
-        id: `analysis-${Date.now()}`,
-        kind: 'analysis',
-        analysis: data,
-        at: todayIso(),
-      }),
-    onError: (error) => toast.error(error.message),
+  useEffect(() => {
+    try {
+      const saved: unknown = JSON.parse(
+        localStorage.getItem('finance-assistant-conversation') ?? '[]',
+      )
+      if (Array.isArray(saved))
+        setConversation(
+          saved
+            .filter(
+              (item): item is FeedItem =>
+                item &&
+                typeof item.id === 'string' &&
+                typeof item.text === 'string' &&
+                (item.kind === 'question' || item.kind === 'answer'),
+            )
+            .slice(-20),
+        )
+    } catch {
+      /* Conversa indisponível neste navegador. */
+    }
+  }, [])
+  const analysis = useQuery({
+    queryKey: ['monthly-assistant-latest', closedMonths],
+    queryFn: () => getLatestMonthlyAnalysisFn(),
+    enabled: assistantConfigured,
+    staleTime: Infinity,
+    retry: 1,
+    retryDelay: 1500,
   })
 
   const ask = useMutation({
-    mutationFn: (text: string) =>
-      askFinanceQuestionFn({ data: { question: text } }),
+    mutationFn: (data: { question: string; history: ConversationMessage[] }) =>
+      askFinanceQuestionFn({ data }),
     onSuccess: (text) =>
       push({ id: `answer-${Date.now()}`, kind: 'answer', text }),
     onError: (error) => toast.error(error.message),
@@ -415,15 +442,35 @@ function ActivityColumn({
     if (text.length < 3 || ask.isPending) return
     push({ id: `question-${Date.now()}`, kind: 'question', text })
     setQuestion('')
-    ask.mutate(text)
+    ask.mutate({
+      question: text,
+      history: conversation
+        .flatMap((item): ConversationMessage[] =>
+          item.kind === 'question' || item.kind === 'answer'
+            ? [
+                {
+                  role: item.kind === 'question' ? 'user' : 'assistant',
+                  content: item.text,
+                },
+              ]
+            : [],
+        )
+        .slice(-20),
+    })
   }
 
   const feed: Array<FeedItem> = [
-    ...insights.map((insight) => ({
-      id: insight.id,
-      kind: 'insight' as const,
-      insight,
-    })),
+    ...(analysis.data?.analysis
+      ? [
+          {
+            id: `monthly-${analysis.data.month}`,
+            kind: 'analysis' as const,
+            analysis: analysis.data.analysis,
+            at: analysis.data.month,
+            initial: analysis.data.initial,
+          },
+        ]
+      : []),
     ...conversation,
   ]
 
@@ -431,19 +478,8 @@ function ActivityColumn({
     <aside className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
       <SheetHeader className="shrink-0 flex-row flex-wrap items-center justify-between gap-3 pr-14">
         <SheetTitle className="text-xl font-semibold tracking-tight">
-          Atividade
+          Assistente
         </SheetTitle>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!assistantConfigured || analysis.isPending}
-          onClick={() => analysis.mutate()}
-        >
-          <Sparkles
-            className={analysis.isPending ? 'animate-pulse' : undefined}
-          />
-          {analysis.isPending ? 'Analisando…' : 'Análise da quinzena'}
-        </Button>
       </SheetHeader>
 
       <div
@@ -452,66 +488,34 @@ function ActivityColumn({
         tabIndex={0}
         className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-panel pb-panel sm:space-y-6"
       >
-        {feed.length === 0 && (
+        {!assistantConfigured && !closedMonths && !analysis.data && (
           <p className="text-sm text-muted-foreground">
-            Importe extratos para o assistente começar a observar seus gastos.
+            Você recebe uma primeira análise com os dados disponíveis. As
+            próximas acompanham o fechamento de cada mês.
+          </p>
+        )}
+        {analysis.isError && (
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm">
+              A análise não ficou pronta. Tente novamente; seus dados e
+              conversas estão preservados.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void analysis.refetch()}
+            >
+              Tentar novamente
+            </Button>
+          </div>
+        )}
+        {feed.length === 0 && !analysis.isError && !analysis.isFetching && (
+          <p className="text-sm text-muted-foreground">
+            Pergunte sobre limites de gastos, compras adiáveis ou ajustes no
+            plano mensal.
           </p>
         )}
         {feed.map((item) => {
-          if (item.kind === 'insight') {
-            const reaction = reactions[item.id]
-            return (
-              <Message
-                key={item.id}
-                author="Assistente"
-                avatar={
-                  <span
-                    className={`flex size-7 items-center justify-center rounded-lg ${toneStyles[item.insight.tone]}`}
-                  >
-                    <Sparkles className="size-3.5" />
-                  </span>
-                }
-              >
-                <p className="font-medium">{item.insight.title}</p>
-                <p className="mt-1 text-muted-foreground">
-                  {item.insight.body}
-                </p>
-                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                  {item.insight.to && item.insight.cta && (
-                    <Link
-                      to={item.insight.to}
-                      search={item.insight.search}
-                      className="inline-flex items-center rounded-md bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-100 pointer-coarse:min-h-11 pointer-coarse:px-3"
-                    >
-                      {item.insight.cta}
-                    </Link>
-                  )}
-                  <ReactionButton
-                    active={reaction === 'up'}
-                    onClick={() =>
-                      setReactions((current) => ({
-                        ...current,
-                        [item.id]: 'up',
-                      }))
-                    }
-                    icon={ThumbsUp}
-                    label="Útil"
-                  />
-                  <ReactionButton
-                    active={reaction === 'down'}
-                    onClick={() =>
-                      setReactions((current) => ({
-                        ...current,
-                        [item.id]: 'down',
-                      }))
-                    }
-                    icon={ThumbsDown}
-                    label="Não ajuda"
-                  />
-                </div>
-              </Message>
-            )
-          }
           if (item.kind === 'question') {
             return (
               <Message
@@ -543,17 +547,19 @@ function ActivityColumn({
           return (
             <Message
               key={item.id}
-              author="Análise quinzenal"
+              author={
+                item.initial ? 'Primeira análise' : `Fechamento de ${item.at}`
+              }
               avatar={<AssistantAvatar />}
             >
               <AnalysisCard analysis={item.analysis} />
             </Message>
           )
         })}
-        {(ask.isPending || analysis.isPending) && (
+        {(ask.isPending || analysis.isFetching) && (
           <Message author="Assistente" avatar={<AssistantAvatar />}>
             <p className="animate-pulse text-muted-foreground">
-              {analysis.isPending ? 'Analisando a quinzena…' : 'Pensando…'}
+              {analysis.isFetching ? 'Analisando seus dados…' : 'Pensando…'}
             </p>
           </Message>
         )}
@@ -587,8 +593,7 @@ function ActivityColumn({
         </div>
         {!assistantConfigured && (
           <p className="mt-2 text-[11px] text-muted-foreground">
-            Para usar o assistente, ative o uso de IA em Configurações e
-            configure OPENROUTER_API_KEY em .env.local.
+            Ative o assistente em Configurações para enviar perguntas.
           </p>
         )}
       </form>
@@ -625,104 +630,5 @@ function Message({
         <div className="mt-1">{children}</div>
       </div>
     </article>
-  )
-}
-
-function ReactionButton({
-  active,
-  onClick,
-  icon: Icon,
-  label,
-}: {
-  active: boolean
-  onClick: () => void
-  icon: typeof ThumbsUp
-  label: string
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      aria-label={label}
-      className={`flex size-7 items-center justify-center rounded-md border text-muted-foreground transition-colors hover:bg-muted pointer-coarse:size-11 ${
-        active ? 'border-foreground/30 bg-muted text-foreground' : ''
-      }`}
-    >
-      <Icon className="size-3.5" />
-    </button>
-  )
-}
-
-const severityDot: Record<'alta' | 'media' | 'baixa', string> = {
-  alta: 'bg-red-500',
-  media: 'bg-amber-500',
-  baixa: 'bg-slate-400',
-}
-
-function AnalysisCard({ analysis }: { analysis: FortnightAnalysis }) {
-  const scoreTone =
-    analysis.healthScore >= 70
-      ? 'bg-emerald-100 text-emerald-700'
-      : analysis.healthScore >= 45
-        ? 'bg-amber-100 text-amber-700'
-        : 'bg-red-100 text-red-700'
-  return (
-    <div className="rounded-xl border bg-muted/30 p-3.5">
-      <div className="flex items-start justify-between gap-3">
-        <p className="font-medium">{analysis.headline}</p>
-        <span
-          className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${scoreTone}`}
-        >
-          {analysis.healthScore} · {analysis.healthLabel}
-        </span>
-      </div>
-      <p className="mt-2 text-muted-foreground">{analysis.summary}</p>
-      {analysis.findings.length > 0 && (
-        <ul className="mt-3 space-y-2">
-          {analysis.findings.map((finding) => (
-            <li key={finding.title} className="flex gap-2">
-              <span
-                className={`mt-1.5 size-2 shrink-0 rounded-full ${severityDot[finding.severity]}`}
-              />
-              <span>
-                <span className="font-medium">{finding.title}</span>{' '}
-                <span className="text-muted-foreground">{finding.detail}</span>
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {analysis.actions.length > 0 && (
-        <div className="mt-3 border-t pt-3">
-          <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            O que fazer nas próximas duas semanas
-          </p>
-          <ol className="mt-2 space-y-2">
-            {analysis.actions.map((action, index) => (
-              <li key={action.title} className="flex gap-2">
-                <span className="w-4 shrink-0 text-xs font-semibold text-muted-foreground tabular-nums">
-                  {index + 1}.
-                </span>
-                <span>
-                  <span className="font-medium">{action.title}</span>
-                  {action.estimatedMonthlySavingsReais !== null &&
-                    action.estimatedMonthlySavingsReais > 0 && (
-                      <span className="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700 tabular-nums">
-                        ~
-                        {formatCurrency(
-                          Math.round(action.estimatedMonthlySavingsReais * 100),
-                        )}
-                        /mês
-                      </span>
-                    )}{' '}
-                  <span className="text-muted-foreground">{action.detail}</span>
-                </span>
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
-    </div>
   )
 }

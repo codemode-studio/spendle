@@ -1023,3 +1023,20 @@ export const appSettings = sqliteTable('app_settings', {
     .default(false),
   createdAt,
 })
+
+/** Relatório preservado no fechamento; não muda com novas importações. */
+export const monthlyReports = sqliteTable('monthly_reports', {
+  month: text('month')
+    .primaryKey()
+    .references(() => monthlyBudgets.month, { onDelete: 'cascade' }),
+  report: text('report').notNull(),
+  createdAt,
+})
+
+/** Primeira orientação, independente de um fechamento de orçamento. */
+export const initialAnalysis = sqliteTable('initial_analysis', {
+  id: text('id').primaryKey(),
+  month: text('month').notNull(),
+  report: text('report').notNull(),
+  createdAt,
+})

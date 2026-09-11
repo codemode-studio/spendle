@@ -382,6 +382,7 @@ export function MonthlyOverview({
                 )}
                 <MonthlyAssistant
                   month={selected.month}
+                  closed={selected.familyMonth?.closed ?? false}
                   configured={assistantConfigured}
                   revision={JSON.stringify({
                     flow,
