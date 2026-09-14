@@ -8,8 +8,15 @@ export const transactionSearchDefaults = {
   direction: 'all' as const,
   minAmount: '',
   maxAmount: '',
+  dateFrom: '',
+  dateTo: '',
   page: 1,
 }
+
+const optionalIsoDate = z
+  .union([z.literal(''), z.iso.date()])
+  .default('')
+  .catch('')
 
 // URL pages start at one; database pages start at zero.
 export const transactionSearchSchema = z.object({
@@ -23,6 +30,8 @@ export const transactionSearchSchema = z.object({
   direction: z.enum(['all', 'in', 'out']).default('all').catch('all'),
   minAmount: z.string().default('').catch(''),
   maxAmount: z.string().default('').catch(''),
+  dateFrom: optionalIsoDate,
+  dateTo: optionalIsoDate,
   page: z.number().int().min(1).max(1_000_001).default(1).catch(1),
 })
 
@@ -46,6 +55,8 @@ export function transactionSearchToFilters(
     direction: search.direction,
     minCents: parseAmountInput(search.minAmount),
     maxCents: parseAmountInput(search.maxAmount),
+    dateFrom: search.dateFrom || null,
+    dateTo: search.dateTo || null,
     page: search.page - 1,
   }
 }

@@ -8,6 +8,8 @@ export const transactionFiltersSchema = z.object({
   direction: z.enum(['all', 'in', 'out']).default('all'),
   minCents: z.number().int().nonnegative().nullable().default(null),
   maxCents: z.number().int().nonnegative().nullable().default(null),
+  dateFrom: z.iso.date().nullable().default(null),
+  dateTo: z.iso.date().nullable().default(null),
   page: z.number().int().nonnegative().max(1_000_000).default(0),
 })
 export type TransactionFilters = z.infer<typeof transactionFiltersSchema>
