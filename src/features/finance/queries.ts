@@ -16,6 +16,7 @@ import {
   getImportReviewSnapshotFn,
   getKnowledgeBaseFn,
   getStrategyHistoryFn,
+  listCardStatementPaymentCandidatesFn,
   listLinkCandidatesFn,
 } from './finance.functions'
 import type { FinanceSnapshot, TransactionSnapshot } from './snapshot.types'
@@ -36,6 +37,14 @@ export const financeQueryKeys = {
     [...financeQueryKeys.all, 'recurrences', 'link-candidates'] as const,
   recurrenceLinkCandidates: (occurrenceId: string) =>
     [...financeQueryKeys.recurrenceLinkCandidatesAll(), occurrenceId] as const,
+  cardStatementCandidatesAll: () =>
+    [...financeQueryKeys.all, 'cards', 'statement-candidates'] as const,
+  cardStatementCandidates: (creditCardId: string, dueDate: string) =>
+    [
+      ...financeQueryKeys.cardStatementCandidatesAll(),
+      creditCardId,
+      dueDate,
+    ] as const,
   strategyHistories: () =>
     [...financeQueryKeys.all, 'strategy', 'history'] as const,
   strategyHistory: (months: number) =>
@@ -49,6 +58,7 @@ const financeInvalidationKeyFactories = {
   knowledgeBase: financeQueryKeys.knowledgeBase,
   recurrenceDetection: financeQueryKeys.recurrenceDetection,
   recurrenceLinkCandidates: financeQueryKeys.recurrenceLinkCandidatesAll,
+  cardStatementCandidates: financeQueryKeys.cardStatementCandidatesAll,
   strategyHistory: financeQueryKeys.strategyHistories,
   openFinance: financeQueryKeys.openFinance,
   assistant: assistantQueryKeys.status,
@@ -76,6 +86,7 @@ export const financeInvalidationGroups = {
     'recurrenceDetection',
     'strategyHistory',
     'recurrenceLinkCandidates',
+    'cardStatementCandidates',
     'openFinance',
   ],
   ownershipScope: ['snapshot'],
@@ -237,6 +248,22 @@ export const recurrenceLinkCandidatesOptions = (occurrenceId?: string) =>
     queryKey: financeQueryKeys.recurrenceLinkCandidates(occurrenceId ?? ''),
     queryFn: occurrenceId
       ? () => listLinkCandidatesFn({ data: { occurrenceId } })
+      : skipToken,
+    staleTime: 0,
+  })
+
+export const cardStatementCandidatesOptions = (input?: {
+  creditCardId: string
+  dueDate: string
+  amountCents?: number
+}) =>
+  queryOptions({
+    queryKey: financeQueryKeys.cardStatementCandidates(
+      input?.creditCardId ?? '',
+      input?.dueDate ?? '',
+    ),
+    queryFn: input
+      ? () => listCardStatementPaymentCandidatesFn({ data: input })
       : skipToken,
     staleTime: 0,
   })

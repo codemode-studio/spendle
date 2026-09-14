@@ -1,3 +1,4 @@
+import { isCardPaymentDescription } from './card-payment'
 import { daysBetween } from './period'
 import { knowledgeExactPatterns } from './knowledge-pattern'
 
@@ -92,6 +93,7 @@ export function buildCommitmentBudget(input: CommitmentInput) {
       t.cents < 0,
   )
   const usedPayments = new Set<string>()
+  const settledBills = new Map<string, number>()
   const paidTransactions = new Map<string, string>()
   const bills = input.statements.filter((s) => month(s.dueDate))
   for (const bill of bills) {
@@ -118,6 +120,7 @@ export function buildCommitmentBudget(input: CommitmentInput) {
       matched.reduce((n, p) => n - (p.cents ?? 0), 0),
     )
     for (const payment of matched) usedPayments.add(payment.id)
+    settledBills.set(bill.id, paid)
     if (matched.length && !explicit.length)
       warnings.push(
         'Um pagamento de fatura foi identificado por valor exato e proximidade de datas. O vínculo permanece uma inferência para revisão.',
@@ -191,6 +194,22 @@ export function buildCommitmentBudget(input: CommitmentInput) {
       !['essential', 'lifestyle', 'tax', 'business'].includes(t.bucket ?? '')
     )
       continue
+    const debitCents = -t.cents
+    if (debitCents > 0 && t.categoryId !== 'transfer') {
+      const looksLikePayment = isCardPaymentDescription(t.description)
+      const unpaidBillWithSameAmount = bills.find(
+        (bill) =>
+          bill.cents === debitCents &&
+          !(settledBills.get(bill.id) ?? 0) &&
+          Math.abs(daysBetween(t.date, bill.dueDate, { inclusive: false })) <=
+            15,
+      )
+      if (looksLikePayment || unpaidBillWithSameAmount) {
+        warnings.push(
+          `"${t.description}" parece pagamento de fatura, mas está categorizado como despesa. Reclassifique como pagamento de cartão para não contar em dobro.`,
+        )
+      }
+    }
     lines.push({
       id: t.id,
       transactionId: t.id,

@@ -193,6 +193,45 @@ describe('reconciliação', () => {
       },
     ])
     expect(suggestions[0]?.type).toBe('card_payment')
+    expect(suggestions[0]?.autoConfirm).toBe(true)
+  })
+
+  it('reconhece variações bancárias de pagamento de fatura', () => {
+    const suggestions = buildReconciliationSuggestions([
+      { ...base, description: 'PAGTO CARTAO 1234' },
+      {
+        ...base,
+        id: 'two',
+        amountCents: 100_000,
+        accountId: null,
+        creditCardId: 'card',
+        description: 'Pagamento recebido',
+      },
+    ])
+    expect(suggestions[0]?.type).toBe('card_payment')
+  })
+
+  it('não auto-confirma pagamento quando dois cartões têm o mesmo total', () => {
+    const suggestions = buildReconciliationSuggestions([
+      { ...base, description: 'Pagamento de fatura' },
+      {
+        ...base,
+        id: 'card-a',
+        amountCents: 100_000,
+        accountId: null,
+        creditCardId: 'card-a',
+      },
+      {
+        ...base,
+        id: 'card-b',
+        amountCents: 100_000,
+        accountId: null,
+        creditCardId: 'card-b',
+      },
+    ])
+    expect(suggestions).toHaveLength(1)
+    expect(suggestions[0]?.type).toBe('card_payment')
+    expect(suggestions[0]?.autoConfirm).toBeUndefined()
   })
 
   it('liga câmbio com taxa plausível e estorno do mesmo estabelecimento', () => {

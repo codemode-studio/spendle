@@ -14,12 +14,7 @@ export const Route = createFileRoute('/planejamento')({
     throw redirect({
       to: '/configuracoes',
       search: {
-        tab:
-          search.section === 'recurrences'
-            ? 'recorrencias'
-            : search.section === 'goals'
-              ? 'metas'
-              : 'orcamento',
+        tab: search.section === 'recurrences' ? 'recorrencias' : 'orcamento',
       },
       replace: true,
     })

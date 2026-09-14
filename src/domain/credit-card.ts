@@ -1,3 +1,5 @@
+import { isCardPaymentRow } from './card-payment'
+
 export interface CardCycle {
   closingDate: string
   dueDate: string
@@ -102,11 +104,19 @@ export function parseInstallmentDescription(description: string) {
   }
 }
 
+/**
+ * Parcelamentos com 3 parcelas ou mais, ou parcelas de valor relevante, são
+ * compromissos fixos temporários: enquanto durarem, contam como essenciais.
+ */
+export const TEMPORARY_FIXED_MIN_INSTALLMENTS = 3
+export const TEMPORARY_FIXED_MIN_INSTALLMENT_CENTS = 50_000
+
 export function classifyInstallmentCommitment(
   totalInstallments: number,
   installmentAmountCents = 0,
 ): InstallmentCommitmentType {
-  return totalInstallments > 3 || installmentAmountCents >= 50_000
+  return totalInstallments >= TEMPORARY_FIXED_MIN_INSTALLMENTS ||
+    installmentAmountCents >= TEMPORARY_FIXED_MIN_INSTALLMENT_CENTS
     ? 'temporary_fixed'
     : 'short_installment'
 }
@@ -207,17 +217,7 @@ export function summarizeCardStatements(input: {
   }
 
   for (const transaction of input.transactions) {
-    const isReceivedCardPayment =
-      transaction.amountCents > 0 &&
-      /pagamento\s+(?:de\s+)?(?:fatura|recebido)|fatura.*(?:paga|pagamento)/i.test(
-        transaction.description ?? '',
-      )
-    if (
-      ['card_payment', 'transfer'].includes(transaction.categoryId ?? '') ||
-      isReceivedCardPayment
-    ) {
-      continue
-    }
+    if (isCardPaymentRow(transaction)) continue
     const summary = ensureSummary(transaction.postedAt)
     summary.amountCents -= transaction.amountCents
     summary.transactionCount += 1

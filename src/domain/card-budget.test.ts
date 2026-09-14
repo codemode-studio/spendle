@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import { cardBudgetLines } from './card-budget'
 
-it('mantém valores explícitos das próximas parcelas, categoria atual e término', () => {
+it('mantém valores explícitos das próximas parcelas e trata parcela fixa temporária como essencial', () => {
   const lines = cardBudgetLines({
     id: 'bill',
     dueDate: '2026-09-15',
@@ -34,7 +34,7 @@ it('mantém valores explícitos das próximas parcelas, categoria atual e térmi
   expect(lines[0]).toMatchObject({
     cents: 101895,
     categoryId: 'shopping',
-    bucket: 'lifestyle',
+    bucket: 'essential',
     installment: '2/12',
     temporaryUntil: '2027-07-15',
     certainty: 'scheduled',
