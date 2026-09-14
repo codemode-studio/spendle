@@ -437,6 +437,205 @@ export const transactions = sqliteTable(
   ],
 )
 
+export const openFinanceConnections = sqliteTable(
+  'open_finance_connections',
+  {
+    id: text('id').primaryKey(),
+    ownershipScopeId: text('ownership_scope_id')
+      .notNull()
+      .references(() => ownershipScopes.id),
+    providerItemId: text('provider_item_id').unique(),
+    clientUserId: text('client_user_id').notNull().unique(),
+    connectorId: integer('connector_id'),
+    connectorName: text('connector_name'),
+    connectorImageUrl: text('connector_image_url'),
+    status: text('status', {
+      enum: [
+        'pending',
+        'updating',
+        'updated',
+        'waiting_user_input',
+        'waiting_user_action',
+        'login_error',
+        'outdated',
+        'error',
+        'disconnected',
+      ],
+    })
+      .notNull()
+      .default('pending'),
+    executionStatus: text('execution_status'),
+    lastSyncedAt: integer('last_synced_at', { mode: 'timestamp' }),
+    nextSyncAt: integer('next_sync_at', { mode: 'timestamp' }),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    paused: integer('paused', { mode: 'boolean' }).notNull().default(false),
+    disconnectedAt: integer('disconnected_at', { mode: 'timestamp' }),
+    createdAt,
+  },
+  (table) => [
+    index('open_finance_connections_scope_idx').on(table.ownershipScopeId),
+    index('open_finance_connections_status_idx').on(table.status),
+  ],
+)
+
+export const openFinanceAccounts = sqliteTable(
+  'open_finance_accounts',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => openFinanceConnections.id, { onDelete: 'cascade' }),
+    providerAccountId: text('provider_account_id').notNull().unique(),
+    type: text('type', { enum: ['BANK', 'CREDIT'] }).notNull(),
+    subtype: text('subtype').notNull(),
+    name: text('name').notNull(),
+    currency: text('currency').notNull(),
+    lastFour: text('last_four'),
+    observedBalanceCents: integer('observed_balance_cents'),
+    observedAvailableBalanceCents: integer('observed_available_balance_cents'),
+    observedCreditLimitCents: integer('observed_credit_limit_cents'),
+    observedAvailableCreditCents: integer('observed_available_credit_cents'),
+    observedClosingDate: text('observed_closing_date'),
+    observedDueDate: text('observed_due_date'),
+    observedAt: integer('observed_at', { mode: 'timestamp' }),
+    accountId: text('account_id').references(() => accounts.id, {
+      onDelete: 'set null',
+    }),
+    creditCardId: text('credit_card_id').references(() => creditCards.id, {
+      onDelete: 'set null',
+    }),
+    createdAt,
+  },
+  (table) => [
+    index('open_finance_accounts_connection_idx').on(table.connectionId),
+    uniqueIndex('open_finance_accounts_local_account_idx')
+      .on(table.accountId)
+      .where(sql`${table.accountId} is not null`),
+    uniqueIndex('open_finance_accounts_local_card_idx')
+      .on(table.creditCardId)
+      .where(sql`${table.creditCardId} is not null`),
+    check(
+      'open_finance_accounts_target_at_most_one',
+      sql`not (${table.accountId} is not null and ${table.creditCardId} is not null)`,
+    ),
+  ],
+)
+
+export const openFinanceTransactionObservations = sqliteTable(
+  'open_finance_transaction_observations',
+  {
+    id: text('id').primaryKey(),
+    openFinanceAccountId: text('open_finance_account_id')
+      .notNull()
+      .references(() => openFinanceAccounts.id, { onDelete: 'cascade' }),
+    providerTransactionId: text('provider_transaction_id').notNull(),
+    contentHash: text('content_hash').notNull(),
+    providerStatus: text('provider_status', {
+      enum: ['PENDING', 'POSTED', 'DELETED'],
+    }).notNull(),
+    postedAt: text('posted_at'),
+    description: text('description'),
+    normalizedDescription: text('normalized_description'),
+    amountCents: integer('amount_cents'),
+    currency: text('currency'),
+    providerCategory: text('provider_category'),
+    sanitizedMetadataJson: text('sanitized_metadata_json').notNull(),
+    canonicalTransactionId: text('canonical_transaction_id').references(
+      () => transactions.id,
+      { onDelete: 'set null' },
+    ),
+    resolution: text('resolution', {
+      enum: [
+        'evidence',
+        'created',
+        'correction_pending',
+        'accepted',
+        'rejected',
+        'deleted',
+        'preserved',
+      ],
+    }).notNull(),
+    resolvedAt: integer('resolved_at', { mode: 'timestamp' }),
+    observedAt: integer('observed_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex('open_finance_observation_version_idx').on(
+      table.openFinanceAccountId,
+      table.providerTransactionId,
+      table.contentHash,
+    ),
+    index('open_finance_observation_transaction_idx').on(
+      table.canonicalTransactionId,
+    ),
+    index('open_finance_observation_resolution_idx').on(table.resolution),
+  ],
+)
+
+export const pluggyWebhookEvents = sqliteTable(
+  'pluggy_webhook_events',
+  {
+    eventId: text('event_id').primaryKey(),
+    event: text('event').notNull(),
+    providerItemId: text('provider_item_id'),
+    providerAccountId: text('provider_account_id'),
+    payloadJson: text('payload_json').notNull(),
+    state: text('state', {
+      enum: ['pending', 'processing', 'processed', 'failed'],
+    })
+      .notNull()
+      .default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    claimedAt: integer('claimed_at', { mode: 'timestamp' }),
+    processedAt: integer('processed_at', { mode: 'timestamp' }),
+    errorMessage: text('error_message'),
+    receivedAt: integer('received_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index('pluggy_webhook_events_state_idx').on(table.state, table.receivedAt),
+    index('pluggy_webhook_events_item_idx').on(table.providerItemId),
+  ],
+)
+
+export const openFinanceSyncRuns = sqliteTable(
+  'open_finance_sync_runs',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => openFinanceConnections.id, { onDelete: 'cascade' }),
+    trigger: text('trigger', {
+      enum: ['bootstrap', 'manual', 'webhook', 'recovery'],
+    }).notNull(),
+    status: text('status', {
+      enum: ['running', 'completed', 'partial', 'failed', 'paused'],
+    })
+      .notNull()
+      .default('running'),
+    accountsFetched: integer('accounts_fetched').notNull().default(0),
+    transactionsFetched: integer('transactions_fetched').notNull().default(0),
+    transactionsCreated: integer('transactions_created').notNull().default(0),
+    evidenceAdded: integer('evidence_added').notNull().default(0),
+    correctionsPending: integer('corrections_pending').notNull().default(0),
+    transactionsDeleted: integer('transactions_deleted').notNull().default(0),
+    errorMessage: text('error_message'),
+    startedAt: integer('started_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    finishedAt: integer('finished_at', { mode: 'timestamp' }),
+  },
+  (table) => [
+    index('open_finance_sync_runs_connection_idx').on(
+      table.connectionId,
+      table.startedAt,
+    ),
+  ],
+)
+
 export const transactionEvidence = sqliteTable(
   'transaction_evidence',
   {

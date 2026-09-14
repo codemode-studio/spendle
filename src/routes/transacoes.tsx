@@ -728,12 +728,21 @@ function TransactionsPage() {
                             </p>
                           )}
                         </TableCell>
-                        <TableCell className="truncate text-muted-foreground">
-                          {formatInstrumentName(
-                            transaction.account?.name ??
-                              transaction.creditCard?.name ??
-                              '—',
-                          )}
+                        <TableCell className="text-muted-foreground">
+                          <div className="flex min-w-0 flex-col items-start gap-1">
+                            <span className="max-w-full truncate">
+                              {formatInstrumentName(
+                                transaction.account?.name ??
+                                  transaction.creditCard?.name ??
+                                  '—',
+                              )}
+                            </span>
+                            {transaction.openFinanceObserved && (
+                              <StatusBadge tone="info">
+                                Open Finance
+                              </StatusBadge>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell>
                           <div className="flex min-w-0 flex-col items-start gap-1.5">

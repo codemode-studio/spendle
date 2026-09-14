@@ -123,6 +123,25 @@ export async function getTransactionsPage(input: TransactionFilters) {
           ),
         )
     : []
+  const openFinanceRows = rows.length
+    ? await db
+        .select({
+          transactionId:
+            schema.openFinanceTransactionObservations.canonicalTransactionId,
+        })
+        .from(schema.openFinanceTransactionObservations)
+        .where(
+          inArray(
+            schema.openFinanceTransactionObservations.canonicalTransactionId,
+            rows.map((row) => row.id),
+          ),
+        )
+    : []
+  const openFinanceTransactionIds = new Set(
+    openFinanceRows.flatMap((row) =>
+      row.transactionId ? [row.transactionId] : [],
+    ),
+  )
   const documentById = new Map(
     evidenceRows.flatMap((row) => {
       const date = sourceDate(row.rawJson)
@@ -146,6 +165,7 @@ export async function getTransactionsPage(input: TransactionFilters) {
   const categoryById = new Map(categories.map((row) => [row.id, row]))
   const enrich = (row: typeof t.$inferSelect) => ({
     ...row,
+    openFinanceObserved: openFinanceTransactionIds.has(row.id),
     sourceDocument: documentById.get(row.id) ?? null,
     account: row.accountId ? (accountById.get(row.accountId) ?? null) : null,
     creditCard: row.creditCardId

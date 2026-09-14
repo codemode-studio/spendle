@@ -3,8 +3,12 @@ import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
+import { config } from 'dotenv'
 import { openDatabase } from '../src/db/connection.server'
 import { seedQaDatabase } from '../src/db/qa-seed.server'
+import { parsePluggyConfiguration } from '../src/features/open-finance/config.server'
+
+config({ path: ['.env.local', '.env'], quiet: true })
 
 const directory = mkdtempSync(join(tmpdir(), 'financas-doctor-'))
 const connection = openDatabase(join(directory, 'check.db'))
@@ -20,6 +24,7 @@ try {
   if ((connection.sqlite.pragma('foreign_key_check') as unknown[]).length)
     throw new Error('Foreign key violations')
   await import('@firecrawl/pdf-inspector')
+  parsePluggyConfiguration(process.env)
   if (!existsSync('src/features/finance/fixtures/synthetic-mercado-pago.pdf'))
     throw new Error('Missing synthetic PDF fixture')
   console.log(

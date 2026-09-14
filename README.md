@@ -15,6 +15,27 @@ pnpm dev
 
 Acesse `http://127.0.0.1:3000`. O SQLite e os arquivos importados são criados em `data/`, fora da pasta pública e do Git. A chave de IA é opcional, usada no diagnóstico de PDFs e no assistente com consentimento. Ela nunca libera automaticamente uma importação.
 
+## Open Finance com Pluggy
+
+A integração é opcional. Configure `PLUGGY_CLIENT_ID` e
+`PLUGGY_CLIENT_SECRET` somente no ambiente do servidor. O navegador recebe um
+Connect Token temporário e nunca recebe essas credenciais.
+
+Para sincronização por webhook, defina também uma URL HTTPS estável em
+`PLUGGY_WEBHOOK_URL` e um segredo longo em `PLUGGY_WEBHOOK_SECRET`. Exponha no
+proxy público somente `POST /api/pluggy/webhook`, registre o webhook pela aba
+Open Finance e mantenha o worker separado ativo:
+
+```bash
+pnpm open-finance:worker
+```
+
+`PLUGGY_INCLUDE_SANDBOX=1` mostra conectores de teste somente em desenvolvimento
+ou QA. Saldos, limites e faturas recebidos da Pluggy aparecem como observações.
+Eles não criam um checkpoint verificado nem alteram o marco "Conferido até".
+Use apenas o Sandbox da Pluggy durante desenvolvimento e nunca informe
+credenciais bancárias reais em um run de QA.
+
 ## Primeira importação
 
 1. Exporte os dois meses mais recentes de cada banco, preferindo OFX. Use CSV quando OFX não existir e envie também o PDF correspondente quando ele trouxer o saldo ou total da fatura.
@@ -34,6 +55,7 @@ pnpm lint
 pnpm test
 pnpm build
 pnpm verify        # executar toda a verificação
+pnpm open-finance:worker # processar a caixa de entrada da Pluggy
 ```
 
 ## Arquitetura
@@ -51,6 +73,7 @@ pnpm verify        # executar toda a verificação
 - Base de conhecimento com as decisões humanas de categoria e recorrência por estabelecimento, reaproveitada nas próximas importações
 - Módulos independentes para leitura de extratos, canonicalização, cobertura, checkpoints e reconciliação
 - Read model dedicado para a revisão de importações, sem carregar o snapshot financeiro completo
+- Pluggy server-only, caixa de entrada idempotente e observações Open Finance auditáveis
 
 O escopo, as decisões e o mapa de arquitetura estão em [`plans/`](./plans/README.md). Verificações e limitações conhecidas estão em [`docs/`](./docs/README.md).
 

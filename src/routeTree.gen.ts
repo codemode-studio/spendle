@@ -16,6 +16,7 @@ import { Route as ImportarRouteImport } from './routes/importar'
 import { Route as MarcaRouteImport } from './routes/marca'
 import { Route as PlanejamentoRouteImport } from './routes/planejamento'
 import { Route as TransacoesRouteImport } from './routes/transacoes'
+import { Route as ApiPluggyWebhookRouteImport } from './routes/api/pluggy/webhook'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -52,6 +53,11 @@ const TransacoesRoute = TransacoesRouteImport.update({
   path: '/transacoes',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPluggyWebhookRoute = ApiPluggyWebhookRouteImport.update({
+  id: '/api/pluggy/webhook',
+  path: '/api/pluggy/webhook',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -61,6 +67,7 @@ export interface FileRoutesByFullPath {
   '/marca': typeof MarcaRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
+  '/api/pluggy/webhook': typeof ApiPluggyWebhookRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -70,6 +77,7 @@ export interface FileRoutesByTo {
   '/marca': typeof MarcaRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
+  '/api/pluggy/webhook': typeof ApiPluggyWebhookRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -80,6 +88,7 @@ export interface FileRoutesById {
   '/marca': typeof MarcaRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
+  '/api/pluggy/webhook': typeof ApiPluggyWebhookRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -91,6 +100,7 @@ export interface FileRouteTypes {
     | '/marca'
     | '/planejamento'
     | '/transacoes'
+    | '/api/pluggy/webhook'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -100,6 +110,7 @@ export interface FileRouteTypes {
     | '/marca'
     | '/planejamento'
     | '/transacoes'
+    | '/api/pluggy/webhook'
   id:
     | '__root__'
     | '/'
@@ -109,6 +120,7 @@ export interface FileRouteTypes {
     | '/marca'
     | '/planejamento'
     | '/transacoes'
+    | '/api/pluggy/webhook'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -119,6 +131,7 @@ export interface RootRouteChildren {
   MarcaRoute: typeof MarcaRoute
   PlanejamentoRoute: typeof PlanejamentoRoute
   TransacoesRoute: typeof TransacoesRoute
+  ApiPluggyWebhookRoute: typeof ApiPluggyWebhookRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -172,6 +185,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TransacoesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/pluggy/webhook': {
+      id: '/api/pluggy/webhook'
+      path: '/api/pluggy/webhook'
+      fullPath: '/api/pluggy/webhook'
+      preLoaderRoute: typeof ApiPluggyWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -183,6 +203,7 @@ const rootRouteChildren: RootRouteChildren = {
   MarcaRoute: MarcaRoute,
   PlanejamentoRoute: PlanejamentoRoute,
   TransacoesRoute: TransacoesRoute,
+  ApiPluggyWebhookRoute: ApiPluggyWebhookRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

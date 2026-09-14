@@ -281,6 +281,13 @@
       "when": 1789139000001,
       "tag": "0039_initial_analysis",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1789394400000,
+      "tag": "0040_open_finance_pluggy",
+      "breakpoints": true
     }
   ]
 }

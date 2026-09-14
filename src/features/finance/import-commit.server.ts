@@ -720,6 +720,12 @@ export async function clearTransactionData() {
 
   db.transaction((transaction) => {
     transaction
+      .update(schema.openFinanceConnections)
+      .set({ paused: true })
+      .where(eq(schema.openFinanceConnections.paused, false))
+      .run()
+    transaction.delete(schema.openFinanceTransactionObservations).run()
+    transaction
       .update(schema.goalContributions)
       .set({ transactionId: null })
       .run()

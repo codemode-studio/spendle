@@ -19,6 +19,7 @@ import {
   listLinkCandidatesFn,
 } from './finance.functions'
 import type { FinanceSnapshot, TransactionSnapshot } from './snapshot.types'
+import { getOpenFinanceSnapshotFn } from '#/features/open-finance/open-finance.functions'
 
 export const financeQueryKeys = {
   all: ['finance'] as const,
@@ -39,6 +40,7 @@ export const financeQueryKeys = {
     [...financeQueryKeys.all, 'strategy', 'history'] as const,
   strategyHistory: (months: number) =>
     [...financeQueryKeys.strategyHistories(), months] as const,
+  openFinance: () => [...financeQueryKeys.all, 'read', 'open-finance'] as const,
 }
 
 const financeInvalidationKeyFactories = {
@@ -48,6 +50,7 @@ const financeInvalidationKeyFactories = {
   recurrenceDetection: financeQueryKeys.recurrenceDetection,
   recurrenceLinkCandidates: financeQueryKeys.recurrenceLinkCandidatesAll,
   strategyHistory: financeQueryKeys.strategyHistories,
+  openFinance: financeQueryKeys.openFinance,
   assistant: assistantQueryKeys.status,
 }
 
@@ -73,6 +76,7 @@ export const financeInvalidationGroups = {
     'recurrenceDetection',
     'strategyHistory',
     'recurrenceLinkCandidates',
+    'openFinance',
   ],
   ownershipScope: ['snapshot'],
   stagedTransactionCategory: ['importReview', 'knowledgeBase'],
@@ -83,6 +87,7 @@ export const financeInvalidationGroups = {
     'recurrenceDetection',
     'strategyHistory',
     'recurrenceLinkCandidates',
+    'openFinance',
   ],
   // `updateSettings` may run the reconciliation refresh (which also refreshes
   // recurrences), so both settings paths invalidate the ledger families too.
@@ -93,6 +98,7 @@ export const financeInvalidationGroups = {
     'recurrenceDetection',
     'strategyHistory',
     'recurrenceLinkCandidates',
+    'openFinance',
   ],
   strategy: [
     'snapshot',
@@ -209,6 +215,13 @@ export const configurationOptions = () =>
   queryOptions({
     queryKey: [...financeQueryKeys.all, 'read', 'configuration'],
     queryFn: () => getConfigurationSnapshotFn(),
+    staleTime: 15_000,
+  })
+
+export const openFinanceOptions = () =>
+  queryOptions({
+    queryKey: financeQueryKeys.openFinance(),
+    queryFn: () => getOpenFinanceSnapshotFn(),
     staleTime: 15_000,
   })
 export const knowledgeBaseOptions = () =>

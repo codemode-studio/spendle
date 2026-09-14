@@ -47,6 +47,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import { AccountsSection } from '#/features/finance/accounts-section'
 import { CardsSection } from '#/features/finance/cards-section'
 import { KnowledgeBaseSection } from '#/features/finance/knowledge-base-section'
+import { OpenFinanceSection } from '#/features/open-finance/open-finance-section'
 import {
   clearTransactionDataFn,
   createOwnershipScopeFn,
@@ -57,6 +58,7 @@ import {
   invalidateFinance,
   knowledgeBaseOptions,
   planningOptions,
+  openFinanceOptions,
 } from '#/features/finance/queries'
 
 import { PlanningSettings } from '#/features/planning/planning-settings'
@@ -69,6 +71,7 @@ const settingsTabs = [
   'metas',
   'recorrencias',
   'conhecimento',
+  'open-finance',
 ] as const
 const settingsLabels = {
   geral: 'Geral',
@@ -78,6 +81,7 @@ const settingsLabels = {
   metas: 'Metas',
   recorrencias: 'Recorrências',
   conhecimento: 'Conhecimento',
+  'open-finance': 'Open Finance',
 } as const
 type SettingsTab = (typeof settingsTabs)[number]
 
@@ -96,6 +100,9 @@ export const Route = createFileRoute('/configuracoes')({
         : null,
       deps.tab === 'conhecimento'
         ? context.queryClient.ensureQueryData(knowledgeBaseOptions())
+        : null,
+      deps.tab === 'open-finance'
+        ? context.queryClient.ensureQueryData(openFinanceOptions())
         : null,
     ]),
   component: SettingsPage,
@@ -179,6 +186,9 @@ function SettingsPage() {
         </TabsContent>
         <TabsContent value="conhecimento">
           <KnowledgeBaseSection />
+        </TabsContent>
+        <TabsContent value="open-finance">
+          <OpenFinanceSection />
         </TabsContent>
       </Tabs>
     </Page>
