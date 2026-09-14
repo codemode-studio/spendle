@@ -44,6 +44,7 @@ describe('reconciliação de recorrências', () => {
       description: 'PG *NETFLIX.COM 847291',
       direction: 'outflow',
       amountCents: 3_990,
+      notes: 'Cobrança no cartão virtual',
     })
 
     const suggestedSnapshot = await getFinanceSnapshot('2026-08')
@@ -66,6 +67,10 @@ describe('reconciliação de recorrências', () => {
       confirmedSnapshot.transactions.find((item) => item.id === transaction.id)
         ?.categoryId,
     ).toBe('subscriptions')
+    expect(
+      confirmedSnapshot.transactions.find((item) => item.id === transaction.id)
+        ?.notes,
+    ).toBe('Cobrança no cartão virtual\nNetflix')
     expect(confirmedSnapshot.dashboard.budgetActual.lifestyle).toBe(3_990)
     await expect(
       recurrenceMatching.rejectMatch(suggestedMatch!.id),
@@ -80,6 +85,10 @@ describe('reconciliação de recorrências', () => {
       unlinkedSnapshot.transactions.find((item) => item.id === transaction.id)
         ?.categoryId,
     ).toBe('uncategorized')
+    expect(
+      unlinkedSnapshot.transactions.find((item) => item.id === transaction.id)
+        ?.notes,
+    ).toBe('Cobrança no cartão virtual')
     expect(unlinkedSnapshot.dashboard.budgetActual.lifestyle).toBe(0)
     expect(
       unlinkedSnapshot.recurrences.find((item) => item.id === recurrence.id)
@@ -865,6 +874,10 @@ describe('reconciliação de recorrências', () => {
         .find((item) => item.id === occurrence!.id)
         ?.matches.some((match) => match.status === 'confirmed'),
     ).toBe(true)
+    expect(
+      renamed.transactions.find((transaction) => transaction.id === row.id)
+        ?.notes,
+    ).toBe('Envelope apenas renomeado')
     await expect(
       recurrenceServer.deleteRecurrence(recurrence.id),
     ).rejects.toThrow('Desvincule os pagamentos confirmados')
