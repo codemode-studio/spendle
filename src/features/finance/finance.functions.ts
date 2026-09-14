@@ -19,6 +19,7 @@ import {
   updateCreditCard,
   updateStagedTransactionCategory,
   updateTransactionCategory,
+  updateTransactionNote,
 } from './finance.server'
 import {
   getFinanceSnapshot,
@@ -269,6 +270,20 @@ export const updateTransactionCategoryFn = createServerFn({ method: 'POST' })
     }),
   )
   .handler(({ data }) => updateTransactionCategory(data))
+
+export const updateTransactionNoteFn = createServerFn({ method: 'POST' })
+  .validator(
+    z.object({
+      transactionId: z.string().min(1),
+      note: z.string().trim().max(200).nullable(),
+    }),
+  )
+  .handler(({ data }) =>
+    updateTransactionNote({
+      ...data,
+      note: data.note || null,
+    }),
+  )
 
 export const categorizeUncategorizedTransactionsWithAiFn = createServerFn({
   method: 'POST',

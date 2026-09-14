@@ -9,6 +9,7 @@ import {
   ArrowLeftRight,
   Check,
   ReceiptText,
+  StickyNote,
   RefreshCw,
   Search,
   SlidersHorizontal,
@@ -81,11 +82,13 @@ import {
   previewKnowledgeSyncFn,
   setReconciliationStatusFn,
   updateTransactionCategoryFn,
+  updateTransactionNoteFn,
 } from '#/features/finance/finance.functions'
 import {
   transactionsPageOptions,
   invalidateFinance,
   patchTransactionCategory,
+  patchTransactionNote,
 } from '#/features/finance/queries'
 import { groupCategoryOptions } from '#/domain/categories'
 import { cn } from '#/lib/utils'
@@ -102,6 +105,7 @@ export const Route = createFileRoute('/transacoes')({
 function TransactionsPage() {
   const queryClient = useQueryClient()
   const updateCategory = useServerFn(updateTransactionCategoryFn)
+  const updateNote = useServerFn(updateTransactionNoteFn)
   const categorizeWithAi = useServerFn(
     categorizeUncategorizedTransactionsWithAiFn,
   )
@@ -195,6 +199,23 @@ function TransactionsPage() {
     onError: (error, _variables, context) => {
       context?.rollback()
       toast.error(error instanceof Error ? error.message : 'Erro ao atualizar.')
+    },
+  })
+  const noteMutation = useMutation({
+    mutationFn: updateNote,
+    onMutate: async (variables) => {
+      const rollback = await patchTransactionNote(queryClient, {
+        transactionId: variables.data.transactionId,
+        note: variables.data.note,
+      })
+      return { rollback }
+    },
+    onSuccess: () => invalidate(),
+    onError: (error, _variables, context) => {
+      context?.rollback()
+      toast.error(
+        error instanceof Error ? error.message : 'Erro ao salvar a nota.',
+      )
     },
   })
   const reconciliationMutation = useMutation({
@@ -521,7 +542,7 @@ function TransactionsPage() {
                   <Input
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Buscar descrição…"
+                    placeholder="Buscar descrição ou nota…"
                     className="pl-8 md:pl-8"
                     aria-label="Buscar transações"
                     maxLength={200}
@@ -709,7 +730,26 @@ function TransactionsPage() {
                                   : 'Excluída'}
                               </StatusBadge>
                             ) : null}
+                            <TransactionNoteEditor
+                              note={transaction.notes}
+                              description={transaction.description}
+                              pending={
+                                noteMutation.isPending &&
+                                noteMutation.variables.data.transactionId ===
+                                  transaction.id
+                              }
+                              onSave={(note) =>
+                                noteMutation.mutate({
+                                  data: { transactionId: transaction.id, note },
+                                })
+                              }
+                            />
                           </div>
+                          {transaction.notes ? (
+                            <p className="mt-1 truncate text-xs font-normal text-muted-foreground">
+                              {transaction.notes}
+                            </p>
+                          ) : null}
                           {transaction.sourceDocument && (
                             <p
                               className="mt-1 text-xs font-normal text-muted-foreground"
@@ -1076,4 +1116,77 @@ function displayDescription(text: string) {
       /(^|[\s(/-])([a-zà-ú])/g,
       (_, prefix, letter: string) => `${prefix}${letter.toUpperCase()}`,
     )
+}
+
+function TransactionNoteEditor({
+  note,
+  description,
+  pending,
+  onSave,
+}: {
+  note: string | null
+  description: string
+  pending: boolean
+  onSave: (note: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState(note ?? '')
+
+  const setEditorOpen = (nextOpen: boolean) => {
+    if (nextOpen) setDraft(note ?? '')
+    setOpen(nextOpen)
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setEditorOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className={cn(
+              'shrink-0 text-muted-foreground',
+              note && 'text-foreground',
+            )}
+            aria-label={`${note ? 'Editar' : 'Adicionar'} nota para ${displayDescription(description)}`}
+          />
+        }
+      >
+        <StickyNote />
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 gap-3 p-3">
+        <form
+          className="flex flex-col gap-3"
+          onSubmit={(event) => {
+            event.preventDefault()
+            const nextNote = draft.trim() || null
+            if (nextNote !== note) onSave(nextNote)
+            setOpen(false)
+          }}
+        >
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium">Nota</span>
+            <Input
+              autoFocus
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder="Ex.: jantar de aniversário"
+              maxLength={200}
+              aria-label="Nota da transação"
+            />
+          </label>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {draft.length}/200
+            </span>
+            <Button type="submit" size="sm" disabled={pending}>
+              {pending ? <Spinner data-icon="inline-start" /> : null}
+              Salvar
+            </Button>
+          </div>
+        </form>
+      </PopoverContent>
+    </Popover>
+  )
 }
