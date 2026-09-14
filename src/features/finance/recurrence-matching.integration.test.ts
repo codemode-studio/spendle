@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { db } from '#/db/index.server'
 import * as schema from '#/db/schema'
@@ -21,6 +21,7 @@ describe('reconciliação de recorrências', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     testDatabase.close()
   })
 
@@ -317,6 +318,8 @@ describe('reconciliação de recorrências', () => {
   })
 
   it('detecta, aprova e passa a ignorar recorrências a partir dos lançamentos', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-03T12:00:00Z'))
     const today = new Date()
     const monthsAgo = (months: number, day: number) => {
       const date = new Date(
