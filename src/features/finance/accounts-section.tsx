@@ -51,14 +51,9 @@ import type {
 } from '#/features/finance/snapshot.types'
 
 type AccountKind = AccountSnapshot['kind']
-type AccountPurpose = AccountSnapshot['purpose']
 type AccountStatusSnapshot = Pick<
   AccountSnapshot,
-  | 'coverage'
-  | 'currency'
-  | 'latestCheckpoint'
-  | 'latestVerifiedCheckpoint'
-  | 'purpose'
+  'coverage' | 'currency' | 'latestCheckpoint' | 'latestVerifiedCheckpoint'
 >
 type AccountFormSnapshot = Pick<
   AccountSnapshot,
@@ -68,7 +63,6 @@ type AccountFormSnapshot = Pick<
   | 'kind'
   | 'name'
   | 'ownershipScopeId'
-  | 'purpose'
 >
 type OwnershipScopeOption = Pick<
   FinanceSnapshot['scopes'][number],
@@ -327,9 +321,6 @@ function AccountStatus({ account }: { account: AccountStatusSnapshot }) {
       ) : (
         <StatusBadge>Sem extratos</StatusBadge>
       )}
-      {account.purpose === 'reserve' && (
-        <StatusBadge tone="info">Reserva</StatusBadge>
-      )}
       {difference !== 0 && (
         <StatusBadge tone="warning">
           Diferença de {formatCurrency(Math.abs(difference), account.currency)}
@@ -400,25 +391,11 @@ function AccountFormFields({
           id={`${prefix}-kind`}
           name="kind"
           className="w-full"
-          defaultValue={account?.kind}
+          defaultValue={account?.kind === 'savings' ? 'checking' : account?.kind}
         >
           <option value="checking">Conta corrente</option>
-          <option value="savings">Poupança</option>
           <option value="cash">Dinheiro</option>
-          <option value="investment">Investimentos</option>
-        </NativeSelect>
-      </Field>
-      <Field>
-        <FieldLabel htmlFor={`${prefix}-purpose`}>Finalidade</FieldLabel>
-        <NativeSelect
-          id={`${prefix}-purpose`}
-          name="purpose"
-          className="w-full"
-          defaultValue={account?.purpose}
-        >
-          <option value="operating">Movimentação</option>
-          <option value="reserve">Reserva</option>
-          <option value="investment">Investimentos</option>
+          <option value="investment">Corretora</option>
         </NativeSelect>
       </Field>
       <Field>
@@ -441,12 +418,13 @@ function AccountFormFields({
 }
 
 function readAccountForm(form: FormData) {
+  const kind = String(form.get('kind')) as AccountKind
   return {
     name: String(form.get('name')),
     institutionName: String(form.get('institutionName')),
     ownershipScopeId: String(form.get('ownershipScopeId')),
-    kind: String(form.get('kind')) as AccountKind,
-    purpose: String(form.get('purpose')) as AccountPurpose,
+    kind,
+    purpose: kind === 'investment' ? ('investment' as const) : ('operating' as const),
     currency: parseCurrency(String(form.get('currency'))),
   }
 }

@@ -276,7 +276,12 @@ export async function refreshReconciliationSuggestions() {
         for (const transactionId of suggestion.transactionIds) {
           transaction
             .update(schema.transactions)
-            .set({ categoryId: 'transfer' })
+            .set({
+              categoryId:
+                suggestion.type === 'card_payment'
+                  ? 'card_payment'
+                  : 'transfer',
+            })
             .where(eq(schema.transactions.id, transactionId))
             .run()
         }

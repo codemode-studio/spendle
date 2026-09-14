@@ -65,33 +65,40 @@ const settingsTabs = [
   'geral',
   'contas',
   'cartoes',
-  'orcamento',
-  'metas',
   'recorrencias',
+  'orcamento',
   'conhecimento',
 ] as const
 const settingsLabels = {
   geral: 'Geral',
   contas: 'Contas',
   cartoes: 'Cartões',
-  orcamento: 'Orçamento',
-  metas: 'Metas',
   recorrencias: 'Recorrências',
+  orcamento: 'Orçamento e metas',
   conhecimento: 'Conhecimento',
 } as const
 type SettingsTab = (typeof settingsTabs)[number]
 
+/** `metas` virou parte de Orçamento e metas; links antigos continuam abrindo a aba certa. */
 const settingsSearchSchema = z.object({
-  tab: z.enum(settingsTabs).optional().catch(undefined),
+  tab: z
+    .enum([...settingsTabs, 'metas'])
+    .optional()
+    .catch(undefined),
 })
+
+function resolveTab(tab: string | undefined): SettingsTab {
+  if (!tab) return 'geral'
+  return tab === 'metas' ? 'orcamento' : (tab as SettingsTab)
+}
 
 export const Route = createFileRoute('/configuracoes')({
   validateSearch: settingsSearchSchema,
-  loaderDeps: ({ search }) => ({ tab: search.tab }),
+  loaderDeps: ({ search }) => ({ tab: resolveTab(search.tab) }),
   loader: ({ context, deps }) =>
     Promise.all([
       context.queryClient.ensureQueryData(configurationOptions()),
-      deps.tab && ['orcamento', 'metas', 'recorrencias'].includes(deps.tab)
+      deps.tab === 'orcamento' || deps.tab === 'recorrencias'
         ? context.queryClient.ensureQueryData(planningOptions())
         : null,
       deps.tab === 'conhecimento'
@@ -103,18 +110,14 @@ export const Route = createFileRoute('/configuracoes')({
 
 function SettingsPage() {
   const { tab } = Route.useSearch()
-  const activeTab = tab ?? 'geral'
+  const activeTab = resolveTab(tab)
   const navigate = Route.useNavigate()
 
   return (
     <Page>
       <PageHeader
         title={
-          activeTab === 'contas'
-            ? 'Contas'
-            : activeTab === 'cartoes'
-              ? 'Cartões'
-              : 'Configurações'
+          activeTab === 'geral' ? 'Configurações' : settingsLabels[activeTab]
         }
       />
       <Tabs
@@ -168,14 +171,11 @@ function SettingsPage() {
         <TabsContent value="cartoes">
           <CardsSection />
         </TabsContent>
-        <TabsContent value="orcamento">
-          <PlanningSettings activeSection="budget" />
-        </TabsContent>
-        <TabsContent value="metas">
-          <PlanningSettings activeSection="goals" />
-        </TabsContent>
         <TabsContent value="recorrencias">
           <PlanningSettings activeSection="recurrences" />
+        </TabsContent>
+        <TabsContent value="orcamento">
+          <PlanningSettings activeSection="planning" />
         </TabsContent>
         <TabsContent value="conhecimento">
           <KnowledgeBaseSection />

@@ -477,7 +477,7 @@ function importedGuidance(
       'Clique em Consolidar para incluir as transações.',
       guidance.targetType === 'account'
         ? 'Depois, use Atualizar saldo na página Contas para informar o valor exibido pelo banco.'
-        : 'Quando a fatura fechar, use Confirmar fatura na página Cartões.',
+        : 'Quando a fatura fechar, acompanhe o total e o pagamento na página Cartões.',
     ],
   }
 }

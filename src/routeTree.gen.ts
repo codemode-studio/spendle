@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as CategoriasRouteImport } from './routes/categorias'
 import { Route as ConfiguracoesRouteImport } from './routes/configuracoes'
 import { Route as ImportarRouteImport } from './routes/importar'
+import { Route as InvestimentosRouteImport } from './routes/investimentos'
 import { Route as MarcaRouteImport } from './routes/marca'
 import { Route as PlanejamentoRouteImport } from './routes/planejamento'
 import { Route as TransacoesRouteImport } from './routes/transacoes'
@@ -37,6 +38,11 @@ const ImportarRoute = ImportarRouteImport.update({
   path: '/importar',
   getParentRoute: () => rootRouteImport,
 } as any)
+const InvestimentosRoute = InvestimentosRouteImport.update({
+  id: '/investimentos',
+  path: '/investimentos',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MarcaRoute = MarcaRouteImport.update({
   id: '/marca',
   path: '/marca',
@@ -58,6 +64,7 @@ export interface FileRoutesByFullPath {
   '/categorias': typeof CategoriasRoute
   '/configuracoes': typeof ConfiguracoesRoute
   '/importar': typeof ImportarRoute
+  '/investimentos': typeof InvestimentosRoute
   '/marca': typeof MarcaRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
@@ -67,6 +74,7 @@ export interface FileRoutesByTo {
   '/categorias': typeof CategoriasRoute
   '/configuracoes': typeof ConfiguracoesRoute
   '/importar': typeof ImportarRoute
+  '/investimentos': typeof InvestimentosRoute
   '/marca': typeof MarcaRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
@@ -77,6 +85,7 @@ export interface FileRoutesById {
   '/categorias': typeof CategoriasRoute
   '/configuracoes': typeof ConfiguracoesRoute
   '/importar': typeof ImportarRoute
+  '/investimentos': typeof InvestimentosRoute
   '/marca': typeof MarcaRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
@@ -88,6 +97,7 @@ export interface FileRouteTypes {
     | '/categorias'
     | '/configuracoes'
     | '/importar'
+    | '/investimentos'
     | '/marca'
     | '/planejamento'
     | '/transacoes'
@@ -97,6 +107,7 @@ export interface FileRouteTypes {
     | '/categorias'
     | '/configuracoes'
     | '/importar'
+    | '/investimentos'
     | '/marca'
     | '/planejamento'
     | '/transacoes'
@@ -106,6 +117,7 @@ export interface FileRouteTypes {
     | '/categorias'
     | '/configuracoes'
     | '/importar'
+    | '/investimentos'
     | '/marca'
     | '/planejamento'
     | '/transacoes'
@@ -116,6 +128,7 @@ export interface RootRouteChildren {
   CategoriasRoute: typeof CategoriasRoute
   ConfiguracoesRoute: typeof ConfiguracoesRoute
   ImportarRoute: typeof ImportarRoute
+  InvestimentosRoute: typeof InvestimentosRoute
   MarcaRoute: typeof MarcaRoute
   PlanejamentoRoute: typeof PlanejamentoRoute
   TransacoesRoute: typeof TransacoesRoute
@@ -151,6 +164,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ImportarRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/investimentos': {
+      id: '/investimentos'
+      path: '/investimentos'
+      fullPath: '/investimentos'
+      preLoaderRoute: typeof InvestimentosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/marca': {
       id: '/marca'
       path: '/marca'
@@ -180,6 +200,7 @@ const rootRouteChildren: RootRouteChildren = {
   CategoriasRoute: CategoriasRoute,
   ConfiguracoesRoute: ConfiguracoesRoute,
   ImportarRoute: ImportarRoute,
+  InvestimentosRoute: InvestimentosRoute,
   MarcaRoute: MarcaRoute,
   PlanejamentoRoute: PlanejamentoRoute,
   TransacoesRoute: TransacoesRoute,

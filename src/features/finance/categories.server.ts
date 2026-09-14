@@ -2,6 +2,10 @@ import { desc, inArray } from 'drizzle-orm'
 
 import { db } from '#/db/index.server'
 import * as schema from '#/db/schema'
+import {
+  isCardPaymentDescription,
+  isReceivedCardPayment,
+} from '#/domain/card-payment'
 import { normalizeDescription } from '#/domain/finance'
 import {
   detectOwnedTransferCategory,
@@ -60,13 +64,7 @@ export async function suggestCategory(input: {
     }
   }
 
-  if (
-    input.creditCardId &&
-    input.amountCents > 0 &&
-    /pagamento\s+(?:de\s+)?(?:fatura|recebido)|fatura.*(?:paga|pagamento)/i.test(
-      normalized,
-    )
-  ) {
+  if (isReceivedCardPayment(input)) {
     return {
       categoryId: 'card_payment',
       confidence: 100,
@@ -74,9 +72,12 @@ export async function suggestCategory(input: {
     }
   }
 
+  if (isCardPaymentDescription(input.description)) {
+    return { categoryId: 'card_payment', confidence: 80, source: 'heuristic' }
+  }
+
   const heuristics: Array<[RegExp, string]> = [
     [/^(?:shein|shopee|mercadolivre)\s*\*/i, 'shopping'],
-    [/pagamento.*fatura|fatura.*(?:paga|pagamento)/i, 'card_payment'],
     [/aluguel|condominio|iptu/i, 'housing'],
     [/financiamento|consorcio|prestacao|emprestimo|crediario/i, 'financing'],
     [/energia|internet|telefone|agua|gas/i, 'utilities'],
@@ -201,16 +202,6 @@ export function applyTargetCategoryPolicy(input: {
     return {
       categoryId: ownedTransferCategory,
       confidence: 96,
-      source: 'system' as const,
-    }
-  }
-  if (input.amountCents > 0 && input.purpose === 'reserve') {
-    return { categoryId: 'reserve', confidence: 100, source: 'system' as const }
-  }
-  if (input.amountCents > 0 && input.purpose === 'investment') {
-    return {
-      categoryId: 'investment',
-      confidence: 100,
       source: 'system' as const,
     }
   }

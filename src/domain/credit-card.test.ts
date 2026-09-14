@@ -53,10 +53,11 @@ describe('ciclo de cartão', () => {
     ])
   })
 
-  it('trata parcelamentos acima de 3x como despesa fixa temporária', () => {
-    expect(classifyInstallmentCommitment(3)).toBe('short_installment')
-    expect(classifyInstallmentCommitment(4)).toBe('temporary_fixed')
+  it('trata parcelamentos de 3x ou mais como despesa fixa temporária', () => {
+    expect(classifyInstallmentCommitment(2)).toBe('short_installment')
+    expect(classifyInstallmentCommitment(3)).toBe('temporary_fixed')
     expect(classifyInstallmentCommitment(12)).toBe('temporary_fixed')
+    expect(classifyInstallmentCommitment(2, 50_000)).toBe('temporary_fixed')
   })
 
   it('desconta estorno e exclui pagamento de fatura', () => {

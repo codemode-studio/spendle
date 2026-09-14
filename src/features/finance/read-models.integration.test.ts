@@ -199,8 +199,9 @@ describe('bounded financial reads', () => {
     selects = 0
     await getStrategyHistory({ months: 12 })
     expect(selects).toBe(threeMonths)
-    // Uma leitura adicional carrega as referências humanas das recorrências.
-    expect(threeMonths).toBeLessThanOrEqual(28)
+    // As leituras adicionais carregam referências humanas de recorrências,
+    // pagamentos de fatura e os vínculos entre posições e transações.
+    expect(threeMonths).toBeLessThanOrEqual(31)
     expect(history[0]).toMatchObject({
       month: '2026-08',
       closed: true,

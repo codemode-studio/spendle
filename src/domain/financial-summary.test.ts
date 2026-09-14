@@ -23,6 +23,7 @@ function summarize(
     splits: [],
     reconciliations: [],
     recurrenceActuals: [],
+    investmentMovements: [],
     recurrenceCandidateTransactionIds: [],
     netWorthCents: 1_000_000,
     missingBalanceConversionCount: 0,
@@ -97,7 +98,7 @@ describe('resumo financeiro único', () => {
     expect(result.currentIncomeCents).toBe(0)
   })
 
-  it('conta aporte uma vez pelo destino de uma transferência confirmada', () => {
+  it('conta aporte uma vez pela posição vinculada à transação', () => {
     const result = summarize({
       transactions: [
         { ...base, id: 'source', categoryId: 'transfer', bucket: 'excluded' },
@@ -107,14 +108,14 @@ describe('resumo financeiro único', () => {
           amountCents: 10_000,
           categoryId: 'transfer',
           bucket: 'excluded',
-          accountPurpose: 'investment',
         },
       ],
-      reconciliations: [
+      investmentMovements: [
         {
-          type: 'transfer',
-          status: 'confirmed',
-          transactionIds: ['source', 'destination'],
+          transactionId: 'destination',
+          kind: 'contribution',
+          baseAmountCents: 10_000,
+          goalType: null,
         },
       ],
     })
@@ -123,37 +124,28 @@ describe('resumo financeiro único', () => {
   })
 
   it.each([
-    ['operating', 'investment', 10_000, 0],
-    ['investment', 'operating', -10_000, 0],
-    ['operating', 'reserve', 0, 10_000],
-    ['reserve', 'operating', 0, -10_000],
-    ['reserve', 'investment', 10_000, -10_000],
-    ['investment', 'reserve', -10_000, 10_000],
-    ['investment', 'investment', 0, 0],
+    ['contribution', null, 10_000, 0],
+    ['withdrawal', null, -10_000, 0],
+    ['contribution', 'emergency_reserve', 0, 10_000],
+    ['withdrawal', 'emergency_reserve', 0, -10_000],
   ] as const)(
-    'calcula a transição líquida %s → %s',
-    (sourcePurpose, destinationPurpose, investment, reserve) => {
+    'calcula %s conforme o objetivo da posição',
+    (kind, goalType, investment, reserve) => {
       const result = summarize({
         transactions: [
           {
             ...base,
-            id: 'source',
-            postedAt: '2026-07-31',
-            accountPurpose: sourcePurpose,
-          },
-          {
-            ...base,
-            id: 'destination',
+            id: 'movement',
             postedAt: '2026-08-01',
             amountCents: 10_000,
-            accountPurpose: destinationPurpose,
           },
         ],
-        reconciliations: [
+        investmentMovements: [
           {
-            type: 'transfer',
-            status: 'confirmed',
-            transactionIds: ['source', 'destination'],
+            transactionId: 'movement',
+            kind,
+            baseAmountCents: 10_000,
+            goalType,
           },
         ],
       })

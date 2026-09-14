@@ -44,6 +44,13 @@ export type RecurrenceActual = {
   categoryConflict: boolean
 }
 
+export type SummaryInvestmentMovement = {
+  transactionId: string
+  kind: 'contribution' | 'withdrawal'
+  baseAmountCents: number | null
+  goalType: 'emergency_reserve' | 'medium_term' | 'retirement' | 'other' | null
+}
+
 export type IntegrityIssue = {
   code:
     | 'uncategorized_confirmed'
@@ -65,6 +72,7 @@ export function buildFinancialSummary(input: {
   splits: SummarySplit[]
   reconciliations: SummaryReconciliation[]
   recurrenceActuals: RecurrenceActual[]
+  investmentMovements: SummaryInvestmentMovement[]
   recurrenceCandidateTransactionIds: string[]
   netWorthCents: number
   missingBalanceConversionCount: number
@@ -151,36 +159,20 @@ export function buildFinancialSummary(input: {
     }
   }
 
-  for (const group of confirmedGroups) {
-    if (group.type !== 'transfer' && group.type !== 'fx_transfer') continue
-    const groupTransactions = group.transactionIds
-      .map((id) => transactionsById.get(id))
-      .filter((transaction): transaction is SummaryTransaction =>
-        Boolean(
-          transaction &&
-          transaction.status === 'confirmed' &&
-          transaction.amountCents !== null &&
-          isFamilyScope(transaction.scopeType),
-        ),
-      )
-    const source = groupTransactions.find(
-      (transaction) => (transaction.amountCents ?? 0) < 0,
-    )
-    const destination = groupTransactions.find(
-      (transaction) => (transaction.amountCents ?? 0) > 0,
-    )
+  for (const movement of input.investmentMovements) {
+    const transaction = transactionsById.get(movement.transactionId)
     if (
-      !source ||
-      !destination ||
-      !destination.postedAt.startsWith(input.month)
-    ) {
-      continue
-    }
-    const value = Math.abs(destination.amountCents ?? source.amountCents ?? 0)
-    if (source.accountPurpose === 'investment') actual.investment -= value
-    if (source.accountPurpose === 'reserve') actual.reserve -= value
-    if (destination.accountPurpose === 'investment') actual.investment += value
-    if (destination.accountPurpose === 'reserve') actual.reserve += value
+      !transaction ||
+      transaction.status !== 'confirmed' ||
+      !transaction.postedAt.startsWith(input.month) ||
+      !isFamilyScope(transaction.scopeType) ||
+      movement.baseAmountCents === null
+    ) continue
+    const bucket = movement.goalType === 'emergency_reserve' ? 'reserve' : 'investment'
+    actual[bucket] +=
+      movement.kind === 'contribution'
+        ? movement.baseAmountCents
+        : -movement.baseAmountCents
   }
 
   for (const recurrence of input.recurrenceActuals) {

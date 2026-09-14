@@ -13,7 +13,7 @@ import {
 import { planningOptions } from '#/features/finance/queries'
 import {
   BudgetSection,
-  ContributionDialog,
+  ClosingSection,
   GoalDialog,
   GoalsSection,
 } from '#/features/planning/budget-section'
@@ -24,7 +24,7 @@ import { RecurrencesSection } from '#/features/planning/recurrences-section'
 export function PlanningSettings({
   activeSection,
 }: {
-  activeSection: 'budget' | 'goals' | 'recurrences'
+  activeSection: 'planning' | 'recurrences'
 }) {
   const { data } = useSuspenseQuery(planningOptions())
   const {
@@ -33,8 +33,6 @@ export function PlanningSettings({
     closeRecurrenceDialog,
     completeOccurrenceMutation,
     confirmMatchMutation,
-    contributionMutation,
-    contributionOpen,
     createRecurrenceMutation,
     currentBudget,
     deleteRecurrenceMutation,
@@ -52,19 +50,15 @@ export function PlanningSettings({
     selectStrategy,
     selectedId,
     setAllocation,
-    setContributionOpen,
     setDeletingRecurrenceId,
     setEditingRecurrenceId,
     setGoalOpen,
     setRecurrenceOpen,
-    settingsMutation,
     skipOccurrenceMutation,
-    strategyMutation,
-    submitContribution,
+    planMutation,
+    savePlan,
     submitGoal,
-    submitIncome,
     submitRecurrence,
-    submitReserve,
     totalBps,
     unlinkMatchMutation,
     updateRecurrenceMutation,
@@ -72,42 +66,30 @@ export function PlanningSettings({
 
   return (
     <>
-      {activeSection === 'budget' && (
-        <BudgetSection
-          data={data}
-          selectedId={selectedId}
-          allocation={allocation}
-          totalBps={totalBps}
-          closed={Boolean(currentBudget?.closed)}
-          pendingCount={pendingCount}
-          selectStrategy={selectStrategy}
-          setAllocation={setAllocation}
-          submitIncome={submitIncome}
-          saveStrategy={() =>
-            strategyMutation.mutate({
-              data: {
-                strategyId: selectedId,
-                essentialBps: allocation.essential,
-                lifestyleBps: allocation.lifestyle,
-                investmentBps: allocation.investment,
-                reserveBps: allocation.reserve,
-              },
-            })
-          }
-          closeMonth={() => closeMutation.mutate({})}
-          strategyPending={strategyMutation.isPending}
-          settingsPending={settingsMutation.isPending}
-          closePending={closeMutation.isPending}
-        />
-      )}
-      {activeSection === 'goals' && (
-        <GoalsSection
-          data={data}
-          submitReserve={submitReserve}
-          settingsPending={settingsMutation.isPending}
-          openGoal={() => setGoalOpen(true)}
-          openContribution={() => setContributionOpen(true)}
-        />
+      {activeSection === 'planning' && (
+        <div className="grid gap-4">
+          <BudgetSection
+            data={data}
+            selectedId={selectedId}
+            allocation={allocation}
+            totalBps={totalBps}
+            selectStrategy={selectStrategy}
+            setAllocation={setAllocation}
+            savePlan={savePlan}
+            planPending={planMutation.isPending}
+          />
+          <GoalsSection
+            data={data}
+            openGoal={() => setGoalOpen(true)}
+          />
+          <ClosingSection
+            data={data}
+            closed={Boolean(currentBudget?.closed)}
+            pendingCount={pendingCount}
+            closeMonth={() => closeMutation.mutate({})}
+            closePending={closeMutation.isPending}
+          />
+        </div>
       )}
       {activeSection === 'recurrences' && (
         <RecurrencesSection
@@ -162,13 +144,6 @@ export function PlanningSettings({
         onOpenChange={setGoalOpen}
         onSubmit={submitGoal}
         pending={goalMutation.isPending}
-      />
-      <ContributionDialog
-        open={contributionOpen}
-        onOpenChange={setContributionOpen}
-        data={data}
-        onSubmit={submitContribution}
-        pending={contributionMutation.isPending}
       />
       <RecurrenceDialog
         key={editingRecurrenceId ?? 'new'}

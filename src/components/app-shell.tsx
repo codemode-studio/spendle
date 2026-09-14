@@ -1,13 +1,16 @@
 import {
   ArrowLeftRight,
+  BookOpen,
+  CalendarClock,
+  ChartNoAxesCombined,
+  CreditCard,
+  Landmark,
   LayoutDashboard,
+  Menu,
   PiggyBank,
   Settings,
-  Upload,
   Tags,
-  Landmark,
-  CalendarClock,
-  Menu,
+  Upload,
   X,
 } from 'lucide-react'
 import { Link, useRouterState } from '@tanstack/react-router'
@@ -24,6 +27,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
+  SidebarSeparator,
   useSidebar,
 } from '#/components/ui/sidebar'
 import { Button } from '#/components/ui/button'
@@ -33,15 +37,25 @@ import { Toaster } from '#/components/ui/sonner'
 import { OnboardingCard } from '#/features/home/onboarding-card'
 import { SpendleLockup } from '#/components/spendle-logo'
 
-const navigation = [
+const overviewNavigation = [
   { to: '/', label: 'Visão geral', icon: LayoutDashboard },
-  { to: '/transacoes', label: 'Transações', icon: ArrowLeftRight },
   { to: '/categorias', label: 'Categorias', icon: Tags },
+  { to: '/investimentos', label: 'Investimentos', icon: ChartNoAxesCombined },
+  { to: '/transacoes', label: 'Transações', icon: ArrowLeftRight },
+] as const
+
+const managementNavigation = [
   {
     to: '/configuracoes',
     search: { tab: 'contas' },
     label: 'Contas',
     icon: Landmark,
+  },
+  {
+    to: '/configuracoes',
+    search: { tab: 'cartoes' },
+    label: 'Cartões',
+    icon: CreditCard,
   },
   {
     to: '/configuracoes',
@@ -55,7 +69,25 @@ const navigation = [
     label: 'Orçamento e metas',
     icon: PiggyBank,
   },
+  {
+    to: '/configuracoes',
+    search: { tab: 'conhecimento' },
+    label: 'Conhecimento',
+    icon: BookOpen,
+  },
 ] as const
+
+const navigation = [...overviewNavigation, ...managementNavigation] as const
+
+/** Abas de configurações que têm entrada própria no menu. */
+const settingsTabsInMenu = new Set<unknown>(
+  navigation.flatMap((item) => ('search' in item ? [item.search.tab] : [])),
+)
+
+/** `metas` foi absorvida por Orçamento e metas; links antigos continuam válidos. */
+function menuTab(tab: unknown) {
+  return tab === 'metas' ? 'orcamento' : tab
+}
 
 function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const { openMobile, setOpenMobile } = useSidebar()
@@ -100,38 +132,39 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
             if ((event.target as HTMLElement).closest('a')) setOpenMobile(false)
           }}
         >
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {navigation.map((item) => {
-                  const { to, label, icon: Icon } = item
-                  const targetSearch =
-                    'search' in item ? item.search : undefined
-                  const isActive =
-                    pathname === to &&
-                    (targetSearch
-                      ? targetSearch.tab === 'contas'
-                        ? search.tab === 'contas' || search.tab === 'cartoes'
-                        : targetSearch.tab === 'orcamento'
-                          ? search.tab === 'orcamento' || search.tab === 'metas'
-                          : search.tab === targetSearch.tab
-                      : true)
-                  return (
-                    <SidebarMenuItem key={label}>
-                      <SidebarMenuButton
-                        render={<Link to={to} search={targetSearch} />}
-                        isActive={isActive}
-                        tooltip={label}
-                      >
-                        <Icon />
-                        <span>{label}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  )
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          {[overviewNavigation, managementNavigation].map((group, index) => (
+            <div key={index}>
+              {index > 0 && <SidebarSeparator />}
+              <SidebarGroup>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {group.map((item) => {
+                      const { to, label, icon: Icon } = item
+                      const targetSearch =
+                        'search' in item ? item.search : undefined
+                      const isActive =
+                        pathname === to &&
+                        (targetSearch
+                          ? menuTab(search.tab) === targetSearch.tab
+                          : true)
+                      return (
+                        <SidebarMenuItem key={label}>
+                          <SidebarMenuButton
+                            render={<Link to={to} search={targetSearch} />}
+                            isActive={isActive}
+                            tooltip={label}
+                          >
+                            <Icon />
+                            <span>{label}</span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      )
+                    })}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            </div>
+          ))}
         </SidebarContent>
         <SidebarFooter
           onClick={(event) => {
@@ -155,11 +188,7 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
                 render={<Link to="/configuracoes" search={{ tab: 'geral' }} />}
                 isActive={
                   pathname === '/configuracoes' &&
-                  search.tab !== 'contas' &&
-                  search.tab !== 'cartoes' &&
-                  search.tab !== 'orcamento' &&
-                  search.tab !== 'metas' &&
-                  search.tab !== 'recorrencias'
+                  !settingsTabsInMenu.has(menuTab(search.tab))
                 }
                 tooltip="Configurações"
               >
@@ -200,7 +229,7 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
             </Button>
           </div>
           <nav aria-label="Navegação principal" className="mt-2 flex gap-1">
-            {navigation.slice(0, 3).map(({ to, label, icon: Icon }) => (
+            {overviewNavigation.slice(0, 3).map(({ to, label, icon: Icon }) => (
               <Link
                 key={to}
                 to={to}

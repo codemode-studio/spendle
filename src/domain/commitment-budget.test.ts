@@ -316,3 +316,36 @@ it('abate recorrência cobrada em agosto dentro da fatura que vence em setembro'
     result.buckets.find((b) => b.bucket === 'lifestyle')?.committedCents,
   ).toBe(906250)
 })
+it('alerta pagamento de fatura categorizado como despesa', () => {
+  const byDescription = buildCommitmentBudget({
+    ...base,
+    transactions: [
+      { ...tx, id: 'pay', description: 'PAGTO FATURA CARTAO 1234' },
+    ],
+  })
+  expect(
+    byDescription.warnings.some((w) => w.includes('categorizado como despesa')),
+  ).toBe(true)
+
+  const byAmount = buildCommitmentBudget({
+    ...base,
+    transactions: [
+      {
+        ...tx,
+        id: 'pay',
+        description: 'Débito',
+        cents: -886250,
+        nativeCents: -886250,
+        date: '2026-09-08',
+      },
+    ],
+  })
+  expect(
+    byAmount.warnings.some((w) => w.includes('categorizado como despesa')),
+  ).toBe(true)
+
+  const ordinary = buildCommitmentBudget(base)
+  expect(
+    ordinary.warnings.some((w) => w.includes('categorizado como despesa')),
+  ).toBe(false)
+})

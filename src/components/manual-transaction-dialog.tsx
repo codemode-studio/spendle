@@ -57,10 +57,20 @@ export function ManualTransactionDialog({
   accounts,
   cards,
   categories,
+  open: controlledOpen,
+  onOpenChange,
+  trigger,
+  defaultDirection = 'outflow',
+  onCreated,
 }: {
   accounts: AccountOption[]
   cards: CardOption[]
   categories: CategoryOption[]
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  trigger?: React.ReactElement | null
+  defaultDirection?: 'inflow' | 'outflow'
+  onCreated?: (transactionId: string) => void
 }) {
   const targets = [
     ...accounts.map((account) => ({
@@ -79,9 +89,16 @@ export function ManualTransactionDialog({
     })),
   ]
   const defaultTarget = targets.at(0)?.value ?? ''
-  const [open, setOpen] = useState(false)
+  const [internalOpen, setInternalOpen] = useState(false)
+  const open = controlledOpen ?? internalOpen
+  const setOpen = (nextOpen: boolean) => {
+    if (controlledOpen === undefined) setInternalOpen(nextOpen)
+    onOpenChange?.(nextOpen)
+  }
   const [targetValue, setTargetValue] = useState(defaultTarget)
-  const [direction, setDirection] = useState<'inflow' | 'outflow'>('outflow')
+  const [direction, setDirection] = useState<'inflow' | 'outflow'>(
+    defaultDirection,
+  )
   const [categoryId, setCategoryId] = useState('uncategorized')
   const [counterpartyAccountId, setCounterpartyAccountId] = useState<
     string | null
@@ -94,7 +111,7 @@ export function ManualTransactionDialog({
 
   function resetForm() {
     setTargetValue(defaultTarget)
-    setDirection('outflow')
+    setDirection(defaultDirection)
     setCategoryId('uncategorized')
     setCounterpartyAccountId(null)
     setAmount('')
@@ -117,6 +134,7 @@ export function ManualTransactionDialog({
       setOpen(false)
       resetForm()
       void invalidateFinance(queryClient, 'ledger')
+      onCreated?.(result.id)
     },
     onError: (reason) => {
       toast.error(
@@ -165,10 +183,14 @@ export function ManualTransactionDialog({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button type="button" />}>
-        <Plus data-icon="inline-start" />
-        Nova transação
-      </DialogTrigger>
+      {trigger === undefined ? (
+        <DialogTrigger render={<Button type="button" />}>
+          <Plus data-icon="inline-start" />
+          Nova transação
+        </DialogTrigger>
+      ) : trigger ? (
+        <DialogTrigger render={trigger} />
+      ) : null}
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
         <form onSubmit={submit} className="grid gap-4">
           <DialogHeader>

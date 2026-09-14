@@ -5,7 +5,9 @@ import {
   pendingRecurrencePayments,
 } from '#/domain/monthly-cash-flow'
 import { shiftDays } from '#/domain/period'
-import { cardBudgetLines } from '#/domain/card-budget'
+import { cardBudgetLines, temporaryFixedBucket } from '#/domain/card-budget'
+import { isCardPaymentRow } from '#/domain/card-payment'
+import { buildCardStatementLedger } from '#/domain/card-statement-ledger'
 import {
   buildCommitmentBudget,
   commitmentBucket,
@@ -31,6 +33,7 @@ import { isFamilyScope } from '#/domain/ledger'
 import {
   allocationAmount,
   calculateConservativeBase,
+  formatInstrumentName,
   resolveEffectiveAllocation,
 } from '#/domain/finance'
 import {
@@ -67,11 +70,14 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
     monthlyBudgetRows,
     goalRows,
     contributionRows,
+    investmentPositionRows,
+    investmentMovementRows,
     cardInstrumentRows,
     importRows,
     stagedRows,
     reconciliationRows,
     reconciliationLinkRows,
+    cardStatementPaymentRows,
     checkpointRows,
     coverageRows,
     correctionRows,
@@ -122,6 +128,10 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
           .select()
           .from(schema.goalContributions)
           .orderBy(desc(schema.goalContributions.contributedAt)),
+    view === 'configuration' ? [] : db.select().from(schema.investmentPositions),
+    view === 'configuration'
+      ? []
+      : db.select().from(schema.investmentPositionMovements),
     db.select().from(schema.creditCardInstruments),
     db.select().from(schema.imports).orderBy(desc(schema.imports.createdAt)),
     view === 'configuration'
@@ -130,15 +140,12 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
           .select()
           .from(schema.stagedTransactions)
           .orderBy(schema.stagedTransactions.postedAt),
-    view === 'configuration'
-      ? []
-      : db
-          .select()
-          .from(schema.reconciliationGroups)
-          .orderBy(desc(schema.reconciliationGroups.createdAt)),
-    view === 'configuration'
-      ? []
-      : db.select().from(schema.reconciliationLinks),
+    db
+      .select()
+      .from(schema.reconciliationGroups)
+      .orderBy(desc(schema.reconciliationGroups.createdAt)),
+    db.select().from(schema.reconciliationLinks),
+    db.select().from(schema.cardStatementPayments),
     db
       .select()
       .from(schema.balanceCheckpoints)
@@ -230,6 +237,40 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
   }))
 
   const transactionById = new Map(transactions.map((row) => [row.id, row]))
+  const investmentPositionById = new Map(
+    investmentPositionRows.map((position) => [position.id, position]),
+  )
+  const investmentGoalById = new Map(goalRows.map((goal) => [goal.id, goal]))
+  // Purchases whose installment plan is a temporary fixed commitment count as
+  // essentials while the plan lasts, whatever their category says.
+  const installmentByTransaction = new Map(
+    installmentRows.flatMap((plan) =>
+      plan.sourceTransactionId
+        ? [
+            [
+              plan.sourceTransactionId,
+              {
+                ...plan,
+                commitmentType: classifyInstallmentCommitment(
+                  plan.totalInstallments,
+                  plan.installmentAmountCents,
+                ),
+              },
+            ] as const,
+          ]
+        : [],
+    ),
+  )
+  const strategyBucket = (transaction: {
+    id: string
+    category: { bucket: string | null } | null
+  }) => {
+    const bucket = transaction.category?.bucket ?? null
+    return installmentByTransaction.get(transaction.id)?.commitmentType ===
+      'temporary_fixed'
+      ? temporaryFixedBucket(bucket)
+      : bucket
+  }
   const stagedById = new Map(stagedRows.map((row) => [row.id, row]))
   const recurrenceById = new Map(recurrenceRows.map((row) => [row.id, row]))
   const occurrenceById = new Map(
@@ -411,8 +452,7 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
           t.status !== 'excluded' &&
           t.postedAt >= source.periodStart! &&
           t.postedAt <= source.periodEnd! &&
-          !['card_payment', 'transfer'].includes(t.categoryId ?? '') &&
-          !/pagamento\s+(?:de\s+)?(?:fatura|recebido)/i.test(t.description),
+          !isCardPaymentRow(t),
       )
       if (!observed.length) continue
       observedStatements.set(cycle.dueDate, {
@@ -542,6 +582,68 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
         paymentIds,
       }
     })
+    const ledger = buildCardStatementLedger({
+      statements: statementSummary.statements,
+      transactions: transactionRows.filter(
+        (t) => t.creditCardId === card.id && t.status !== 'excluded',
+      ),
+      accountPayments: transactionRows.filter(
+        (t) => t.accountId && t.status !== 'excluded',
+      ),
+      reconciliations: reconciliationRows.map((group) => ({
+        id: group.id,
+        type: group.type,
+        status: group.status,
+        transactionIds: (linksByGroup.get(group.id) ?? []).map(
+          (link) => link.transactionId,
+        ),
+      })),
+      manualLinks: cardStatementPaymentRows.filter(
+        (link) => link.creditCardId === card.id,
+      ),
+      today: referenceDate,
+    })
+    const statements = ledger.map((entry) => ({
+      dueDate: entry.dueDate,
+      closingDate: entry.closingDate,
+      amountCents: entry.amountCents,
+      certainty: entry.certainty ?? null,
+      status: entry.status,
+      paidCents: entry.paidCents,
+      transactions: entry.transactionIds.flatMap((id) => {
+        const transaction = transactionById.get(id)
+        if (!transaction) return []
+        const plan = installmentByTransaction.get(id)
+        return [
+          {
+            id: transaction.id,
+            postedAt: transaction.postedAt,
+            description: transaction.description,
+            amountCents: transaction.amountCents,
+            categoryId: transaction.categoryId,
+            categoryName: transaction.category?.name ?? null,
+            installment: plan
+              ? `${plan.currentInstallment}/${plan.totalInstallments}`
+              : null,
+            temporaryFixed: plan?.commitmentType === 'temporary_fixed',
+          },
+        ]
+      }),
+      payments: entry.payments.flatMap((payment) => {
+        const transaction = transactionById.get(payment.transactionId)
+        if (!transaction) return []
+        return [
+          {
+            ...payment,
+            postedAt: transaction.postedAt,
+            description: transaction.description,
+            accountName: transaction.account
+              ? formatInstrumentName(transaction.account.name)
+              : null,
+          },
+        ]
+      }),
+    }))
     const latestCheckpoint =
       checkpointRows.find(
         (checkpoint) =>
@@ -567,6 +669,7 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
           ? Math.max(0, futureControl.unexplainedNextCents)
           : 0,
       statementCents: statementSummary.current.amountCents,
+      statements,
       currentStatement: statementSummary.current,
       nextStatement: statementSummary.next,
       upcomingStatements: statementSummary.statements.filter(
@@ -593,6 +696,28 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
         : null,
     }
   })
+
+  // A bank debit settled on one card is never a candidate for another card.
+  const settledPaymentIds = new Set(
+    cards.flatMap((card) =>
+      card.statements.flatMap((statement) =>
+        statement.payments
+          .filter(
+            (p) =>
+              p.kind === 'manual' ||
+              p.kind === 'confirmed' ||
+              p.kind === 'inferred',
+          )
+          .map((p) => p.transactionId),
+      ),
+    ),
+  )
+  for (const card of cards)
+    for (const statement of card.statements)
+      statement.payments = statement.payments.filter(
+        (p) =>
+          p.kind !== 'candidate' || !settledPaymentIds.has(p.transactionId),
+      )
 
   const convertToBaseCurrency = (value: number, currency: string) => {
     if (currency === settings.baseCurrency) return value
@@ -703,7 +828,24 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       emergencyGoal?.targetCents ||
       allocationAmount(baseIncomeCents, originalAllocation.essential) *
         settings.reserveMonths
-    const reserveCurrentCents = emergencyGoal?.currentCents ?? 0
+    const reserveCurrentCents = investmentPositionRows
+      .filter((position) => position.active && position.goalId === emergencyGoal?.id)
+      .reduce((sum, position) => {
+        const movementTotal = investmentMovementRows
+          .filter((movement) => movement.positionId === position.id)
+          .reduce(
+            (total, movement) =>
+              total +
+              (movement.kind === 'contribution'
+                ? movement.amountMinor
+                : -movement.amountMinor),
+            0,
+          )
+        const currentAmount =
+          position.manualCurrentAmountMinor ??
+          position.initialAmountMinor + movementTotal
+        return sum + (convertToBaseCurrency(currentAmount, position.currency) ?? 0)
+      }, 0)
     const reserveComplete =
       derivedReserveTarget > 0 && reserveCurrentCents >= derivedReserveTarget
     const effectiveAllocation = selectedBudget
@@ -865,7 +1007,7 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
           amountCents: amountInBaseCurrency(transaction),
           status: transaction.status,
           categoryId: transaction.categoryId,
-          bucket: transaction.category?.bucket ?? null,
+          bucket: strategyBucket(transaction),
           incomeBaseEligible: transaction.category?.incomeBaseEligible ?? false,
           scopeType: ownershipScopeId
             ? (scopeById.get(ownershipScopeId)?.type ?? null)
@@ -893,6 +1035,21 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       }),
       reconciliations: reconciliationsForSummary,
       recurrenceActuals,
+      investmentMovements: investmentMovementRows.flatMap((movement) => {
+        const position = investmentPositionById.get(movement.positionId)
+        if (!position) return []
+        const goal = position.goalId
+          ? investmentGoalById.get(position.goalId)
+          : null
+        return [
+          {
+            transactionId: movement.transactionId,
+            kind: movement.kind,
+            baseAmountCents: movement.baseAmountCents,
+            goalType: goal?.type ?? null,
+          },
+        ]
+      }),
       recurrenceCandidateTransactionIds: [
         ...recurrenceMatchRows
           .filter((match) => match.status === 'suggested')

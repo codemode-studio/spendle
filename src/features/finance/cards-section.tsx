@@ -7,10 +7,9 @@ import {
 import { Link } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
 import { toast } from 'sonner'
-import { Fragment, useState } from 'react'
+import { useState } from 'react'
 
 import { EmptyState, Panel, SectionHeader, StatusBadge } from '#/components/ui'
-import { BalanceCheckpointDialog } from '#/components/balance-checkpoint-dialog'
 import { Button } from '#/components/ui/button'
 import {
   Dialog,
@@ -37,7 +36,11 @@ import {
   TableHeader,
   TableRow,
 } from '#/components/ui/table'
-import type { CardStatementSummary } from '#/domain/credit-card'
+import {
+  TEMPORARY_FIXED_MIN_INSTALLMENTS,
+  TEMPORARY_FIXED_MIN_INSTALLMENT_CENTS,
+  addMonths,
+} from '#/domain/credit-card'
 import {
   currencyOptions,
   formatCurrency,
@@ -47,6 +50,7 @@ import {
 } from '#/domain/currency'
 import { formatInstrumentName } from '#/domain/finance'
 import { formatMonthLong, formatShortDate as formatDate } from '#/domain/period'
+import { CardStatementsExplorer } from '#/features/finance/card-statements-explorer'
 import {
   createCreditCardFn,
   updateCreditCardFn,
@@ -84,10 +88,6 @@ type OwnershipScopeOption = Pick<
   FinanceSnapshot['scopes'][number],
   'id' | 'name'
 >
-type StatementCardSnapshot = Pick<
-  CardSnapshot,
-  'currency' | 'id' | 'name' | 'upcomingStatements'
->
 
 export function CardsSection() {
   const { data } = useSuspenseQuery(configurationOptions())
@@ -99,7 +99,6 @@ export function CardsSection() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const editing = data.cards.find((card) => card.id === editingId)
   const cardById = new Map(data.cards.map((card) => [card.id, card]))
-  const statementMonths = groupStatementsByMonth(data.cards)
   const invalidate = () => invalidateFinance(queryClient, 'ledger')
   const fail = (fallback: string) => (reason: unknown) => {
     const message = reason instanceof Error ? reason.message : fallback
@@ -214,15 +213,6 @@ export function CardsSection() {
                     : []),
                 ]}
                 status={<CardStatus card={card} />}
-                actions={
-                  <BalanceCheckpointDialog
-                    targetType="card"
-                    targetId={card.id}
-                    targetName={formatInstrumentName(card.name)}
-                    targetCurrency={card.currency}
-                    trigger="icon"
-                  />
-                }
               />
             )
           })}
@@ -237,65 +227,7 @@ export function CardsSection() {
         </Panel>
       )}
 
-      {statementMonths.length > 0 && (
-        <Panel
-          title="Calendário de faturas"
-          description="Compras importadas e parcelas projetadas por vencimento."
-        >
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Cartão</TableHead>
-                <TableHead className="hidden md:table-cell">
-                  Fechamento
-                </TableHead>
-                <TableHead>Vencimento</TableHead>
-                <TableHead className="hidden sm:table-cell">
-                  Lançamentos
-                </TableHead>
-                <TableHead className="text-right">Valor</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {statementMonths.map((month) => (
-                <Fragment key={month.key}>
-                  <TableRow className="bg-muted/40 pointer-fine:hover:bg-muted/40">
-                    <TableCell colSpan={5} className="py-1.5">
-                      <div className="flex items-center justify-between gap-3 text-xs">
-                        <span className="font-medium">{month.label}</span>
-                        <span className="font-mono text-muted-foreground tabular-nums">
-                          {month.totals
-                            .map(([currency, cents]) =>
-                              formatCurrency(cents, currency),
-                            )
-                            .join(' · ')}
-                        </span>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                  {month.rows.map(({ card, statement }) => (
-                    <TableRow key={`${card.id}-${statement.dueDate}`}>
-                      <TableCell className="font-medium">
-                        {formatInstrumentName(card.name)}
-                      </TableCell>
-                      <TableCell className="hidden text-muted-foreground md:table-cell">
-                        {formatDate(statement.closingDate)}
-                      </TableCell>
-                      <TableCell>{formatDate(statement.dueDate)}</TableCell>
-                      <TableCell className="hidden text-muted-foreground sm:table-cell">
-                        {describeStatementItems(statement)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono tabular-nums">
-                        {formatCurrency(statement.amountCents, card.currency)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </Fragment>
-              ))}
-            </TableBody>
-          </Table>
-        </Panel>
-      )}
+      {data.cards.length > 0 && <CardStatementsExplorer cards={data.cards} />}
 
       {data.cards
         .filter((card) => card.unexplainedNextStatementCents > 0)
@@ -309,7 +241,10 @@ export function CardsSection() {
         ))}
 
       {data.installmentPlans.length > 0 && (
-        <Panel title="Histórico de parcelas identificadas">
+        <Panel
+          title="Histórico de parcelas identificadas"
+          description={`Parcelamentos com ${TEMPORARY_FIXED_MIN_INSTALLMENTS} parcelas ou mais, ou parcela a partir de ${formatCurrency(TEMPORARY_FIXED_MIN_INSTALLMENT_CENTS)}, são despesas fixas temporárias: contam em Essenciais até a última parcela.`}
+        >
           <Table>
             <TableHeader>
               <TableRow>
@@ -317,6 +252,7 @@ export function CardsSection() {
                 <TableHead className="hidden sm:table-cell">Cartão</TableHead>
                 <TableHead className="text-right">Parcela</TableHead>
                 <TableHead className="hidden md:table-cell">Tipo</TableHead>
+                <TableHead className="hidden md:table-cell">Até</TableHead>
                 <TableHead className="hidden lg:table-cell">Origem</TableHead>
                 <TableHead className="text-right">Valor</TableHead>
               </TableRow>
@@ -324,6 +260,10 @@ export function CardsSection() {
             <TableBody>
               {data.installmentPlans.map((plan) => {
                 const card = cardById.get(plan.creditCardId)
+                const lastCharge = addMonths(
+                  plan.firstChargeDate,
+                  plan.totalInstallments - plan.currentInstallment,
+                )
                 return (
                   <TableRow key={plan.id}>
                     <TableCell className="max-w-[16rem] truncate">
@@ -347,6 +287,9 @@ export function CardsSection() {
                           ? 'Fixa temporária'
                           : 'Parcelamento curto'}
                       </StatusBadge>
+                    </TableCell>
+                    <TableCell className="hidden text-muted-foreground md:table-cell">
+                      {formatMonthLong(lastCharge, { capitalize: true })}
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground lg:table-cell">
                       {plan.autoDetected ? 'Detectada' : 'Manual'}
@@ -596,69 +539,4 @@ function readCardForm(form: FormData) {
     closingDay: Number(form.get('closingDay')),
     dueDay: Number(form.get('dueDay')),
   }
-}
-
-function describeStatementItems(statement: CardStatementSummary) {
-  const parts: string[] = []
-  if (statement.transactionCount > 0) {
-    parts.push(
-      `${statement.transactionCount} ${
-        statement.transactionCount === 1 ? 'confirmado' : 'confirmados'
-      }`,
-    )
-  }
-  if (statement.projectedInstallmentCount > 0) {
-    parts.push(
-      `${statement.projectedInstallmentCount} ${
-        statement.projectedInstallmentCount === 1
-          ? 'parcela prevista'
-          : 'parcelas previstas'
-      }`,
-    )
-  }
-  return parts.length ? parts.join(' · ') : 'Sem lançamentos'
-}
-
-/** Achata as faturas de todos os cartões, ordena por vencimento e agrupa por mês. */
-function groupStatementsByMonth(cards: ReadonlyArray<StatementCardSnapshot>) {
-  const rows = cards
-    .flatMap((card) =>
-      card.upcomingStatements.map((statement) => ({ card, statement })),
-    )
-    .sort(
-      (a, b) =>
-        a.statement.dueDate.localeCompare(b.statement.dueDate) ||
-        a.card.name.localeCompare(b.card.name),
-    )
-  const months = new Map<
-    string,
-    {
-      key: string
-      label: string
-      rows: typeof rows
-      totals: Map<string, number>
-    }
-  >()
-  for (const row of rows) {
-    const key = row.statement.dueDate.slice(0, 7)
-    let month = months.get(key)
-    if (!month) {
-      month = {
-        key,
-        label: formatMonthLong(key, { capitalize: true }),
-        rows: [],
-        totals: new Map(),
-      }
-      months.set(key, month)
-    }
-    month.rows.push(row)
-    month.totals.set(
-      row.card.currency,
-      (month.totals.get(row.card.currency) ?? 0) + row.statement.amountCents,
-    )
-  }
-  return [...months.values()].map((month) => ({
-    ...month,
-    totals: [...month.totals.entries()],
-  }))
 }

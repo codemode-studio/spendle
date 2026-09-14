@@ -1,3 +1,4 @@
+import { isCardPaymentDescription } from './card-payment'
 import { minorUnitsToMajor } from './currency'
 import { normalizeDescription } from './finance'
 import { daysBetween } from './period'
@@ -101,12 +102,6 @@ export function detectOwnedTransferCategory(input: {
   return 'transfer' as const
 }
 
-function cardPaymentDescription(value: string) {
-  return /pag(?:amento)?\s*(?:de\s*)?(?:fatura|cartao)|fatura\s*(?:paga|cartao)/i.test(
-    value,
-  )
-}
-
 function merchantDescription(value: string) {
   return normalizeDescription(value)
     .replace(/^(estorno|cancelamento|credito|reembolso)\s+/, '')
@@ -198,8 +193,8 @@ export function buildReconciliationSuggestions(
         days <= 5 &&
         differentTargets &&
         (left.creditCardId || right.creditCardId) &&
-        (cardPaymentDescription(left.description) ||
-          cardPaymentDescription(right.description))
+        (isCardPaymentDescription(left.description) ||
+          isCardPaymentDescription(right.description))
       ) {
         suggestions.push({
           type: 'card_payment',
@@ -301,6 +296,31 @@ export function buildReconciliationSuggestions(
     fx_transfer: 2,
     profit_distribution: 3,
     transfer: 4,
+  }
+  // Auto-confirm a bill payment only when neither side could pair with any
+  // other candidate; two cards with equal totals stay a manual decision.
+  const cardPaymentUses = new Map<string, number>()
+  for (const suggestion of suggestions) {
+    if (suggestion.type !== 'card_payment') continue
+    for (const transactionId of suggestion.transactionIds) {
+      cardPaymentUses.set(
+        transactionId,
+        (cardPaymentUses.get(transactionId) ?? 0) + 1,
+      )
+    }
+  }
+  for (const suggestion of suggestions) {
+    if (suggestion.type !== 'card_payment') continue
+    if (
+      suggestion.transactionIds.every(
+        (transactionId) => cardPaymentUses.get(transactionId) === 1,
+      )
+    ) {
+      suggestion.autoConfirm = true
+      suggestion.confidence = 100
+      suggestion.reason =
+        'Pagamento de fatura com valor e data correspondentes, sem outro candidato.'
+    }
   }
   const matchedIds = new Set<string>()
   return suggestions

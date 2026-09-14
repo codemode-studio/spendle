@@ -1,3 +1,4 @@
+import { isCardPaymentRow } from './card-payment'
 import { addMonths, classifyInstallmentCommitment } from './credit-card'
 import { commitmentBucket } from './commitment-budget'
 import type { CommitmentLine } from './commitment-budget'
@@ -17,6 +18,13 @@ interface Plan {
   totalInstallments: number
   installmentAmountCents: number
 }
+/** Spending buckets collapse into essentials; savings and unknown stay as they are. */
+export function temporaryFixedBucket<T extends string | null>(bucket: T) {
+  return bucket === 'lifestyle' || bucket === 'essential'
+    ? ('essential' as const)
+    : bucket
+}
+
 export function cardBudgetLines(input: {
   id: string
   dueDate: string
@@ -46,36 +54,40 @@ export function cardBudgetLines(input: {
     purchase: Purchase | undefined,
     current?: number,
     total?: number,
-  ): CommitmentLine => ({
-    id: input.id + ':' + lines.length,
-    description,
-    date: input.dueDate,
-    cents,
-    categoryId: purchase?.categoryId ?? null,
-    bucket: commitmentBucket(purchase?.bucket ?? null),
-    transactionId: input.futureOffset === 0 ? purchase?.id : undefined,
-    importId: input.importId,
-    certainty: input.futureOffset === 0 ? 'documented' : 'scheduled',
-    paidCents: 0,
-    origin: 'card',
-    ...(current && total
-      ? {
-          installment: `${current}/${total}`,
-          temporaryUntil:
-            classifyInstallmentCommitment(total, cents) === 'temporary_fixed'
-              ? addMonths(input.dueDate, total - current)
-              : undefined,
-        }
-      : {}),
-  })
+  ): CommitmentLine => {
+    const temporaryUntil =
+      current && total
+        ? classifyInstallmentCommitment(total, cents) === 'temporary_fixed'
+          ? addMonths(input.dueDate, total - current)
+          : undefined
+        : undefined
+    const bucket = commitmentBucket(purchase?.bucket ?? null)
+    return {
+      id: input.id + ':' + lines.length,
+      description,
+      date: input.dueDate,
+      cents,
+      categoryId: purchase?.categoryId ?? null,
+      // A temporary fixed installment is a commitment already taken: while it
+      // lasts it belongs to the essentials envelope, whatever its category.
+      bucket: temporaryUntil ? temporaryFixedBucket(bucket) : bucket,
+      transactionId: input.futureOffset === 0 ? purchase?.id : undefined,
+      importId: input.importId,
+      certainty: input.futureOffset === 0 ? 'documented' : 'scheduled',
+      paidCents: 0,
+      origin: 'card',
+      ...(current && total
+        ? { installment: `${current}/${total}`, temporaryUntil }
+        : {}),
+    }
+  }
   if (input.futureOffset === 0) {
     for (const purchase of input.purchases) {
       if (
         (input.includedTransactionIds
           ? !input.includedTransactionIds.includes(purchase.id)
           : purchase.importId !== input.importId) ||
-        ['card_payment', 'transfer'].includes(purchase.categoryId ?? '') ||
-        /pagamento (recebido|em)/i.test(purchase.description)
+        isCardPaymentRow(purchase)
       )
         continue
       const plan = input.plans.find(

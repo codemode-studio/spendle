@@ -62,6 +62,11 @@ import {
 } from './knowledge-sync.server'
 import { serverInput } from './input-errors.server'
 import {
+  linkCardStatementPayment,
+  listCardStatementPaymentCandidates,
+  unlinkCardStatementPayment,
+} from './card-statement-payment.server'
+import {
   approveDetectedRecurrence,
   completeOccurrence as completeRecurrenceOccurrence,
   confirmMatch as confirmRecurrenceMatch,
@@ -394,6 +399,35 @@ export const completeRecurrenceOccurrenceFn = createServerFn({
 })
   .validator(z.object({ occurrenceId: z.string().min(1) }))
   .handler(({ data }) => completeRecurrenceOccurrence(data.occurrenceId))
+
+export const listCardStatementPaymentCandidatesFn = createServerFn({
+  method: 'GET',
+})
+  .validator(
+    z.object({
+      creditCardId: z.string().min(1),
+      dueDate: isoDateSchema,
+      amountCents: z.number().int().nonnegative().optional(),
+    }),
+  )
+  .handler(({ data }) =>
+    serverInput(() => listCardStatementPaymentCandidates(data)),
+  )
+
+export const linkCardStatementPaymentFn = createServerFn({ method: 'POST' })
+  .validator(
+    z.object({
+      creditCardId: z.string().min(1),
+      dueDate: isoDateSchema,
+      transactionId: z.string().min(1),
+      partial: z.boolean().optional(),
+    }),
+  )
+  .handler(({ data }) => linkCardStatementPayment(data))
+
+export const unlinkCardStatementPaymentFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ id: z.string().min(1) }))
+  .handler(({ data }) => unlinkCardStatementPayment(data))
 
 export const createInstallmentFn = createServerFn({ method: 'POST' })
   .validator(

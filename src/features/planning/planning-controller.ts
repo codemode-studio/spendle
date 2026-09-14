@@ -8,7 +8,6 @@ import { parseCurrency, toMinorUnits as toCents } from '#/domain/currency'
 import { formatMonthLong as formatMonth } from '#/domain/period'
 import {
   activateStrategyFn,
-  addGoalContributionFn,
   closeCurrentBudgetFn,
   completeRecurrenceOccurrenceFn,
   confirmRecurrenceMatchFn,
@@ -26,14 +25,13 @@ import {
 } from '#/features/finance/finance.functions'
 import { invalidateFinance } from '#/features/finance/queries'
 import type { PlanningSnapshot } from '#/features/finance/snapshot.types'
-import type { Allocation } from './budget-section'
+import type { Allocation, PlanInput } from './budget-section'
 
 export function usePlanningController(data: PlanningSnapshot) {
   const queryClient = useQueryClient()
   const activateStrategy = useServerFn(activateStrategyFn)
   const updateSettings = useServerFn(updateSettingsFn)
   const saveGoal = useServerFn(saveGoalFn)
-  const addContribution = useServerFn(addGoalContributionFn)
   const closeBudget = useServerFn(closeCurrentBudgetFn)
   const createRecurrence = useServerFn(createRecurrenceFn)
   const updateRecurrence = useServerFn(updateRecurrenceFn)
@@ -59,7 +57,6 @@ export function usePlanningController(data: PlanningSnapshot) {
     reserve: selected.reserveBps,
   })
   const [goalOpen, setGoalOpen] = useState(false)
-  const [contributionOpen, setContributionOpen] = useState(false)
   const [recurrenceOpen, setRecurrenceOpen] = useState(false)
   const [editingRecurrenceId, setEditingRecurrenceId] = useState<string | null>(
     null,
@@ -97,11 +94,27 @@ export function usePlanningController(data: PlanningSnapshot) {
     },
     onError: showError,
   })
-  const contributionMutation = useMutation({
-    mutationFn: addContribution,
+  // Renda, estratégia e reserva são salvas juntas: um clique, um aviso.
+  const planMutation = useMutation({
+    mutationFn: async (input: PlanInput) => {
+      await updateSettings({
+        data: {
+          ...input,
+          aiClassificationConsent: data.settings.aiClassificationConsent,
+        },
+      })
+      await activateStrategy({
+        data: {
+          strategyId: selectedId,
+          essentialBps: allocation.essential,
+          lifestyleBps: allocation.lifestyle,
+          investmentBps: allocation.investment,
+          reserveBps: allocation.reserve,
+        },
+      })
+    },
     onSuccess: () => {
-      toast.success('Aporte registrado.')
-      setContributionOpen(false)
+      toast.success('Plano salvo.')
       void invalidateStrategy()
     },
     onError: showError,
@@ -253,32 +266,6 @@ export function usePlanningController(data: PlanningSnapshot) {
     })
   }
 
-  function submitIncome(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const form = new FormData(event.currentTarget)
-    settingsMutation.mutate({
-      data: {
-        monthlyIncomeTargetCents: toCents(String(form.get('income'))),
-        reserveMonths: data.settings.reserveMonths,
-        keepReserveContributions: data.settings.keepReserveContributions,
-        aiClassificationConsent: data.settings.aiClassificationConsent,
-      },
-    })
-  }
-
-  function submitReserve(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const form = new FormData(event.currentTarget)
-    settingsMutation.mutate({
-      data: {
-        monthlyIncomeTargetCents: data.settings.monthlyIncomeTargetCents,
-        reserveMonths: Number(form.get('reserveMonths')),
-        keepReserveContributions: form.get('keepReserveContributions') === 'on',
-        aiClassificationConsent: data.settings.aiClassificationConsent,
-      },
-    })
-  }
-
   function submitGoal(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
@@ -290,19 +277,6 @@ export function usePlanningController(data: PlanningSnapshot) {
         targetCents: toCents(String(form.get('target'))),
         currentCents: toCents(String(form.get('current') || '0')),
         targetDate: String(form.get('targetDate') || '') || undefined,
-      },
-    })
-  }
-
-  function submitContribution(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const form = new FormData(event.currentTarget)
-    contributionMutation.mutate({
-      data: {
-        goalId: String(form.get('goalId')),
-        amountCents: toCents(String(form.get('amount'))),
-        contributedAt: String(form.get('date')),
-        notes: String(form.get('notes') || '') || undefined,
       },
     })
   }
@@ -363,8 +337,6 @@ export function usePlanningController(data: PlanningSnapshot) {
     closeRecurrenceDialog,
     completeOccurrenceMutation,
     confirmMatchMutation,
-    contributionMutation,
-    contributionOpen,
     createRecurrenceMutation,
     deleteRecurrenceMutation,
     deletingRecurrenceId,
@@ -381,7 +353,6 @@ export function usePlanningController(data: PlanningSnapshot) {
     selectStrategy,
     selectedId,
     setAllocation,
-    setContributionOpen,
     setDeletingRecurrenceId,
     setEditingRecurrenceId,
     setGoalOpen,
@@ -389,11 +360,10 @@ export function usePlanningController(data: PlanningSnapshot) {
     settingsMutation,
     skipOccurrenceMutation,
     strategyMutation,
-    submitContribution,
+    planMutation,
+    savePlan: (input: PlanInput) => planMutation.mutate(input),
     submitGoal,
-    submitIncome,
     submitRecurrence,
-    submitReserve,
     totalBps,
     currentBudget,
     unlinkMatchMutation,

@@ -281,6 +281,34 @@
       "when": 1789139000001,
       "tag": "0039_initial_analysis",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1789139000002,
+      "tag": "0040_card_statement_payments",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1789139000003,
+      "tag": "0041_card_statement_payment_partial",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1789421358626,
+      "tag": "0042_investment_positions",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1789425000000,
+      "tag": "0043_remove_legacy_investment_positions",
+      "breakpoints": true
     }
   ]
 }

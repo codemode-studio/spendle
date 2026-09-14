@@ -514,6 +514,36 @@ export const statementExclusions = sqliteTable(
   ],
 )
 
+/** Qual débito bancário quitou uma fatura, decidido pela pessoa na página Cartões. */
+export const cardStatementPayments = sqliteTable(
+  'card_statement_payments',
+  {
+    id: text('id').primaryKey(),
+    creditCardId: text('credit_card_id')
+      .notNull()
+      .references(() => creditCards.id, { onDelete: 'cascade' }),
+    dueDate: text('due_date').notNull(),
+    transactionId: text('transaction_id')
+      .notNull()
+      .references(() => transactions.id, { onDelete: 'cascade' }),
+    previousCategoryId: text('previous_category_id').references(
+      () => categories.id,
+    ),
+    /** Marcado pela pessoa: pagou só parte e a fatura segue em aberto. */
+    partial: integer('partial', { mode: 'boolean' }).notNull().default(false),
+    createdAt,
+  },
+  (table) => [
+    uniqueIndex('card_statement_payment_transaction_idx').on(
+      table.transactionId,
+    ),
+    index('card_statement_payment_card_idx').on(
+      table.creditCardId,
+      table.dueDate,
+    ),
+  ],
+)
+
 export const balanceCheckpoints = sqliteTable(
   'balance_checkpoints',
   {
@@ -1003,6 +1033,66 @@ export const goalContributions = sqliteTable('goal_contributions', {
   notes: text('notes'),
   createdAt,
 })
+
+export const investmentAssetClasses = sqliteTable('investment_asset_classes', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  color: text('color').notNull(),
+  sortOrder: integer('sort_order').notNull().default(100),
+  active: integer('active', { mode: 'boolean' }).notNull().default(true),
+  createdAt,
+})
+
+export const investmentPositions = sqliteTable(
+  'investment_positions',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id),
+    assetClassId: text('asset_class_id')
+      .notNull()
+      .references(() => investmentAssetClasses.id),
+    goalId: text('goal_id').references(() => investmentGoals.id, {
+      onDelete: 'set null',
+    }),
+    name: text('name').notNull(),
+    symbol: text('symbol'),
+    currency: text('currency').notNull(),
+    initialAmountMinor: integer('initial_amount_minor').notNull().default(0),
+    initialBaseCents: integer('initial_base_cents'),
+    manualCurrentAmountMinor: integer('manual_current_amount_minor'),
+    manualCurrentAt: text('manual_current_at'),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    createdAt,
+  },
+  (table) => [
+    index('investment_positions_account_idx').on(table.accountId),
+    index('investment_positions_class_idx').on(table.assetClassId),
+    index('investment_positions_goal_idx').on(table.goalId),
+  ],
+)
+
+export const investmentPositionMovements = sqliteTable(
+  'investment_position_movements',
+  {
+    id: text('id').primaryKey(),
+    positionId: text('position_id')
+      .notNull()
+      .references(() => investmentPositions.id, { onDelete: 'cascade' }),
+    transactionId: text('transaction_id')
+      .notNull()
+      .unique()
+      .references(() => transactions.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: ['contribution', 'withdrawal'] }).notNull(),
+    amountMinor: integer('amount_minor').notNull(),
+    baseAmountCents: integer('base_amount_cents'),
+    createdAt,
+  },
+  (table) => [
+    index('investment_position_movements_position_idx').on(table.positionId),
+  ],
+)
 
 export const appSettings = sqliteTable('app_settings', {
   id: text('id').primaryKey(),
