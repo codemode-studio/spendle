@@ -605,7 +605,7 @@ function TransactionsPage() {
                         ? `Desde ${formatLongDate(dateFrom)}`
                         : dateTo
                           ? `Até ${formatLongDate(dateTo)}`
-                          : 'Período'}
+                          : 'Todo período'}
                   </PopoverTrigger>
                   <PopoverContent
                     align="end"
@@ -620,12 +620,7 @@ function TransactionsPage() {
                       defaultMonth={selectedDateRange?.from}
                       autoFocus
                     />
-                    <div className="flex items-center justify-between gap-3 border-t px-3 py-2">
-                      <span className="text-xs text-muted-foreground">
-                        {dateFrom && !dateTo
-                          ? 'Selecione a data final'
-                          : 'Datas inicial e final inclusas'}
-                      </span>
+                    <div className="flex justify-end border-t px-3 py-2">
                       <Button
                         variant="ghost"
                         size="sm"
