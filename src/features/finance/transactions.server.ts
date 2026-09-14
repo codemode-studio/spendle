@@ -15,7 +15,10 @@ export async function getTransactionsPage(input: TransactionFilters) {
   )
   const where = and(
     input.search
-      ? sql`instr(normalize_description(${t.description}), ${normalizeDescription(input.search)}) > 0`
+      ? sql`(
+          instr(normalize_description(${t.description}), ${normalizeDescription(input.search)}) > 0
+          or instr(normalize_description(coalesce(${t.notes}, '')), ${normalizeDescription(input.search)}) > 0
+        )`
       : undefined,
     input.target !== 'all'
       ? or(eq(t.accountId, input.target), eq(t.creditCardId, input.target))

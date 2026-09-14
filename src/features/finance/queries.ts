@@ -174,6 +174,43 @@ export async function patchTransactionCategory(
   }
 }
 
+export async function patchTransactionNote(
+  queryClient: QueryClient,
+  input: {
+    transactionId: TransactionSnapshot['id']
+    note: string | null
+  },
+) {
+  type EditableRows = Pick<FinanceSnapshot, 'transactions'>
+  const filters: { queryKey: QueryKey }[] = [
+    { queryKey: financeQueryKeys.snapshots() },
+    { queryKey: [...financeQueryKeys.all, 'read', 'transactions'] },
+  ]
+  await Promise.all(filters.map((filter) => queryClient.cancelQueries(filter)))
+  const previous = filters.flatMap((filter) =>
+    queryClient.getQueriesData<EditableRows>(filter),
+  )
+
+  for (const filter of filters)
+    queryClient.setQueriesData<EditableRows>(filter, (snapshot) =>
+      snapshot
+        ? {
+            ...snapshot,
+            transactions: snapshot.transactions.map((transaction) =>
+              transaction.id === input.transactionId
+                ? { ...transaction, notes: input.note }
+                : transaction,
+            ),
+          }
+        : snapshot,
+    )
+
+  return () => {
+    for (const [queryKey, snapshot] of previous)
+      queryClient.setQueryData(queryKey, snapshot)
+  }
+}
+
 export const financeSnapshotOptions = (month?: string) =>
   queryOptions({
     queryKey: financeQueryKeys.snapshot(month),
