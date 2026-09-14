@@ -1172,7 +1172,7 @@ function TransactionNoteEditor({
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               placeholder="Ex.: jantar de aniversário"
-              maxLength={200}
+              maxLength={320}
               aria-label="Nota da transação"
             />
           </label>

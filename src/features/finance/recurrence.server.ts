@@ -42,6 +42,17 @@ type TransactionRow = typeof schema.transactions.$inferSelect
 
 const NEVER_RECURRING_CATEGORIES = new Set(['transfer', 'card_payment'])
 const DAY_MS = 86_400_000
+function withoutRecurrenceNote(note: string | null, recurrenceName: string) {
+  const lines = (note ?? '')
+    .split('\n')
+    .filter((line) => line !== recurrenceName)
+  return lines.join('\n').trim() || null
+}
+
+function withRecurrenceNote(note: string | null, recurrenceName: string) {
+  const personalNote = withoutRecurrenceNote(note, recurrenceName)
+  return personalNote ? `${personalNote}\n${recurrenceName}` : recurrenceName
+}
 
 export type RecurrenceInput = {
   name: string
@@ -366,6 +377,11 @@ function settleMatch(
       .where(eq(schema.transactions.id, input.row.id))
       .run()
   }
+  transaction
+    .update(schema.transactions)
+    .set({ notes: withRecurrenceNote(input.row.notes, input.recurrence.name) })
+    .where(eq(schema.transactions.id, input.row.id))
+    .run()
   const settled = {
     status: input.automatic
       ? ('auto_confirmed' as const)
@@ -1182,6 +1198,45 @@ export async function updateRecurrence(id: string, input: RecurrenceInput) {
       })
       .where(eq(schema.recurrences.id, id))
       .run()
+    if (values.name !== current[0].name) {
+      const acceptedMatches = transaction
+        .select({ transactionId: schema.recurrenceMatches.transactionId })
+        .from(schema.recurrenceMatches)
+        .innerJoin(
+          schema.recurrenceOccurrences,
+          eq(
+            schema.recurrenceOccurrences.id,
+            schema.recurrenceMatches.occurrenceId,
+          ),
+        )
+        .where(
+          and(
+            eq(schema.recurrenceOccurrences.recurrenceId, id),
+            inArray(
+              schema.recurrenceMatches.status,
+              acceptedRecurrenceMatchStatuses,
+            ),
+          ),
+        )
+        .all()
+      for (const match of acceptedMatches) {
+        const linked = transaction
+          .select({ notes: schema.transactions.notes })
+          .from(schema.transactions)
+          .where(eq(schema.transactions.id, match.transactionId))
+          .get()
+        transaction
+          .update(schema.transactions)
+          .set({
+            notes: withRecurrenceNote(
+              withoutRecurrenceNote(linked?.notes ?? null, current[0].name),
+              values.name,
+            ),
+          })
+          .where(eq(schema.transactions.id, match.transactionId))
+          .run()
+      }
+    }
   })
   await refreshRecurrences()
   return { id }
@@ -1303,6 +1358,13 @@ export async function unlinkMatch(matchId: string) {
         .update(schema.transactions)
         .set({ categoryId: match[0].previousCategoryId })
         .where(eq(schema.transactions.id, match[0].transactionId))
+        .run()
+    }
+    if (row) {
+      transaction
+        .update(schema.transactions)
+        .set({ notes: withoutRecurrenceNote(row.notes, recurrences[0].name) })
+        .where(eq(schema.transactions.id, row.id))
         .run()
     }
     transaction

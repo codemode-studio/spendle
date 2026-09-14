@@ -275,7 +275,7 @@ export const updateTransactionNoteFn = createServerFn({ method: 'POST' })
   .validator(
     z.object({
       transactionId: z.string().min(1),
-      note: z.string().trim().max(200).nullable(),
+      note: z.string().trim().max(320).nullable(),
     }),
   )
   .handler(({ data }) =>
