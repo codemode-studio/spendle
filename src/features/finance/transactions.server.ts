@@ -1,4 +1,15 @@
-import { and, count, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm'
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lte,
+  or,
+  sql,
+} from 'drizzle-orm'
 import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
 import { normalizeDescription } from '#/domain/finance'
@@ -36,6 +47,8 @@ export async function getTransactionsPage(input: TransactionFilters) {
     input.maxCents !== null
       ? sql`abs(${amount}) <= ${input.maxCents}`
       : undefined,
+    input.dateFrom ? gte(t.postedAt, input.dateFrom) : undefined,
+    input.dateTo ? lte(t.postedAt, input.dateTo) : undefined,
   )
   const [{ total }] = await db.select({ total: count() }).from(t).where(where)
   const page = Math.min(input.page, Math.max(0, Math.ceil(total / 50) - 1))

@@ -28,7 +28,7 @@ describe('bounded financial reads', () => {
         Array.from({ length: 121 }, (_, index) => ({
           id: String(index).padStart(3, '0'),
           accountId: ids.brlAccount,
-          postedAt: '2026-08-01',
+          postedAt: index === 0 ? '2026-08-01' : '2026-08-15',
           description: index === 0 ? 'Café São Paulo' : 'Mercado',
           normalizedDescription: 'unused by search',
           amountCents: -100,
@@ -67,6 +67,14 @@ describe('bounded financial reads', () => {
       transactionFiltersSchema.parse({ search: "' OR 1=1 --" }),
     )
     expect(noMatch.filteredCount).toBe(0)
+    const dateRange = await getTransactionsPage(
+      transactionFiltersSchema.parse({
+        dateFrom: '2026-08-01',
+        dateTo: '2026-08-01',
+      }),
+    )
+    expect(dateRange.transactions.map((row) => row.id)).toEqual(['000'])
+    expect(dateRange.filteredCount).toBe(1)
     const config = await getConfigurationSnapshot()
     expect(config).not.toHaveProperty('transactions')
     expect(config.accounts).toEqual((await getFinanceSnapshot()).accounts)

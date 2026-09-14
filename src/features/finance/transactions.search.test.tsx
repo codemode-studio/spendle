@@ -29,4 +29,11 @@ it('validates URL values and preserves centavo precision and legacy category lin
     minCents: 150051,
   })
   expect(load(`?search=${'x'.repeat(250)}`).search).toHaveLength(200)
+  expect(load('?dateFrom=2026-02-29&dateTo=invalid')).toMatchObject({
+    dateFrom: '',
+    dateTo: '',
+  })
+  expect(
+    transactionSearchToFilters(load('?dateFrom=2026-08-05&dateTo=2026-08-21')),
+  ).toMatchObject({ dateFrom: '2026-08-05', dateTo: '2026-08-21' })
 })

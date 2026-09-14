@@ -7,6 +7,7 @@ import {
 } from '#/features/finance/transactions.search'
 import {
   ArrowLeftRight,
+  CalendarDays,
   Check,
   ReceiptText,
   StickyNote,
@@ -28,6 +29,9 @@ import {
 } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
 import { Fragment, useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+import type { DateRange } from 'react-day-picker'
 import { toast } from 'sonner'
 
 import {
@@ -53,6 +57,7 @@ import {
 } from '#/components/ui/alert-dialog'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
+import { Calendar } from '#/components/ui/calendar'
 import {
   Popover,
   PopoverContent,
@@ -75,7 +80,7 @@ import {
 } from '#/components/ui/table'
 import { formatInstrumentName } from '#/domain/finance'
 import { formatCurrency } from '#/domain/currency'
-import { formatDayLabel, formatPeriod } from '#/domain/period'
+import { formatDayLabel, formatLongDate, formatPeriod } from '#/domain/period'
 import {
   applyKnowledgeSyncFn,
   categorizeUncategorizedTransactionsWithAiFn,
@@ -92,6 +97,7 @@ import {
 } from '#/features/finance/queries'
 import { groupCategoryOptions } from '#/domain/categories'
 import { cn } from '#/lib/utils'
+import { useIsMobile } from '#/hooks/use-mobile'
 
 export const Route = createFileRoute('/transacoes')({
   validateSearch: transactionSearchSchema,
@@ -103,6 +109,7 @@ export const Route = createFileRoute('/transacoes')({
 })
 
 function TransactionsPage() {
+  const isMobile = useIsMobile()
   const queryClient = useQueryClient()
   const updateCategory = useServerFn(updateTransactionCategoryFn)
   const updateNote = useServerFn(updateTransactionNoteFn)
@@ -129,7 +136,8 @@ function TransactionsPage() {
       replace: options?.replace,
       resetScroll: false,
     })
-  const { search, target, direction, minAmount, maxAmount } = urlState
+  const { search, target, direction, minAmount, maxAmount, dateFrom, dateTo } =
+    urlState
   const onlyUncategorized = urlState.category === 'uncategorized'
   const categoryFilter = onlyUncategorized ? 'all' : urlState.category
   const minCents = parseAmountInput(minAmount)
@@ -145,6 +153,18 @@ function TransactionsPage() {
     void setUrlState({ minAmount: value, page: 1 }, { replace: true })
   const setMaxAmount = (value: string) =>
     void setUrlState({ maxAmount: value, page: 1 }, { replace: true })
+  const setDateRange = (range: DateRange | undefined) =>
+    updateFilters({
+      dateFrom: range?.from ? format(range.from, 'yyyy-MM-dd') : '',
+      dateTo: range?.to ? format(range.to, 'yyyy-MM-dd') : '',
+    })
+  const selectedDateRange = useMemo<DateRange | undefined>(() => {
+    if (!dateFrom && !dateTo) return undefined
+    return {
+      from: dateFrom ? new Date(`${dateFrom}T12:00:00`) : undefined,
+      to: dateTo ? new Date(`${dateTo}T12:00:00`) : undefined,
+    }
+  }, [dateFrom, dateTo])
   const filters = useMemo(
     () => transactionSearchToFilters(urlState),
     [urlState],
@@ -170,7 +190,9 @@ function TransactionsPage() {
     categoryFilter !== 'all' ||
     direction !== 'all' ||
     minCents !== null ||
-    maxCents !== null
+    maxCents !== null ||
+    dateFrom !== '' ||
+    dateTo !== ''
   const clearFilters = () => void setUrlState(null)
   const clearAdvancedFilters = () =>
     updateFilters({
@@ -356,6 +378,16 @@ function TransactionsPage() {
             : `≤ ${formatCurrency(maxCents ?? 0, 'BRL')}`,
       clear: () => updateFilters({ minAmount: '', maxAmount: '' }),
     },
+    (dateFrom !== '' || dateTo !== '') && {
+      key: 'date',
+      label:
+        dateFrom && dateTo
+          ? formatPeriod({ start: dateFrom, end: dateTo }, 'day-range')
+          : dateFrom
+            ? `Desde ${formatLongDate(dateFrom)}`
+            : `Até ${formatLongDate(dateTo)}`,
+      clear: () => updateFilters({ dateFrom: '', dateTo: '' }),
+    },
   ].filter((chip): chip is Exclude<typeof chip, false> => Boolean(chip))
   const suggestedReconciliations = data.reconciliations.filter(
     (item) => item.status === 'suggested',
@@ -537,6 +569,76 @@ function TransactionsPage() {
                 ]}
               />
               <div className="flex flex-1 flex-wrap items-center justify-end gap-2 sm:flex-none">
+                <Popover>
+                  <PopoverTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        className={cn(
+                          'w-full justify-start font-normal sm:w-auto',
+                          !dateFrom && !dateTo && 'text-muted-foreground',
+                        )}
+                        aria-label={
+                          dateFrom || dateTo
+                            ? `Período selecionado: ${
+                                dateFrom && dateTo
+                                  ? formatPeriod(
+                                      { start: dateFrom, end: dateTo },
+                                      'day-range',
+                                    )
+                                  : dateFrom
+                                    ? `desde ${formatLongDate(dateFrom)}`
+                                    : `até ${formatLongDate(dateTo)}`
+                              }`
+                            : 'Filtrar por período'
+                        }
+                      />
+                    }
+                  >
+                    <CalendarDays data-icon="inline-start" />
+                    {dateFrom && dateTo
+                      ? formatPeriod(
+                          { start: dateFrom, end: dateTo },
+                          'day-range',
+                        )
+                      : dateFrom
+                        ? `Desde ${formatLongDate(dateFrom)}`
+                        : dateTo
+                          ? `Até ${formatLongDate(dateTo)}`
+                          : 'Período'}
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="end"
+                    className="w-auto max-w-[calc(100vw-2rem)] gap-0 overflow-x-auto p-0"
+                  >
+                    <Calendar
+                      mode="range"
+                      locale={ptBR}
+                      selected={selectedDateRange}
+                      onSelect={setDateRange}
+                      numberOfMonths={isMobile ? 1 : 2}
+                      defaultMonth={selectedDateRange?.from}
+                      autoFocus
+                    />
+                    <div className="flex items-center justify-between gap-3 border-t px-3 py-2">
+                      <span className="text-xs text-muted-foreground">
+                        {dateFrom && !dateTo
+                          ? 'Selecione a data final'
+                          : 'Datas inicial e final inclusas'}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={!dateFrom && !dateTo}
+                        onClick={() =>
+                          updateFilters({ dateFrom: '', dateTo: '' })
+                        }
+                      >
+                        Limpar
+                      </Button>
+                    </div>
+                  </PopoverContent>
+                </Popover>
                 <div className="relative w-full sm:w-64">
                   <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
                   <Input

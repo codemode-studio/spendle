@@ -16,6 +16,8 @@ const filters = {
   direction: 'all' as const,
   minCents: null,
   maxCents: null,
+  dateFrom: null,
+  dateTo: null,
   page: 0,
 }
 
