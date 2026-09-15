@@ -14,7 +14,9 @@ export const getAssistantStatusFn = createServerFn({ method: 'GET' }).handler(
 
 export const getLatestMonthlyAnalysisFn = createServerFn({
   method: 'POST',
-}).handler(() => getLatestMonthlyAnalysis())
+})
+  .validator(z.object({ refreshInitial: z.boolean().default(false) }))
+  .handler(({ data }) => getLatestMonthlyAnalysis(data.refreshInitial))
 
 export const askFinanceQuestionFn = createServerFn({ method: 'POST' })
   .validator(

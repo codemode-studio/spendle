@@ -134,6 +134,23 @@ do orçamento e seus compromissos; entrega esses dados a `buildMonthlyCashFlow`.
 Reconstrução histórica e aritmética dos totais são detalhes internos testados
 pela leitura do caixa a partir dos fatos.
 
+O mesmo módulo projeta o caixa operacional. `projectCash` recebe os fatos mais
+categorias, cartões com faturas futuras, parcelamentos, referências da base de
+conhecimento e vínculos de recorrência; devolve histórico dia a dia pelo mesmo
+`cashAt` do resumo mensal, os compromissos datados dentro do horizonte
+(recorrências em conta e faturas) e a média diária do consumo variável de 60
+dias. `trimCashProjection` recorta a projeção a um horizonte menor sem
+consultar os fatos. O snapshot entrega `cashProjection` (14 dias de histórico,
+90 de horizonte); a Home lê o cabeçalho de caixa, o gráfico de previsão e os
+próximos compromissos dessa mesma projeção. Nenhuma feature reimplementa a
+seleção de contas, a exclusão de transferências ou o calendário de ocorrências.
+Quando uma conta operacional em moeda estrangeira não tem cotação, o caixa é
+desconhecido: o cabeçalho e a previsão dizem isso em vez de somar só os reais.
+
+`src/features/home/insights.ts` fica com o read model restante da Home: totais
+dos últimos 30 dias, gastos por categoria comparados à referência, integridade
+e prontidão das comparações. Recebe apenas os campos que usa.
+
 ## Período de análise
 
 `src/domain/period.ts` concentra intervalos inclusivos em datas ISO, janelas

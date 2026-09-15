@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { buildMonthlyCashFlow } from './monthly-cash-flow'
+import { shiftDays } from './period'
+import { addRecurrencePeriod } from './recurrence-schedule'
+import {
+  buildMonthlyCashFlow,
+  projectCash,
+  trimCashProjection,
+} from './monthly-cash-flow'
 
 type Facts = Parameters<typeof buildMonthlyCashFlow>[0]
 
@@ -259,5 +265,499 @@ describe('monthly cash flow from financial facts', () => {
       cashCents: null,
       closingCashCents: null,
     })
+  })
+})
+
+type ProjectionFacts = Parameters<typeof projectCash>[0]
+
+/**
+ * Conta operacional com saldo zero conferido hoje: movimentos anteriores não
+ * mudam o caixa de partida, então cada teste controla o ponto inicial.
+ */
+type Mutable<T> = {
+  -readonly [K in keyof T]: T[K] extends ReadonlyArray<infer U>
+    ? Array<U>
+    : T[K]
+}
+
+function projectionFacts(
+  today: string,
+): Mutable<ProjectionFacts> & { expectedDates: string[] } {
+  const firstDate = shiftDays(today, 1)
+  const secondDate = addRecurrencePeriod(firstDate, 'monthly', firstDate)
+  const thirdDate = addRecurrencePeriod(secondDate, 'monthly', firstDate)
+  const expectedDates = [firstDate, secondDate, thirdDate]
+  return {
+    expectedDates,
+    baseCurrency: 'BRL',
+    accounts: [
+      account({
+        id: 'operating-account',
+        statementBalanceAt: today,
+        statementBalanceCents: 0,
+      }),
+    ],
+    scopes: [{ id: 'family', type: 'household' }],
+    checkpoints: [],
+    exchangeRates: [],
+    reconciliations: [],
+    categories: [
+      { id: 'food', bucket: 'essential' },
+      { id: 'housing', bucket: 'essential' },
+      { id: 'health', bucket: 'essential' },
+      { id: 'subscriptions', bucket: 'essential' },
+      { id: 'reserve', bucket: 'reserve' },
+      { id: 'uncategorized', bucket: 'excluded' },
+    ],
+    cards: [],
+    installmentPlans: [],
+    knowledgeReferences: [],
+    matches: [],
+    transactions: [],
+    recurrences: [
+      recurrence({
+        id: 'monthly-recurrence',
+        name: 'Compromisso mensal',
+        categoryId: 'housing',
+        direction: 'expense',
+        amountCents: 10000,
+        nextDate: firstDate,
+        scheduleAnchor: firstDate,
+        accountId: null,
+        dateToleranceDays: 15,
+      }),
+    ],
+    occurrences: expectedDates.map((expectedDate, index) => ({
+      id: `occurrence-${index + 1}`,
+      recurrenceId: 'monthly-recurrence',
+      expectedDate,
+      expectedAmountCents: 10000,
+      currency: 'BRL',
+      direction: 'expense',
+      categoryId: 'housing',
+      status: 'expected',
+    })),
+  }
+}
+
+function spend(
+  id: string,
+  today: string,
+  amountCents: number,
+  overrides: Partial<ProjectionFacts['transactions'][number]> = {},
+) {
+  return transaction(id, amountCents, {
+    postedAt: shiftDays(today, -1),
+    accountId: 'operating-account',
+    description: id,
+    categoryId: 'food',
+    ...overrides,
+  })
+}
+
+describe('cash projection from financial facts', () => {
+  const today = '2026-09-04'
+
+  it('schedules every expected monthly occurrence within 90 days and moves cash on those dates', () => {
+    const scenario = projectionFacts(today)
+    const projection = projectCash(scenario, {
+      today,
+      daysBack: 0,
+      daysAhead: 90,
+    })
+    expect(projection.scheduled.map((event) => event.date)).toEqual(
+      scenario.expectedDates,
+    )
+    const changes = projection.points
+      .slice(projection.todayIndex + 1)
+      .filter(
+        (point, index, future) =>
+          point.balanceCents !==
+          (index === 0 ? 0 : future[index - 1].balanceCents),
+      )
+    expect(changes.map((point) => point.date)).toEqual(scenario.expectedDates)
+    expect(changes.map((point) => point.balanceCents)).toEqual([
+      -10000, -20000, -30000,
+    ])
+  })
+
+  it('starts from the same operating cash as the monthly summary, anchors included', () => {
+    const scenario = projectionFacts(today)
+    scenario.accounts = [
+      account({
+        id: 'operating-account',
+        statementBalanceAt: null,
+        statementBalanceCents: null,
+        initialBalanceCents: 50000,
+      }),
+      account({
+        id: 'pj',
+        statementBalanceAt: shiftDays(today, -10),
+        statementBalanceCents: 4801903,
+      }),
+      account({ id: 'reserve', purpose: 'reserve', statementBalanceCents: 1 }),
+      account({ id: 'usd', currency: 'USD', statementBalanceCents: 100 }),
+    ]
+    scenario.checkpoints = [
+      {
+        accountId: 'operating-account',
+        reviewState: 'verified',
+        asOf: shiftDays(today, -3),
+        balanceCents: 20000,
+      },
+    ]
+    scenario.transactions = [
+      transaction('after-anchor', -5000, {
+        postedAt: shiftDays(today, -1),
+        accountId: 'operating-account',
+      }),
+    ]
+
+    const unknown = projectCash(scenario, { today, daysBack: 5, daysAhead: 30 })
+    expect(unknown.assumptions.startingCents).toBeNull()
+    expect(unknown.points).toEqual([])
+    expect(unknown.in30Cents).toBeNull()
+    expect(unknown.scheduled).toHaveLength(1)
+
+    scenario.exchangeRates = [
+      {
+        date: shiftDays(today, -10),
+        fromCurrency: 'USD',
+        toCurrency: 'BRL',
+        rateMicros: 5_000_000,
+      },
+    ]
+    const projection = projectCash(scenario, {
+      today,
+      daysBack: 5,
+      daysAhead: 30,
+    })
+    const summary = buildMonthlyCashFlow({
+      ...scenario,
+      month: today.slice(0, 7),
+      referenceDate: today,
+      commitments: { forecasting: false, lines: [], savingsRemainingCents: 0 },
+    })
+    expect(projection.assumptions.startingCents).toBe(summary.cashCents)
+    // 50000 - 5000 (PF) + 4801903 (PJ) + 500 (USD convertido); reserva fora.
+    expect(projection.assumptions.startingCents).toBe(4847403)
+    // No dia do checkpoint o histórico segue a âncora, não o saldo atual.
+    const anchored = projection.points.find(
+      (point) => point.date === shiftDays(today, -3),
+    )
+    expect(anchored?.balanceCents).toBe(20000 + 4801903 + 500)
+    // Antes da âncora, sem movimentos, o saldo é desconhecido: o histórico para.
+    expect(
+      projection.points
+        .slice(0, projection.todayIndex + 1)
+        .map((point) => point.date),
+    ).toEqual([
+      shiftDays(today, -3),
+      shiftDays(today, -2),
+      shiftDays(today, -1),
+      today,
+    ])
+  })
+
+  it('does not improve the forecast when the same outflow loses its category', () => {
+    const scenario = projectionFacts(today)
+    scenario.recurrences = []
+    scenario.occurrences = []
+    scenario.transactions = [spend('expense', today, -60000)]
+    expect(
+      projectCash(scenario, { today, daysBack: 0, daysAhead: 30 }).in30Cents,
+    ).toBe(-30000)
+    scenario.transactions = [
+      spend('expense', today, -60000, { categoryId: 'uncategorized' }),
+    ]
+    expect(
+      projectCash(scenario, { today, daysBack: 0, daysAhead: 30 }).in30Cents,
+    ).toBe(-30000)
+  })
+
+  it('reserves new card purchases without repeating scheduled installments', () => {
+    const scenario = projectionFacts(today)
+    scenario.recurrences = []
+    scenario.occurrences = []
+    scenario.cards = [
+      {
+        id: 'card',
+        name: 'Cartão',
+        currency: 'BRL',
+        upcomingStatements: [
+          { dueDate: shiftDays(today, 5), amountCents: 20000 },
+        ],
+      },
+    ]
+    scenario.installmentPlans = [{ sourceTransactionId: 'installment' }]
+    scenario.transactions = ['groceries', 'installment'].map((id) =>
+      spend(id, today, -60000, { accountId: null, creditCardId: 'card' }),
+    )
+    const projection = projectCash(scenario, {
+      today,
+      daysBack: 0,
+      daysAhead: 30,
+    })
+    expect(projection.dailyVariableCents).toBe(1000)
+    expect(projection.in30Cents).toBe(-50000)
+    expect(projection.assumptions.estimatedCardCents).toBe(20000)
+  })
+
+  it('does not project a past allocation as new consumption', () => {
+    const scenario = projectionFacts(today)
+    scenario.recurrences = []
+    scenario.occurrences = []
+    scenario.transactions = [
+      spend('reserve', today, -60000, { categoryId: 'reserve' }),
+    ]
+    expect(
+      projectCash(scenario, { today, daysBack: 0, daysAhead: 30 }).in30Cents,
+    ).toBe(0)
+  })
+
+  it('keeps a card subscription in the average even when linked to a card recurrence', () => {
+    const scenario = projectionFacts(today)
+    scenario.cards = [
+      { id: 'card', name: 'Cartão', currency: 'BRL', upcomingStatements: [] },
+    ]
+    scenario.recurrences = [
+      { ...scenario.recurrences[0], creditCardId: 'card' },
+    ]
+    scenario.occurrences = scenario.occurrences.slice(0, 1)
+    scenario.matches = [
+      {
+        occurrenceId: 'occurrence-1',
+        transactionId: 'subscription',
+        status: 'confirmed',
+      },
+    ]
+    scenario.transactions = [
+      spend('subscription', today, -6000, {
+        accountId: null,
+        creditCardId: 'card',
+        categoryId: 'subscriptions',
+      }),
+    ]
+    expect(
+      projectCash(scenario, { today, daysBack: 0, daysAhead: 30 }).in30Cents,
+    ).toBe(-3000)
+  })
+
+  it('projects 90 days even when only the next occurrence is recorded', () => {
+    const scenario = projectionFacts(today)
+    scenario.occurrences = scenario.occurrences.slice(0, 1)
+    const projection = projectCash(scenario, {
+      today,
+      daysBack: 0,
+      daysAhead: 90,
+    })
+    expect(projection.scheduled.map((event) => event.date)).toEqual(
+      scenario.expectedDates,
+    )
+    expect(projection.points.at(-1)?.balanceCents).toBe(-30000)
+  })
+
+  it('does not recreate a paid or skipped commitment when completing the horizon', () => {
+    const scenario = projectionFacts(today)
+    scenario.occurrences[1].status = 'skipped'
+    scenario.occurrences[2].status = 'matched'
+    const projection = projectCash(scenario, {
+      today,
+      daysBack: 0,
+      daysAhead: 90,
+    })
+    expect(projection.scheduled.map((event) => event.date)).toEqual([
+      scenario.expectedDates[0],
+    ])
+    expect(projection.points.at(-1)?.balanceCents).toBe(-10000)
+  })
+
+  it('does not repeat in the variable average a payment recognised by the recurrence knowledge', () => {
+    const scenario = projectionFacts(today)
+    scenario.recurrences[0].amountCents = 60000
+    scenario.recurrences[0].amountToleranceBps = 500
+    scenario.occurrences.forEach((occurrence) => {
+      occurrence.expectedAmountCents = 60000
+    })
+    scenario.knowledgeReferences = [
+      { recurrenceId: 'monthly-recurrence', description: 'LOCADORA EXEMPLO' },
+    ]
+    scenario.transactions = [
+      spend('rent-paid', today, -60000, {
+        postedAt: shiftDays(today, -30),
+        description: 'Pix enviado: "Cp :12345678-LOCADORA EXEMPLO"',
+        categoryId: 'housing',
+      }),
+    ]
+    const before = JSON.stringify(scenario)
+    const projection = projectCash(scenario, {
+      today,
+      daysBack: 0,
+      daysAhead: 30,
+    })
+    expect(projection.in30Cents).toBe(-60000)
+    expect(projection.recurringEstimateTransactionIds).toEqual(['rent-paid'])
+    expect(JSON.stringify(scenario)).toBe(before)
+
+    scenario.recurrences.push({ ...scenario.recurrences[0], id: 'ambiguous' })
+    scenario.knowledgeReferences.push({
+      recurrenceId: 'ambiguous',
+      description: 'LOCADORA EXEMPLO',
+    })
+    expect(
+      projectCash(scenario, { today, daysBack: 0, daysAhead: 30 })
+        .recurringEstimateTransactionIds,
+    ).toEqual([])
+
+    scenario.recurrences.pop()
+    scenario.knowledgeReferences.pop()
+    scenario.recurrences[0].active = false
+    expect(
+      projectCash(scenario, { today, daysBack: 0, daysAhead: 30 }).in30Cents,
+    ).toBe(-30000)
+  })
+
+  it('explains estimated receipts, documents and repeated history separately', () => {
+    const scenario = projectionFacts(today)
+    scenario.recurrences.push(
+      recurrence({
+        id: 'income',
+        name: 'Recebimento',
+        amountCents: 60000,
+        nextDate: scenario.expectedDates[0],
+        scheduleAnchor: scenario.expectedDates[0],
+        accountId: null,
+      }),
+    )
+    scenario.occurrences.push({
+      id: 'income-1',
+      recurrenceId: 'income',
+      expectedDate: scenario.expectedDates[0],
+      expectedAmountCents: 60000,
+      currency: 'BRL',
+      direction: 'income',
+      categoryId: 'income',
+      status: 'expected',
+    })
+    scenario.cards = [
+      {
+        id: 'card',
+        name: 'Cartão',
+        currency: 'BRL',
+        upcomingStatements: [
+          {
+            dueDate: shiftDays(today, 2),
+            amountCents: 20000,
+            certainty: 'closed',
+          },
+          {
+            dueDate: shiftDays(today, 3),
+            amountCents: 30000,
+            certainty: 'installment_schedule',
+          },
+          { dueDate: shiftDays(today, 4), amountCents: 5000 },
+        ],
+      },
+    ]
+    scenario.transactions = [
+      spend('one-off', today, -60000, {
+        description: 'Pagamento a esclarecer',
+        categoryId: 'uncategorized',
+      }),
+    ]
+    const projection = projectCash(scenario, {
+      today,
+      daysBack: 0,
+      daysAhead: 30,
+    })
+    expect(projection.assumptions).toEqual({
+      days: 30,
+      startingCents: 0,
+      estimatedIncomeCents: 60000,
+      estimatedRecurrenceCents: 10000,
+      closedCardCents: 20000,
+      scheduledCardCents: 30000,
+      estimatedCardCents: 5000,
+      historicalEstimateCents: 30000,
+    })
+    expect(projection.in30Cents).toBe(-35000)
+    expect(projection.largestHistoricalExpenses[0]).toMatchObject({
+      id: 'one-off',
+      cents: 60000,
+    })
+    expect(projection.scheduled.map((event) => event.name)).toEqual([
+      'Compromisso mensal',
+      'Recebimento',
+      'Fatura Cartão',
+      'Parcelas conhecidas Cartão',
+      'Fatura Cartão',
+    ])
+  })
+
+  it('removes a fixed bill paid in advance from the forecast without confirming the link', () => {
+    const scenario = projectionFacts(today)
+    scenario.knowledgeReferences = [
+      { recurrenceId: 'monthly-recurrence', description: 'OPERADORA EXEMPLO' },
+    ]
+    scenario.transactions = [
+      spend('paid-early', today, -10000, {
+        description: 'Pix enviado: "Cp :12345678-OPERADORA EXEMPLO"',
+        categoryId: 'health',
+      }),
+    ]
+    const before = JSON.stringify(scenario)
+    const projection = projectCash(scenario, {
+      today,
+      daysBack: 0,
+      daysAhead: 30,
+    })
+    expect(projection.scheduled).toEqual([])
+    expect(projection.assumptions.estimatedRecurrenceCents).toBe(0)
+    expect(projection.observedAdvancePayments).toMatchObject([
+      {
+        transactionId: 'paid-early',
+        occurrenceId: 'occurrence-1',
+        cents: 10000,
+      },
+    ])
+    expect(JSON.stringify(scenario)).toBe(before)
+
+    scenario.recurrences.push({ ...scenario.recurrences[0], id: 'ambiguous' })
+    scenario.knowledgeReferences.push({
+      recurrenceId: 'ambiguous',
+      description: 'OPERADORA EXEMPLO',
+    })
+    scenario.occurrences.push(
+      ...scenario.occurrences.map((occurrence) => ({
+        ...occurrence,
+        id: 'second-' + occurrence.id,
+        recurrenceId: 'ambiguous',
+      })),
+    )
+    expect(
+      projectCash(scenario, { today, daysBack: 0, daysAhead: 30 })
+        .observedAdvancePayments,
+    ).toEqual([])
+
+    scenario.recurrences.pop()
+    scenario.knowledgeReferences.pop()
+    scenario.occurrences.length = 3
+    scenario.transactions[0].amountCents = -5000
+    expect(
+      projectCash(scenario, { today, daysBack: 0, daysAhead: 30 })
+        .observedAdvancePayments,
+    ).toEqual([])
+  })
+
+  it('trims a projection to a shorter horizon without touching the scenario', () => {
+    const scenario = projectionFacts(today)
+    scenario.transactions = [spend('expense', today, -60000)]
+    const full = projectCash(scenario, { today, daysBack: 3, daysAhead: 90 })
+    const trimmed = trimCashProjection(full, 30)
+    const direct = projectCash(scenario, { today, daysBack: 3, daysAhead: 30 })
+    expect(trimmed).toEqual(direct)
+    expect(trimmed.points).toEqual(full.points.slice(0, full.todayIndex + 31))
+    expect(trimmed.scheduled).toEqual(full.scheduled.slice(0, 1))
+    expect(trimCashProjection(full, 120).assumptions.days).toBe(90)
   })
 })

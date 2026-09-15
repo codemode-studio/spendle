@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -19,6 +19,31 @@ import { toast } from 'sonner'
 import { EmptyState, Page, Panel } from '#/components/ui'
 import { Button, buttonVariants } from '#/components/ui/button'
 import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupTextarea,
+} from '#/components/ui/input-group'
+import { Progress } from '#/components/ui/progress'
+import {
+  Questionnaire,
+  QuestionnaireActions,
+  QuestionnaireChoice,
+  QuestionnaireChoiceDescription,
+  QuestionnaireChoices,
+  QuestionnaireDescription,
+  QuestionnaireError,
+  QuestionnaireInput,
+  QuestionnaireItem,
+  QuestionnaireNext,
+  QuestionnairePrevious,
+  QuestionnaireProgress,
+  QuestionnaireSkip,
+  QuestionnaireSubmit,
+  QuestionnaireTitle,
+} from '#/components/ui/questionnaire'
+import { Separator } from '#/components/ui/separator'
+import { Spinner } from '#/components/ui/spinner'
+import {
   Sheet,
   SheetTrigger,
   SheetContent,
@@ -35,12 +60,20 @@ import {
   askFinanceQuestionFn,
   getLatestMonthlyAnalysisFn,
 } from './analysis.functions'
-import type { MonthlyAnalysis, ConversationMessage } from './analysis.server'
+import type { ConversationMessage } from './analysis.server'
+import {
+  financeAnswerSchema,
+  INITIAL_ANALYSIS_REFRESH_MS,
+} from './assistant-contract'
+import type { FinanceAnswer, FinanceQuestionnaire } from './assistant-contract'
 import { AnalysisCard } from './analysis-card'
 import { CategoryBar } from './charts'
 import { ForecastOutlook } from './forecast-outlook'
 import { buildHomeView } from './insights'
 import type { HomeView } from './insights'
+import { trimCashProjection } from '#/domain/monthly-cash-flow'
+import type { CashEvent } from '#/domain/monthly-cash-flow'
+import { assistantQueryKeys } from './query-keys'
 
 // ─── Página ──────────────────────────────────────────────────────────────────
 
@@ -53,6 +86,10 @@ export function Home({
 }) {
   const [showAnalysis, setShowAnalysis] = useState(false)
   const view = useMemo(() => buildHomeView(snapshot), [snapshot])
+  const commitments = useMemo(
+    () => trimCashProjection(snapshot.cashProjection, 30).scheduled,
+    [snapshot],
+  )
 
   return (
     <Page className="home-page max-w-[1120px]">
@@ -129,7 +166,7 @@ export function Home({
           />
           <div className="grid items-stretch gap-6 md:grid-cols-2">
             <CategorySummaryCard view={view} />
-            <CommitmentsCard view={view} />
+            <CommitmentsCard commitments={commitments} />
           </div>
         </div>
       )}
@@ -256,8 +293,12 @@ function CategorySummaryCard({ view }: { view: HomeView }) {
   )
 }
 
-function CommitmentsCard({ view }: { view: HomeView }) {
-  const due = view.commitments30.filter((item) => item.amountCents < 0)
+function CommitmentsCard({
+  commitments,
+}: {
+  commitments: ReadonlyArray<CashEvent>
+}) {
+  const due = commitments.filter((item) => item.amountCents < 0)
   const dueCents = due.reduce((sum, item) => sum + -item.amountCents, 0)
   return (
     <Panel
@@ -276,7 +317,7 @@ function CommitmentsCard({ view }: { view: HomeView }) {
         </p>
         <span className="text-xs text-muted-foreground">a pagar</span>
       </div>
-      {view.commitments30.length === 0 ? (
+      {commitments.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 py-6 text-muted-foreground">
           <CalendarDays
             aria-hidden="true"
@@ -287,7 +328,7 @@ function CommitmentsCard({ view }: { view: HomeView }) {
         </div>
       ) : (
         <ul className="divide-y">
-          {view.commitments30.slice(0, 5).map((item) => {
+          {commitments.slice(0, 5).map((item) => {
             const incoming = item.amountCents > 0
             const Icon = incoming
               ? ArrowDownLeft
@@ -365,16 +406,14 @@ function CommitmentsCard({ view }: { view: HomeView }) {
 
 type FeedItem =
   | { id: string; kind: 'question'; text: string }
-  | { id: string; kind: 'answer'; text: string }
   | {
       id: string
-      kind: 'analysis'
-      analysis: MonthlyAnalysis
-      at: string
-      initial: boolean
+      kind: 'answer'
+      answer: FinanceAnswer
+      questionnaireResponse?: string
     }
 
-function ActivityColumn({
+export function ActivityColumn({
   assistantConfigured,
   closedMonths,
 }: {
@@ -382,19 +421,27 @@ function ActivityColumn({
   assistantConfigured: boolean
 }) {
   const [conversation, setConversation] = useState<Array<FeedItem>>([])
+  const [conversationLoaded, setConversationLoaded] = useState(false)
   const [question, setQuestion] = useState('')
+  const conversationRegionRef = useRef<HTMLDivElement>(null)
+  const hadAnalysisRef = useRef(false)
+  const submittingRef = useRef(false)
+
+  const persistConversation = (items: FeedItem[]) => {
+    try {
+      localStorage.setItem(
+        'finance-assistant-conversation',
+        JSON.stringify(items),
+      )
+    } catch {
+      /* Armazenamento indisponível. */
+    }
+  }
 
   const push = (item: FeedItem) =>
     setConversation((current) => {
       const next = [...current, item].slice(-20)
-      try {
-        localStorage.setItem(
-          'finance-assistant-conversation',
-          JSON.stringify(next),
-        )
-      } catch {
-        /* Armazenamento indisponível. */
-      }
+      persistConversation(next)
       return next
     })
 
@@ -403,76 +450,145 @@ function ActivityColumn({
       const saved: unknown = JSON.parse(
         localStorage.getItem('finance-assistant-conversation') ?? '[]',
       )
-      if (Array.isArray(saved))
-        setConversation(
-          saved
-            .filter(
-              (item): item is FeedItem =>
-                item &&
-                typeof item.id === 'string' &&
-                typeof item.text === 'string' &&
-                (item.kind === 'question' || item.kind === 'answer'),
-            )
-            .slice(-20),
-        )
+      if (Array.isArray(saved)) {
+        const restored = saved.flatMap((item): FeedItem[] => {
+          if (!item || typeof item !== 'object') return []
+          const candidate = item as Record<string, unknown>
+          if (typeof candidate.id !== 'string') return []
+          if (
+            candidate.kind === 'question' &&
+            typeof candidate.text === 'string'
+          )
+            return [
+              { id: candidate.id, kind: 'question', text: candidate.text },
+            ]
+          if (candidate.kind !== 'answer') return []
+          const parsed = financeAnswerSchema.safeParse(candidate.answer)
+          if (parsed.success)
+            return [
+              {
+                id: candidate.id,
+                kind: 'answer',
+                answer: parsed.data,
+                questionnaireResponse:
+                  typeof candidate.questionnaireResponse === 'string'
+                    ? candidate.questionnaireResponse
+                    : undefined,
+              },
+            ]
+          if (typeof candidate.text === 'string')
+            return [
+              {
+                id: candidate.id,
+                kind: 'answer',
+                answer: {
+                  summary: candidate.text.replace(/\*\*/g, ''),
+                  metrics: [],
+                  comparison: null,
+                  nextStep: null,
+                },
+              },
+            ]
+          return []
+        })
+        setConversation(restored.slice(-20))
+      }
     } catch {
       /* Conversa indisponível neste navegador. */
+    } finally {
+      setConversationLoaded(true)
     }
   }, [])
+  const hasFollowUp = conversation.some((item) => item.kind === 'question')
   const analysis = useQuery({
-    queryKey: ['monthly-assistant-latest', closedMonths],
-    queryFn: () => getLatestMonthlyAnalysisFn(),
-    enabled: assistantConfigured,
-    staleTime: Infinity,
+    queryKey: assistantQueryKeys.latestAnalysis(closedMonths),
+    queryFn: () =>
+      getLatestMonthlyAnalysisFn({ data: { refreshInitial: true } }),
+    enabled: assistantConfigured && conversationLoaded,
+    staleTime: INITIAL_ANALYSIS_REFRESH_MS,
     retry: 1,
     retryDelay: 1500,
+    refetchInterval: (query) =>
+      initialAnalysisRefetchInterval(hasFollowUp, query.state.data),
+    refetchIntervalInBackground: false,
   })
 
   const ask = useMutation({
     mutationFn: (data: { question: string; history: ConversationMessage[] }) =>
       askFinanceQuestionFn({ data }),
-    onSuccess: (text) =>
-      push({ id: `answer-${Date.now()}`, kind: 'answer', text }),
+    onSuccess: (answer) =>
+      push({ id: `answer-${Date.now()}`, kind: 'answer', answer }),
     onError: (error) => toast.error(error.message),
+    onSettled: () => {
+      submittingRef.current = false
+    },
   })
 
-  const submitQuestion = (event: React.FormEvent) => {
-    event.preventDefault()
-    const text = question.trim()
-    if (text.length < 3 || ask.isPending) return
+  const historyFrom = (items: FeedItem[]): ConversationMessage[] =>
+    items
+      .map((item): ConversationMessage => ({
+        role: item.kind === 'question' ? 'user' : 'assistant',
+        content:
+          item.kind === 'question' ? item.text : answerAsHistory(item.answer),
+      }))
+      .slice(-20)
+
+  const askQuestion = (text: string) => {
+    if (
+      !assistantConfigured ||
+      text.length < 3 ||
+      ask.isPending ||
+      submittingRef.current
+    )
+      return
+    submittingRef.current = true
     push({ id: `question-${Date.now()}`, kind: 'question', text })
     setQuestion('')
     ask.mutate({
       question: text,
-      history: conversation
-        .flatMap((item): ConversationMessage[] =>
-          item.kind === 'question' || item.kind === 'answer'
-            ? [
-                {
-                  role: item.kind === 'question' ? 'user' : 'assistant',
-                  content: item.text,
-                },
-              ]
-            : [],
-        )
-        .slice(-20),
+      history: historyFrom(conversation),
     })
   }
 
-  const feed: Array<FeedItem> = [
-    ...(analysis.data?.analysis
-      ? [
-          {
-            id: `monthly-${analysis.data.month}`,
-            kind: 'analysis' as const,
-            analysis: analysis.data.analysis,
-            at: analysis.data.month,
-            initial: analysis.data.initial,
-          },
-        ]
-      : []),
-    ...conversation,
-  ]
+  const submitQuestion = (event: React.FormEvent) => {
+    event.preventDefault()
+    askQuestion(question.trim())
+  }
+
+  const submitQuestionnaire = (answerId: string, response: string) => {
+    if (!assistantConfigured || ask.isPending || submittingRef.current) return
+    setConversation((current) => {
+      const next = current.map((item) =>
+        item.id === answerId && item.kind === 'answer'
+          ? { ...item, questionnaireResponse: response }
+          : item,
+      )
+      persistConversation(next)
+      return next
+    })
+    askQuestion(response)
+  }
+
+  useEffect(() => {
+    if (!analysis.data?.analysis || hadAnalysisRef.current) return
+    hadAnalysisRef.current = true
+    if (conversation.length > 0 && conversationRegionRef.current)
+      conversationRegionRef.current.scrollTop = 0
+  }, [analysis.data?.analysis, conversation.length])
+
+  const hasAnalysisArea =
+    Boolean(analysis.data?.analysis) ||
+    analysis.isFetching ||
+    analysis.isError ||
+    (!assistantConfigured && !closedMonths)
+  const pendingQuestionnaireId = [...conversation]
+    .reverse()
+    .find(
+      (item) =>
+        item.kind === 'answer' &&
+        item.answer.questionnaire &&
+        !item.questionnaireResponse,
+    )?.id
 
   return (
     <aside className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
@@ -483,114 +599,137 @@ function ActivityColumn({
       </SheetHeader>
 
       <div
+        ref={conversationRegionRef}
         aria-label="Conversa com o assistente"
         role="region"
         tabIndex={0}
-        className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-panel pb-panel sm:space-y-6"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-panel pb-panel"
       >
-        {!assistantConfigured && !closedMonths && !analysis.data && (
-          <p className="text-sm text-muted-foreground">
-            Você recebe uma primeira análise com os dados disponíveis. As
-            próximas acompanham o fechamento de cada mês.
-          </p>
-        )}
-        {analysis.isError && (
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm">
-              A análise não ficou pronta. Tente novamente; seus dados e
-              conversas estão preservados.
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void analysis.refetch()}
-            >
-              Tentar novamente
-            </Button>
-          </div>
-        )}
-        {feed.length === 0 && !analysis.isError && !analysis.isFetching && (
-          <p className="text-sm text-muted-foreground">
-            Pergunte sobre limites de gastos, compras adiáveis ou ajustes no
-            plano mensal.
-          </p>
-        )}
-        {feed.map((item) => {
-          if (item.kind === 'question') {
-            return (
-              <Message
-                key={item.id}
-                author="Você"
-                avatar={
-                  <span className="flex size-7 items-center justify-center rounded-lg bg-muted text-xs font-semibold">
-                    V
-                  </span>
-                }
-              >
-                <p>{item.text}</p>
-              </Message>
-            )
-          }
-          if (item.kind === 'answer') {
-            return (
-              <Message
-                key={item.id}
-                author="Assistente"
-                avatar={<AssistantAvatar />}
-              >
-                <p className="whitespace-pre-line">
-                  {item.text.replace(/\*\*/g, '')}
+        <div className="flex flex-col gap-5 sm:gap-6">
+          {hasAnalysisArea && (
+            <section aria-label="Primeira análise">
+              {!assistantConfigured && !closedMonths && !analysis.data ? (
+                <p className="text-sm text-muted-foreground">
+                  Você recebe uma primeira análise com os dados disponíveis. As
+                  próximas acompanham o fechamento de cada mês.
                 </p>
-              </Message>
+              ) : analysis.isError && !analysis.data ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm">
+                    A primeira análise não ficou pronta. Suas conversas estão
+                    preservadas.
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void analysis.refetch()}
+                  >
+                    Tentar novamente
+                  </Button>
+                </div>
+              ) : analysis.isFetching && !analysis.data ? (
+                <div
+                  aria-label="Analisando seus dados"
+                  className="flex min-h-11 items-center gap-2 text-sm text-muted-foreground"
+                >
+                  <Spinner />
+                  Preparando sua primeira análise…
+                </div>
+              ) : analysis.data?.analysis ? (
+                <AssistantMessage>
+                  <p className="mb-2 text-xs text-muted-foreground">
+                    {analysis.data.initial
+                      ? 'Primeira análise'
+                      : `Fechamento de ${analysis.data.month}`}
+                  </p>
+                  <AnalysisCard analysis={analysis.data.analysis} />
+                </AssistantMessage>
+              ) : null}
+            </section>
+          )}
+          {hasAnalysisArea && conversation.length > 0 && <Separator />}
+          {conversationLoaded &&
+            conversation.length === 0 &&
+            !analysis.isError &&
+            !analysis.isFetching && (
+              <p className="text-sm text-muted-foreground">
+                Pergunte sobre limites de gastos, compras adiáveis ou ajustes no
+                plano mensal.
+              </p>
+            )}
+          {conversation.map((item) => {
+            if (item.kind === 'question') {
+              return (
+                <article key={item.id} className="flex justify-end">
+                  <p className="max-w-[85%] rounded-2xl rounded-br-md bg-muted px-4 py-2.5 text-sm leading-relaxed">
+                    {item.text}
+                  </p>
+                </article>
+              )
+            }
+            return (
+              <AssistantMessage key={item.id}>
+                <FinanceAnswerView
+                  answer={item.answer}
+                  questionnaireResponse={item.questionnaireResponse}
+                  onQuestionnaireSubmit={
+                    assistantConfigured &&
+                    item.id === pendingQuestionnaireId &&
+                    !ask.isPending
+                      ? (response) => submitQuestionnaire(item.id, response)
+                      : undefined
+                  }
+                />
+              </AssistantMessage>
             )
-          }
-          return (
-            <Message
-              key={item.id}
-              author={
-                item.initial ? 'Primeira análise' : `Fechamento de ${item.at}`
-              }
-              avatar={<AssistantAvatar />}
-            >
-              <AnalysisCard analysis={item.analysis} />
-            </Message>
-          )
-        })}
-        {(ask.isPending || analysis.isFetching) && (
-          <Message author="Assistente" avatar={<AssistantAvatar />}>
-            <p className="animate-pulse text-muted-foreground">
-              {analysis.isFetching ? 'Analisando seus dados…' : 'Pensando…'}
-            </p>
-          </Message>
-        )}
+          })}
+          {ask.isPending && (
+            <AssistantMessage>
+              <div
+                aria-label="Preparando resposta"
+                className="flex min-h-11 items-center gap-2 text-muted-foreground"
+              >
+                <Spinner />
+                Preparando resposta…
+              </div>
+            </AssistantMessage>
+          )}
+        </div>
       </div>
 
       <form
         onSubmit={submitQuestion}
         className="shrink-0 border-t bg-background p-panel pb-[max(var(--spacing-panel),env(safe-area-inset-bottom))]"
       >
-        <div className="flex items-center gap-2 rounded-xl border bg-background px-3 py-1.5 shadow-xs focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40">
-          <input
+        <InputGroup className="rounded-2xl">
+          <InputGroupTextarea
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' || event.shiftKey) return
+              event.preventDefault()
+              event.currentTarget.form?.requestSubmit()
+            }}
+            rows={1}
             placeholder="Pergunte sobre suas finanças…"
             aria-label="Pergunte sobre suas finanças"
             disabled={!assistantConfigured || ask.isPending}
-            className="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground disabled:opacity-60 pointer-coarse:h-11"
           />
-          <button
-            type="submit"
-            aria-label="Enviar pergunta"
-            disabled={
-              !assistantConfigured ||
-              ask.isPending ||
-              question.trim().length < 3
-            }
-            className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40 pointer-coarse:size-11"
-          >
-            <Send className="size-4" />
-          </button>
-        </div>
+          <InputGroupAddon align="inline-end">
+            <Button
+              type="submit"
+              size="icon"
+              aria-label="Enviar pergunta"
+              disabled={
+                !assistantConfigured ||
+                ask.isPending ||
+                question.trim().length < 3
+              }
+            >
+              <Send />
+            </Button>
+          </InputGroupAddon>
+        </InputGroup>
         {!assistantConfigured && (
           <p className="mt-2 text-[11px] text-muted-foreground">
             Ative o assistente em Configurações para enviar perguntas.
@@ -601,34 +740,212 @@ function ActivityColumn({
   )
 }
 
-function AssistantAvatar() {
+export function initialAnalysisRefetchInterval(
+  hasFollowUp: boolean,
+  analysis?: { initial: boolean },
+) {
+  return !hasFollowUp && analysis?.initial ? INITIAL_ANALYSIS_REFRESH_MS : false
+}
+
+function AssistantMessage({ children }: { children: React.ReactNode }) {
   return (
-    <span className="flex size-7 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
-      <Sparkles className="size-3.5" />
-    </span>
+    <article className="max-w-full text-sm leading-relaxed">{children}</article>
   )
 }
 
-function Message({
-  author,
-  avatar,
-  children,
-  className,
+function answerAsHistory(answer: FinanceAnswer) {
+  const metrics = answer.metrics
+    .map((metric) => `${metric.label}: ${formatCurrency(metric.valueCents)}`)
+    .join('; ')
+  const questionnaire = answer.questionnaire?.items
+    .map(
+      (item) =>
+        `${item.question} Opções: ${item.choices.map((choice) => choice.label).join(', ')}.`,
+    )
+    .join('\n')
+  return [answer.summary, metrics, answer.nextStep, questionnaire]
+    .filter(Boolean)
+    .join('\n')
+}
+
+export function FinanceAnswerView({
+  answer,
+  questionnaireResponse,
+  onQuestionnaireSubmit,
 }: {
-  author: string
-  avatar: React.ReactNode
-  children: React.ReactNode
-  className?: string
+  answer: FinanceAnswer
+  questionnaireResponse?: string
+  onQuestionnaireSubmit?: (response: string) => void
 }) {
+  const largestComparison = Math.max(
+    1,
+    ...(answer.comparison?.items.map((item) => item.valueCents) ?? []),
+  )
+
   return (
-    <article
-      className={cn('grid grid-cols-[28px_minmax(0,1fr)] gap-x-3', className)}
+    <div className="flex flex-col gap-4">
+      <p className="whitespace-pre-line">{answer.summary}</p>
+      {answer.metrics.length > 0 && (
+        <dl className="grid gap-2 sm:grid-cols-3">
+          {answer.metrics.map((metric) => (
+            <div key={metric.label} className="rounded-xl bg-muted p-3">
+              <dt className="text-xs text-muted-foreground">{metric.label}</dt>
+              <dd className="mt-1 text-base font-semibold tabular-nums">
+                {formatCurrency(metric.valueCents)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {answer.comparison && (
+        <figure className="flex flex-col gap-3">
+          <figcaption className="text-xs font-medium text-muted-foreground">
+            {answer.comparison.title}
+          </figcaption>
+          {answer.comparison.items.map((item) => (
+            <Progress
+              key={item.label}
+              value={(item.valueCents / largestComparison) * 100}
+              aria-label={`${item.label}: ${formatCurrency(item.valueCents)}`}
+            >
+              <span className="text-xs">{item.label}</span>
+              <span className="ml-auto text-xs font-medium tabular-nums">
+                {formatCurrency(item.valueCents)}
+              </span>
+            </Progress>
+          ))}
+        </figure>
+      )}
+      {answer.nextStep && (
+        <p className="border-l-2 border-primary pl-3 text-muted-foreground">
+          {answer.nextStep}
+        </p>
+      )}
+      {answer.questionnaire && (
+        <FinanceQuestionnaireView
+          questionnaire={answer.questionnaire}
+          response={questionnaireResponse}
+          onSubmit={onQuestionnaireSubmit}
+        />
+      )}
+    </div>
+  )
+}
+
+function FinanceQuestionnaireView({
+  questionnaire,
+  response,
+  onSubmit,
+}: {
+  questionnaire: FinanceQuestionnaire
+  response?: string
+  onSubmit?: (response: string) => void
+}) {
+  if (response) {
+    return (
+      <p className="text-xs font-medium text-muted-foreground">
+        Respostas enviadas
+      </p>
+    )
+  }
+
+  const enabled = Boolean(onSubmit)
+  const items = questionnaire.items.map((item, itemIndex) => ({
+    name: `question-${itemIndex}`,
+    required: item.required,
+    multiple: item.multiple,
+    choices: item.choices.map((_, choiceIndex) => ({
+      value: `choice-${choiceIndex}`,
+      disabled: !enabled,
+    })),
+  }))
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!onSubmit) return
+    const formData = new FormData(event.currentTarget)
+    const responses = questionnaire.items.flatMap((item, itemIndex) => {
+      const values = formData
+        .getAll(`question-${itemIndex}`)
+        .flatMap((value) =>
+          typeof value === 'string' && value.trim() ? [value] : [],
+        )
+        .map((value) => {
+          const choiceIndex = Number(value.replace('choice-', ''))
+          return Number.isInteger(choiceIndex) && item.choices[choiceIndex]
+            ? item.choices[choiceIndex].label
+            : value
+        })
+      return values.length > 0 ? [`${item.question}\n${values.join(', ')}`] : []
+    })
+    onSubmit(
+      responses.length > 0
+        ? responses.join('\n\n')
+        : 'Prefiro não responder às perguntas.',
+    )
+  }
+
+  return (
+    <Questionnaire
+      defaultItem={items[0]?.name}
+      items={items}
+      shortcuts="numbers"
+      onSubmit={handleSubmit}
     >
-      <div>{avatar}</div>
-      <div className="pt-1 text-sm leading-relaxed">
-        <p className="text-xs text-muted-foreground">{author}</p>
-        <div className="mt-1">{children}</div>
-      </div>
-    </article>
+      {items.length > 1 && (
+        <QuestionnaireProgress
+          render={(props, state) => (
+            <span {...props}>
+              Pergunta {state.current} de {state.total}
+            </span>
+          )}
+        />
+      )}
+      {questionnaire.items.map((item, itemIndex) => (
+        <QuestionnaireItem
+          key={`question-${itemIndex}`}
+          name={`question-${itemIndex}`}
+          multiple={item.multiple}
+          required={item.required}
+        >
+          <QuestionnaireTitle>{item.question}</QuestionnaireTitle>
+          {item.description && (
+            <QuestionnaireDescription>
+              {item.description}
+            </QuestionnaireDescription>
+          )}
+          <QuestionnaireChoices>
+            {item.choices.map((choice, choiceIndex) => (
+              <QuestionnaireChoice
+                key={`choice-${choiceIndex}`}
+                value={`choice-${choiceIndex}`}
+                disabled={!enabled}
+              >
+                <span className="font-medium">{choice.label}</span>
+                {choice.description && (
+                  <QuestionnaireChoiceDescription>
+                    {choice.description}
+                  </QuestionnaireChoiceDescription>
+                )}
+              </QuestionnaireChoice>
+            ))}
+            {item.allowOther && (
+              <QuestionnaireInput
+                aria-label={`Outra resposta para: ${item.question}`}
+                placeholder="Outra resposta…"
+                disabled={!enabled}
+              />
+            )}
+          </QuestionnaireChoices>
+          <QuestionnaireError />
+        </QuestionnaireItem>
+      ))}
+      <QuestionnaireActions>
+        <QuestionnairePrevious disabled={!enabled} />
+        <QuestionnaireSkip disabled={!enabled} />
+        <QuestionnaireNext disabled={!enabled} />
+        <QuestionnaireSubmit disabled={!enabled} />
+      </QuestionnaireActions>
+    </Questionnaire>
   )
 }

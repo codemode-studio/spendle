@@ -62,6 +62,7 @@ const financeInvalidationKeyFactories = {
   strategyHistory: financeQueryKeys.strategyHistories,
   openFinance: financeQueryKeys.openFinance,
   assistant: assistantQueryKeys.status,
+  assistantAnalysis: assistantQueryKeys.analyses,
 }
 
 type FinanceInvalidationFamily = keyof typeof financeInvalidationKeyFactories
@@ -87,6 +88,7 @@ export const financeInvalidationGroups = {
     'strategyHistory',
     'recurrenceLinkCandidates',
     'cardStatementCandidates',
+    'assistantAnalysis',
     'openFinance',
   ],
   ownershipScope: ['snapshot'],
@@ -98,12 +100,14 @@ export const financeInvalidationGroups = {
     'recurrenceDetection',
     'strategyHistory',
     'recurrenceLinkCandidates',
+    'assistantAnalysis',
     'openFinance',
   ],
   // `updateSettings` may run the reconciliation refresh (which also refreshes
   // recurrences), so both settings paths invalidate the ledger families too.
   aiConsent: [
     'assistant',
+    'assistantAnalysis',
     'snapshot',
     'importReview',
     'recurrenceDetection',
@@ -112,13 +116,14 @@ export const financeInvalidationGroups = {
     'openFinance',
   ],
   strategy: [
+    'assistantAnalysis',
     'snapshot',
     'importReview',
     'recurrenceDetection',
     'strategyHistory',
     'recurrenceLinkCandidates',
   ],
-  budgetClose: ['snapshot', 'strategyHistory'],
+  budgetClose: ['snapshot', 'strategyHistory', 'assistantAnalysis'],
 } as const satisfies Record<string, ReadonlyArray<FinanceInvalidationFamily>>
 
 export type FinanceInvalidationScope = keyof typeof financeInvalidationGroups

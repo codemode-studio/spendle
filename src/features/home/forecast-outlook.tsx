@@ -9,12 +9,12 @@ import { Input } from '#/components/ui/input'
 import { SegmentedControl } from '#/components/segmented-control'
 import { formatCurrency, toMinorUnits } from '#/domain/currency'
 import { formatMonth } from '#/domain/finance'
+import { trimCashProjection } from '#/domain/monthly-cash-flow'
 import { formatLongDate, formatShortDate } from '#/domain/period'
 import type { FinanceSnapshot } from '#/features/finance/snapshot.types'
 import { cn } from '#/lib/utils'
 import { CashChart } from './charts'
 import { simulateRecovery } from './forecast'
-import { projectCash } from './insights'
 import type { HomeView } from './insights'
 
 export function ForecastOutlook({
@@ -27,7 +27,10 @@ export function ForecastOutlook({
   const [days, setDays] = useState(60)
   const [reduction, setReduction] = useState(0)
   const [extra, setExtra] = useState('')
-  const cash = useMemo(() => projectCash(snapshot, 14, days), [snapshot, days])
+  const cash = useMemo(
+    () => trimCashProjection(snapshot.cashProjection, days),
+    [snapshot, days],
+  )
   const dashboard = snapshot.dashboard
   const month = dashboard.familyMonth
   const savingsTarget =
@@ -42,31 +45,10 @@ export function ForecastOutlook({
       invalid = true
     }
   }
-  const scenario = simulateRecovery(
-    cash,
-    reduction,
-    invalid ? 0 : extraCents,
-    savingsTarget,
-  )
-  const changed = scenario.improvementMonthlyCents > 0
   const hasData =
     view.latestPostedAt !== null ||
     cash.assumptions.estimatedIncomeCents > 0 ||
     cash.assumptions.estimatedRecurrenceCents > 0
-  const monthlyIncome = Math.round(
-    (cash.assumptions.estimatedIncomeCents * 30) / days,
-  )
-  const monthlyExpenses = monthlyIncome - scenario.monthlyBalanceCents
-  const title = !hasData
-    ? 'Complete os dados para prever o caixa'
-    : view.cashTodayCents < 0
-      ? 'O caixa já está negativo'
-      : scenario.firstNegative
-        ? `O caixa aperta em ${formatShortDate(scenario.firstNegative.date)}`
-        : scenario.monthlyBalanceCents < 0
-          ? 'O caixa está perdendo fôlego'
-          : 'Há espaço para acumular neste cenário'
-
   if (!hasData)
     return (
       <EmptyState
@@ -80,6 +62,39 @@ export function ForecastOutlook({
         }
       />
     )
+  const startingCents = cash.assumptions.startingCents
+  if (startingCents === null)
+    return (
+      <EmptyState
+        icon={TrendingUp}
+        title="Sem caixa em reais para prever"
+        description="Uma conta operacional em moeda estrangeira está sem cotação. Cadastre a cotação para converter o saldo e liberar a previsão."
+        action={
+          <Link to="/configuracoes" className={buttonVariants()}>
+            Abrir configurações
+          </Link>
+        }
+      />
+    )
+  const scenario = simulateRecovery(
+    cash,
+    reduction,
+    invalid ? 0 : extraCents,
+    savingsTarget,
+  )
+  const changed = scenario.improvementMonthlyCents > 0
+  const monthlyIncome = Math.round(
+    (cash.assumptions.estimatedIncomeCents * 30) / days,
+  )
+  const monthlyExpenses = monthlyIncome - scenario.monthlyBalanceCents
+  const title =
+    startingCents < 0
+      ? 'O caixa já está negativo'
+      : scenario.firstNegative
+        ? `O caixa aperta em ${formatShortDate(scenario.firstNegative.date)}`
+        : scenario.monthlyBalanceCents < 0
+          ? 'O caixa está perdendo fôlego'
+          : 'Há espaço para acumular neste cenário'
 
   return (
     <div className="flex flex-col gap-6">
@@ -112,11 +127,15 @@ export function ForecastOutlook({
           />
         </div>
         <dl className="mt-6 grid grid-cols-2 gap-5 lg:grid-cols-4">
-          <ForecastMetric label="Disponível hoje" cents={view.cashTodayCents} />
+          <ForecastMetric label="Caixa hoje" cents={startingCents} />
           <ForecastMetric
             label="Em 30 dias"
-            cents={cash.in30Cents}
-            detail={formatShortDate(cash.points[cash.todayIndex + 30].date)}
+            cents={cash.in30Cents ?? startingCents}
+            detail={formatShortDate(
+              cash.points[
+                Math.min(cash.todayIndex + 30, cash.points.length - 1)
+              ].date,
+            )}
           />
           <ForecastMetric
             label="Menor saldo previsto"
@@ -436,10 +455,7 @@ export function ForecastOutlook({
         <dl className="mt-4 flex flex-col gap-3 text-sm">
           <MoneyRow label="Entradas previstas / mês" cents={monthlyIncome} />
           <MoneyRow label="Saídas previstas / mês" cents={-monthlyExpenses} />
-          <MoneyRow
-            label="Caixa inicial"
-            cents={cash.assumptions.startingCents}
-          />
+          <MoneyRow label="Caixa inicial" cents={startingCents} />
           <MoneyRow
             label="Entradas estimadas"
             cents={cash.assumptions.estimatedIncomeCents}

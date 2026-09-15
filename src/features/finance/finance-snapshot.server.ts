@@ -2,6 +2,7 @@ import { buildFamilyMonth } from '#/domain/family-month'
 import { confirmedAccountIncome } from '#/domain/account-income'
 import {
   buildMonthlyCashFlow,
+  projectCash,
   pendingRecurrencePayments,
 } from '#/domain/monthly-cash-flow'
 import { shiftDays } from '#/domain/period'
@@ -128,7 +129,9 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
           .select()
           .from(schema.goalContributions)
           .orderBy(desc(schema.goalContributions.contributedAt)),
-    view === 'configuration' ? [] : db.select().from(schema.investmentPositions),
+    view === 'configuration'
+      ? []
+      : db.select().from(schema.investmentPositions),
     view === 'configuration'
       ? []
       : db.select().from(schema.investmentPositionMovements),
@@ -760,6 +763,14 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
     baseCurrency: settings.baseCurrency,
   }
 
+  const reconciliationsForSummary = reconciliationRows.map((group) => ({
+    type: group.type,
+    status: group.status,
+    transactionIds: (linksByGroup.get(group.id) ?? []).map(
+      (link) => link.transactionId,
+    ),
+  }))
+
   function dashboard(selectedMonth?: string) {
     const currentMonth = selectedMonth ?? referenceDate.slice(0, 7)
     const amountInBaseCurrency = (
@@ -829,7 +840,9 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       allocationAmount(baseIncomeCents, originalAllocation.essential) *
         settings.reserveMonths
     const reserveCurrentCents = investmentPositionRows
-      .filter((position) => position.active && position.goalId === emergencyGoal?.id)
+      .filter(
+        (position) => position.active && position.goalId === emergencyGoal?.id,
+      )
       .reduce((sum, position) => {
         const movementTotal = investmentMovementRows
           .filter((movement) => movement.positionId === position.id)
@@ -844,7 +857,9 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
         const currentAmount =
           position.manualCurrentAmountMinor ??
           position.initialAmountMinor + movementTotal
-        return sum + (convertToBaseCurrency(currentAmount, position.currency) ?? 0)
+        return (
+          sum + (convertToBaseCurrency(currentAmount, position.currency) ?? 0)
+        )
       }, 0)
     const reserveComplete =
       derivedReserveTarget > 0 && reserveCurrentCents >= derivedReserveTarget
@@ -934,13 +949,6 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
         },
       ]
     })
-    const reconciliationsForSummary = reconciliationRows.map((group) => ({
-      type: group.type,
-      status: group.status,
-      transactionIds: (linksByGroup.get(group.id) ?? []).map(
-        (link) => link.transactionId,
-      ),
-    }))
     const projectedPendingByOccurrenceId = pendingRecurrencePayments({
       ...cashFacts,
       month: currentMonth,
@@ -1463,6 +1471,18 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
     },
     snapshot(selectedMonth?: string) {
       return {
+        cashProjection: projectCash(
+          {
+            ...cashFacts,
+            reconciliations: reconciliationsForSummary,
+            categories: categoryRows,
+            cards,
+            installmentPlans: installmentRows,
+            knowledgeReferences: recurrenceKnowledgeRows,
+            matches: recurrenceMatchRows,
+          },
+          { today: referenceDate, daysBack: 14, daysAhead: 90 },
+        ),
         scopes,
         institutions,
         accounts,
