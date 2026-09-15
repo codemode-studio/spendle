@@ -140,6 +140,7 @@ it('renders compact structured answers with real currency values', () => {
           ],
         },
         nextStep: 'Separe R$ 375,00 por semana.',
+        questionnaire: null,
       }}
     />,
   )
@@ -147,6 +148,33 @@ it('renders compact structured answers with real currency values', () => {
   expect(screen.getByText('R$ 732,40')).toBeTruthy()
   expect(screen.getByLabelText('Atual: R$ 2.232,40')).toBeTruthy()
   expect(screen.getByText('Separe R$ 375,00 por semana.')).toBeTruthy()
+})
+
+it('renders negative projections with a valid comparison scale', () => {
+  render(
+    <FinanceAnswerView
+      answer={{
+        summary: 'O saldo ficaria negativo em três meses.',
+        metrics: [{ label: 'Saldo projetado', valueCents: -1350000 }],
+        comparison: {
+          title: 'Projeção de saldo',
+          items: [
+            { label: 'Hoje', valueCents: 250000 },
+            { label: 'Em 3 meses', valueCents: -1350000 },
+          ],
+        },
+        nextStep: null,
+        questionnaire: null,
+      }}
+    />,
+  )
+
+  expect(screen.getAllByText('-R$ 13.500,00')).toHaveLength(2)
+  expect(
+    screen
+      .getByLabelText('Em 3 meses: -R$ 13.500,00')
+      .getAttribute('aria-valuenow'),
+  ).toBe('100')
 })
 
 it('submits clarification answers from a questionnaire', () => {
@@ -324,5 +352,54 @@ it('continues the conversation with questionnaire responses', async () => {
     }),
   )
   expect(await screen.findByText('Respostas enviadas')).toBeTruthy()
+  client.clear()
+})
+
+it('shows a failed answer in the conversation and retries without duplicating the question', async () => {
+  latest.mockImplementation(() => new Promise(() => undefined))
+  ask
+    .mockRejectedValueOnce(new Error('Resposta inválida'))
+    .mockResolvedValueOnce({
+      summary: 'Em três meses, o déficit acumulado exigiria um ajuste.',
+      metrics: [],
+      comparison: null,
+      nextStep: null,
+      questionnaire: null,
+    })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={client}>
+      <Sheet open>
+        <SheetContent>
+          <ActivityColumn assistantConfigured closedMonths="" />
+        </SheetContent>
+      </Sheet>
+    </QueryClientProvider>,
+  )
+
+  const question =
+    'Considerando que nada mude, em 3 meses como ficaria nossa saude financeira?'
+  fireEvent.change(
+    await screen.findByLabelText('Pergunte sobre suas finanças'),
+    {
+      target: { value: question },
+    },
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Enviar pergunta' }))
+
+  expect(
+    await screen.findByText('Não consegui preparar essa resposta.'),
+  ).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }))
+
+  expect(
+    await screen.findByText(
+      'Em três meses, o déficit acumulado exigiria um ajuste.',
+    ),
+  ).toBeTruthy()
+  expect(screen.getAllByText(question)).toHaveLength(1)
+  expect(ask).toHaveBeenCalledTimes(2)
   client.clear()
 })
