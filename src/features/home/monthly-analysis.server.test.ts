@@ -122,6 +122,7 @@ it('continues the conversation with its history, current knowledge and saved mon
     metrics: [],
     comparison: null,
     nextStep: 'Separe o valor no início do mês.',
+    questionnaire: null,
   }
   mocks.generate.mockResolvedValue({ output: answer })
   const { answerFinanceQuestion } = await import('./analysis.server')
@@ -142,6 +143,32 @@ it('continues the conversation with its history, current knowledge and saved mon
     report,
   })
   expect(mocks.object).toHaveBeenCalled()
+})
+
+it('returns a three-month projection when the projected balance is negative', async () => {
+  await setupClosedMonth()
+  const answer = {
+    summary:
+      'Mantido o ritmo atual, o saldo acumulado ficaria negativo em três meses.',
+    metrics: [{ label: 'Saldo em 3 meses', valueCents: -1350000 }],
+    comparison: {
+      title: 'Projeção de saldo',
+      items: [
+        { label: 'Hoje', valueCents: 250000 },
+        { label: 'Em 3 meses', valueCents: -1350000 },
+      ],
+    },
+    nextStep: 'Reduza o déficit mensal antes do próximo fechamento.',
+    questionnaire: null,
+  }
+  mocks.generate.mockResolvedValue({ output: answer })
+  const { answerFinanceQuestion } = await import('./analysis.server')
+
+  await expect(
+    answerFinanceQuestion(
+      'Considerando que nada mude, em 3 meses como ficaria nossa saude financeira?',
+    ),
+  ).resolves.toEqual(answer)
 })
 
 it('calculates savings from recorded cents and rejects duplicate or unsupported category limits', async () => {

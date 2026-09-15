@@ -43,7 +43,7 @@ export const financeAnswerSchema = z.object({
         .array(
           z.object({
             label: z.string().min(1).max(60),
-            valueCents: z.number().int().nonnegative(),
+            valueCents: z.number().int(),
           }),
         )
         .min(2)
@@ -51,8 +51,19 @@ export const financeAnswerSchema = z.object({
     })
     .nullable(),
   nextStep: z.string().min(1).max(240).nullable(),
-  questionnaire: financeQuestionnaireSchema.nullable().optional(),
+  questionnaire: financeQuestionnaireSchema.nullable(),
 })
+
+export const persistedFinanceAnswerSchema = z.preprocess((value) => {
+  if (
+    value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    !('questionnaire' in value)
+  )
+    return { ...value, questionnaire: null }
+  return value
+}, financeAnswerSchema)
 
 export type FinanceAnswer = z.infer<typeof financeAnswerSchema>
 export type FinanceQuestionnaire = z.infer<typeof financeQuestionnaireSchema>

@@ -62,8 +62,8 @@ import {
 } from './analysis.functions'
 import type { ConversationMessage } from './analysis.server'
 import {
-  financeAnswerSchema,
   INITIAL_ANALYSIS_REFRESH_MS,
+  persistedFinanceAnswerSchema,
 } from './assistant-contract'
 import type { FinanceAnswer, FinanceQuestionnaire } from './assistant-contract'
 import { AnalysisCard } from './analysis-card'
@@ -467,7 +467,9 @@ export function ActivityColumn({
               { id: candidate.id, kind: 'question', text: candidate.text },
             ]
           if (candidate.kind !== 'answer') return []
-          const parsed = financeAnswerSchema.safeParse(candidate.answer)
+          const parsed = persistedFinanceAnswerSchema.safeParse(
+            candidate.answer,
+          )
           if (parsed.success)
             return [
               {
@@ -490,6 +492,7 @@ export function ActivityColumn({
                   metrics: [],
                   comparison: null,
                   nextStep: null,
+                  questionnaire: null,
                 },
               },
             ]
@@ -558,6 +561,18 @@ export function ActivityColumn({
   const submitQuestion = (event: React.FormEvent) => {
     event.preventDefault()
     askQuestion(question.trim())
+  }
+
+  const retryQuestion = () => {
+    if (
+      !assistantConfigured ||
+      ask.isPending ||
+      submittingRef.current ||
+      !ask.variables
+    )
+      return
+    submittingRef.current = true
+    ask.mutate(ask.variables)
   }
 
   const submitQuestionnaire = (answerId: string, response: string) => {
@@ -716,6 +731,18 @@ export function ActivityColumn({
               </div>
             </AssistantMessage>
           )}
+          {ask.isError && (
+            <AssistantMessage>
+              <div role="alert" className="flex flex-wrap items-center gap-2">
+                <p className="text-sm text-muted-foreground">
+                  Não consegui preparar essa resposta.
+                </p>
+                <Button variant="outline" size="sm" onClick={retryQuestion}>
+                  Tentar novamente
+                </Button>
+              </div>
+            </AssistantMessage>
+          )}
         </div>
       </div>
 
@@ -801,7 +828,8 @@ export function FinanceAnswerView({
 }) {
   const largestComparison = Math.max(
     1,
-    ...(answer.comparison?.items.map((item) => item.valueCents) ?? []),
+    ...(answer.comparison?.items.map((item) => Math.abs(item.valueCents)) ??
+      []),
   )
 
   return (
@@ -827,8 +855,13 @@ export function FinanceAnswerView({
           {answer.comparison.items.map((item) => (
             <Progress
               key={item.label}
-              value={(item.valueCents / largestComparison) * 100}
+              value={(Math.abs(item.valueCents) / largestComparison) * 100}
               aria-label={`${item.label}: ${formatCurrency(item.valueCents)}`}
+              className={
+                item.valueCents < 0
+                  ? '[&_[data-slot=progress-indicator]]:bg-destructive'
+                  : undefined
+              }
             >
               <span className="text-xs">{item.label}</span>
               <span className="ml-auto text-xs font-medium tabular-nums">
