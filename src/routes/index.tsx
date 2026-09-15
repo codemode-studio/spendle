@@ -1,7 +1,10 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 
-import { financeSnapshotOptions } from '#/features/finance/queries'
+import {
+  financeSnapshotOptions,
+  strategyHistoryOptions,
+} from '#/features/finance/queries'
 import { Home } from '#/features/home/home'
 import { assistantStatusOptions } from '#/features/home/queries'
 
@@ -10,6 +13,7 @@ export const Route = createFileRoute('/')({
     Promise.all([
       context.queryClient.ensureQueryData(financeSnapshotOptions()),
       context.queryClient.ensureQueryData(assistantStatusOptions()),
+      context.queryClient.prefetchQuery(strategyHistoryOptions(11)),
     ]),
   component: HomePage,
 })

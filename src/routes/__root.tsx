@@ -3,15 +3,17 @@ import {
   Link,
   Scripts,
   createRootRouteWithContext,
+  useRouter,
 } from '@tanstack/react-router'
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import { TanStackDevtools } from '@tanstack/react-devtools'
-import { FileQuestion } from 'lucide-react'
+import { CircleAlert, FileQuestion } from 'lucide-react'
 
 import TanStackQueryDevtools from '../integrations/tanstack-query/devtools'
 import { AppShell } from '../components/app-shell'
 import { EmptyState, Page } from '../components/ui'
 import { Button } from '../components/ui/button'
+import { onboardingOptions } from '../features/finance/queries'
 
 import appCss from '../styles.css?url'
 
@@ -22,6 +24,8 @@ interface MyRouterContext {
 }
 
 export const Route = createRootRouteWithContext<MyRouterContext>()({
+  loader: ({ context }) =>
+    context.queryClient.prefetchQuery(onboardingOptions()),
   head: () => ({
     meta: [
       {
@@ -52,8 +56,27 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
     ],
   }),
   notFoundComponent: NotFoundPage,
+  errorComponent: RootErrorPage,
   shellComponent: RootDocument,
 })
+
+function RootErrorPage() {
+  const router = useRouter()
+  return (
+    <Page className="flex min-h-[60vh] items-center justify-center">
+      <EmptyState
+        icon={CircleAlert}
+        title="Não foi possível carregar esta área"
+        description="Tente novamente. Seus dados permanecem salvos neste dispositivo."
+        action={
+          <Button variant="outline" onClick={() => void router.invalidate()}>
+            Tentar novamente
+          </Button>
+        }
+      />
+    </Page>
+  )
+}
 
 function NotFoundPage() {
   return (

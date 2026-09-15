@@ -96,6 +96,9 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   })
 
   const search = useRouterState({ select: (state) => state.location.search })
+  const navigating = useRouterState({
+    select: (state) => state.status === 'pending',
+  })
 
   if (pathname === '/marca') {
     return (
@@ -107,6 +110,13 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
 
   return (
     <>
+      <div
+        aria-hidden="true"
+        className={cn(
+          'fixed inset-x-0 top-0 z-50 h-0.5 origin-left bg-primary transition-transform duration-200',
+          navigating ? 'scale-x-100' : 'scale-x-0',
+        )}
+      />
       <Sidebar collapsible="icon" variant="inset">
         <SidebarHeader className="flex-row items-center justify-between">
           <Link
