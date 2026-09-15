@@ -85,6 +85,7 @@ export function Home({
   assistantConfigured: boolean
 }) {
   const [showAnalysis, setShowAnalysis] = useState(false)
+  const [assistantOpen, setAssistantOpen] = useState(false)
   const view = useMemo(() => buildHomeView(snapshot), [snapshot])
   const commitments = useMemo(
     () => trimCashProjection(snapshot.cashProjection, 30).scheduled,
@@ -106,7 +107,7 @@ export function Home({
             {showAnalysis ? 'Voltar' : 'Previsão'}
           </span>
         </Button>
-        <Sheet>
+        <Sheet open={assistantOpen} onOpenChange={setAssistantOpen}>
           <SheetTrigger
             render={
               <Button
@@ -124,6 +125,7 @@ export function Home({
             className="min-h-0 overflow-hidden data-[side=right]:h-dvh data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
           >
             <ActivityColumn
+              open={assistantOpen}
               closedMonths={snapshot.monthlyBudgets
                 .filter((budget) => budget.closed)
                 .map((budget) => budget.month)
@@ -414,9 +416,11 @@ type FeedItem =
     }
 
 export function ActivityColumn({
+  open = true,
   assistantConfigured,
   closedMonths,
 }: {
+  open?: boolean
   closedMonths: string
   assistantConfigured: boolean
 }) {
@@ -424,8 +428,9 @@ export function ActivityColumn({
   const [conversationLoaded, setConversationLoaded] = useState(false)
   const [question, setQuestion] = useState('')
   const conversationRegionRef = useRef<HTMLDivElement>(null)
-  const hadAnalysisRef = useRef(false)
   const submittingRef = useRef(false)
+  const shouldFollowConversationRef = useRef(true)
+  const wasOpenRef = useRef(false)
 
   const persistConversation = (items: FeedItem[]) => {
     try {
@@ -437,7 +442,6 @@ export function ActivityColumn({
       /* Armazenamento indisponível. */
     }
   }
-
   const push = (item: FeedItem) =>
     setConversation((current) => {
       const next = [...current, item].slice(-20)
@@ -542,6 +546,7 @@ export function ActivityColumn({
     )
       return
     submittingRef.current = true
+    shouldFollowConversationRef.current = true
     push({ id: `question-${Date.now()}`, kind: 'question', text })
     setQuestion('')
     ask.mutate({
@@ -569,13 +574,6 @@ export function ActivityColumn({
     askQuestion(response)
   }
 
-  useEffect(() => {
-    if (!analysis.data?.analysis || hadAnalysisRef.current) return
-    hadAnalysisRef.current = true
-    if (conversation.length > 0 && conversationRegionRef.current)
-      conversationRegionRef.current.scrollTop = 0
-  }, [analysis.data?.analysis, conversation.length])
-
   const hasAnalysisArea =
     Boolean(analysis.data?.analysis) ||
     analysis.isFetching ||
@@ -590,6 +588,25 @@ export function ActivityColumn({
         !item.questionnaireResponse,
     )?.id
 
+  useEffect(() => {
+    const conversationElement = conversationRegionRef.current
+    if (!open || !conversationElement) {
+      wasOpenRef.current = open
+      return
+    }
+
+    const justOpened = !wasOpenRef.current
+    wasOpenRef.current = true
+    if (!justOpened && !shouldFollowConversationRef.current) return
+
+    if (typeof conversationElement.scrollTo === 'function')
+      conversationElement.scrollTo({
+        top: conversationElement.scrollHeight,
+        behavior: justOpened ? 'auto' : 'smooth',
+      })
+    else conversationElement.scrollTop = conversationElement.scrollHeight
+  }, [open, conversation.length, ask.isPending, analysis.isFetching])
+
   return (
     <aside className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
       <SheetHeader className="shrink-0 flex-row flex-wrap items-center justify-between gap-3 pr-14">
@@ -603,6 +620,11 @@ export function ActivityColumn({
         aria-label="Conversa com o assistente"
         role="region"
         tabIndex={0}
+        onScroll={(event) => {
+          const element = event.currentTarget
+          shouldFollowConversationRef.current =
+            element.scrollHeight - element.scrollTop - element.clientHeight < 80
+        }}
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-panel pb-panel"
       >
         <div className="flex flex-col gap-5 sm:gap-6">
