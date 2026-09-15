@@ -5,6 +5,11 @@ import { desc, eq } from 'drizzle-orm'
 import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
 import { getConfiguredAiModel } from '#/features/finance/ai.server'
+import {
+  financeAnswerSchema,
+  INITIAL_ANALYSIS_REFRESH_MS,
+} from './assistant-contract'
+import type { FinanceAnswer } from './assistant-contract'
 import { getAnalysisContext } from './analysis-context.server'
 
 export const monthlyAnalysisSchema = z.object({
@@ -47,6 +52,7 @@ const modelReportSchema = monthlyAnalysisSchema.extend({
 })
 
 export type MonthlyAnalysis = z.infer<typeof monthlyAnalysisSchema>
+export type { FinanceAnswer } from './assistant-contract'
 
 export const SYSTEM_PROMPT = `Você ajuda uma família brasileira a gastar melhor e cumprir suas metas. Responda em português direto. Os dados monetários estão em CENTAVOS de BRL; divida por 100 ao escrever reais.
 Use a base de conhecimento, que contém decisões humanas, para interpretar estabelecimentos e recorrências. Uma razão social não é uma despesa desconhecida se a base informa sua categoria ou finalidade. Preserve despesas essenciais como escola, saúde e moradia; valor alto ou acima da média não comprova desperdício, fraude nem necessidade de auditoria. Não recomende suspender escola, tratamento, alimentação ou deixar contas vencerem. Em essenciais variáveis, proponha melhorias que preservem a necessidade atendida, como planejar supermercado e comparar preços. Não invente condições contratuais nem economia com renegociação.
@@ -149,16 +155,30 @@ let initialInFlight: Promise<{
   analysis: MonthlyAnalysis
   initial: true
 }> | null = null
-async function getInitialAnalysis() {
+async function getInitialAnalysis(refresh = false) {
   await requireConsent()
   const saved = await db.select().from(schema.initialAnalysis).limit(1)
-  if (saved[0])
-    return {
-      month: saved[0].month,
-      analysis: monthlyAnalysisSchema.parse(JSON.parse(saved[0].report)),
-      initial: true as const,
+  const savedResult = saved[0]
+    ? {
+        month: saved[0].month,
+        analysis: monthlyAnalysisSchema.parse(JSON.parse(saved[0].report)),
+        initial: true as const,
+      }
+    : null
+  if (
+    savedResult &&
+    (!refresh ||
+      Date.now() - saved[0].createdAt.getTime() < INITIAL_ANALYSIS_REFRESH_MS)
+  )
+    return savedResult
+  if (initialInFlight) {
+    try {
+      return await initialInFlight
+    } catch (error) {
+      if (savedResult) return savedResult
+      throw error
     }
-  if (initialInFlight) return initialInFlight
+  }
   initialInFlight = (async () => {
     const briefing = await getAnalysisContext()
     const analysis = await createAnalysisReport(briefing, true)
@@ -169,11 +189,21 @@ async function getInitialAnalysis() {
         month: briefing.month,
         report: JSON.stringify(analysis),
       })
-      .onConflictDoNothing()
+      .onConflictDoUpdate({
+        target: schema.initialAnalysis.id,
+        set: {
+          month: briefing.month,
+          report: JSON.stringify(analysis),
+          createdAt: new Date(),
+        },
+      })
     return { month: briefing.month, analysis, initial: true as const }
   })()
   try {
     return await initialInFlight
+  } catch (error) {
+    if (savedResult) return savedResult
+    throw error
   } finally {
     initialInFlight = null
   }
@@ -219,7 +249,7 @@ export async function generateMonthlyAnalysis(
   }
 }
 
-export async function getLatestMonthlyAnalysis() {
+export async function getLatestMonthlyAnalysis(refreshInitial = false) {
   await ensureDatabase()
   const rows = await db
     .select()
@@ -227,7 +257,7 @@ export async function getLatestMonthlyAnalysis() {
     .where(eq(schema.monthlyBudgets.closed, true))
     .orderBy(desc(schema.monthlyBudgets.month))
     .limit(1)
-  if (!rows[0]) return getInitialAnalysis()
+  if (!rows[0]) return getInitialAnalysis(refreshInitial)
   return {
     month: rows[0].month,
     initial: false as const,
@@ -243,7 +273,7 @@ export type ConversationMessage = {
 export async function answerFinanceQuestion(
   question: string,
   history: ConversationMessage[] = [],
-): Promise<string> {
+): Promise<FinanceAnswer> {
   const model = requireModel()
   await requireConsent()
   const briefing = await getAnalysisContext()
@@ -257,6 +287,7 @@ export async function answerFinanceQuestion(
     : await db.select().from(schema.initialAnalysis).limit(1)
   const result = await generateText({
     model,
+    output: Output.object({ schema: financeAnswerSchema }),
     abortSignal: AbortSignal.timeout(60_000),
     system: SYSTEM_PROMPT,
     messages: [
@@ -270,12 +301,12 @@ export async function answerFinanceQuestion(
           initialAnalysis: initial[0]
             ? { month: initial[0].month, report: JSON.parse(initial[0].report) }
             : null,
-          task: 'Continue a conversa usando o contexto atual e o último plano mensal. Responda à pergunta com uma ação concreta ou simulação calculada. Seja breve, sem markdown.',
+          task: 'Continue a conversa usando o contexto atual e o último plano mensal. Responda com um resumo curto e direto. Use metrics apenas para valores monetários presentes no briefing ou calculados a partir dele. Use comparison apenas quando dois ou mais valores ajudam a responder; não invente números para preencher o gráfico. Inclua um nextStep concreto quando houver uma ação útil. Se uma informação ausente impedir uma resposta confiável, preencha questionnaire com 1 a 3 perguntas objetivas. Cada pergunta deve ter de 2 a 4 alternativas distintas e allowOther deve ser true quando uma resposta livre fizer sentido. Não pergunte algo que já conste no briefing ou no histórico. Quando usar questionnaire, explique em summary por que a informação é necessária e deixe metrics, comparison e nextStep vazios ou nulos se ainda não houver base para eles. Se já puder responder com segurança, questionnaire deve ser null. Não use markdown.',
         }),
       },
       ...history,
       { role: 'user', content: question },
     ],
   })
-  return result.text.trim()
+  return financeAnswerSchema.parse(result.output)
 }

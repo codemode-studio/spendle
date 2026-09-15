@@ -8,6 +8,10 @@ Intervalo entre a primeira e a última transação do arquivo. Não prova cobert
 
 Transferência para conta própria de investimento. Movimenta patrimônio, sem criar receita, despesa ou rendimento.
 
+## Caixa operacional
+
+Soma dos saldos das contas ativas de finalidade operacional, reconstruída por checkpoints e movimentos postados e convertida para a moeda-base. É o "Caixa atual" da Home e o ponto de partida da previsão. Não é saldo disponível: sem cotação para uma conta em moeda estrangeira, o caixa é desconhecido.
+
 ## Checkpoint de saldo
 
 Saldo datado de conta ou cartão, com tipo e evidência. Serve de referência para reconciliação.

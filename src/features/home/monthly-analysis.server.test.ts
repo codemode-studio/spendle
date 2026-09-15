@@ -1,11 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { openTestDatabase } from '#/test/database'
 import { generateMonthlyAnalysis } from './analysis.server'
+import { INITIAL_ANALYSIS_REFRESH_MS } from './assistant-contract'
 
-const mocks = vi.hoisted(() => ({ generate: vi.fn() }))
+const mocks = vi.hoisted(() => ({ generate: vi.fn(), object: vi.fn() }))
 vi.mock('ai', () => ({
   generateText: mocks.generate,
-  Output: { object: vi.fn() },
+  Output: { object: mocks.object },
 }))
 vi.mock('#/features/finance/ai.server', () => ({
   getConfiguredAiModel: () => 'test-model',
@@ -116,13 +117,21 @@ it('continues the conversation with its history, current knowledge and saved mon
   await database.db
     .insert(database.schema.monthlyReports)
     .values({ month: '2026-08', report: JSON.stringify(report) })
-  mocks.generate.mockResolvedValue({ text: 'Reserve o limite proposto.' })
+  const answer = {
+    summary: 'Reserve o limite proposto.',
+    metrics: [],
+    comparison: null,
+    nextStep: 'Separe o valor no início do mês.',
+  }
+  mocks.generate.mockResolvedValue({ output: answer })
   const { answerFinanceQuestion } = await import('./analysis.server')
   const history = [
     { role: 'user' as const, content: 'Quero reduzir delivery.' },
     { role: 'assistant' as const, content: 'Qual limite pretende adotar?' },
   ]
-  await answerFinanceQuestion('E se for 300 reais?', history)
+  await expect(
+    answerFinanceQuestion('E se for 300 reais?', history),
+  ).resolves.toEqual(answer)
   const request = mocks.generate.mock.calls[0][0]
   expect(request.messages.slice(1)).toEqual([
     ...history,
@@ -132,6 +141,7 @@ it('continues the conversation with its history, current knowledge and saved mon
     month: '2026-08',
     report,
   })
+  expect(mocks.object).toHaveBeenCalled()
 })
 
 it('calculates savings from recorded cents and rejects duplicate or unsupported category limits', async () => {
@@ -227,27 +237,71 @@ it('creates and persists the first analysis without closing a budget, then prefe
   expect(
     await database.db.select().from(database.schema.monthlyReports),
   ).toEqual([])
-  await database.db
-    .insert(database.schema.monthlyBudgets)
-    .values({
-      id: 'closed',
-      month: '2026-08',
-      strategyId: 'test-strategy-balanced',
-      baseIncomeCents: 100000,
-      eligibleIncomeCents: 100000,
-      essentialBps: 4000,
-      lifestyleBps: 2000,
-      investmentBps: 3000,
-      reserveBps: 1000,
-      effectiveInvestmentBps: 3000,
-      effectiveReserveBps: 1000,
-      closed: true,
-    })
+  await database.db.insert(database.schema.monthlyBudgets).values({
+    id: 'closed',
+    month: '2026-08',
+    strategyId: 'test-strategy-balanced',
+    baseIncomeCents: 100000,
+    eligibleIncomeCents: 100000,
+    essentialBps: 4000,
+    lifestyleBps: 2000,
+    investmentBps: 3000,
+    reserveBps: 1000,
+    effectiveInvestmentBps: 3000,
+    effectiveReserveBps: 1000,
+    closed: true,
+  })
   expect(await getLatestMonthlyAnalysis()).toMatchObject({
     initial: false,
     month: '2026-08',
   })
   expect(mocks.generate).toHaveBeenCalledTimes(2)
+})
+it('refreshes a stale first analysis and keeps a recent one', async () => {
+  database = await openTestDatabase()
+  await database.db
+    .update(database.schema.appSettings)
+    .set({ aiClassificationConsent: true })
+  const refreshedReport = { ...report, headline: 'Plano atualizado' }
+  mocks.generate
+    .mockResolvedValueOnce({ output: report })
+    .mockResolvedValueOnce({ output: refreshedReport })
+  const { getLatestMonthlyAnalysis } = await import('./analysis.server')
+
+  await expect(getLatestMonthlyAnalysis(true)).resolves.toMatchObject({
+    analysis: report,
+  })
+  await expect(getLatestMonthlyAnalysis(true)).resolves.toMatchObject({
+    analysis: report,
+  })
+  expect(mocks.generate).toHaveBeenCalledTimes(1)
+
+  await database.db
+    .update(database.schema.initialAnalysis)
+    .set({ createdAt: new Date(Date.now() - INITIAL_ANALYSIS_REFRESH_MS - 1) })
+  await expect(getLatestMonthlyAnalysis(true)).resolves.toMatchObject({
+    analysis: refreshedReport,
+  })
+  expect(mocks.generate).toHaveBeenCalledTimes(2)
+})
+it('keeps the saved first analysis when its background refresh fails', async () => {
+  database = await openTestDatabase()
+  await database.db
+    .update(database.schema.appSettings)
+    .set({ aiClassificationConsent: true })
+  mocks.generate.mockResolvedValueOnce({ output: report })
+  const { getLatestMonthlyAnalysis } = await import('./analysis.server')
+
+  await getLatestMonthlyAnalysis(true)
+  await database.db
+    .update(database.schema.initialAnalysis)
+    .set({ createdAt: new Date(Date.now() - INITIAL_ANALYSIS_REFRESH_MS - 1) })
+  mocks.generate.mockRejectedValueOnce(new Error('provider offline'))
+
+  await expect(getLatestMonthlyAnalysis(true)).resolves.toMatchObject({
+    initial: true,
+    analysis: report,
+  })
 })
 it('does not create the first analysis without consent and retries provider failures', async () => {
   database = await openTestDatabase()

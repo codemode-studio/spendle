@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { shiftDays } from '#/domain/period'
-import type { CashProjection } from './insights'
+import type { CashProjection } from '#/domain/monthly-cash-flow'
 import { simulateRecovery } from './forecast'
 
 function projection(
@@ -8,6 +8,8 @@ function projection(
   dailyVariableCents = 100,
 ): CashProjection {
   return {
+    today: '2026-09-09',
+    scheduled: [],
     points: balances.map((balanceCents, i) => ({
       date: shiftDays('2026-09-09', i),
       balanceCents,

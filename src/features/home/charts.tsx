@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
-import type { CashPoint, CategoryShare } from './insights'
+import type { CashPoint } from '#/domain/monthly-cash-flow'
+import type { CategoryShare } from './insights'
 
 /**
  * Largura do contêiner medida no cliente. Fica `null` durante a renderização

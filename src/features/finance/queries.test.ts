@@ -17,6 +17,7 @@ const queries = {
   candidate: financeQueryKeys.recurrenceLinkCandidates('occurrence-1'),
   history: financeQueryKeys.strategyHistory(3),
   assistant: assistantQueryKeys.status(),
+  analysis: assistantQueryKeys.latestAnalysis(''),
   unrelated: ['unrelated'],
 }
 const reads = [
@@ -27,7 +28,14 @@ const reads = [
   'transactions',
   'knowledge',
 ]
-const ledger = [...reads, 'imports', 'detection', 'candidate', 'history']
+const ledger = [
+  ...reads,
+  'imports',
+  'detection',
+  'candidate',
+  'history',
+  'analysis',
+]
 const expected: Record<FinanceInvalidationScope, string[]> = {
   ledger,
   ownershipScope: reads,
@@ -35,7 +43,7 @@ const expected: Record<FinanceInvalidationScope, string[]> = {
   knowledgeBase: ledger,
   aiConsent: [...ledger, 'assistant'],
   strategy: ledger,
-  budgetClose: [...reads, 'history'],
+  budgetClose: [...reads, 'history', 'analysis'],
 }
 
 describe('financial cache invalidation', () => {
