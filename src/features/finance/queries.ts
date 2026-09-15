@@ -272,6 +272,7 @@ export const strategyHistoryOptions = (months = 3) =>
     queryKey: financeQueryKeys.strategyHistory(months),
     queryFn: () => getStrategyHistoryFn({ data: { months } }),
     staleTime: 60_000,
+    gcTime: 30 * 60_000,
   })
 
 export const configurationOptions = () =>
@@ -312,4 +313,5 @@ export const onboardingOptions = () =>
     queryKey: financeQueryKeys.onboarding(),
     queryFn: () => getOnboardingStatusFn(),
     staleTime: 60_000,
+    gcTime: 30 * 60_000,
   })

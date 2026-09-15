@@ -147,6 +147,28 @@ describe('monthly overview', () => {
       ).toBeTruthy(),
     )
   })
+  it('keeps cached months visible while stale history refreshes', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 0 } },
+    })
+    clients.push(client)
+    client.setQueryData(['monthly-overview-test'], [closedMonth])
+    fetchHistory.mockReturnValue(new Promise(() => {}))
+
+    render(
+      <QueryClientProvider client={client}>
+        <MonthlyOverview dashboard={dashboard} />
+      </QueryClientProvider>,
+    )
+
+    expect(
+      screen.queryByLabelText('Carregando histórico mensal'),
+    ).toBeNull()
+    expect(
+      screen.getByRole('button', { name: /Agosto de 2026:/ }),
+    ).toBeTruthy()
+    expect(fetchHistory).toHaveBeenCalledOnce()
+  })
   it('shows monthly cash projections with spending bars and contribution rings', async () => {
     fetchHistory.mockResolvedValue([])
     const budget = buildCommitmentBudget({
