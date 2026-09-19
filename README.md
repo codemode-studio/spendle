@@ -4,7 +4,7 @@ Aplicativo local para consolidar contas PF/PJ brasileiras, investimentos e cart�
 
 ## Executar
 
-Use Node.js 22.22.0 (`.node-version`) e pnpm 9.15.9 (`packageManager`). O servidor escuta somente em `127.0.0.1`.
+Use Node.js 22.22.0 (`.node-version`) e pnpm 9.15.9 (`packageManager`). `pnpm dev` escuta somente no endereço Tailscale da máquina (`tailscale ip -4`), acessível pelos dispositivos da tailnet e não pela rede local. O comando falha se o Tailscale não estiver ativo.
 
 ```bash
 cp .env.example .env.local
@@ -13,7 +13,7 @@ pnpm setup:check
 pnpm dev
 ```
 
-Acesse `http://127.0.0.1:3000`. O SQLite e os arquivos importados são criados em `data/`, fora da pasta pública e do Git. A chave de IA é opcional, usada no diagnóstico de PDFs e no assistente com consentimento. Ela nunca libera automaticamente uma importação.
+Acesse `http://<nome-da-máquina>.<tailnet>.ts.net:3000` ou o IP Tailscale na porta 3000. O SQLite e os arquivos importados são criados em `data/`, fora da pasta pública e do Git. A chave de IA é opcional, usada no diagnóstico de PDFs e no assistente com consentimento. Ela nunca libera automaticamente uma importação.
 
 ## Open Finance com Pluggy
 
