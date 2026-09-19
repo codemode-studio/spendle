@@ -27,6 +27,7 @@
     "qa:inspect": "tsx scripts/qa.ts inspect",
     "qa:clean": "tsx scripts/qa.ts clean",
     "bench": "tsx scripts/benchmark.ts",
+    "eval:categories": "tsx scripts/eval-categories.ts",
     "fixtures:pdf": "node scripts/generate-pdf-fixture.mjs",
     "test:pdf": "vitest run src/features/finance/pdf-synthetic.integration.test.ts src/features/finance/pdf-inspector.server.test.ts"
   },
@@ -44,7 +45,7 @@
     "@tanstack/react-router-devtools": "1.167.0",
     "@tanstack/react-router-ssr-query": "1.167.1",
     "@tanstack/react-start": "1.168.34",
-    "ai": "^7.0.48",
+    "ai": "^7.0.107",
     "better-sqlite3": "^12.6.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -94,6 +95,6 @@
   },
   "packageManager": "pnpm@9.15.9",
   "engines": {
-    "node": ">=22.22.0 <23"
+    "node": ">=22.22.0"
   }
 }

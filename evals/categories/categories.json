@@ -1,0 +1,197 @@
+{
+  "version": 1,
+  "categories": [
+    {
+      "id": "business",
+      "name": "Empresa",
+      "bucket": "business",
+      "description": "Despesas da empresa da família: fornecedores, registro de domínio, franquia, serviços para o negócio."
+    },
+    {
+      "id": "education",
+      "name": "Educação",
+      "bucket": "essential",
+      "description": "Escola, mensalidades, cursos e material escolar."
+    },
+    {
+      "id": "family",
+      "name": "Família e filhos",
+      "bucket": "essential",
+      "description": "Despesas com filhos e repasses a familiares."
+    },
+    {
+      "id": "financing",
+      "name": "Financiamentos",
+      "bucket": "essential",
+      "description": "Parcelas de financiamento de imóvel ou veículo e empréstimos."
+    },
+    {
+      "id": "groceries",
+      "name": "Mercado",
+      "bucket": "essential",
+      "description": "Compras de supermercado, atacado, hortifruti e padaria para abastecer a casa."
+    },
+    {
+      "id": "health",
+      "name": "Saúde",
+      "bucket": "essential",
+      "description": "Plano de saúde, consultas, exames, terapias, dentista e farmácia."
+    },
+    {
+      "id": "housing",
+      "name": "Moradia",
+      "bucket": "essential",
+      "description": "Aluguel, condomínio, administradora do imóvel, gás e água da residência."
+    },
+    {
+      "id": "insurance",
+      "name": "Seguros",
+      "bucket": "essential",
+      "description": "Seguros de vida, auto e residencial."
+    },
+    {
+      "id": "maintenance",
+      "name": "Manutenção e reparos",
+      "bucket": "essential",
+      "description": "Consertos, reformas, materiais de construção e prestadores para a casa ou o carro."
+    },
+    {
+      "id": "transport",
+      "name": "Transporte",
+      "bucket": "essential",
+      "description": "Combustível, aplicativos de transporte, estacionamento, pedágio e transporte público."
+    },
+    {
+      "id": "utilities",
+      "name": "Contas e serviços",
+      "bucket": "essential",
+      "description": "Contas de consumo e serviços da casa: energia, água, internet, telefone e celular."
+    },
+    {
+      "id": "asset_sales",
+      "name": "Venda de bens",
+      "bucket": "income",
+      "description": "Venda de bens como veículo, móveis ou equipamentos."
+    },
+    {
+      "id": "investment_income",
+      "name": "Rendimentos de investimentos",
+      "bucket": "income",
+      "description": "Juros, rendimentos e dividendos recebidos de investimentos."
+    },
+    {
+      "id": "other_income",
+      "name": "Outras receitas",
+      "bucket": "income",
+      "description": "Receita identificada que não se encaixa em nenhuma outra categoria."
+    },
+    {
+      "id": "profit_distribution_income",
+      "name": "Distribuição de lucros",
+      "bucket": "income",
+      "description": "Lucros da empresa da família distribuídos para a pessoa física."
+    },
+    {
+      "id": "reimbursements",
+      "name": "Reembolsos e restituições",
+      "bucket": "income",
+      "description": "Estornos, créditos de lojas, reembolsos de plano de saúde e restituições."
+    },
+    {
+      "id": "rental_income",
+      "name": "Aluguéis recebidos",
+      "bucket": "income",
+      "description": "Aluguéis recebidos de imóveis."
+    },
+    {
+      "id": "salary",
+      "name": "Renda familiar",
+      "bucket": "income",
+      "description": "Salário e renda recorrente do trabalho."
+    },
+    {
+      "id": "services_income",
+      "name": "Serviços e trabalhos extras",
+      "bucket": "income",
+      "description": "Pagamentos recebidos por serviços prestados, inclusive do exterior."
+    },
+    {
+      "id": "investment",
+      "name": "Investimentos",
+      "bucket": "investment",
+      "description": "Aportes em investimentos feitos como despesa planejada."
+    },
+    {
+      "id": "delivery",
+      "name": "Delivery",
+      "bucket": "lifestyle",
+      "description": "Comida pedida por aplicativo e entregue em casa, como iFood (IFD*) e Rappi."
+    },
+    {
+      "id": "leisure",
+      "name": "Lazer",
+      "bucket": "lifestyle",
+      "description": "Passeios, esportes, academia recreativa, eventos, aluguel de patinete, clubes e hobbies."
+    },
+    {
+      "id": "other_expense",
+      "name": "Outras despesas",
+      "bucket": "lifestyle",
+      "description": "Despesa identificada que não se encaixa em nenhuma outra categoria."
+    },
+    {
+      "id": "personal_care",
+      "name": "Cuidados pessoais",
+      "bucket": "lifestyle",
+      "description": "Salão, estética, clínica estética, cosméticos de tratamento e academia."
+    },
+    {
+      "id": "pets",
+      "name": "Pets",
+      "bucket": "lifestyle",
+      "description": "Pet shop, ração, veterinário e banho e tosa."
+    },
+    {
+      "id": "restaurants",
+      "name": "Restaurantes",
+      "bucket": "lifestyle",
+      "description": "Refeições feitas no local: restaurantes, bares, cafés, padarias e lanchonetes."
+    },
+    {
+      "id": "shopping",
+      "name": "Compras",
+      "bucket": "lifestyle",
+      "description": "Compras de bens: roupas, brinquedos, eletrônicos, livrarias, marketplaces e lojas em geral."
+    },
+    {
+      "id": "subscriptions",
+      "name": "Assinaturas",
+      "bucket": "lifestyle",
+      "description": "Assinaturas recorrentes de streaming, software e serviços digitais."
+    },
+    {
+      "id": "travel",
+      "name": "Viagens",
+      "bucket": "lifestyle",
+      "description": "Passagens, hospedagem, pacotes e passeios de viagem."
+    },
+    {
+      "id": "reserve",
+      "name": "Reserva",
+      "bucket": "reserve",
+      "description": "Dinheiro separado para a reserva de emergência."
+    },
+    {
+      "id": "fees_interest",
+      "name": "Tarifas e juros",
+      "bucket": "tax",
+      "description": "Tarifas bancárias, IOF, juros, multas e encargos."
+    },
+    {
+      "id": "tax",
+      "name": "Impostos",
+      "bucket": "tax",
+      "description": "Impostos e tributos: IPTU, IPVA, DARF, taxas de governo."
+    }
+  ]
+}

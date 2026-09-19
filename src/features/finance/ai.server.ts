@@ -2,6 +2,11 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import { generateText, Output } from 'ai'
 import { z } from 'zod'
 
+import {
+  categorizeTransactionsWithJev,
+  isJevConfigured,
+} from './typesafe.server'
+
 const aiCategoryOutputSchema = z.object({
   suggestions: z.array(
     z.object({
@@ -136,6 +141,19 @@ export function parseAiReconciliationOutput(
 }
 
 export async function categorizeTransactionsWithAi(
+  transactions: AiCategoryTransaction[],
+  categories: AiCategoryOption[],
+): Promise<AiCategorySuggestion[]> {
+  // Escolher uma categoria é um julgamento fechado: o Jev devolve
+  // probabilidades calibradas em vez de uma confiança autodeclarada.
+  if (isJevConfigured()) {
+    return categorizeTransactionsWithJev(transactions, categories)
+  }
+  return categorizeTransactionsWithOpenRouter(transactions, categories)
+}
+
+/** Caminho generativo. Exportado para que a avaliação compare os provedores. */
+export async function categorizeTransactionsWithOpenRouter(
   transactions: AiCategoryTransaction[],
   categories: AiCategoryOption[],
 ): Promise<AiCategorySuggestion[]> {

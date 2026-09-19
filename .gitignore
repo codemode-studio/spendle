@@ -20,3 +20,6 @@ __unconfig*
 todos.json
 
 .qa/
+
+# Saídas locais da avaliação de categorias
+evals/categories/results/

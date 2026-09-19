@@ -22,6 +22,7 @@ import {
   noteTransactionCategoryChanged,
   refreshRecurrences,
 } from './recurrence.server'
+import { isJevConfigured } from './typesafe.server'
 
 export async function createOwnershipScope(input: {
   name: string
@@ -421,8 +422,13 @@ export async function categorizeUncategorizedTransactionsWithAi() {
       'Ative “Permitir sugestões de categoria por IA” em Configurações.',
     )
   }
-  if (!process.env.OPENROUTER_API_KEY || !process.env.OPENROUTER_MODEL) {
-    throw new Error('O OpenRouter não está configurado no servidor.')
+  if (
+    !isJevConfigured() &&
+    (!process.env.OPENROUTER_API_KEY || !process.env.OPENROUTER_MODEL)
+  ) {
+    throw new Error(
+      'Nenhum provedor de IA está configurado no servidor. Defina AI_GATEWAY_API_KEY ou as variáveis do OpenRouter.',
+    )
   }
 
   const uncategorizedFilter = and(
@@ -488,7 +494,9 @@ export async function categorizeUncategorizedTransactionsWithAi() {
         (error as { statusCode?: number }).statusCode === 401)
     ) {
       throw new Error(
-        'O OpenRouter recusou a credencial. Verifique OPENROUTER_API_KEY.',
+        isJevConfigured()
+          ? 'O AI Gateway recusou a credencial. Verifique AI_GATEWAY_API_KEY.'
+          : 'O OpenRouter recusou a credencial. Verifique OPENROUTER_API_KEY.',
       )
     }
     throw new Error('Não foi possível categorizar as transações com IA.')

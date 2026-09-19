@@ -190,6 +190,8 @@ if (command === 'inspect') {
         DATABASE_URL: join(directory, 'finance.db'),
         FINANCAS_QA: '1',
         FINANCAS_DEBUG: '1',
+        AI_GATEWAY_API_KEY: '',
+        AI_CATEGORY_PROVIDER: '',
         OPENROUTER_API_KEY: '',
         OPENROUTER_MODEL: '',
       },

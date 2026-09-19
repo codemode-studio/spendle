@@ -4,7 +4,7 @@ Aplicativo local para consolidar contas PF/PJ brasileiras, investimentos e cart�
 
 ## Executar
 
-Use Node.js 22.22.0 (`.node-version`) e pnpm 9.15.9 (`packageManager`). `pnpm dev` escuta somente no endereço Tailscale da máquina (`tailscale ip -4`), acessível pelos dispositivos da tailnet e não pela rede local. O comando falha se o Tailscale não estiver ativo.
+Use Node.js 22.22.0 ou mais recente (`.node-version` fixa a versão do CI) e pnpm 9.15.9 (`packageManager`). `pnpm dev` escuta somente no endereço Tailscale da máquina (`tailscale ip -4`), acessível pelos dispositivos da tailnet e não pela rede local. O comando falha se o Tailscale não estiver ativo.
 
 ```bash
 cp .env.example .env.local

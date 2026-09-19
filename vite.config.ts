@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import { devtools } from '@tanstack/devtools-vite'
 
@@ -18,6 +19,8 @@ const config = defineConfig({
     ],
   },
   ssr: { external: ['@firecrawl/pdf-inspector'] },
+  // Node 25+ define um `localStorage` global vazio que encobre o do jsdom.
+  test: { execArgv: ['--no-experimental-webstorage'] },
   plugins: [
     // Vite forwards browser errors to the terminal. Piping server logs back to
     // the browser creates a feedback loop that can fill the disk with logs.
