@@ -8,6 +8,9 @@ import tailwindcss from '@tailwindcss/vite'
 
 const config = defineConfig({
   resolve: { tsconfigPaths: true },
+  // `pnpm dev` binds to the Tailscale address. Allow the MagicDNS name too;
+  // Vite rejects unknown Host headers by default.
+  server: { allowedHosts: ['.ts.net'] },
   optimizeDeps: {
     exclude: [
       '@firecrawl/pdf-inspector',
