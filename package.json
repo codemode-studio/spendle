@@ -85,14 +85,7 @@
     "vite": "^8.0.0",
     "vitest": "^4.1.10"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "lightningcss",
-      "better-sqlite3"
-    ]
-  },
-  "packageManager": "pnpm@9.15.9",
+  "packageManager": "pnpm@12.4.2",
   "engines": {
     "node": ">=22.22.0 <23"
   }

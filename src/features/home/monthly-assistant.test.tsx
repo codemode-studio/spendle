@@ -17,6 +17,33 @@ import {
 } from './home'
 import { INITIAL_ANALYSIS_REFRESH_MS } from './assistant-contract'
 
+// Node keeps a `localStorage` global that stays undefined unless the process is
+// started with --localstorage-file, and it shadows the Storage jsdom installs.
+vi.hoisted(() => {
+  // Typed as optional because the DOM lib declares it as always present.
+  if ((globalThis as { localStorage?: Storage }).localStorage) return
+  const entries = new Map<string, string>()
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      get length() {
+        return entries.size
+      },
+      key: (index: number) => [...entries.keys()][index] ?? null,
+      getItem: (key: string) => entries.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        entries.set(key, String(value))
+      },
+      removeItem: (key: string) => {
+        entries.delete(key)
+      },
+      clear: () => {
+        entries.clear()
+      },
+    } satisfies Storage,
+  })
+})
+
 const report = {
   healthScore: 50,
   healthLabel: 'Atenção',
