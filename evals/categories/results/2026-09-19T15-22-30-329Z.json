@@ -1,0 +1,766 @@
+{
+  "ranAt": "2026-09-19T15:22:30.330Z",
+  "openRouterModel": "openai/gpt-5.6-luna",
+  "examItems": 120,
+  "contextItems": 100,
+  "actingConfidence": 70,
+  "results": [
+    {
+      "configuration": "openrouter",
+      "seconds": 30.1,
+      "guessable": {
+        "items": 82,
+        "accuracyWhenConfident": 84.8,
+        "coverage": 80.5,
+        "correctAndConfident": 68.3,
+        "accuracyAnyConfidence": 74.4
+      },
+      "personalConvention": {
+        "items": 30,
+        "accuracyWhenConfident": 0,
+        "coverage": 16.7,
+        "correctAndConfident": 0,
+        "accuracyAnyConfidence": 10
+      },
+      "allPurchases": {
+        "items": 112,
+        "accuracyWhenConfident": 78.9,
+        "coverage": 63.4,
+        "correctAndConfident": 50,
+        "accuracyAnyConfidence": 57.1
+      },
+      "movementsWronglyCategorized": "0/8",
+      "calibration": [
+        {
+          "confidence": "0-50",
+          "suggestions": 19,
+          "accuracy": 36.8
+        },
+        {
+          "confidence": "50-70",
+          "suggestions": 7,
+          "accuracy": 14.3
+        },
+        {
+          "confidence": "70-90",
+          "suggestions": 15,
+          "accuracy": 46.7
+        },
+        {
+          "confidence": "90-100",
+          "suggestions": 56,
+          "accuracy": 87.5
+        }
+      ],
+      "misses": [
+        {
+          "id": "c110",
+          "description": "Pagamento de conta Policia Rodoviaria Federal",
+          "expected": "fees_interest",
+          "suggested": "tax",
+          "confidence": 70,
+          "guessable": true
+        },
+        {
+          "id": "c121",
+          "description": "Cam Consultoria",
+          "expected": "housing",
+          "suggested": "business",
+          "confidence": 70,
+          "guessable": false
+        },
+        {
+          "id": "c126",
+          "description": "Funcional Jurere",
+          "expected": "leisure",
+          "suggested": "personal_care",
+          "confidence": 75,
+          "guessable": true
+        },
+        {
+          "id": "c129",
+          "description": "Pix enviado WHOOSH BR ALUGUEL DE PATINETES LTDA.",
+          "expected": "leisure",
+          "suggested": "transport",
+          "confidence": 95,
+          "guessable": true
+        },
+        {
+          "id": "c130",
+          "description": "Pix enviado: \"25018 136275150 FUNCIONAL JURERE LTDA\"",
+          "expected": "leisure",
+          "suggested": "personal_care",
+          "confidence": 75,
+          "guessable": true
+        },
+        {
+          "id": "c132",
+          "description": "ALEMAO JURERE",
+          "expected": "maintenance",
+          "suggested": "restaurants",
+          "confidence": 90,
+          "guessable": false
+        },
+        {
+          "id": "c136",
+          "description": "CLINICA DR ROMAO (Parcela 02 de 03)",
+          "expected": "personal_care",
+          "suggested": "health",
+          "confidence": 98,
+          "guessable": true
+        },
+        {
+          "id": "c139",
+          "description": "Resgate Global Account",
+          "expected": "profit_distribution_income",
+          "suggested": "investment_income",
+          "confidence": 95,
+          "guessable": false
+        },
+        {
+          "id": "c140",
+          "description": "Resgate: \"32911\"",
+          "expected": "profit_distribution_income",
+          "suggested": "investment_income",
+          "confidence": 90,
+          "guessable": false
+        },
+        {
+          "id": "c145",
+          "description": "Barra Beach",
+          "expected": "restaurants",
+          "suggested": "leisure",
+          "confidence": 85,
+          "guessable": true
+        },
+        {
+          "id": "c165",
+          "description": "Pbkids Brinquedos",
+          "expected": "shopping",
+          "suggested": "family",
+          "confidence": 97,
+          "guessable": true
+        },
+        {
+          "id": "c170",
+          "description": "Jim.Com* Sharon Felic",
+          "expected": "subscriptions",
+          "suggested": "personal_care",
+          "confidence": 72,
+          "guessable": false
+        },
+        {
+          "id": "c171",
+          "description": "Lyon Park",
+          "expected": "transport",
+          "suggested": "leisure",
+          "confidence": 80,
+          "guessable": true
+        },
+        {
+          "id": "c173",
+          "description": "VALE AURORA (Parcela 01 de 02)",
+          "expected": "travel",
+          "suggested": "housing",
+          "confidence": 72,
+          "guessable": true
+        },
+        {
+          "id": "c183",
+          "description": "IOF COMPRA INTERNACIONAL",
+          "expected": "fees_interest",
+          "suggested": "tax",
+          "confidence": 98,
+          "guessable": true
+        }
+      ],
+      "purchasesDroppedAsMovement": []
+    },
+    {
+      "configuration": "jev",
+      "seconds": 6.5,
+      "guessable": {
+        "items": 82,
+        "accuracyWhenConfident": 80.4,
+        "coverage": 62.2,
+        "correctAndConfident": 50,
+        "accuracyAnyConfidence": 57.3
+      },
+      "personalConvention": {
+        "items": 30,
+        "accuracyWhenConfident": 0,
+        "coverage": 10,
+        "correctAndConfident": 0,
+        "accuracyAnyConfidence": 3.3
+      },
+      "allPurchases": {
+        "items": 112,
+        "accuracyWhenConfident": 75.9,
+        "coverage": 48.2,
+        "correctAndConfident": 36.6,
+        "accuracyAnyConfidence": 42.9
+      },
+      "movementsWronglyCategorized": "0/8",
+      "calibration": [
+        {
+          "confidence": "0-50",
+          "suggestions": 17,
+          "accuracy": 17.6
+        },
+        {
+          "confidence": "50-70",
+          "suggestions": 11,
+          "accuracy": 36.4
+        },
+        {
+          "confidence": "70-90",
+          "suggestions": 14,
+          "accuracy": 57.1
+        },
+        {
+          "confidence": "90-100",
+          "suggestions": 40,
+          "accuracy": 82.5
+        }
+      ],
+      "misses": [
+        {
+          "id": "c105",
+          "description": "Easy Food",
+          "expected": "delivery",
+          "suggested": "groceries",
+          "confidence": 82,
+          "guessable": true
+        },
+        {
+          "id": "c106",
+          "description": "PG *FUTURO GESTAO FINA (Parcela 01 de 03)",
+          "expected": "education",
+          "suggested": "financing",
+          "confidence": 93,
+          "guessable": false
+        },
+        {
+          "id": "c107",
+          "description": "Pg *do Not Scare Soluc - Parcela 7/12",
+          "expected": "education",
+          "suggested": "financing",
+          "confidence": 71,
+          "guessable": false
+        },
+        {
+          "id": "c111",
+          "description": "Pagamento de conta ALFA",
+          "expected": "financing",
+          "suggested": "utilities",
+          "confidence": 92,
+          "guessable": false
+        },
+        {
+          "id": "c136",
+          "description": "CLINICA DR ROMAO (Parcela 02 de 03)",
+          "expected": "personal_care",
+          "suggested": "health",
+          "confidence": 99,
+          "guessable": true
+        },
+        {
+          "id": "c144",
+          "description": "Alimentare Baldovino C",
+          "expected": "restaurants",
+          "suggested": "groceries",
+          "confidence": 91,
+          "guessable": true
+        },
+        {
+          "id": "c146",
+          "description": "Brasil Berry Natural F",
+          "expected": "restaurants",
+          "suggested": "groceries",
+          "confidence": 94,
+          "guessable": true
+        },
+        {
+          "id": "c157",
+          "description": "BCS PALLADIUM (Parcela 01 de 03)",
+          "expected": "shopping",
+          "suggested": "financing",
+          "confidence": 88,
+          "guessable": true
+        },
+        {
+          "id": "c163",
+          "description": "Ondavivafi - Parcela 1/2",
+          "expected": "shopping",
+          "suggested": "financing",
+          "confidence": 72,
+          "guessable": true
+        },
+        {
+          "id": "c173",
+          "description": "VALE AURORA (Parcela 01 de 02)",
+          "expected": "travel",
+          "suggested": "financing",
+          "confidence": 78,
+          "guessable": true
+        },
+        {
+          "id": "c179",
+          "description": "IFD*BURGER DO BAIRRO",
+          "expected": "delivery",
+          "suggested": "restaurants",
+          "confidence": 99,
+          "guessable": true
+        },
+        {
+          "id": "c180",
+          "description": "IFD*SUSHI HOUSE",
+          "expected": "delivery",
+          "suggested": "restaurants",
+          "confidence": 100,
+          "guessable": true
+        },
+        {
+          "id": "c193",
+          "description": "LEROY MERLIN",
+          "expected": "maintenance",
+          "suggested": "shopping",
+          "confidence": 70,
+          "guessable": true
+        }
+      ],
+      "purchasesDroppedAsMovement": [
+        {
+          "id": "c109",
+          "description": "Pix enviado: \"Cp :00000000-Tainara Moreira Pires\"",
+          "expected": "family",
+          "wouldHaveChosen": "nenhuma_categoria"
+        },
+        {
+          "id": "c118",
+          "description": "Pix enviado: \"Cp :00000000-Andreia Lima\"",
+          "expected": "health",
+          "wouldHaveChosen": "nenhuma_categoria"
+        },
+        {
+          "id": "c119",
+          "description": "Pix enviado: \"Cp :00000000-Leticia Tavares da Rosa\"",
+          "expected": "health",
+          "wouldHaveChosen": "nenhuma_categoria"
+        },
+        {
+          "id": "c123",
+          "description": "Débito em conta",
+          "expected": "insurance",
+          "wouldHaveChosen": "nenhuma_categoria"
+        },
+        {
+          "id": "c131",
+          "description": "Pix enviado: \"Cp :67749808-Juliana Lobo Rodrigues\"",
+          "expected": "leisure",
+          "wouldHaveChosen": "nenhuma_categoria"
+        },
+        {
+          "id": "c139",
+          "description": "Resgate Global Account",
+          "expected": "profit_distribution_income",
+          "wouldHaveChosen": "investment"
+        },
+        {
+          "id": "c140",
+          "description": "Resgate: \"32911\"",
+          "expected": "profit_distribution_income",
+          "wouldHaveChosen": "investment"
+        },
+        {
+          "id": "c141",
+          "description": "Crédito em conta",
+          "expected": "reimbursements",
+          "wouldHaveChosen": "nenhuma_categoria"
+        },
+        {
+          "id": "c142",
+          "description": "Transferencia recebida: \"341 7336 79181 UNIMED PORTO ALEGRE COOPERAT\"",
+          "expected": "reimbursements",
+          "wouldHaveChosen": "reimbursements"
+        },
+        {
+          "id": "c155",
+          "description": "Transferencia recebida: \"301 1 5206794 DEMERGE BRASIL FACILITADORA DE PAGA\"",
+          "expected": "services_income",
+          "wouldHaveChosen": "other_income"
+        },
+        {
+          "id": "c166",
+          "description": "Rb Florianopolis - Parcela 2/3",
+          "expected": "shopping",
+          "wouldHaveChosen": "financing"
+        }
+      ]
+    },
+    {
+      "configuration": "jev+descriptions",
+      "seconds": 9.1,
+      "guessable": {
+        "items": 82,
+        "accuracyWhenConfident": 88.7,
+        "coverage": 64.6,
+        "correctAndConfident": 57.3,
+        "accuracyAnyConfidence": 62.2
+      },
+      "personalConvention": {
+        "items": 30,
+        "accuracyWhenConfident": 0,
+        "coverage": 6.7,
+        "correctAndConfident": 0,
+        "accuracyAnyConfidence": 6.7
+      },
+      "allPurchases": {
+        "items": 112,
+        "accuracyWhenConfident": 85.5,
+        "coverage": 49.1,
+        "correctAndConfident": 42,
+        "accuracyAnyConfidence": 47.3
+      },
+      "movementsWronglyCategorized": "0/8",
+      "calibration": [
+        {
+          "confidence": "0-50",
+          "suggestions": 18,
+          "accuracy": 16.7
+        },
+        {
+          "confidence": "50-70",
+          "suggestions": 16,
+          "accuracy": 18.8
+        },
+        {
+          "confidence": "70-90",
+          "suggestions": 8,
+          "accuracy": 25
+        },
+        {
+          "confidence": "90-100",
+          "suggestions": 47,
+          "accuracy": 95.7
+        }
+      ],
+      "misses": [
+        {
+          "id": "c105",
+          "description": "Easy Food",
+          "expected": "delivery",
+          "suggested": "groceries",
+          "confidence": 80,
+          "guessable": true
+        },
+        {
+          "id": "c106",
+          "description": "PG *FUTURO GESTAO FINA (Parcela 01 de 03)",
+          "expected": "education",
+          "suggested": "financing",
+          "confidence": 77,
+          "guessable": false
+        },
+        {
+          "id": "c111",
+          "description": "Pagamento de conta ALFA",
+          "expected": "financing",
+          "suggested": "utilities",
+          "confidence": 84,
+          "guessable": false
+        },
+        {
+          "id": "c136",
+          "description": "CLINICA DR ROMAO (Parcela 02 de 03)",
+          "expected": "personal_care",
+          "suggested": "health",
+          "confidence": 93,
+          "guessable": true
+        },
+        {
+          "id": "c144",
+          "description": "Alimentare Baldovino C",
+          "expected": "restaurants",
+          "suggested": "groceries",
+          "confidence": 89,
+          "guessable": true
+        },
+        {
+          "id": "c146",
+          "description": "Brasil Berry Natural F",
+          "expected": "restaurants",
+          "suggested": "groceries",
+          "confidence": 96,
+          "guessable": true
+        },
+        {
+          "id": "c157",
+          "description": "BCS PALLADIUM (Parcela 01 de 03)",
+          "expected": "shopping",
+          "suggested": "financing",
+          "confidence": 72,
+          "guessable": true
+        },
+        {
+          "id": "c177",
+          "description": "Plano NuCel",
+          "expected": "utilities",
+          "suggested": "health",
+          "confidence": 76,
+          "guessable": true
+        }
+      ],
+      "purchasesDroppedAsMovement": [
+        {
+          "id": "c109",
+          "description": "Pix enviado: \"Cp :00000000-Tainara Moreira Pires\"",
+          "expected": "family",
+          "wouldHaveChosen": "other_expense"
+        },
+        {
+          "id": "c118",
+          "description": "Pix enviado: \"Cp :00000000-Andreia Lima\"",
+          "expected": "health",
+          "wouldHaveChosen": "nenhuma_categoria"
+        },
+        {
+          "id": "c119",
+          "description": "Pix enviado: \"Cp :00000000-Leticia Tavares da Rosa\"",
+          "expected": "health",
+          "wouldHaveChosen": "other_expense"
+        },
+        {
+          "id": "c123",
+          "description": "Débito em conta",
+          "expected": "insurance",
+          "wouldHaveChosen": "nenhuma_categoria"
+        },
+        {
+          "id": "c124",
+          "description": "Pagamento / rec. Juros: \"LCI IPCA MENSAL BANCO INTER S A\"",
+          "expected": "investment_income",
+          "wouldHaveChosen": "investment_income"
+        },
+        {
+          "id": "c131",
+          "description": "Pix enviado: \"Cp :67749808-Juliana Lobo Rodrigues\"",
+          "expected": "leisure",
+          "wouldHaveChosen": "other_expense"
+        },
+        {
+          "id": "c139",
+          "description": "Resgate Global Account",
+          "expected": "profit_distribution_income",
+          "wouldHaveChosen": "investment_income"
+        },
+        {
+          "id": "c140",
+          "description": "Resgate: \"32911\"",
+          "expected": "profit_distribution_income",
+          "wouldHaveChosen": "nenhuma_categoria"
+        },
+        {
+          "id": "c141",
+          "description": "Crédito em conta",
+          "expected": "reimbursements",
+          "wouldHaveChosen": "nenhuma_categoria"
+        },
+        {
+          "id": "c142",
+          "description": "Transferencia recebida: \"341 7336 79181 UNIMED PORTO ALEGRE COOPERAT\"",
+          "expected": "reimbursements",
+          "wouldHaveChosen": "health"
+        },
+        {
+          "id": "c155",
+          "description": "Transferencia recebida: \"301 1 5206794 DEMERGE BRASIL FACILITADORA DE PAGA\"",
+          "expected": "services_income",
+          "wouldHaveChosen": "other_income"
+        },
+        {
+          "id": "c166",
+          "description": "Rb Florianopolis - Parcela 2/3",
+          "expected": "shopping",
+          "wouldHaveChosen": "financing"
+        }
+      ]
+    },
+    {
+      "configuration": "jev+descriptions+context",
+      "seconds": 9.2,
+      "guessable": {
+        "items": 82,
+        "accuracyWhenConfident": 91.2,
+        "coverage": 69.5,
+        "correctAndConfident": 63.4,
+        "accuracyAnyConfidence": 72
+      },
+      "personalConvention": {
+        "items": 30,
+        "accuracyWhenConfident": 0,
+        "coverage": 20,
+        "correctAndConfident": 0,
+        "accuracyAnyConfidence": 3.3
+      },
+      "allPurchases": {
+        "items": 112,
+        "accuracyWhenConfident": 82.5,
+        "coverage": 56.3,
+        "correctAndConfident": 46.4,
+        "accuracyAnyConfidence": 53.6
+      },
+      "movementsWronglyCategorized": "0/8",
+      "calibration": [
+        {
+          "confidence": "0-50",
+          "suggestions": 22,
+          "accuracy": 18.2
+        },
+        {
+          "confidence": "50-70",
+          "suggestions": 13,
+          "accuracy": 30.8
+        },
+        {
+          "confidence": "70-90",
+          "suggestions": 11,
+          "accuracy": 54.5
+        },
+        {
+          "confidence": "90-100",
+          "suggestions": 52,
+          "accuracy": 88.5
+        }
+      ],
+      "misses": [
+        {
+          "id": "c110",
+          "description": "Pagamento de conta Policia Rodoviaria Federal",
+          "expected": "fees_interest",
+          "suggested": "tax",
+          "confidence": 75,
+          "guessable": true
+        },
+        {
+          "id": "c121",
+          "description": "Cam Consultoria",
+          "expected": "housing",
+          "suggested": "business",
+          "confidence": 95,
+          "guessable": false
+        },
+        {
+          "id": "c125",
+          "description": "Cac Coqueiros",
+          "expected": "leisure",
+          "suggested": "restaurants",
+          "confidence": 80,
+          "guessable": false
+        },
+        {
+          "id": "c128",
+          "description": "Pagamento com QR Pix OTAVIO MENDES CARVALHO TECNOLOGIA DA INFORMACAO LTDA",
+          "expected": "leisure",
+          "suggested": "business",
+          "confidence": 93,
+          "guessable": false
+        },
+        {
+          "id": "c130",
+          "description": "Pix enviado: \"25018 136275150 FUNCIONAL JURERE LTDA\"",
+          "expected": "leisure",
+          "suggested": "business",
+          "confidence": 72,
+          "guessable": true
+        },
+        {
+          "id": "c132",
+          "description": "ALEMAO JURERE",
+          "expected": "maintenance",
+          "suggested": "restaurants",
+          "confidence": 90,
+          "guessable": false
+        },
+        {
+          "id": "c133",
+          "description": "Pagamento com QR Pix PRIMEVA LTDA",
+          "expected": "other_expense",
+          "suggested": "business",
+          "confidence": 74,
+          "guessable": false
+        },
+        {
+          "id": "c136",
+          "description": "CLINICA DR ROMAO (Parcela 02 de 03)",
+          "expected": "personal_care",
+          "suggested": "health",
+          "confidence": 89,
+          "guessable": true
+        },
+        {
+          "id": "c144",
+          "description": "Alimentare Baldovino C",
+          "expected": "restaurants",
+          "suggested": "groceries",
+          "confidence": 91,
+          "guessable": true
+        },
+        {
+          "id": "c146",
+          "description": "Brasil Berry Natural F",
+          "expected": "restaurants",
+          "suggested": "groceries",
+          "confidence": 92,
+          "guessable": true
+        },
+        {
+          "id": "c170",
+          "description": "Jim.Com* Sharon Felic",
+          "expected": "subscriptions",
+          "suggested": "shopping",
+          "confidence": 93,
+          "guessable": false
+        }
+      ],
+      "purchasesDroppedAsMovement": [
+        {
+          "id": "c123",
+          "description": "Débito em conta",
+          "expected": "insurance",
+          "wouldHaveChosen": "nenhuma_categoria"
+        },
+        {
+          "id": "c139",
+          "description": "Resgate Global Account",
+          "expected": "profit_distribution_income",
+          "wouldHaveChosen": "profit_distribution_income"
+        },
+        {
+          "id": "c140",
+          "description": "Resgate: \"32911\"",
+          "expected": "profit_distribution_income",
+          "wouldHaveChosen": "nenhuma_categoria"
+        },
+        {
+          "id": "c141",
+          "description": "Crédito em conta",
+          "expected": "reimbursements",
+          "wouldHaveChosen": "nenhuma_categoria"
+        },
+        {
+          "id": "c157",
+          "description": "BCS PALLADIUM (Parcela 01 de 03)",
+          "expected": "shopping",
+          "wouldHaveChosen": "financing"
+        },
+        {
+          "id": "c166",
+          "description": "Rb Florianopolis - Parcela 2/3",
+          "expected": "shopping",
+          "wouldHaveChosen": "financing"
+        }
+      ]
+    }
+  ]
+}
