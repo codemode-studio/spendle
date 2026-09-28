@@ -1,12 +1,26 @@
 import { createHash, randomUUID } from 'node:crypto'
 
-import { and, asc, desc, eq, isNull, lt, or, sql } from 'drizzle-orm'
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  isNull,
+  lt,
+  lte,
+  max,
+  or,
+  sql,
+  sum,
+} from 'drizzle-orm'
 import type { Account, Item, Transaction } from 'pluggy-sdk'
 
 import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
 import { suggestCategory } from '#/features/finance/categories.server'
 import {
+  addBalanceCheckpoint,
   invalidateCheckpointChain,
   refreshStatementAnchor,
 } from '#/features/finance/checkpoint-chain.server'
@@ -16,8 +30,13 @@ import {
 } from '#/features/finance/finance.server'
 import { refreshReconciliationAfterCommit } from '#/features/finance/reconciliation-refresh.server'
 
+import { shiftDays } from '#/domain/period'
+
 import { getPluggyConfiguration } from './config.server'
+import { pluggyContinuationStart, pluggyHistoryStart } from './history-window'
+import type { PluggyHistoryMonths } from './history-window'
 import {
+  dateInSaoPaulo,
   normalizePluggyTransaction,
   pluggyAccountObservation,
 } from './normalization'
@@ -204,6 +223,7 @@ export async function registerPluggyItem(
 
 export type MapPluggyAccountInput = {
   providerAccountId: string
+  historyMonths?: PluggyHistoryMonths
 } & (
   | {
       existingTarget: { type: 'account' | 'card'; id: string }
@@ -231,6 +251,7 @@ export type MapPluggyAccountInput = {
 export async function mapPluggyAccount(
   input: MapPluggyAccountInput,
   gateway: PluggyGateway = getPluggyGateway(),
+  now = new Date(),
 ) {
   await ensureDatabase()
   const providerAccount = await requireProviderAccount(input.providerAccountId)
@@ -250,6 +271,7 @@ export async function mapPluggyAccount(
 
   let accountId: string | null = null
   let creditCardId: string | null = null
+  let closingDay: number | undefined
   if (input.existingTarget) {
     if (input.existingTarget.type === 'account') {
       const target = (
@@ -283,6 +305,7 @@ export async function mapPluggyAccount(
         throw new Error('O cartão local não é compatível com esta conexão.')
       }
       creditCardId = target.id
+      closingDay = target.closingDay
     }
   } else if (input.newTarget.type === 'account') {
     const target = await createAccount({
@@ -307,18 +330,97 @@ export async function mapPluggyAccount(
       dueDay: input.newTarget.dueDay,
     })
     creditCardId = target.id
+    closingDay = input.newTarget.closingDay
   }
+
+  const latestLocal = (
+    await db
+      .select({ postedAt: max(schema.transactions.postedAt) })
+      .from(schema.transactions)
+      .where(
+        accountId
+          ? eq(schema.transactions.accountId, accountId)
+          : eq(schema.transactions.creditCardId, creditCardId!),
+      )
+  ).at(0)?.postedAt
+  const historyStart = latestLocal
+    ? pluggyContinuationStart(latestLocal)
+    : pluggyHistoryStart({
+        today: dateInSaoPaulo(now),
+        months: input.historyMonths ?? 3,
+        closingDay,
+      })
 
   await db
     .update(schema.openFinanceAccounts)
-    .set({ accountId, creditCardId })
+    .set({ accountId, creditCardId, historyStart })
     .where(eq(schema.openFinanceAccounts.id, providerAccount.id))
-  const result = await syncProviderAccount(
-    { ...providerAccount, accountId, creditCardId },
-    gateway,
-  )
+  const mapped = { ...providerAccount, accountId, creditCardId, historyStart }
+  const result = await syncProviderAccount(mapped, gateway)
+  const openingBalanceCents =
+    accountId && !latestLocal
+      ? await recordOpeningBalance(mapped, accountId, historyStart, now)
+      : null
   await refreshReconciliationAfterCommit()
-  return { accountId, creditCardId, ...result }
+  return {
+    accountId,
+    creditCardId,
+    historyStart,
+    openingBalanceCents,
+    ...result,
+  }
+}
+
+/**
+ * A bank account copied from `historyStart` has no earlier facts, so its
+ * opening balance is the balance Pluggy reports minus the copied movement.
+ */
+async function recordOpeningBalance(
+  account: OpenFinanceAccount,
+  accountId: string,
+  historyStart: string,
+  now: Date,
+) {
+  if (account.observedBalanceCents === null) return null
+  const balanceAsOf = dateInSaoPaulo(account.observedAt ?? now)
+  const movement = (
+    await db
+      .select({ totalCents: sum(schema.transactions.amountCents) })
+      .from(schema.transactions)
+      .where(
+        and(
+          eq(schema.transactions.accountId, accountId),
+          eq(schema.transactions.status, 'confirmed'),
+          gte(schema.transactions.postedAt, historyStart),
+          lte(schema.transactions.postedAt, balanceAsOf),
+        ),
+      )
+  ).at(0)
+  const openingBalanceCents =
+    account.observedBalanceCents - Number(movement?.totalCents ?? 0)
+  db.transaction((transaction) => {
+    addBalanceCheckpoint(transaction, {
+      accountId,
+      kind: 'opening',
+      balanceType: 'posted',
+      source: 'integration',
+      reviewState: 'observed',
+      verified: false,
+      balanceCents: openingBalanceCents,
+      asOf: shiftDays(historyStart, -1),
+      evidenceJson: JSON.stringify({
+        method: 'pluggy_balance_minus_copied_movement',
+        providerBalanceCents: account.observedBalanceCents,
+        providerBalanceAsOf: balanceAsOf,
+      }),
+    })
+    refreshStatementAnchor(transaction, {
+      targetType: 'account',
+      targetId: accountId,
+      balanceType: 'posted',
+    })
+  })
+  return openingBalanceCents
 }
 
 async function exactCanonicalCandidate(
@@ -434,6 +536,10 @@ async function storeTransactionObservation(
     },
     providerTransaction,
   )
+  // Pluggy may resend facts older than the copied window on refreshes.
+  if (account.historyStart && normalized.postedAt < account.historyStart) {
+    return { kind: 'skipped' as const }
+  }
   const existingVersion = (
     await db
       .select()
@@ -591,9 +697,14 @@ async function syncProviderAccount(
         account.providerAccountId,
         filters.ids,
       )
-    : await gateway.fetchAllTransactions(account.providerAccountId, {
-        createdAtFrom: filters?.createdAtFrom,
-      })
+    : await gateway.fetchAllTransactions(
+        account.providerAccountId,
+        // Pluggy rejects dateFrom together with createdAtFrom; the stored
+        // window still applies to each observation.
+        filters?.createdAtFrom
+          ? { createdAtFrom: filters.createdAtFrom }
+          : { dateFrom: account.historyStart ?? undefined },
+      )
   const counts = {
     fetched: providerTransactions.length,
     created: 0,
@@ -605,6 +716,7 @@ async function syncProviderAccount(
       account,
       providerTransaction,
     )
+    if (result.kind === 'skipped') continue
     counts[result.kind === 'correction' ? 'corrections' : result.kind] += 1
   }
   return counts

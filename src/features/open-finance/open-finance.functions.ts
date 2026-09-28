@@ -60,6 +60,7 @@ export const mapPluggyAccountFn = createServerFn({ method: 'POST' })
     z
       .object({
         providerAccountId: z.string().min(1),
+        historyMonths: z.union([z.literal(3), z.literal(6)]).default(3),
         existingTarget: existingTargetSchema.optional(),
         newTarget: newTargetSchema.optional(),
       })

@@ -54,7 +54,7 @@ export interface NormalizedPluggyTransaction {
   contentHash: string
 }
 
-function dateInSaoPaulo(value: Date | string) {
+export function dateInSaoPaulo(value: Date | string) {
   const date = value instanceof Date ? value : new Date(value)
   if (Number.isNaN(date.getTime())) throw new Error('Data da Pluggy inválida.')
   const parts = new Intl.DateTimeFormat('en-CA', {

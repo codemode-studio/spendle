@@ -33,6 +33,13 @@ pnpm open-finance:worker
 `PLUGGY_INCLUDE_SANDBOX=1` mostra conectores de teste somente em desenvolvimento
 ou QA. Saldos, limites e faturas recebidos da Pluggy aparecem como observações.
 Eles não criam um checkpoint verificado nem alteram o marco "Conferido até".
+
+Um instrumento novo copia 3 meses completos (ou 6, se escolhido), a partir do
+dia 1 do mês; cartões começam no ciclo de fatura que contém essa data. A conta
+bancária abre com um checkpoint observado igual ao saldo informado pela Pluggy
+menos o movimento copiado. Um instrumento que já tem lançamentos continua a
+partir do último, relendo 7 dias para reconhecer a sobreposição. Lançamentos
+anteriores à janela são ignorados também em sincronizações e webhooks.
 Use apenas o Sandbox da Pluggy durante desenvolvimento e nunca informe
 credenciais bancárias reais em um run de QA.
 

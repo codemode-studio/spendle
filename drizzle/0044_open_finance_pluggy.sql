@@ -38,6 +38,7 @@ CREATE TABLE `open_finance_accounts` (
 	`observed_closing_date` text,
 	`observed_due_date` text,
 	`observed_at` integer,
+	`history_start` text,
 	`account_id` text,
 	`credit_card_id` text,
 	`created_at` integer DEFAULT (unixepoch()) NOT NULL,

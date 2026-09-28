@@ -3,6 +3,7 @@ import type { Account, Item, Transaction } from 'pluggy-sdk'
 import { TransactionStatus } from 'pluggy-sdk'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { getFinanceSnapshot } from '#/features/finance/finance-snapshot.server'
 import { clearTransactionData } from '#/features/finance/import.server'
 import { transactionFingerprint } from '#/features/finance/canonicalization.server'
 import { openTestDatabase } from '#/test/database'
@@ -125,6 +126,7 @@ class FakePluggyGateway implements PluggyGateway {
   tokenInputs: Array<{ clientUserId: string; itemId?: string }> = []
   webhookInputs: Array<{ url: string; secret: string }> = []
   transactionFetches = 0
+  transactionFilters: Array<{ dateFrom?: string; createdAtFrom?: string }> = []
 
   async createConnectToken(input: { clientUserId: string; itemId?: string }) {
     this.tokenInputs.push(input)
@@ -137,8 +139,12 @@ class FakePluggyGateway implements PluggyGateway {
   async fetchAccounts() {
     return this.accounts
   }
-  async fetchAllTransactions(accountId: string) {
+  async fetchAllTransactions(
+    accountId: string,
+    filters: { dateFrom?: string; createdAtFrom?: string } = {},
+  ) {
     this.transactionFetches += 1
+    this.transactionFilters.push(filters)
     return this.transactions.get(accountId) ?? []
   }
   async fetchTransactionsByIds(accountId: string, ids: string[]) {
@@ -152,6 +158,23 @@ class FakePluggyGateway implements PluggyGateway {
   async ensureWebhook(input: { url: string; secret: string }) {
     this.webhookInputs.push(input)
   }
+}
+
+const mappedAt = new Date('2026-09-15T15:00:00Z')
+
+async function registeredConnection(
+  database: TestDatabase,
+  gateway: FakePluggyGateway,
+) {
+  const token = await createPluggyConnectToken(
+    { ownershipScopeId: database.ids.personScope },
+    gateway,
+  )
+  await registerPluggyItem(
+    { connectionId: token.connectionId, itemId: gateway.item.id },
+    gateway,
+  )
+  return token.connectionId
 }
 
 async function connectedAccount(
@@ -173,6 +196,7 @@ async function connectedAccount(
       existingTarget: { type: 'account', id: database.ids.brlAccount },
     },
     gateway,
+    mappedAt,
   )
   return token.connectionId
 }
@@ -506,5 +530,225 @@ describe('Open Finance persistence', () => {
     })
     await processNextPluggyWebhook(gateway)
     expect(gateway.transactionFetches).toBe(fetchesAfterBootstrap)
+  })
+})
+
+describe('Open Finance history window', () => {
+  let database: TestDatabase
+
+  beforeEach(async () => {
+    database = await openTestDatabase()
+  })
+
+  afterEach(() => database.close())
+
+  it('copies three months to a new account and opens it at the bank balance', async () => {
+    const gateway = new FakePluggyGateway()
+    gateway.transactions.set('provider-bank', [
+      providerTransaction({
+        id: 'too-old',
+        date: new Date('2026-05-20T15:00:00Z'),
+      }),
+      providerTransaction({
+        id: 'first-day',
+        date: new Date('2026-06-01T15:00:00Z'),
+        type: 'CREDIT',
+        amount: 300.25,
+      }),
+      providerTransaction({ id: 'recent', amount: 10.1 }),
+      providerTransaction({
+        id: 'pending',
+        status: TransactionStatus.PENDING,
+        amount: 5,
+      }),
+    ])
+    await registeredConnection(database, gateway)
+
+    const result = await mapPluggyAccount(
+      {
+        providerAccountId: 'provider-bank',
+        newTarget: {
+          type: 'account',
+          name: 'Conta Pluggy',
+          kind: 'checking',
+          purpose: 'operating',
+        },
+      },
+      gateway,
+      mappedAt,
+    )
+
+    expect(result).toMatchObject({
+      historyStart: '2026-06-01',
+      created: 3,
+      // 1000.00 reported by Pluggy minus +300.25 and -10.10 confirmed.
+      openingBalanceCents: 70_985,
+    })
+    expect(gateway.transactionFilters.at(-1)).toEqual({
+      dateFrom: '2026-06-01',
+    })
+    const copied = await database.db
+      .select({ externalId: database.schema.transactions.externalId })
+      .from(database.schema.transactions)
+      .where(eq(database.schema.transactions.accountId, result.accountId!))
+    expect(copied.map((row) => row.externalId).sort()).toEqual([
+      'first-day',
+      'pending',
+      'recent',
+    ])
+    const [opening] = await database.db
+      .select()
+      .from(database.schema.balanceCheckpoints)
+      .where(
+        eq(database.schema.balanceCheckpoints.accountId, result.accountId!),
+      )
+    expect(opening).toMatchObject({
+      kind: 'opening',
+      source: 'integration',
+      reviewState: 'observed',
+      balanceType: 'posted',
+      asOf: '2026-05-31',
+      balanceCents: 70_985,
+    })
+    const snapshot = await getFinanceSnapshot()
+    expect(
+      snapshot.accounts.find((item) => item.id === result.accountId)
+        ?.balanceCents,
+    ).toBe(100_000)
+  })
+
+  it('copies six months when chosen', async () => {
+    const gateway = new FakePluggyGateway()
+    gateway.transactions.set('provider-bank', [
+      providerTransaction({
+        id: 'march',
+        date: new Date('2026-03-02T15:00:00Z'),
+      }),
+    ])
+    await registeredConnection(database, gateway)
+    const result = await mapPluggyAccount(
+      {
+        providerAccountId: 'provider-bank',
+        historyMonths: 6,
+        newTarget: {
+          type: 'account',
+          name: 'Conta Pluggy',
+          kind: 'checking',
+          purpose: 'operating',
+        },
+      },
+      gateway,
+      mappedAt,
+    )
+    expect(result).toMatchObject({ historyStart: '2026-03-01', created: 1 })
+  })
+
+  it('keeps ignoring facts older than the window on later webhooks', async () => {
+    const gateway = new FakePluggyGateway()
+    const connectionId = await connectedAccount(database, gateway)
+    gateway.transactions.set('provider-bank', [
+      providerTransaction(),
+      providerTransaction({
+        id: 'late-old',
+        date: new Date('2026-04-02T15:00:00Z'),
+      }),
+    ])
+    await enqueuePluggyWebhook({
+      eventId: 'late-created',
+      event: 'transactions/created',
+      itemId: 'item-1',
+      accountId: 'provider-bank',
+      transactionsCreatedAtFrom: '2026-09-15T00:00:00Z',
+      triggeredBy: 'SYNC',
+    })
+    await processNextPluggyWebhook(gateway)
+    await syncPluggyConnection({ connectionId }, gateway)
+
+    expect(gateway.transactionFilters).toContainEqual({
+      createdAtFrom: '2026-09-15T00:00:00Z',
+    })
+    expect(gateway.transactionFilters.at(-1)).toEqual({
+      dateFrom: '2026-06-01',
+    })
+    const late = await database.db
+      .select()
+      .from(database.schema.transactions)
+      .where(eq(database.schema.transactions.externalId, 'late-old'))
+    expect(late).toHaveLength(0)
+  })
+
+  it('continues an account with local history from its latest fact without a new opening', async () => {
+    const gateway = new FakePluggyGateway()
+    await database.db.insert(database.schema.transactions).values({
+      id: 'file-latest',
+      accountId: database.ids.brlAccount,
+      fingerprint: 'file-latest',
+      postedAt: '2026-09-03',
+      description: 'Aluguel',
+      normalizedDescription: 'aluguel',
+      amountCents: -150_000,
+      currency: 'BRL',
+      status: 'confirmed',
+    })
+    await registeredConnection(database, gateway)
+    const result = await mapPluggyAccount(
+      {
+        providerAccountId: 'provider-bank',
+        existingTarget: { type: 'account', id: database.ids.brlAccount },
+      },
+      gateway,
+      mappedAt,
+    )
+    expect(result).toMatchObject({
+      historyStart: '2026-08-27',
+      openingBalanceCents: null,
+    })
+    const checkpoints = await database.db
+      .select()
+      .from(database.schema.balanceCheckpoints)
+      .where(
+        eq(
+          database.schema.balanceCheckpoints.accountId,
+          database.ids.brlAccount,
+        ),
+      )
+    expect(checkpoints).toHaveLength(0)
+  })
+
+  it('starts a new card at the statement cycle containing the window start', async () => {
+    const gateway = new FakePluggyGateway()
+    gateway.accounts = [account('CREDIT')]
+    gateway.transactions.set('provider-card', [
+      providerTransaction({
+        id: 'previous-cycle',
+        accountId: 'provider-card',
+        date: new Date('2026-05-10T15:00:00Z'),
+      }),
+      providerTransaction({
+        id: 'first-cycle',
+        accountId: 'provider-card',
+        date: new Date('2026-05-11T15:00:00Z'),
+      }),
+    ])
+    await registeredConnection(database, gateway)
+    const result = await mapPluggyAccount(
+      {
+        providerAccountId: 'provider-card',
+        newTarget: {
+          type: 'card',
+          name: 'Cartão Pluggy',
+          limitCents: 100_000,
+          closingDay: 10,
+          dueDay: 17,
+        },
+      },
+      gateway,
+      mappedAt,
+    )
+    expect(result).toMatchObject({
+      historyStart: '2026-05-11',
+      created: 1,
+      openingBalanceCents: null,
+    })
   })
 })

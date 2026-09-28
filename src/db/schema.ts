@@ -499,6 +499,7 @@ export const openFinanceAccounts = sqliteTable(
     observedClosingDate: text('observed_closing_date'),
     observedDueDate: text('observed_due_date'),
     observedAt: integer('observed_at', { mode: 'timestamp' }),
+    historyStart: text('history_start'),
     accountId: text('account_id').references(() => accounts.id, {
       onDelete: 'set null',
     }),

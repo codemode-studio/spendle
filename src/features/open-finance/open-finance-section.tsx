@@ -30,10 +30,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from '#/components/ui/dialog'
-import { Field, FieldGroup, FieldLabel } from '#/components/ui/field'
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '#/components/ui/native-select'
+import { ToggleGroup, ToggleGroupItem } from '#/components/ui/toggle-group'
 import { formatCurrency, toMinorUnits } from '#/domain/currency'
+import { formatLongDate } from '#/domain/period'
 import {
   invalidateFinance,
   openFinanceOptions,
@@ -50,6 +57,7 @@ import {
   resumePluggyConnectionFn,
   syncPluggyConnectionFn,
 } from './open-finance.functions'
+import type { PluggyHistoryMonths } from './history-window'
 import type { getOpenFinanceSnapshot } from './open-finance.server'
 
 type OpenFinanceAccount = Awaited<
@@ -134,10 +142,13 @@ function AccountMappingDialog({
   const { data: configuration } = useSuspenseQuery(configurationOptions())
   const mapAccount = useServerFn(mapPluggyAccountFn)
   const [mode, setMode] = useState<'existing' | 'new'>('existing')
+  const [historyMonths, setHistoryMonths] = useState<PluggyHistoryMonths>(3)
   const mutation = useMutation({
     mutationFn: mapAccount,
-    onSuccess: async () => {
-      toast.success('Instrumento vinculado e dados disponíveis copiados.')
+    onSuccess: async (result) => {
+      toast.success(
+        `Instrumento vinculado. Lançamentos copiados desde ${formatLongDate(result.historyStart)}.`,
+      )
       onOpenChange(false)
       await invalidateFinance(queryClient, 'ledger')
     },
@@ -174,6 +185,7 @@ function AccountMappingDialog({
     mutation.mutate({
       data: {
         providerAccountId: account!.providerAccountId,
+        historyMonths,
         newTarget: isBank
           ? {
               type: 'account',
@@ -249,6 +261,31 @@ function AccountMappingDialog({
                     defaultValue={account.name}
                     required
                   />
+                </Field>
+                <Field>
+                  <FieldLabel id="mapping-history">Copiar histórico</FieldLabel>
+                  <ToggleGroup
+                    aria-labelledby="mapping-history"
+                    value={[String(historyMonths)]}
+                    onValueChange={(values) => {
+                      const value = Number(values.at(0))
+                      if (value === 3 || value === 6) setHistoryMonths(value)
+                    }}
+                    variant="outline"
+                  >
+                    <ToggleGroupItem value="3">3 meses</ToggleGroupItem>
+                    <ToggleGroupItem value="6">6 meses</ToggleGroupItem>
+                  </ToggleGroup>
+                  {historyMonths === 6 ? (
+                    <FieldDescription>
+                      <AlertCircle
+                        aria-hidden
+                        className="mr-1 inline size-3.5 align-[-2px]"
+                      />
+                      Meses antigos podem ter categorias e orçamentos
+                      incompletos.
+                    </FieldDescription>
+                  ) : null}
                 </Field>
                 {isBank ? (
                   <>
