@@ -10,7 +10,7 @@ import {
 } from '#/domain/currency'
 import { inferCoverageFromLearnedTemplates } from '#/domain/import-coverage'
 import { DESTINATION_CONFLICT_MESSAGE } from '#/domain/import-audit'
-import { getConfiguredAiModel } from './ai.server'
+import { generateStructured, getConfiguredAiModel } from './ai.server'
 import { parseCsvStatement } from './csv-statement.server'
 import { inspectPdfStatement } from './pdf-inspector.server'
 
@@ -376,29 +376,25 @@ export async function parsePdfBufferWithAi(buffer: Buffer, filename: string) {
     )
   }
 
-  const { generateText, Output } = await import('ai')
-  const result = await generateText({
+  const parser = new PDFParse({ data: buffer })
+  let pdfText: string
+  try {
+    pdfText = (await parser.getText()).text
+  } finally {
+    await parser.destroy()
+  }
+  const output = await generateStructured({
     model,
-    output: Output.object({ schema: aiPdfOutputSchema }),
+    schema: aiPdfOutputSchema,
+    timeoutMs: 60_000,
     messages: [
       {
         role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: pdfTransactionExtractionPrompt,
-          },
-          {
-            type: 'file',
-            data: buffer,
-            mediaType: 'application/pdf',
-            filename,
-          },
-        ],
+        content: `${pdfTransactionExtractionPrompt}\n\nArquivo: ${filename}\n\n${pdfText}`,
       },
     ],
   })
-  return result.output.transactions.map((transaction) => ({
+  return output.transactions.map((transaction) => ({
     ...transaction,
     externalId: transaction.externalId ?? undefined,
   }))

@@ -3,13 +3,10 @@ import { openTestDatabase } from '#/test/database'
 import { generateMonthlyAnalysis } from './analysis.server'
 import { INITIAL_ANALYSIS_REFRESH_MS } from './assistant-contract'
 
-const mocks = vi.hoisted(() => ({ generate: vi.fn(), object: vi.fn() }))
-vi.mock('ai', () => ({
-  generateText: mocks.generate,
-  Output: { object: mocks.object },
-}))
+const mocks = vi.hoisted(() => ({ generate: vi.fn() }))
 vi.mock('#/features/finance/ai.server', () => ({
-  getConfiguredAiModel: () => 'test-model',
+  generateStructured: mocks.generate,
+  getConfiguredAiModel: () => ({ apiKey: 'test-key', model: 'test/model' }),
 }))
 let database: Awaited<ReturnType<typeof openTestDatabase>>
 afterEach(() => {
@@ -66,7 +63,7 @@ it('uses human knowledge and essential buckets, saves once and leaves knowledge 
     source: 'transaction_review',
   })
   const before = await db.select().from(schema.knowledgeBase)
-  mocks.generate.mockResolvedValue({ output: report })
+  mocks.generate.mockResolvedValue(report)
   const [first, second] = await Promise.all([
     generateMonthlyAnalysis('2026-08'),
     generateMonthlyAnalysis('2026-08'),
@@ -105,7 +102,7 @@ it('allows retry after provider failure without storing a broken report', async 
   await setupClosedMonth()
   mocks.generate
     .mockRejectedValueOnce(new Error('offline'))
-    .mockResolvedValueOnce({ output: report })
+    .mockResolvedValueOnce(report)
   await expect(generateMonthlyAnalysis('2026-08')).rejects.toThrow('offline')
   expect(
     await database.db.select().from(database.schema.monthlyReports),
@@ -124,7 +121,7 @@ it('continues the conversation with its history, current knowledge and saved mon
     nextStep: 'Separe o valor no início do mês.',
     questionnaire: null,
   }
-  mocks.generate.mockResolvedValue({ output: answer })
+  mocks.generate.mockResolvedValue(answer)
   const { answerFinanceQuestion } = await import('./analysis.server')
   const history = [
     { role: 'user' as const, content: 'Quero reduzir delivery.' },
@@ -142,8 +139,7 @@ it('continues the conversation with its history, current knowledge and saved mon
     month: '2026-08',
     report,
   })
-  expect(mocks.object).toHaveBeenCalled()
-})
+  })
 
 it('returns a three-month projection when the projected balance is negative', async () => {
   await setupClosedMonth()
@@ -161,7 +157,7 @@ it('returns a three-month projection when the projected balance is negative', as
     nextStep: 'Reduza o déficit mensal antes do próximo fechamento.',
     questionnaire: null,
   }
-  mocks.generate.mockResolvedValue({ output: answer })
+  mocks.generate.mockResolvedValue(answer)
   const { answerFinanceQuestion } = await import('./analysis.server')
 
   await expect(
@@ -192,21 +188,15 @@ it('calculates savings from recorded cents and rejects duplicate or unsupported 
     categoryId: ids.categories.groceries,
     proposedLimitCents: 249575,
   }
-  mocks.generate.mockResolvedValueOnce({
-    output: { ...report, actions: [action, action] },
-  })
+  mocks.generate.mockResolvedValueOnce({ ...report, actions: [action, action] })
   await expect(generateMonthlyAnalysis('2026-08')).rejects.toThrow(
     'limite sem base',
   )
-  mocks.generate.mockResolvedValueOnce({
-    output: { ...report, actions: [{ ...action, proposedLimitCents: 449576 }] },
-  })
+  mocks.generate.mockResolvedValueOnce({ ...report, actions: [{ ...action, proposedLimitCents: 449576 }] })
   await expect(generateMonthlyAnalysis('2026-08')).rejects.toThrow(
     'limite sem base',
   )
-  mocks.generate.mockResolvedValueOnce({
-    output: { ...report, actions: [action] },
-  })
+  mocks.generate.mockResolvedValueOnce({ ...report, actions: [action] })
   const result = await generateMonthlyAnalysis('2026-08')
   expect(result?.actions[0]).toMatchObject({
     baselineCents: 449575,
@@ -233,7 +223,7 @@ it('automatically creates the report when closing and keeps the budget closed if
       (await database.db.select().from(database.schema.monthlyBudgets))[0]
         .closed,
     ).toBe(true)
-    mocks.generate.mockResolvedValueOnce({ output: report })
+    mocks.generate.mockResolvedValueOnce(report)
     await expect(generateMonthlyAnalysis(result.month)).resolves.toEqual(report)
   } finally {
     vi.unstubAllEnvs()
@@ -245,7 +235,7 @@ it('creates and persists the first analysis without closing a budget, then prefe
   await database.db
     .update(database.schema.appSettings)
     .set({ aiClassificationConsent: true })
-  mocks.generate.mockResolvedValue({ output: report })
+  mocks.generate.mockResolvedValue(report)
   const { getLatestMonthlyAnalysis } = await import('./analysis.server')
   const [first, simultaneous] = await Promise.all([
     getLatestMonthlyAnalysis(),
@@ -291,8 +281,8 @@ it('refreshes a stale first analysis and keeps a recent one', async () => {
     .set({ aiClassificationConsent: true })
   const refreshedReport = { ...report, headline: 'Plano atualizado' }
   mocks.generate
-    .mockResolvedValueOnce({ output: report })
-    .mockResolvedValueOnce({ output: refreshedReport })
+    .mockResolvedValueOnce(report)
+    .mockResolvedValueOnce(refreshedReport)
   const { getLatestMonthlyAnalysis } = await import('./analysis.server')
 
   await expect(getLatestMonthlyAnalysis(true)).resolves.toMatchObject({
@@ -316,7 +306,7 @@ it('keeps the saved first analysis when its background refresh fails', async () 
   await database.db
     .update(database.schema.appSettings)
     .set({ aiClassificationConsent: true })
-  mocks.generate.mockResolvedValueOnce({ output: report })
+  mocks.generate.mockResolvedValueOnce(report)
   const { getLatestMonthlyAnalysis } = await import('./analysis.server')
 
   await getLatestMonthlyAnalysis(true)
@@ -340,7 +330,7 @@ it('does not create the first analysis without consent and retries provider fail
     .set({ aiClassificationConsent: true })
   mocks.generate
     .mockRejectedValueOnce(new Error('offline'))
-    .mockResolvedValueOnce({ output: report })
+    .mockResolvedValueOnce(report)
   await expect(getLatestMonthlyAnalysis()).rejects.toThrow('offline')
   expect(
     await database.db.select().from(database.schema.initialAnalysis),

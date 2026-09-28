@@ -1,5 +1,6 @@
-import { expect, it } from 'vitest'
-import { Output } from 'ai'
+import { expect, it, vi } from 'vitest'
+import { chat } from '@tanstack/ai'
+import { createOpenRouterText } from '@tanstack/ai-openrouter'
 
 import {
   financeAnswerSchema,
@@ -45,15 +46,31 @@ function findOptionalObjectProperties(
   return errors
 }
 
-it('generates an Azure-compatible strict response schema', async () => {
-  const responseFormat = await Output.object({
-    schema: financeAnswerSchema,
-  }).responseFormat
-  if (!responseFormat || responseFormat.type !== 'json')
-    throw new Error('Expected a JSON response format')
+it('sends a strict JSON schema to OpenRouter', async () => {
+  const requests: Request[] = []
+  vi.stubGlobal('fetch', (request: Request) => {
+    requests.push(request)
+    return new Promise<Response>((_, reject) => {
+      request.signal.addEventListener('abort', () => reject(request.signal.reason))
+    })
+  })
+  const abortController = new AbortController()
+  const pending = chat({
+    adapter: createOpenRouterText('~openai/gpt-mini-latest', 'test-key'),
+    messages: [{ role: 'user', content: 'Responda.' }],
+    outputSchema: financeAnswerSchema,
+    abortController,
+  })
+  await vi.waitFor(() => expect(requests).toHaveLength(1))
+  const request = await requests[0].clone().json()
+  const responseFormat = request.response_format
+  expect(responseFormat.type).toBe('json_schema')
 
-  expect(responseFormat.schema).toBeDefined()
-  expect(findOptionalObjectProperties(responseFormat.schema)).toEqual([])
+  expect(responseFormat.json_schema.strict).toBe(true)
+  expect(findOptionalObjectProperties(responseFormat.json_schema.schema)).toEqual([])
+  abortController.abort()
+  await pending.catch(() => undefined)
+  vi.unstubAllGlobals()
 })
 
 it('normalizes stored answers created before questionnaire support', () => {

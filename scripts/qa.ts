@@ -12,6 +12,7 @@ import {
 } from 'node:fs'
 import { resolve, join, sep } from 'node:path'
 import Database from 'better-sqlite3'
+import { parse } from 'dotenv'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
 import { openDatabase } from '../src/db/connection.server'
 import { qaIds, seedQaDatabase } from '../src/db/qa-seed.server'
@@ -81,6 +82,14 @@ if (command === 'inspect') {
   rmSync(directory, { recursive: true })
   console.log(`Removed ${directory}`)
 } else if (command === 'start') {
+  const liveAi = process.env.FINANCAS_QA_AI === '1'
+  if (liveAi) {
+    const local = parse(readFileSync(resolve('.env.local')))
+    for (const name of ['OPENROUTER_API_KEY', 'OPENROUTER_MODEL'] as const) {
+      if (!local[name]) throw new Error(`Missing ${name} in .env.local`)
+      process.env[name] = local[name]
+    }
+  }
   const port = Number(argument ?? 3100)
   const extraRows = Number(portArgument ?? 0)
   if (
@@ -166,6 +175,7 @@ if (command === 'inspect') {
         uploads: join(directory, 'imports'),
         date,
         extraRows,
+        ai: liveAi ? 'LIVE — OpenRouter requests enabled' : 'disabled',
       },
       null,
       2,
@@ -190,8 +200,8 @@ if (command === 'inspect') {
         DATABASE_URL: join(directory, 'finance.db'),
         FINANCAS_QA: '1',
         FINANCAS_DEBUG: '1',
-        OPENROUTER_API_KEY: '',
-        OPENROUTER_MODEL: '',
+        OPENROUTER_API_KEY: liveAi ? process.env.OPENROUTER_API_KEY : '',
+        OPENROUTER_MODEL: liveAi ? process.env.OPENROUTER_MODEL : '',
       },
     },
   )

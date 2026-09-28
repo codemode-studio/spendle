@@ -1,10 +1,12 @@
-import { generateText, Output } from 'ai'
 import { z } from 'zod'
 import { desc, eq } from 'drizzle-orm'
 
 import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
-import { getConfiguredAiModel } from '#/features/finance/ai.server'
+import {
+  generateStructured,
+  getConfiguredAiModel,
+} from '#/features/finance/ai.server'
 import {
   financeAnswerSchema,
   INITIAL_ANALYSIS_REFRESH_MS,
@@ -101,10 +103,10 @@ async function createAnalysisReport(
   initial: boolean,
 ): Promise<MonthlyAnalysis> {
   const model = requireModel()
-  const result = await generateText({
+  const output = await generateStructured({
     model,
-    output: Output.object({ schema: modelReportSchema }),
-    abortSignal: AbortSignal.timeout(60_000),
+    schema: modelReportSchema,
+    timeoutMs: 60_000,
     system: SYSTEM_PROMPT,
     prompt: JSON.stringify({
       task:
@@ -115,7 +117,7 @@ async function createAnalysisReport(
       briefing,
     }),
   })
-  const generated = modelReportSchema.parse(result.output)
+  const generated = modelReportSchema.parse(output)
   const used = new Set<string>()
   const report = monthlyAnalysisSchema.parse({
     ...generated,
@@ -285,10 +287,10 @@ export async function answerFinanceQuestion(
   const initial = saved[0]
     ? []
     : await db.select().from(schema.initialAnalysis).limit(1)
-  const result = await generateText({
+  const output = await generateStructured({
     model,
-    output: Output.object({ schema: financeAnswerSchema }),
-    abortSignal: AbortSignal.timeout(60_000),
+    schema: financeAnswerSchema,
+    timeoutMs: 60_000,
     system: SYSTEM_PROMPT,
     messages: [
       {
@@ -308,5 +310,5 @@ export async function answerFinanceQuestion(
       { role: 'user', content: question },
     ],
   })
-  return financeAnswerSchema.parse(result.output)
+  return financeAnswerSchema.parse(output)
 }

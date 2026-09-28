@@ -3,22 +3,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { comparePdfExtractions, readStatement } from './statement-reader.server'
 
 const mocks = vi.hoisted(() => ({
-  generateText: vi.fn(),
+  generateStructured: vi.fn(),
   inspectPdfStatement: vi.fn(),
 }))
 
 vi.mock('./ai.server', () => ({
-  getConfiguredAiModel: () => 'test-model',
+  generateStructured: mocks.generateStructured,
+  getConfiguredAiModel: () => ({ apiKey: 'test-key', model: 'test/model' }),
 }))
 
 vi.mock('./pdf-inspector.server', () => ({
   inspectPdfStatement: mocks.inspectPdfStatement,
 }))
 
-vi.mock('ai', () => ({
-  generateText: mocks.generateText,
-  Output: { object: vi.fn(() => ({})) },
-}))
 
 vi.mock('pdf-parse', () => ({
   PDFParse: class {
@@ -93,22 +90,18 @@ function aiOutput(
     'raw'
   > = deterministicTransaction,
 ) {
-  return {
-    output: {
-      transactions: [transaction],
-    },
-  }
+  return { transactions: [transaction] }
 }
 
 describe('confirmação independente de PDF por IA', () => {
   beforeEach(() => {
-    mocks.generateText.mockReset()
+    mocks.generateStructured.mockReset()
     mocks.inspectPdfStatement.mockReset()
     mocks.inspectPdfStatement.mockResolvedValue(inspectionWith())
   })
 
   it('mantém as transações determinísticas quando as duas extrações concordam', async () => {
-    mocks.generateText.mockResolvedValue(
+    mocks.generateStructured.mockResolvedValue(
       aiOutput({
         externalId: 'op-1',
         postedAt: '2026-08-07',
@@ -123,7 +116,7 @@ describe('confirmação independente de PDF por IA', () => {
       result.diagnostics.extractionDiagnosticsJson!,
     )
 
-    expect(mocks.generateText).toHaveBeenCalledOnce()
+    expect(mocks.generateStructured).toHaveBeenCalledOnce()
     expect(result).toMatchObject({
       parser: 'pdf_inspector',
       parserId: 'nubank/account-statement/v1',
@@ -143,7 +136,7 @@ describe('confirmação independente de PDF por IA', () => {
   })
 
   it('bloqueia a consolidação quando valor ou evidência da IA divergem', async () => {
-    mocks.generateText.mockResolvedValue(
+    mocks.generateStructured.mockResolvedValue(
       aiOutput({
         externalId: 'op-diferente',
         postedAt: '2026-08-07',
@@ -190,7 +183,7 @@ describe('confirmação independente de PDF por IA', () => {
   })
 
   it('bloqueia para revisão se a confirmação autorizada falhar', async () => {
-    mocks.generateText.mockRejectedValue(new Error('serviço indisponível'))
+    mocks.generateStructured.mockRejectedValue(new Error('serviço indisponível'))
 
     const result = await readStatement({ ...baseInput, aiConsent: true })
     const diagnostics = JSON.parse(
@@ -216,14 +209,14 @@ describe('confirmação independente de PDF por IA', () => {
       result.diagnostics.extractionDiagnosticsJson!,
     )
 
-    expect(mocks.generateText).not.toHaveBeenCalled()
+    expect(mocks.generateStructured).not.toHaveBeenCalled()
     expect(result.diagnostics.blockingReason).toBeNull()
     expect(diagnostics.aiConfirmation.status).toBe('not_requested')
   })
 
   it('mantém o fallback por IA quando o parser determinístico não extrai nada', async () => {
     mocks.inspectPdfStatement.mockResolvedValue(inspectionWith([]))
-    mocks.generateText.mockResolvedValue(aiOutput())
+    mocks.generateStructured.mockResolvedValue(aiOutput())
 
     const result = await readStatement({ ...baseInput, aiConsent: true })
     const diagnostics = JSON.parse(

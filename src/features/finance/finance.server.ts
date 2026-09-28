@@ -482,10 +482,18 @@ export async function categorizeUncategorizedTransactionsWithAi() {
       allowedCategories,
     )
   } catch (error) {
+    const providerError = error as {
+      message?: string
+      statusCode?: number
+      cause?: { message?: string; statusCode?: number }
+    }
     if (
       error instanceof Error &&
-      (/unauthorized|api key|authentication|401/i.test(error.message) ||
-        (error as { statusCode?: number }).statusCode === 401)
+      (/unauthorized|api key|authentication|401/i.test(
+        `${providerError.message ?? ''} ${providerError.cause?.message ?? ''}`,
+      ) ||
+        providerError.statusCode === 401 ||
+        providerError.cause?.statusCode === 401)
     ) {
       throw new Error(
         'O OpenRouter recusou a credencial. Verifique OPENROUTER_API_KEY.',

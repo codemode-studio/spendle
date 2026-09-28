@@ -37,6 +37,8 @@
     "@openrouter/ai-sdk-provider": "^3.0.0",
     "@shadcn/react": "^0.3.1",
     "@tailwindcss/vite": "^4.1.18",
+    "@tanstack/ai": "^0.55.0",
+    "@tanstack/ai-openrouter": "^0.19.12",
     "@tanstack/react-devtools": "0.10.9",
     "@tanstack/react-query": "5.101.4",
     "@tanstack/react-query-devtools": "5.101.4",
