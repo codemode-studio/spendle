@@ -306,6 +306,25 @@ const make = Effect.gen(function* () {
     (connectionId: string) => findProviderAccounts(connectionId),
   )
 
+  // Writes what Pluggy answered only if the connection was not disconnected
+  // meanwhile: an item/deleted or disconnect that landed while Pluggy
+  // answered wins. The check and the writes share one transaction, so a
+  // disconnect cannot slip between them.
+  const whileConnected = <A, E, R>(
+    connectionId: string,
+    write: Effect.Effect<A, E, R>,
+  ) =>
+    sql.withTransaction(
+      Effect.gen(function* () {
+        const live = yield* sql`
+          SELECT 1 FROM open_finance_connections
+          WHERE id = ${connectionId} AND status != 'disconnected'
+        `
+        if (live.length === 0) return yield* fail('connection_disconnected')
+        return yield* write
+      }),
+    )
+
   // Provider fields are refreshed on every read; the ledger link and window are not.
   const storeProviderAccounts = (
     connectionId: string,
@@ -343,9 +362,10 @@ const make = Effect.gen(function* () {
           RETURNING id
         `
       if (updated.length === 0) return yield* fail('connection_disconnected')
-      yield* storeProviderAccounts(
+      const listed = yield* pluggy.listAccounts(item.id)
+      yield* whileConnected(
         current.id,
-        yield* pluggy.listAccounts(item.id),
+        storeProviderAccounts(current.id, listed),
       )
       return yield* connection(current.id)
     })
@@ -379,18 +399,11 @@ const make = Effect.gen(function* () {
     })
   })
 
-  const registerItem = Effect.fn('OpenFinance.registerItem')(function* (input: {
-    readonly connectionId: string
-    readonly itemId: string
-  }) {
-    const current = yield* connection(input.connectionId)
-    if (current.status === 'disconnected')
-      return yield* fail('connection_disconnected')
-    // A token can create several items sharing one clientUserId; the first
-    // registered item stays the connection's item.
-    if (current.itemId !== null && current.itemId !== input.itemId)
-      return yield* fail('item_already_registered')
-    const item = yield* pluggy.getItem(input.itemId)
+  // Attaches a fetched item to the connection, once known to be its own.
+  const attachItem = Effect.fnUntraced(function* (
+    current: Connection,
+    item: PluggyItem,
+  ) {
     // The widget reports the item id from the browser; only an item created
     // with this connection's clientUserId may attach to it.
     if (item.clientUserId !== current.id)
@@ -406,6 +419,42 @@ const make = Effect.gen(function* () {
     if (pinned.length === 0) return yield* fail('item_already_registered')
     yield* applyItem(current, item)
     return yield* providerAccounts(current.id)
+  })
+
+  const registerItem = Effect.fn('OpenFinance.registerItem')(function* (input: {
+    readonly connectionId: string
+    readonly itemId: string
+  }) {
+    const current = yield* connection(input.connectionId)
+    if (current.status === 'disconnected')
+      return yield* fail('connection_disconnected')
+    // A token can create several items sharing one clientUserId; the first
+    // registered item stays the connection's item.
+    if (current.itemId !== null && current.itemId !== input.itemId)
+      return yield* fail('item_already_registered')
+    return yield* attachItem(current, yield* pluggy.getItem(input.itemId))
+  })
+
+  /**
+   * Attaches an item Pluggy reported by webhook to the pending connection
+   * whose connect token created it, when the widget callback never arrived.
+   * The connection is the item's `clientUserId`; an item of no pending
+   * connection here is left alone. Returns the connection it attached to.
+   */
+  const adoptItem = Effect.fn('OpenFinance.adoptItem')(function* (
+    itemId: string,
+  ) {
+    const item = yield* pluggy.getItem(itemId)
+    if (!item.clientUserId) return Option.none<string>()
+    const pending = yield* findConnection(item.clientUserId)
+    if (
+      Option.isNone(pending) ||
+      pending.value.status !== 'pending' ||
+      pending.value.itemId !== null
+    )
+      return Option.none<string>()
+    yield* attachItem(pending.value, item)
+    return Option.some(pending.value.id)
   })
 
   const refreshConnection = Effect.fn('OpenFinance.refreshConnection')(
@@ -779,8 +828,10 @@ const make = Effect.gen(function* () {
     // Everything this read concluded is written at once, after all provider
     // I/O: should any write fail, the transaction facts roll back too, and
     // the retry sees the same changes again instead of finding them stored
-    // and leaving the days they left unjudged.
-    return yield* sql.withTransaction(
+    // and leaving the days they left unjudged. Nothing from this read is
+    // written once the connection is disconnected.
+    return yield* whileConnected(
+      owner.id,
       Effect.gen(function* () {
         const result = yield* observations.recordTransactions({
           sourceId,
@@ -960,11 +1011,14 @@ const make = Effect.gen(function* () {
               continue
             reported.push(normalized.value)
           }
-          const result = yield* observations.recordTransactions({
-            sourceId,
-            accountId,
-            transactions: reported,
-          })
+          const result = yield* whileConnected(
+            owner.id,
+            observations.recordTransactions({
+              sourceId,
+              accountId,
+              transactions: reported,
+            }),
+          )
           return result.recorded.length
         }),
       ),
@@ -1113,6 +1167,7 @@ const make = Effect.gen(function* () {
   return {
     refreshTransactions,
     connectionByItem,
+    adoptItem,
     markItemDeleted,
     removeTransactions,
     createConnectToken,

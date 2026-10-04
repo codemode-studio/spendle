@@ -1,19 +1,23 @@
 import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer'
 import { assert, describe, it } from '@effect/vitest'
+import * as DateTime from 'effect/DateTime'
 import * as Deferred from 'effect/Deferred'
 import * as Effect from 'effect/Effect'
 import * as Fiber from 'effect/Fiber'
 import * as Option from 'effect/Option'
 import * as Redacted from 'effect/Redacted'
 import * as Ref from 'effect/Ref'
+import * as Schema from 'effect/Schema'
 import * as Stream from 'effect/Stream'
 import * as Layer from 'effect/Layer'
+import * as TestClock from 'effect/testing/TestClock'
 import * as HttpClient from 'effect/http/HttpClient'
 import * as HttpClientRequest from 'effect/http/HttpClientRequest'
 import * as HttpRouter from 'effect/http/HttpRouter'
 import * as HttpServer from 'effect/http/HttpServer'
 
 import { EventLog } from '../events/EventLog.ts'
+import { Accounts } from '../ledger/Accounts.ts'
 import { Observations } from '../ledger/Observations.ts'
 import {
   bank,
@@ -23,6 +27,7 @@ import {
   openFinanceTest,
   tx,
 } from '../testing/FakePluggy.ts'
+import { OpenFinance, OpenFinanceError } from './OpenFinance.ts'
 import { acceptWebhook, routes, webhookReceived } from './Webhook.ts'
 
 const secret = 'whsec-0123456789abcdef0123456789abcdef'
@@ -51,6 +56,10 @@ const linkedBank = (transactions: Parameters<typeof tx>[] = []) =>
     yield* drain
     return { ...connected, account }
   })
+
+// The reason of an Open Finance failure, or the failure itself.
+const reasonOf = (error: unknown) =>
+  Schema.is(OpenFinanceError)(error) ? error.reason : error
 
 const currentIds = (accountId: string) =>
   Effect.gen(function* () {
@@ -202,6 +211,82 @@ describe('webhook reactions', () => {
     }).pipe(Effect.provide(openFinanceTest(settings))),
   )
 
+  // A connect token whose widget callback never reached the server.
+  const pendingConnection = Effect.gen(function* () {
+    yield* TestClock.setTime(
+      DateTime.toEpochMillis(DateTime.makeUnsafe('2026-10-04T15:00:00Z')),
+    )
+    const openFinance = yield* OpenFinance
+    const owner = yield* (yield* Accounts).createOwner({
+      name: 'Donald',
+      kind: 'person',
+    })
+    const { connectionId } = yield* openFinance.createConnectToken({
+      ownerId: owner.id,
+    })
+    return { openFinance, connectionId, state: yield* FakePluggyState }
+  })
+
+  it.effect(
+    'attaches the item of item/created to the connection that created it',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, connectionId, state } = yield* pendingConnection
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          clientUserId: connectionId,
+          accounts: [bank],
+        }))
+        yield* deliver({
+          eventId: 'evt-created',
+          event: 'item/created',
+          itemId: 'item-1',
+        })
+        yield* drain
+        const connection = yield* openFinance.connection(connectionId)
+        assert.deepStrictEqual(
+          [connection.itemId, connection.status],
+          ['item-1', 'active'],
+        )
+        assert.deepStrictEqual(
+          (yield* openFinance.providerAccounts(connectionId)).map(
+            (account) => account.providerAccountId,
+          ),
+          ['provider-bank'],
+        )
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect(
+    'leaves pending connections alone for items created by someone else or gone',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, connectionId, state } = yield* pendingConnection
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          clientUserId: 'someone-else',
+          accounts: [bank],
+          deleted: ['item-gone'],
+        }))
+        yield* deliver({
+          eventId: 'evt-foreign',
+          event: 'item/created',
+          itemId: 'item-1',
+        })
+        yield* deliver({
+          eventId: 'evt-gone',
+          event: 'item/updated',
+          itemId: 'item-gone',
+        })
+        yield* drain
+        const connection = yield* openFinance.connection(connectionId)
+        assert.deepStrictEqual(
+          [connection.itemId, connection.status],
+          [null, 'pending'],
+        )
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
   it.effect('ignores events for items it does not know', () =>
     Effect.gen(function* () {
       yield* deliver({
@@ -311,6 +396,175 @@ describe('webhook reactions', () => {
         'disconnected',
       )
     }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect(
+    'marks a vanished item disconnected without deleting it at Pluggy',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, connectionId, state } = yield* linkedBank([
+          ['market', '2026-09-28'],
+        ])
+        // Deleting at Pluggy would fail for good (credentials revoked).
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          gone: true,
+          deleteRefused: 'unauthorized' as const,
+        }))
+        yield* deliver({
+          eventId: 'evt-stale',
+          event: 'transactions/updated',
+          itemId: 'item-1',
+          accountId: 'provider-bank',
+          transactionIds: ['market'],
+        })
+        yield* deliver({
+          eventId: 'evt-after',
+          event: 'item/deleted',
+          itemId: 'item-1',
+        })
+        yield* drain
+        assert.strictEqual(
+          (yield* openFinance.connection(connectionId)).status,
+          'disconnected',
+        )
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect(
+    'marks a vanished item disconnected from a queued sync without deleting it at Pluggy',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, connectionId, state } = yield* linkedBank([
+          ['market', '2026-09-28'],
+        ])
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          gone: true,
+          deleteRefused: 'unauthorized' as const,
+        }))
+        yield* openFinance.requestSync({ connectionId })
+        yield* drain
+        assert.strictEqual(
+          (yield* openFinance.connection(connectionId)).status,
+          'disconnected',
+        )
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect(
+    'keeps item/deleted over a refresh whose item Pluggy sent before it',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, connectionId, account, state } = yield* linkedBank(
+          [['market', '2026-09-28']],
+        )
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: {
+            'provider-bank': [
+              tx('market', '2026-09-28'),
+              tx('pharmacy', '2026-10-04'),
+            ],
+          },
+        }))
+        // Each read takes Pluggy's UPDATED item, then waits until item/deleted
+        // was processed.
+        const held = <A, E>(read: Effect.Effect<A, E>) =>
+          Effect.gen(function* () {
+            const entered = yield* Deferred.make<void>()
+            const release = yield* Deferred.make<void>()
+            yield* Ref.update(state, (current) => ({
+              ...current,
+              afterGetItem: Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+              ),
+            }))
+            const fiber = yield* Effect.forkChild(read)
+            yield* Deferred.await(entered)
+            return { fiber, release }
+          })
+        const refresh = yield* held(openFinance.refreshConnection(connectionId))
+        const sync = yield* held(openFinance.syncAccount('provider-bank'))
+        yield* deliver({
+          eventId: 'evt-gone',
+          event: 'item/deleted',
+          itemId: 'item-1',
+        })
+        yield* drain
+        yield* Deferred.succeed(refresh.release, undefined)
+        yield* Deferred.succeed(sync.release, undefined)
+        const failures = [
+          yield* Effect.flip(Fiber.join(refresh.fiber)),
+          yield* Effect.flip(Fiber.join(sync.fiber)),
+        ]
+        assert.deepStrictEqual(failures.map(reasonOf), [
+          'connection_disconnected',
+          'connection_disconnected',
+        ])
+        assert.strictEqual(
+          (yield* openFinance.connection(connectionId)).status,
+          'disconnected',
+        )
+        assert.deepStrictEqual(yield* currentIds(account.id), ['market'])
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  // Holds `read` after Pluggy answered with a new transaction, processes
+  // item/deleted, then lets it finish: it must fail and record nothing.
+  const readAcrossDeletion = <A, E>(
+    read: (
+      openFinance: Effect.Success<ReturnType<typeof linkedBank>>['openFinance'],
+    ) => Effect.Effect<A, E>,
+  ) =>
+    Effect.gen(function* () {
+      const { openFinance, connectionId, account, state } = yield* linkedBank([
+        ['market', '2026-09-28'],
+      ])
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* Ref.update(state, (current) => ({
+        ...current,
+        transactions: {
+          'provider-bank': [
+            tx('market', '2026-09-28'),
+            tx('pharmacy', '2026-10-04'),
+          ],
+        },
+        gate: { entered, release },
+      }))
+      const fiber = yield* Effect.forkChild(read(openFinance))
+      yield* Deferred.await(entered)
+      yield* deliver({
+        eventId: 'evt-gone',
+        event: 'item/deleted',
+        itemId: 'item-1',
+      })
+      yield* drain
+      yield* Deferred.succeed(release, undefined)
+      const failure = yield* Effect.flip(Fiber.join(fiber))
+      assert.strictEqual(reasonOf(failure), 'connection_disconnected')
+      assert.strictEqual(
+        (yield* openFinance.connection(connectionId)).status,
+        'disconnected',
+      )
+      assert.deepStrictEqual(yield* currentIds(account.id), ['market'])
+    }).pipe(Effect.provide(openFinanceTest(settings)))
+
+  it.effect(
+    'writes nothing from a sync Pluggy answered before item/deleted',
+    () =>
+      readAcrossDeletion((openFinance) =>
+        openFinance.syncAccount('provider-bank'),
+      ),
+  )
+
+  it.effect(
+    'writes nothing from changed transactions Pluggy sent before item/deleted',
+    () =>
+      readAcrossDeletion((openFinance) =>
+        openFinance.refreshTransactions('provider-bank', { ids: ['pharmacy'] }),
+      ),
   )
 
   it.effect('keeps a deletion that arrives while a sync is fetching', () =>
@@ -444,6 +698,31 @@ describe('webhook route', () => {
         ),
       ).pipe(Effect.map((response) => assert.strictEqual(response.status, 413)))
     }),
+  )
+
+  it.live(
+    'answers 413 over a real connection to a chunked body past the drain cap',
+    () =>
+      Effect.gen(function* () {
+        const chunk = new TextEncoder().encode('x'.repeat(16 * 1024))
+        // 2 MiB, twice the amount the route reads before giving up.
+        const response = yield* HttpClient.execute(
+          HttpClientRequest.post('/api/pluggy/webhook').pipe(
+            HttpClientRequest.setHeader('authorization', `Bearer ${secret}`),
+            HttpClientRequest.bodyStream(
+              Stream.fromIterable(Array.from({ length: 128 }, () => chunk)),
+            ),
+          ),
+        )
+        assert.strictEqual(response.status, 413)
+      }).pipe(
+        Effect.provide(
+          HttpRouter.serve(routes, { disableListenLog: true }).pipe(
+            Layer.provideMerge(openFinanceTest(settings)),
+            Layer.provideMerge(NodeHttpServer.layerTest),
+          ),
+        ),
+      ),
   )
 
   it.live(

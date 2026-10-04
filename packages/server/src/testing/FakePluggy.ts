@@ -42,6 +42,8 @@ export interface FakePluggyData {
   readonly afterGetItem?: Effect.Effect<void>
   /** The item's top-level `lastUpdatedAt`. */
   readonly itemLastUpdatedAt?: string
+  /** Pluggy refuses item deletions for this reason (e.g. revoked credentials). */
+  readonly deleteRefused?: PluggyError['reason']
   /** Pluggy removed the item on its side: every read answers 404. */
   readonly gone?: boolean
   /**
@@ -136,10 +138,19 @@ const makeFake = (state: Ref.Ref<FakePluggyData>) =>
         return item
       }),
     deleteItem: (itemId) =>
-      Ref.update(state, (current) => ({
-        ...current,
-        deleted: [...current.deleted, itemId],
-      })),
+      Effect.flatMap(Ref.get(state), (current) =>
+        current.deleteRefused
+          ? Effect.fail(
+              new PluggyError({
+                operation: 'deleteItem',
+                reason: current.deleteRefused,
+              }),
+            )
+          : Ref.update(state, (latest) => ({
+              ...latest,
+              deleted: [...latest.deleted, itemId],
+            })),
+      ),
     listAccounts: (itemId) =>
       Effect.flatMap(Ref.get(state), (current) =>
         current.gone

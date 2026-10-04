@@ -1,3 +1,6 @@
+import * as NodeHttpServerRequest from '@effect/platform-node/NodeHttpServerRequest'
+import * as NodeStream from '@effect/platform-node/NodeStream'
+import * as Cause from 'effect/Cause'
 import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
@@ -5,6 +8,7 @@ import * as Redacted from 'effect/Redacted'
 import * as Schema from 'effect/Schema'
 import * as Stream from 'effect/Stream'
 import * as HttpRouter from 'effect/http/HttpRouter'
+import * as HttpServerError from 'effect/http/HttpServerError'
 import * as HttpServerRequest from 'effect/http/HttpServerRequest'
 import * as HttpServerResponse from 'effect/http/HttpServerResponse'
 
@@ -43,24 +47,74 @@ const decodeJson = Schema.decodeUnknownEffect(
 const decodeStored = Schema.decodeUnknownEffect(PluggyWebhook)
 
 const maximumBodyBytes = 64 * 1024
-// An oversized body is read and discarded up to this size, so the caller
-// receives the 413 instead of a reset connection; beyond it, the connection
-// is dropped.
+// Past `maximumBodyBytes`, the rest of a body is discarded while the 413 goes
+// out; once this much more arrived, and the 413 is sent, the connection is
+// closed.
 const maximumDrainBytes = 1024 * 1024
 
+interface BodySource {
+  readonly stream: Stream.Stream<
+    Uint8Array,
+    HttpServerError.HttpServerError | Cause.UnknownError
+  >
+  /** Discards what the caller still sends, without buffering it. */
+  readonly discardRest: Effect.Effect<void>
+}
+
+/**
+ * Node's own request stream destroys the request, and with it the socket,
+ * when reading stops early, so the 413 would never reach the caller. On Node
+ * the body is read without that finalizer and the rest is discarded until the
+ * response is out. Other runtimes (the web handler) answer independently of
+ * the request body.
+ */
+const bodySource = (
+  request: HttpServerRequest.HttpServerRequest,
+): BodySource => {
+  if (request.source instanceof Request) {
+    return { stream: request.stream, discardRest: Effect.void }
+  }
+  const incoming = NodeHttpServerRequest.toIncomingMessage(request)
+  return {
+    stream: NodeStream.fromReadable({
+      evaluate: () => incoming,
+      closeOnDone: false,
+    }),
+    discardRest: Effect.sync(() => {
+      if (incoming.readableEnded) return
+      const response = NodeHttpServerRequest.toServerResponse(request)
+      const close = () => incoming.destroy()
+      let discarded = 0
+      const discard = (chunk: Uint8Array) => {
+        discarded += chunk.length
+        if (discarded <= maximumDrainBytes) return
+        incoming.off('data', discard)
+        incoming.pause()
+        if (response.writableFinished) close()
+        else response.once('finish', close)
+      }
+      incoming.on('data', discard)
+      incoming.resume()
+    }),
+  }
+}
+
 /** The body as text, or `None` when it exceeds `maximumBodyBytes`. */
-const readBody = (request: HttpServerRequest.HttpServerRequest) =>
+const readBody = (source: BodySource) =>
   Effect.gen(function* () {
     const chunks: Array<Uint8Array> = []
     let size = 0
-    yield* Stream.runForEachWhile(request.stream, (chunk) =>
+    yield* Stream.runForEachWhile(source.stream, (chunk) =>
       Effect.sync(() => {
         size += chunk.length
         if (size <= maximumBodyBytes) chunks.push(chunk)
-        return size <= maximumDrainBytes
+        return size <= maximumBodyBytes
       }),
     )
-    if (size > maximumBodyBytes) return Option.none<string>()
+    if (size > maximumBodyBytes) {
+      yield* source.discardRest
+      return Option.none<string>()
+    }
     const body = new Uint8Array(size)
     let offset = 0
     for (const chunk of chunks) {
@@ -158,7 +212,7 @@ export const routes = HttpRouter.use(
           )
         }
         // The limit also applies while streaming, for bodies without Content-Length.
-        const read = yield* readBody(request).pipe(Effect.result)
+        const read = yield* readBody(bodySource(request)).pipe(Effect.result)
         if (read._tag === 'Failure') {
           return HttpServerResponse.jsonUnsafe(
             { error: 'invalid_event' },
@@ -169,7 +223,7 @@ export const routes = HttpRouter.use(
         if (Option.isNone(body)) {
           return HttpServerResponse.jsonUnsafe(
             { error: 'too_large' },
-            { status: 413, headers: { connection: 'close' } },
+            { status: 413 },
           )
         }
         const result = yield* acceptWebhook({
@@ -186,7 +240,8 @@ export const routes = HttpRouter.use(
 
 /**
  * Turns Pluggy events into ledger work:
- * - item created or updated: refresh the item and sync every linked account
+ * - item created or updated: refresh the item and sync every linked account;
+ *   an unknown item attaches to the pending connection that created it
  * - item errors and waiting states: refresh so the connection shows attention
  * - item deleted: mark the connection disconnected
  * - transactions created or updated: read exactly those transactions (by id,
@@ -202,6 +257,33 @@ const permanent = new Set([
   'not_linked',
 ])
 
+// Attaches an unknown item to the pending connection that created it, then
+// syncs it. Items of no pending connection here are ignored.
+const adopt = (event: string, itemId: string) =>
+  Effect.gen(function* () {
+    const openFinance = yield* OpenFinance
+    const adopted = yield* openFinance.adoptItem(itemId)
+    if (Option.isNone(adopted)) {
+      yield* Effect.logWarning(`Ignoring ${event} for unknown item ${itemId}`)
+      return
+    }
+    yield* openFinance.requestSync({ connectionId: adopted.value })
+  }).pipe(
+    // The connection was disconnected or took another item meanwhile.
+    Effect.catchTag('OpenFinanceError', (error) =>
+      Effect.logWarning(
+        `Ignoring ${event} for item ${itemId}: ${error.message}`,
+      ),
+    ),
+    Effect.catchTag('PluggyError', (error) =>
+      error.reason === 'unavailable'
+        ? Effect.fail(error)
+        : Effect.logWarning(
+            `Ignoring ${event} for item ${itemId}: ${error.message}`,
+          ),
+    ),
+  )
+
 export const reactor = Reactor.layer({
   name: 'pluggy-webhooks',
   types: [webhookReceived],
@@ -214,11 +296,21 @@ export const reactor = Reactor.layer({
         yield* Effect.logDebug(`Ignoring Pluggy event ${webhook.event}`)
         return
       }
-      const connection = yield* openFinance.connectionByItem(webhook.itemId)
+      const itemId = webhook.itemId
+      const connection = yield* openFinance.connectionByItem(itemId)
       if (Option.isNone(connection)) {
-        yield* Effect.logWarning(
-          `Ignoring ${webhook.event} for unknown item ${webhook.itemId}`,
+        // The widget callback may never have arrived: Pluggy's item events
+        // are the recovery, attaching the item to the connection that
+        // requested it.
+        if (
+          webhook.event === 'item/created' ||
+          webhook.event === 'item/updated'
         )
+          yield* adopt(webhook.event, itemId)
+        else
+          yield* Effect.logWarning(
+            `Ignoring ${webhook.event} for unknown item ${itemId}`,
+          )
         return
       }
       const connectionId = connection.value.id
@@ -287,18 +379,21 @@ export const reactor = Reactor.layer({
         // Only an outage is worth retrying; holding the event for anything
         // else would block every later webhook behind it.
         Effect.catchTag('PluggyError', (error) =>
-          error.reason === 'unavailable'
-            ? Effect.fail(error)
-            : error.reason === 'not_found'
-              ? Effect.gen(function* () {
-                  yield* Effect.logWarning(
-                    `Pluggy no longer has item ${webhook.itemId}; disconnecting`,
-                  )
-                  yield* openFinance.disconnect(connectionId)
-                })
-              : Effect.logWarning(
-                  `Skipping ${webhook.event}: ${error.message}`,
-                ),
+          Effect.gen(function* () {
+            if (error.reason === 'unavailable') return yield* error
+            if (error.reason !== 'not_found') {
+              yield* Effect.logWarning(
+                `Skipping ${webhook.event}: ${error.message}`,
+              )
+              return
+            }
+            yield* Effect.logWarning(
+              `Pluggy no longer has item ${itemId}; disconnecting`,
+            )
+            // Pluggy already removed the item: nothing to delete there, and a
+            // provider call here could hold the event forever.
+            yield* openFinance.markItemDeleted(connectionId)
+          }),
         ),
       )
     }),

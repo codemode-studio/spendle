@@ -68,17 +68,20 @@ export const layer = Reactor.layer({
       // Only an outage is worth retrying; holding the event for anything else
       // would block every later sync behind it.
       Effect.catchTag('PluggyError', (error) =>
-        error.reason === 'unavailable'
-          ? Effect.fail(error)
-          : error.reason === 'not_found'
-            ? Effect.gen(function* () {
-                const request = yield* decodeRequest(event.payload)
-                yield* Effect.logWarning(
-                  `Pluggy no longer has the item of connection ${request.connectionId}; disconnecting`,
-                )
-                yield* (yield* OpenFinance).disconnect(request.connectionId)
-              })
-            : Effect.logWarning(`Skipping sync request: ${error.message}`),
+        Effect.gen(function* () {
+          if (error.reason === 'unavailable') return yield* error
+          if (error.reason !== 'not_found') {
+            yield* Effect.logWarning(`Skipping sync request: ${error.message}`)
+            return
+          }
+          const request = yield* decodeRequest(event.payload)
+          yield* Effect.logWarning(
+            `Pluggy no longer has the item of connection ${request.connectionId}; disconnecting`,
+          )
+          // Pluggy already removed the item: nothing to delete there, and a
+          // provider call here could hold the queue forever.
+          yield* (yield* OpenFinance).markItemDeleted(request.connectionId)
+        }),
       ),
     ),
 })

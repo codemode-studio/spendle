@@ -1095,7 +1095,7 @@ describe('OpenFinance', () => {
             invalidated: ['2026-10-02'],
           },
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -1118,7 +1118,7 @@ describe('OpenFinance', () => {
           ),
           { booked: [['2026-10-01', 100000]], invalidated: [] },
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -1139,7 +1139,7 @@ describe('OpenFinance', () => {
             invalidated: ['2026-10-02'],
           },
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -1158,7 +1158,7 @@ describe('OpenFinance', () => {
             invalidated: [],
           },
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   // A 10 September debit closes its day at R$900; Pluggy later dates it 2
@@ -1325,6 +1325,6 @@ describe('OpenFinance', () => {
           ),
           ['market', 'pharmacy'],
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 })
