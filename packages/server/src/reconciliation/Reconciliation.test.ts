@@ -1,5 +1,9 @@
 import { assert, describe, it } from '@effect/vitest'
+import * as Deferred from 'effect/Deferred'
 import * as Effect from 'effect/Effect'
+import * as Fiber from 'effect/Fiber'
+import * as Statement from 'effect/sql/Statement'
+import * as Tracer from 'effect/Tracer'
 
 import { Imports } from '../imports/Imports.ts'
 import { Accounts, CardTerms } from '../ledger/Accounts.ts'
@@ -233,7 +237,13 @@ const decidedThenWithdrawn = (
       assert.notStrictEqual(entries[0]!.id, merged!.id)
       return entries[0]!
     })
-    return { ...setup, transfer: transfer!, merged: merged!, mergeOlder }
+    return {
+      ...setup,
+      transfer: transfer!,
+      merged: merged!,
+      mergeOlder,
+      reportB,
+    }
   })
 
 // A fuller Nubank statement shows another R$ 500,00 sent to Donald on 10 Sep.
@@ -449,6 +459,31 @@ describe('Reconciliation', () => {
   )
 
   it.effect(
+    'rejecting a followed confirmation also covers its withdrawn observation',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, reportB, nubankEntry, merged } =
+          yield* decidedThenWithdrawn('confirmed')
+        const [followed] = yield* reconciliation.relations
+        assert.strictEqual(followed!.inflowEntryId, merged.id)
+        yield* reconciliation.decide(followed!.key, 'rejected')
+        assert.deepStrictEqual(yield* reconciliation.relations, [])
+
+        // The withdrawn Pix returns as a separate salary on 20 Sep: the
+        // person's rejection still covers it, so no confirmation resurfaces.
+        yield* reportB('2026-09-20', 'Salario Donald')
+        assert.isFalse(
+          (yield* reconciliation.relations).some(
+            (relation) =>
+              relation.outflowEntryId === nubankEntry &&
+              (relation.origin === 'person' || relation.status === 'confirmed'),
+          ),
+        )
+        assert.deepStrictEqual(yield* reconciliation.orphanedDecisions, [])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
     'reports a confirmation hidden by merged entries and lets the person reject it',
     () =>
       Effect.gen(function* () {
@@ -598,6 +633,63 @@ describe('Reconciliation', () => {
           [[key, 'person']],
         )
         assert.deepStrictEqual(yield* reconciliation.orphanedDecisions, [])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'keeps a rejection that commits while a rebuild is computing relations',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, report } = yield* twoAccounts
+        yield* report('x1', '2026-09-10', 'Pix recebido Donald')
+        const [transfer] = yield* reconciliation.relations
+        assert.deepStrictEqual(shape([transfer!]), [
+          ['internal_transfer', 'confirmed', 'auto'],
+        ])
+
+        // A rebuild has matched entries and decisions and stops right before
+        // comparing with stored relations.
+        const reached = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const hold: Statement.Transformer = (statement) =>
+          statement.compile()[0].includes('FROM relations ORDER BY key') &&
+          !Deferred.isDoneUnsafe(reached)
+            ? Deferred.succeed(reached, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as(statement),
+              )
+            : Effect.succeed(statement)
+        const rebuild = yield* reconciliation
+          .rebuild()
+          .pipe(
+            Effect.provideService(Statement.CurrentTransformer, hold),
+            Effect.forkChild,
+          )
+        yield* Deferred.await(reached)
+
+        // The person rejects the pair meanwhile. The rebuild resumes once
+        // the rejection either committed or waits for its turn.
+        const waiting = yield* Deferred.make<void>()
+        const base = yield* Effect.tracer
+        const observe = Tracer.make({
+          ...(base.context ? { context: base.context } : {}),
+          span: (options) => {
+            if (options.name === 'Reconciliation.serialize')
+              Deferred.doneUnsafe(waiting, Effect.void)
+            return base.span(options)
+          },
+        })
+        const decide = yield* reconciliation
+          .decide(transfer!.key, 'rejected')
+          .pipe(Effect.withTracer(observe), Effect.forkChild)
+        yield* Effect.raceFirst(Deferred.await(waiting), Fiber.await(decide))
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(rebuild)
+        yield* Fiber.join(decide)
+
+        assert.deepStrictEqual(yield* reconciliation.relations, [])
+        yield* reconciliation.rebuild()
+        assert.deepStrictEqual(yield* reconciliation.relations, [])
       }).pipe(Effect.provide(openFinanceTest())),
   )
 

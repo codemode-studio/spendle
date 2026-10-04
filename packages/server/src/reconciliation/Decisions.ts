@@ -27,6 +27,8 @@ export interface FollowedDecisions {
   readonly decisions: ReadonlyMap<string, Decision>
   /** The stored decision each current key comes from. */
   readonly storedKeys: ReadonlyMap<string, string>
+  /** The current keys each stored decision applies to, whether or not it wins. */
+  readonly currentKeys: ReadonlyMap<string, ReadonlyArray<string>>
   /** Confirmations left out of `decisions` until the person resolves them. */
   readonly split: ReadonlyArray<SplitDecision>
 }
@@ -46,6 +48,7 @@ export const followDecisions = (
 ): FollowedDecisions => {
   const decisions = new Map<string, Decision>()
   const storedKeys = new Map<string, string>()
+  const currentKeys = new Map<string, Array<string>>()
   const split: Array<SplitDecision> = []
   const follow = (id: string, holders: ReadonlyArray<string>) => {
     const current = [...new Set(holders)].filter((holder) =>
@@ -68,13 +71,16 @@ export const followDecisions = (
       })
       continue
     }
+    const keys: Array<string> = []
     for (const outflow of outflows) {
       for (const inflow of inflows) {
         const key = relationKey(kind as RelationKind, outflow, inflow)
         decisions.set(key, decision.decision)
         storedKeys.set(key, decision.key)
+        keys.push(key)
       }
     }
+    currentKeys.set(decision.key, keys)
   }
-  return { decisions, storedKeys, split }
+  return { decisions, storedKeys, currentKeys, split }
 }

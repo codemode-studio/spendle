@@ -4,6 +4,7 @@ import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
 import * as Schema from 'effect/Schema'
+import * as Semaphore from 'effect/Semaphore'
 import * as SqlClient from 'effect/sql/SqlClient'
 import * as SqlSchema from 'effect/sql/SqlSchema'
 
@@ -120,6 +121,12 @@ const sameRelations = (
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   const log = yield* EventLog
+  // Rebuilds and decisions run one at a time, each from reading entries and
+  // decisions to replacing relations: a rebuild never writes relations
+  // computed before a decision that committed meanwhile.
+  const lock = yield* Semaphore.make(1)
+  const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    lock.withPermit(effect).pipe(Effect.withSpan('Reconciliation.serialize'))
 
   const findEntries = SqlSchema.findAll({
     Request: Schema.Void,
@@ -221,7 +228,7 @@ const make = Effect.gen(function* () {
         reason: 'entry_split',
       })),
     ].sort((a, b) => a.key.localeCompare(b.key))
-    return { relations: matching.relations, orphaned }
+    return { relations: matching.relations, orphaned, followed }
   })
 
   /** Confirmations that no longer hold their entries, for the person to resolve. */
@@ -230,35 +237,38 @@ const make = Effect.gen(function* () {
     Effect.withSpan('Reconciliation.orphanedDecisions'),
   )
 
+  // Callers hold `lock`. Reads and the replacement share one transaction.
+  const replaceRelations = sql.withTransaction(
+    Effect.gen(function* () {
+      const sequence = yield* log.latestSequence
+      const matched = (yield* match).relations
+      if (sameRelations(yield* relations, matched)) {
+        yield* markRebuilt(sequence)
+        return false
+      }
+      yield* sql`DELETE FROM relations`
+      for (const relation of matched) {
+        yield* sql`
+          INSERT INTO relations (key, kind, outflow_entry_id, inflow_entry_id, status, origin, score, reasons)
+          VALUES (${relation.key}, ${relation.kind}, ${relation.outflowId}, ${relation.inflowId},
+            ${relation.status}, ${relation.origin}, ${relation.score}, ${yield* encodeReasons(relation.reasons)})
+        `
+      }
+      yield* log.append([
+        {
+          type: relationsChanged,
+          streamId: 'relations',
+          payload: { relations: matched.length },
+        },
+      ])
+      yield* markRebuilt(sequence)
+      return true
+    }),
+  )
+
   /** Recomputes every relation from entries and decisions; emits `RelationsChanged` on change. */
   const rebuild = Effect.fn('Reconciliation.rebuild')(function* () {
-    const sequence = yield* log.latestSequence
-    const matched = (yield* match).relations
-    if (sameRelations(yield* relations, matched)) {
-      yield* markRebuilt(sequence)
-      return false
-    }
-    yield* sql.withTransaction(
-      Effect.gen(function* () {
-        yield* sql`DELETE FROM relations`
-        for (const relation of matched) {
-          yield* sql`
-            INSERT INTO relations (key, kind, outflow_entry_id, inflow_entry_id, status, origin, score, reasons)
-            VALUES (${relation.key}, ${relation.kind}, ${relation.outflowId}, ${relation.inflowId},
-              ${relation.status}, ${relation.origin}, ${relation.score}, ${yield* encodeReasons(relation.reasons)})
-          `
-        }
-        yield* log.append([
-          {
-            type: relationsChanged,
-            streamId: 'relations',
-            payload: { relations: matched.length },
-          },
-        ])
-        yield* markRebuilt(sequence)
-      }),
-    )
-    return true
+    return yield* serialized(replaceRelations)
   })
 
   /** Whether relations already reflect events up to `sequence`. */
@@ -277,10 +287,15 @@ const make = Effect.gen(function* () {
       ON CONFLICT (id) DO UPDATE SET sequence = excluded.sequence
     `
 
-  // Stores the decision with the observations its entries have now, adding
-  // to those recorded earlier, never replacing them: a verdict changed after
-  // an entry split or vanished still covers every observation first decided.
-  const write = Effect.fnUntraced(function* (key: string, decision: Decision) {
+  // Stores the decision with the observations the entries of `current` have
+  // now, adding to those recorded earlier, never replacing them: a verdict
+  // changed after an entry split, merged or vanished still covers every
+  // observation first decided.
+  const write = Effect.fnUntraced(function* (
+    key: string,
+    decision: Decision,
+    current: string = key,
+  ) {
     const decidedAt = DateTime.formatIso(yield* DateTime.now)
     yield* sql`
       INSERT INTO relation_decisions (key, decision, decided_at, revision)
@@ -289,7 +304,7 @@ const make = Effect.gen(function* () {
       ON CONFLICT (key) DO UPDATE SET decision = excluded.decision,
         decided_at = excluded.decided_at, revision = excluded.revision
     `
-    const { outflowId, inflowId } = parseRelationKey(key)
+    const { outflowId, inflowId } = parseRelationKey(current)
     for (const [side, entryId] of [
       ['outflow', outflowId],
       ['inflow', inflowId],
@@ -302,13 +317,30 @@ const make = Effect.gen(function* () {
     }
   })
 
+  // A decision about a current relation updates the stored decisions it
+  // comes from, when they apply to that relation alone, instead of sitting
+  // beside them: the stored one keeps its observations, so its old verdict
+  // cannot resurface once entries diverge again. A relation no stored
+  // decision maps to alone gets its own.
+  const writeDecision = Effect.fnUntraced(function* (
+    key: string,
+    decision: Decision,
+  ) {
+    const { followed } = yield* match
+    const sources = [...followed.currentKeys]
+      .filter(([, keys]) => keys.length === 1 && keys[0] === key)
+      .map(([stored]) => stored)
+    if (sources.length === 0) return yield* write(key, decision)
+    for (const stored of sources) yield* write(stored, decision, key)
+  })
+
   // The decision and the relations it changes commit together: a failed
   // rebuild leaves no decision behind that relations do not reflect.
   const record = (key: string, decision: Decision) =>
     sql.withTransaction(
       Effect.gen(function* () {
-        yield* write(key, decision)
-        yield* rebuild()
+        yield* writeDecision(key, decision)
+        yield* replaceRelations
       }),
     )
 
@@ -316,7 +348,12 @@ const make = Effect.gen(function* () {
    * The person confirms or rejects a suggested or automatic relation, or
    * rejects an orphaned confirmation to release the entry it reserves.
    */
-  const decide = Effect.fn('Reconciliation.decide')(function* (
+  const decide = Effect.fn('Reconciliation.decide')(
+    (key: string, decision: Decision) =>
+      serialized(decideUnlocked(key, decision)),
+  )
+
+  const decideUnlocked = Effect.fnUntraced(function* (
     key: string,
     decision: Decision,
   ) {
@@ -345,7 +382,14 @@ const make = Effect.gen(function* () {
    * The person pairs two entries the matcher missed: an outflow and an
    * inflow of the same amount on different accounts.
    */
-  const link = Effect.fn('Reconciliation.link')(function* (input: {
+  const link = Effect.fn('Reconciliation.link')(
+    (input: {
+      readonly outflowEntryId: string
+      readonly inflowEntryId: string
+    }) => serialized(linkUnlocked(input)),
+  )
+
+  const linkUnlocked = Effect.fnUntraced(function* (input: {
     readonly outflowEntryId: string
     readonly inflowEntryId: string
   }) {
@@ -398,8 +442,8 @@ const make = Effect.gen(function* () {
           if (orphan.reserved.some((id) => id === out.id || id === into.id))
             yield* write(orphan.key, 'rejected')
         }
-        yield* write(key, 'confirmed')
-        yield* rebuild()
+        yield* writeDecision(key, 'confirmed')
+        yield* replaceRelations
         const linked = (yield* relations).some(
           (relation) => relation.key === key && relation.origin === 'person',
         )
