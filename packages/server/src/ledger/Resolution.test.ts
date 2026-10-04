@@ -1,7 +1,7 @@
 import { assert, describe, it } from '@effect/vitest'
 
 import { assignment, problemShapes } from '../domain/Assignment.ts'
-import { addDays } from '../domain/LocalDate.ts'
+import { addDays, daysBetween } from '../domain/LocalDate.ts'
 import {
   balanceProof,
   pairings,
@@ -253,6 +253,58 @@ describe('resolveEntries', () => {
       [a2.anchorId, b3.anchorId, c1.anchorId],
       [a3.anchorId, b5.anchorId, c6.anchorId],
     ])
+  })
+
+  it('regroups a whole run of movements when no pair or triple can repair it', () => {
+    // Four R$10 bakery debits: Pluggy dates them 6-9 Sep; two September
+    // exports without FITIDs date them 4/5/7/10 and 3/4/9/10.
+    const debit = { amountCents: -1000, description: 'Padaria Central' }
+    const september = { start: '2026-09-01', end: '2026-09-30' }
+    const day = (n: number) => `2026-09-${String(n).padStart(2, '0')}`
+    const report = (sourceId: string, n: number) =>
+      observed({
+        sourceId,
+        bookedOn: day(n),
+        coverage: sourceId === 'pluggy' ? null : september,
+        ...debit,
+      })
+    const pluggy = [6, 7, 8, 9].map((n) => report('pluggy', n))
+    const fileA = [4, 5, 7, 10].map((n) => report('a', n))
+    const fileB = [3, 4, 9, 10].map((n) => report('b', n))
+    const observations = [...pluggy, ...fileA, ...fileB]
+    // Four movements, each reported once by every source within the window.
+    const resolved = resolveEntries(observations)
+    assert.strictEqual(resolved.length, 4)
+    for (const entry of resolved) {
+      const dates = entry.evidence.map((evidence) => evidence.bookedOn).sort()
+      assert.deepStrictEqual(
+        entry.evidence.map((evidence) => evidence.sourceId).sort(),
+        ['a', 'b', 'pluggy'],
+      )
+      assert.isAtMost(daysBetween(dates[0]!, dates.at(-1)!), 3)
+    }
+    // Whatever order the observations come in.
+    assert.deepStrictEqual(
+      groups([...observations].reverse()),
+      groups(observations),
+    )
+  })
+
+  it('finds the fewest movements in a dense run of equal debits', () => {
+    // 80 equal debits a day for two days, each reported by three sources
+    // that date it a day apart: 160 movements, 480 reports.
+    const debit = { amountCents: -1000, description: 'Padaria Central' }
+    const days = ['2026-09-10', '2026-09-11']
+    const observations = ['a', 'b', 'c'].flatMap((sourceId, shift) =>
+      days.flatMap((day) =>
+        Array.from({ length: 80 }, () =>
+          observed({ sourceId, bookedOn: addDays(day, shift), ...debit }),
+        ),
+      ),
+    )
+    const resolved = resolveEntries(observations)
+    assert.strictEqual(resolved.length, 160)
+    assert.isTrue(resolved.every((entry) => entry.evidence.length === 3))
   })
 
   it('pairs two continuous daily histories without a history-sized problem', () => {

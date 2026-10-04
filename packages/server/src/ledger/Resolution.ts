@@ -428,74 +428,232 @@ const fewestGroups = (
     : best.groups.map((group) => group.flatMap((index) => units[index]!))
 }
 
+// Two entries may share a movement: some reports of theirs from different
+// sources are compatible and carry no conflicting file transaction ids.
+const linked = (a: Building, b: Building) =>
+  a.evidence.some((x) =>
+    b.evidence.some(
+      (y) =>
+        x.sourceId !== y.sourceId && compatible(x, y) && !conflicting(x, y),
+    ),
+  )
+
+// For each entry, the other entries with a report within the window of one of
+// its own, found by date instead of by scanning every entry.
+const nearby = (entries: ReadonlyArray<Building>) => {
+  const byDay = new Map<number, Array<Building>>()
+  for (const entry of entries)
+    for (const day of new Set(
+      entry.evidence.map((evidence) => dayNumber(evidence.bookedOn)),
+    )) {
+      const list = byDay.get(day) ?? []
+      list.push(entry)
+      byDay.set(day, list)
+    }
+  return (entry: Building) => {
+    const near = new Set<Building>()
+    for (const evidence of entry.evidence) {
+      const day = dayNumber(evidence.bookedOn)
+      for (let offset = -matchWindowDays; offset <= matchWindowDays; offset++)
+        for (const other of byDay.get(day + offset) ?? [])
+          if (other !== entry) near.add(other)
+    }
+    return near
+  }
+}
+
 /**
- * Pairing source by source can commit early pairs that keep a later source
- * from completing movements. This revisits each entry with one or two
- * entries it could share a movement with and regroups their evidence when it
- * fits in fewer entries, until nothing changes. Each change removes an
- * entry, so it ends; entries are visited oldest first, so the result is
- * deterministic.
+ * Entries split into the sets that could trade evidence: two entries are in
+ * the same set when a chain of linked entries joins them. Sets come in the
+ * order of their first entry, members in the order given.
  */
-const regroup = (
+const linkedSets = (
+  entries: ReadonlyArray<Building>,
+): Array<Array<Building>> => {
+  const parent = entries.map((_, index) => index)
+  const find = (index: number): number => {
+    let root = index
+    while (parent[root] !== root) root = parent[root]!
+    while (parent[index] !== root) {
+      const next = parent[index]!
+      parent[index] = root
+      index = next
+    }
+    return root
+  }
+  const position = new Map(entries.map((entry, index) => [entry, index]))
+  const near = nearby(entries)
+  entries.forEach((entry, index) => {
+    for (const other of near(entry)) {
+      const at = position.get(other)!
+      if (at < index || find(at) === find(index)) continue
+      if (linked(entry, other)) parent[find(at)] = find(index)
+    }
+  })
+  const sets = new Map<number, Array<Building>>()
+  entries.forEach((entry, index) => {
+    const root = find(index)
+    const set = sets.get(root) ?? []
+    set.push(entry)
+    sets.set(root, set)
+  })
+  return [...sets.values()]
+}
+
+// Pairs the units source by source in `order`, each unit led by the first of
+// its sources there, as `resolveEntries` does in order of appearance.
+const buildInOrder = (
+  units: ReadonlyArray<ReadonlyArray<ObservedTransaction>>,
+  order: ReadonlyArray<string>,
+): Array<Building> => {
+  const position = new Map(order.map((sourceId, index) => [sourceId, index]))
+  const batches = order.map((): Array<ReadonlyArray<ObservedTransaction>> => [])
+  for (const unit of units)
+    batches[
+      Math.min(
+        ...unit.map((observation) => position.get(observation.sourceId)!),
+      )
+    ]!.push(unit)
+  const built: Array<Building> = []
+  for (const incoming of batches) {
+    const chosen = assign(pairings(incoming, built))
+    const existing = [...built]
+    incoming.forEach((unit, row) => {
+      const column = chosen.get(row)
+      if (column === undefined) built.push({ evidence: [...unit] })
+      else existing[column]!.evidence.push(...unit)
+    })
+  }
+  return built
+}
+
+// With this many sources or fewer, every order is tried.
+const everyOrderUpTo = 4
+
+const permutations = <A>(items: ReadonlyArray<A>): Array<Array<A>> =>
+  items.length <= 1
+    ? [[...items]]
+    : items.flatMap((item, index) =>
+        permutations([...items.slice(0, index), ...items.slice(index + 1)]).map(
+          (rest) => [item, ...rest],
+        ),
+      )
+
+/**
+ * The source orders a set of entries is rebuilt in, after the order of
+ * appearance it was built in: every order for a few sources, else each
+ * source leading once, followed by the others from the most reports down.
+ */
+const sourceOrders = (
+  evidence: ReadonlyArray<ObservedTransaction>,
+): Array<Array<string>> => {
+  const count = new Map<string, number>()
+  for (const item of evidence)
+    count.set(item.sourceId, (count.get(item.sourceId) ?? 0) + 1)
+  // Map insertion order: evidence comes by sequence, so order of appearance.
+  const appearance = [...count.keys()]
+  if (appearance.length <= everyOrderUpTo)
+    return permutations(appearance).slice(1)
+  const byCount = [...appearance].sort((a, b) => count.get(b)! - count.get(a)!)
+  return byCount.map((lead) => [
+    lead,
+    ...byCount.filter((sourceId) => sourceId !== lead),
+  ])
+}
+
+/**
+ * Revisits each entry with one or two entries it could share a movement with
+ * and regroups their evidence when it fits in fewer entries, until nothing
+ * changes or `bound` entries remain. Each change removes an entry, so it
+ * ends; entries are visited oldest first, so the result is deterministic.
+ */
+const regroupLocally = (
   built: ReadonlyArray<Building>,
   unitOf: ReadonlyMap<ObservedTransaction, number>,
+  bound: number,
 ): Array<Building> => {
   let current = [...built]
   let changed = true
-  while (changed) {
+  while (changed && current.length > bound) {
     changed = false
     current.sort((a, b) => firstSequence(a) - firstSequence(b))
-    const byDay = new Map<number, Array<Building>>()
-    for (const entry of current)
-      for (const day of new Set(
-        entry.evidence.map((evidence) => dayNumber(evidence.bookedOn)),
-      )) {
-        const list = byDay.get(day) ?? []
-        list.push(entry)
-        byDay.set(day, list)
-      }
+    const near = nearby(current)
     const rank = new Map(current.map((entry, index) => [entry, index]))
     const gone = new Set<Building>()
     const born: Array<Building> = []
-    const linked = (a: Building, b: Building) =>
-      a.evidence.some((x) =>
-        b.evidence.some(
-          (y) =>
-            x.sourceId !== y.sourceId && compatible(x, y) && !conflicting(x, y),
-        ),
-      )
+    // Replaces `set` with fewer entries when its evidence fits in them.
+    const tryRegroup = (set: Array<Building>) => {
+      const items = set.flatMap((member) => member.evidence)
+      if (items.length > regroupLimit) return false
+      const groups = fewestGroups(items, set.length, unitOf)
+      if (groups === null) return false
+      for (const member of set) gone.add(member)
+      born.push(...groups.map((evidence) => ({ evidence })))
+      return true
+    }
     for (const entry of current) {
+      if (current.length - gone.size + born.length <= bound) break
       if (gone.has(entry)) continue
-      const near = new Set<Building>()
-      for (const evidence of entry.evidence) {
-        const day = dayNumber(evidence.bookedOn)
-        for (let offset = -matchWindowDays; offset <= matchWindowDays; offset++)
-          for (const other of byDay.get(day + offset) ?? [])
-            if (other !== entry && !gone.has(other)) near.add(other)
-      }
-      const neighbors = [...near]
-        .filter((other) => linked(entry, other))
+      const neighbors = [...near(entry)]
+        .filter((other) => !gone.has(other) && linked(entry, other))
         .sort((a, b) => rank.get(a)! - rank.get(b)!)
-      const sets: Array<Array<Building>> = []
-      neighbors.forEach((first, index) => {
-        sets.push([entry, first])
+      search: for (const [index, first] of neighbors.entries()) {
+        if (tryRegroup([entry, first])) {
+          changed = true
+          break
+        }
         for (const second of neighbors.slice(index + 1))
-          sets.push([entry, first, second])
-      })
-      for (const set of sets) {
-        const items = set.flatMap((member) => member.evidence)
-        if (items.length > regroupLimit) continue
-        const groups = fewestGroups(items, set.length, unitOf)
-        if (groups === null) continue
-        for (const member of set) gone.add(member)
-        born.push(...groups.map((evidence) => ({ evidence })))
-        changed = true
-        break
+          if (tryRegroup([entry, first, second])) {
+            changed = true
+            break search
+          }
       }
     }
     current = [...current.filter((entry) => !gone.has(entry)), ...born]
   }
   return current
+}
+
+/**
+ * Pairing source by source can commit early pairs that keep a later source
+ * from completing movements. Each set of entries that could trade evidence
+ * is checked against its lower bound, the most reports one source has in it
+ * (a source reports a movement once). A set above it is rebuilt from its
+ * identity units in other source orders, each source paired as a whole with
+ * every report already in an entry, and the fewest entries kept (the first
+ * order wins a tie, so nothing changes without a gain); then pairs and
+ * triples of neighbouring entries are regrouped exhaustively. Every step
+ * keeps one report per source per entry, units whole, the window, coverage,
+ * description and file transaction id rules, and depends only on the
+ * observations, so the result is deterministic.
+ */
+const regroup = (
+  built: ReadonlyArray<Building>,
+  unitOf: ReadonlyMap<ObservedTransaction, number>,
+): Array<Building> => {
+  const evidenceOf = (entries: ReadonlyArray<Building>) =>
+    entries.flatMap((entry) => entry.evidence).sort(bySequence)
+  // Each set at its bound when the whole is: no set can be above it.
+  if (built.length <= mostFromOneSource(evidenceOf(built))) return [...built]
+  return linkedSets(built).flatMap((set) => {
+    const evidence = evidenceOf(set)
+    const bound = mostFromOneSource(evidence)
+    if (set.length <= bound) return set
+    const byUnit = new Map<number, Array<ObservedTransaction>>()
+    for (const item of evidence) {
+      const key = unitOf.get(item)!
+      byUnit.set(key, [...(byUnit.get(key) ?? []), item])
+    }
+    // Map insertion order: units by their first report.
+    const units = [...byUnit.values()]
+    let best: Array<Building> = set
+    for (const order of sourceOrders(evidence)) {
+      if (best.length <= bound) break
+      const candidate = buildInOrder(units, order)
+      if (candidate.length < best.length) best = candidate
+    }
+    return regroupLocally(best, unitOf, bound)
+  })
 }
 
 /**
@@ -509,8 +667,9 @@ const regroup = (
  * of that amount; a batch is paired with the entries built so far as a whole:
  * the pairing maximizes how many reports find their movement, then prefers
  * close dates and similar descriptions. When pairs made for an earlier
- * source keep a later one from completing movements, neighbouring entries
- * are regrouped into fewer. Reports of other amounts or from unrelated
+ * source keep a later one from completing movements, the entries that could
+ * trade evidence are rebuilt in other source orders and regrouped into
+ * fewer. Reports of other amounts or from unrelated
  * sources cannot change the outcome. A source never reports one movement
  * twice, so identical lines from one source stay separate.
  *

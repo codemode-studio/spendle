@@ -528,6 +528,72 @@ CHARSET:UTF-8
   )
 
   it.effect(
+    'counts each movement once when only regrouping a whole run completes them',
+    () =>
+      Effect.gen(function* () {
+        // Four R$10 bakery debits from R$100 to R$60: Pluggy dates them 6-9
+        // Sep; two September exports without FITIDs date them 4/5/7/10 and
+        // 3/4/9/10.
+        const exported = (days: ReadonlyArray<string>) =>
+          new TextEncoder().encode(`<OFX><STMTRS><CURDEF>BRL<BANKTRANLIST>
+            <DTSTART>20260901<DTEND>20260930
+            ${days.map((day) => `<STMTTRN><DTPOSTED>202609${day}<TRNAMT>-10.00<MEMO>PADARIA CENTRAL</STMTTRN>`).join('')}
+            </BANKTRANLIST><LEDGERBAL><BALAMT>60.00<DTASOF>20260930</LEDGERBAL></STMTRS></OFX>`)
+        const { account, entries } = yield* linkedWithStatement(
+          exported(['04', '05', '07', '10']),
+          {
+            accounts: [{ ...bank, balance: 60 }],
+            transactions: {
+              'provider-bank': [6, 7, 8, 9].map((day) =>
+                tx(`p-${day}`, `2026-09-0${day}`, {
+                  balance: 100 - (day - 5) * 10,
+                  description: 'Padaria Central',
+                }),
+              ),
+            },
+          },
+        )
+        const observations = yield* Observations
+        const opening = yield* observations.registerSource({
+          kind: 'manual',
+          externalRef: 'opening',
+          label: 'opening',
+        })
+        yield* observations.recordBalance({
+          sourceId: opening.id,
+          accountId: account.id,
+          balance: {
+            kind: 'booked',
+            asOf: '2026-09-01',
+            balanceCents: 100_00,
+            currency: 'BRL',
+          },
+        })
+        yield* (yield* Imports).importFile({
+          accountId: account.id,
+          fileName: 'b.ofx',
+          bytes: exported(['03', '04', '09', '10']),
+        })
+        yield* drain
+
+        const resolved = yield* entries.entries(account.id)
+        const proof = yield* entries.balanceProof(account.id)
+        assert.deepStrictEqual(
+          {
+            sources: resolved.map((entry) => entry.sources),
+            total: resolved.reduce((sum, entry) => sum + entry.amountCents, 0),
+            gaps: proof.supported
+              ? proof.intervals.filter(
+                  (interval) => interval.differenceCents !== 0,
+                )
+              : null,
+          },
+          { sources: [3, 3, 3, 3], total: -4000, gaps: [] },
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
     'looks up checkpoint withdrawals by index, not by scanning them all per balance',
     () =>
       Effect.gen(function* () {
