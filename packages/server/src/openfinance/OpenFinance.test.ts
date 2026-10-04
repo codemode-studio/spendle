@@ -1214,6 +1214,123 @@ describe('OpenFinance', () => {
       }).pipe(Effect.provide(TestLayer)),
   )
 
+  // A 10 September debit closes its day at R$900; Pluggy later dates it 2
+  // October, outside the next read's overlap.
+  const rent = tx('rent', '2026-09-10', { amount: 100, balance: 900 })
+  const recent = tx('recent', '2026-10-03')
+  const bookedAndWithdrawn = (accountId: string) =>
+    Effect.gen(function* () {
+      return {
+        booked: (yield* balancesOf(accountId))
+          .filter((balance) => balance.kind === 'booked')
+          .map((balance) => [balance.asOf, balance.balanceCents]),
+        invalidated: (yield* (yield* OpenFinance).invalidatedCheckpoints(
+          accountId,
+        )).map((checkpoint) => checkpoint.asOf),
+      }
+    })
+
+  it.effect(
+    'still withdraws the old day of a moved debit when a retry follows a failed write',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, state } = yield* connect({
+          accounts: [bank],
+          transactions: { 'provider-bank': [rent, recent] },
+        })
+        const account = yield* openFinance.linkAccount({
+          providerAccountId: 'provider-bank',
+          target: { kind: 'checking', purpose: 'operating' },
+          historyMonths: 3,
+        })
+        yield* openFinance.syncAccount('provider-bank')
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: {
+            'provider-bank': [
+              { ...rent, date: '2026-10-02T15:00:00.000Z' },
+              recent,
+            ],
+          },
+        }))
+        // The database refuses one write after the facts were recorded.
+        const sql = yield* SqlClient.SqlClient
+        yield* sql`
+          CREATE TRIGGER fail_once BEFORE INSERT ON open_finance_checkpoint_invalidations
+          BEGIN SELECT RAISE(ABORT, 'disk full'); END
+        `
+        const failed = yield* Effect.result(
+          openFinance.syncAccount('provider-bank'),
+        )
+        yield* sql`DROP TRIGGER fail_once`
+        yield* openFinance.syncAccount('provider-bank')
+        assert.deepStrictEqual(
+          {
+            failed: Result.isFailure(failed),
+            ...(yield* bookedAndWithdrawn(account.id)),
+          },
+          {
+            failed: true,
+            booked: [
+              ['2026-09-10', 90000],
+              ['2026-10-02', 90000],
+            ],
+            invalidated: ['2026-09-10'],
+          },
+        )
+      }).pipe(Effect.provide(ManualLayer)),
+  )
+
+  it.effect(
+    'withdraws the old day of a debit Pluggy moved without a convertible amount',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, state } = yield* connect({
+          accounts: [bank],
+          transactions: { 'provider-bank': [rent, recent] },
+        })
+        const account = yield* openFinance.linkAccount({
+          providerAccountId: 'provider-bank',
+          target: { kind: 'checking', purpose: 'operating' },
+          historyMonths: 3,
+        })
+        yield* openFinance.syncAccount('provider-bank')
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: {
+            'provider-bank': [
+              {
+                ...rent,
+                date: '2026-10-02T15:00:00.000Z',
+                currencyCode: 'USD',
+                amount: 20,
+                amountInAccountCurrency: null,
+                balance: null,
+              },
+              recent,
+            ],
+          },
+        }))
+        yield* openFinance.syncAccount('provider-bank')
+        assert.deepStrictEqual(
+          {
+            facts: (yield* (yield* Observations).current(account.id)).map(
+              (observation) => [observation.externalId, observation.bookedOn],
+            ),
+            ...(yield* bookedAndWithdrawn(account.id)),
+          },
+          {
+            facts: [
+              ['rent', '2026-09-10'],
+              ['recent', '2026-10-03'],
+            ],
+            booked: [['2026-09-10', 90000]],
+            invalidated: ['2026-09-10'],
+          },
+        )
+      }).pipe(Effect.provide(ManualLayer)),
+  )
+
   it.effect(
     'links a ledger account again through a new connection after a disconnect',
     () =>

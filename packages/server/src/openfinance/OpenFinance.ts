@@ -468,12 +468,11 @@ const make = Effect.gen(function* () {
    * running balance from this response, none of its transactions is still
    * unresolved, and those lines agree on one closing balance; today never
    * does, as it may still receive movements. Judged are the days this read
-   * covered and the days a changed transaction left or joined. A judged day
-   * that yields none withdraws the checkpoint an earlier read inferred for
-   * it, even when no posted line remains on it. Should a later read infer
-   * the withdrawn balance again, it is already known and not re-recorded, so
-   * the day stays without a checkpoint: a missing checkpoint is safe, a
-   * stale one is not.
+   * covered and the days a returned transaction left or joined, recorded or
+   * not. A judged day that yields none withdraws the checkpoint an earlier
+   * read inferred for it, even when no posted line remains on it; a later
+   * complete read that infers the withdrawn balance again reinstates it. A
+   * missing checkpoint is safe, a stale one is not.
    */
   const reconcileCheckpoints = Effect.fnUntraced(function* (input: {
     readonly accountId: string
@@ -483,7 +482,11 @@ const make = Effect.gen(function* () {
     readonly dateFrom: string
     readonly dateTo: string
     readonly stored: ReadonlyArray<TransactionObservation>
-    readonly recorded: ReadonlyArray<TransactionObservation>
+    /** Every transaction this response returned, convertible or not, by its reported day. */
+    readonly reported: ReadonlyArray<{
+      readonly externalId: string
+      readonly bookedOn: string
+    }>
     readonly runningBalances: ReadonlyMap<
       string,
       { readonly bookedOn: string; readonly balanceAfterCents: number | null }
@@ -502,9 +505,12 @@ const make = Effect.gen(function* () {
       ]),
     )
     const judged = new Set<string>()
-    for (const observation of input.recorded) {
-      judged.add(observation.bookedOn)
-      const previous = previousDay.get(observation.externalId)
+    // A transaction returned on another day than its stored fact moves away
+    // from that day even when it cannot be recorded (an unconvertible
+    // correction): both days are judged, and the old fact stays as it is.
+    for (const transaction of input.reported) {
+      judged.add(transaction.bookedOn)
+      const previous = previousDay.get(transaction.externalId)
       if (previous !== undefined) judged.add(previous)
     }
     for (const observation of posted)
@@ -731,17 +737,20 @@ const make = Effect.gen(function* () {
       })
     }
 
-    const result = yield* observations.recordTransactions({
-      sourceId,
-      accountId,
-      transactions: reported,
-    })
-    // Only after recording: a failed write must not forget what to re-read.
-    // Every unresolved transaction from `dateFrom` on was covered by this
-    // read: one still unresolved is kept as seen today, one now recorded is
-    // done, and one absent is dropped only after a long absence.
-    yield* sql.withTransaction(
+    // Everything this read concluded is written at once, after all provider
+    // I/O: should any write fail, the transaction facts roll back too, and
+    // the retry sees the same changes again instead of finding them stored
+    // and leaving the days they left unjudged.
+    return yield* sql.withTransaction(
       Effect.gen(function* () {
+        const result = yield* observations.recordTransactions({
+          sourceId,
+          accountId,
+          transactions: reported,
+        })
+        // Every unresolved transaction from `dateFrom` on was covered by this
+        // read: one still unresolved is kept as seen today, one now recorded
+        // is done, and one absent is dropped only after a long absence.
         for (const transaction of reported) {
           yield* sql`
             DELETE FROM open_finance_unresolved
@@ -763,62 +772,65 @@ const make = Effect.gen(function* () {
             DO UPDATE SET booked_on = excluded.booked_on, last_seen_on = excluded.last_seen_on
           `
         }
+        if (item.type === 'BANK') {
+          // Pluggy's account balance is the available balance when accounts were
+          // last collected: kept for reference, never used as a booked
+          // checkpoint. An execution that did not refresh accounts reports an old
+          // balance, which must not be dated today.
+          // A fully successful execution has no `statusDetail`; its collection
+          // time is then the item's `lastUpdatedAt`, or the account's.
+          const accountsStatus = pluggyItem.statusDetail?.accounts
+          if (accountsStatus?.isUpdated !== false) {
+            const collectedAt =
+              accountsStatus?.lastUpdatedAt ??
+              pluggyItem.lastUpdatedAt ??
+              item.updatedAt
+            yield* observations.recordBalance({
+              sourceId,
+              accountId,
+              balance: {
+                kind: 'available',
+                asOf: collectedAt ? bookedOn(collectedAt) : dateTo,
+                balanceCents: toMinorUnits(item.balance, item.currencyCode),
+                currency: item.currencyCode,
+              },
+            })
+          }
+          yield* reconcileCheckpoints({
+            accountId,
+            sourceId,
+            providerAccountId,
+            currency: item.currencyCode,
+            dateFrom,
+            dateTo,
+            stored,
+            reported: fetched.map((transaction) => ({
+              externalId: transaction.id,
+              bookedOn: bookedOn(transaction.date),
+            })),
+            runningBalances,
+          })
+        }
+        const summary: SyncResult = {
+          recorded: result.recorded.length - vanished.length,
+          unchanged: result.unchanged,
+          removed: vanished.length,
+          skipped,
+          providerReady: true,
+        }
+        yield* sql`
+            UPDATE open_finance_connections SET last_synced_at = ${yield* now} WHERE id = ${owner.id}
+          `
+        yield* log.append([
+          {
+            type: accountSynced,
+            streamId: owner.id,
+            payload: { providerAccountId, ...summary },
+          },
+        ])
+        return summary
       }),
     )
-    if (item.type === 'BANK') {
-      // Pluggy's account balance is the available balance when accounts were
-      // last collected: kept for reference, never used as a booked
-      // checkpoint. An execution that did not refresh accounts reports an old
-      // balance, which must not be dated today.
-      // A fully successful execution has no `statusDetail`; its collection
-      // time is then the item's `lastUpdatedAt`, or the account's.
-      const accountsStatus = pluggyItem.statusDetail?.accounts
-      if (accountsStatus?.isUpdated !== false) {
-        const collectedAt =
-          accountsStatus?.lastUpdatedAt ??
-          pluggyItem.lastUpdatedAt ??
-          item.updatedAt
-        yield* observations.recordBalance({
-          sourceId,
-          accountId,
-          balance: {
-            kind: 'available',
-            asOf: collectedAt ? bookedOn(collectedAt) : dateTo,
-            balanceCents: toMinorUnits(item.balance, item.currencyCode),
-            currency: item.currencyCode,
-          },
-        })
-      }
-      yield* reconcileCheckpoints({
-        accountId,
-        sourceId,
-        providerAccountId,
-        currency: item.currencyCode,
-        dateFrom,
-        dateTo,
-        stored,
-        recorded: result.recorded,
-        runningBalances,
-      })
-    }
-    const summary: SyncResult = {
-      recorded: result.recorded.length - vanished.length,
-      unchanged: result.unchanged,
-      removed: vanished.length,
-      skipped,
-      providerReady: true,
-    }
-    yield* sql`
-        UPDATE open_finance_connections SET last_synced_at = ${yield* now} WHERE id = ${owner.id}
-      `
-    yield* log.append([
-      {
-        type: accountSynced,
-        streamId: owner.id,
-        payload: { providerAccountId, ...summary },
-      },
-    ])
-    return summary
   })
 
   const syncAccount = Effect.fn('OpenFinance.syncAccount')(
