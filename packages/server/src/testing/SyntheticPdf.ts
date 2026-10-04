@@ -1,7 +1,8 @@
 /**
  * Builds a one-page text PDF without bank or customer data, the way V1's
  * `generate-pdf-fixture.mjs` did. Each entry is a line of Helvetica text,
- * stacked from the top unless it gives its own position. Text must be ASCII.
+ * stacked from the top unless it gives its own position. Text must be
+ * Latin-1, written in the WinAnsi encoding.
  */
 export const syntheticPdf = (
   entries: ReadonlyArray<
@@ -9,7 +10,11 @@ export const syntheticPdf = (
   >,
 ): Uint8Array => {
   const escape = (text: string) =>
-    text.replace(/[\\()]/g, (char) => `\\${char}`)
+    text.replace(/[\\()]|[^\x20-\x7e]/g, (char) =>
+      /[\\()]/.test(char)
+        ? `\\${char}`
+        : `\\${char.charCodeAt(0).toString(8).padStart(3, '0')}`,
+    )
   const content = entries
     .map((entry, index) => {
       const { text, x, y } =
@@ -25,7 +30,7 @@ export const syntheticPdf = (
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
     '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
     `<< /Length ${length(content)} >>\nstream\n${content}\nendstream`,
   ]
   let pdf = '%PDF-1.4\n'

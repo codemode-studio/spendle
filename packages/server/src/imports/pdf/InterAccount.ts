@@ -7,7 +7,9 @@ import type { LayoutLine, PdfLayout } from './Layout.ts'
 /**
  * Reads an Inter account statement, where days are headed `1 de Junho de
  * 2026 Saldo do dia:` and every movement prints the balance after it. The
- * balances must chain and end at the statement's total balance.
+ * balances must chain and end at the statement's total balance. No opening
+ * balance is printed, so the chain cannot show a lost first movement;
+ * `parsePdf` refuses a file whose positioned text lost one of its amounts.
  */
 export const interAccount: PdfLayout = {
   id: 'inter/account-statement/v1',

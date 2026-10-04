@@ -12,7 +12,7 @@ import { interAccount } from './pdf/InterAccount.ts'
 import { interCard } from './pdf/InterCard.ts'
 import { interGlobal } from './pdf/InterGlobal.ts'
 import { groupLines } from './pdf/Layout.ts'
-import type { PdfLayout, PositionedText } from './pdf/Layout.ts'
+import type { PdfLayout, PositionedLine, PositionedText } from './pdf/Layout.ts'
 import { mercadoPagoAccount } from './pdf/MercadoPagoAccount.ts'
 import { nubankAccount } from './pdf/NubankAccount.ts'
 import { nubankCard } from './pdf/NubankCard.ts'
@@ -73,11 +73,52 @@ export const extractPdfText = Effect.fn('Pdf.extractText')(function* (
 
 const visibleLength = (value: string) => value.replace(/\s+/g, '').length
 
+const moneyToken = /R\$\s*[-−]?\s*((?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})/g
+
+/** How many times each money amount is printed in the given lines. */
+const amountCounts = (lines: ReadonlyArray<string>) => {
+  const counts = new Map<string, number>()
+  for (const line of lines)
+    for (const match of line.matchAll(moneyToken)) {
+      const amount = match[1]!.replace(/\./g, '')
+      counts.set(amount, (counts.get(amount) ?? 0) + 1)
+    }
+  return counts
+}
+
+/**
+ * Whether every money amount the plain text prints was also seen by the
+ * positioned extraction, as many times. Layouts read rows from positioned
+ * lines and check purchases against the printed totals, but rows outside
+ * those totals (bill payments, a statement's first movement) can only be
+ * found missing by comparing the two extractions. Amounts are compared rather than
+ * rows because the plain text splits table cells over separate lines, and
+ * counted because two rows can print the same amount. The sign is ignored:
+ * the count alone tells a lost row, and a sign printed apart from its amount
+ * would otherwise make the two extractions disagree. Consecutive repeated
+ * plain lines, such as text drawn twice to look bold, count once.
+ */
+const seesEveryAmount = (
+  text: string,
+  lines: ReadonlyArray<PositionedLine>,
+) => {
+  const plain = text
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter((line) => line !== '')
+    .filter((line, index, all) => line !== all[index - 1])
+  const positioned = amountCounts(lines.map((line) => line.text))
+  return [...amountCounts(plain)].every(
+    ([amount, count]) => (positioned.get(amount) ?? 0) >= count,
+  )
+}
+
 /**
  * Reads a statement from a PDF's text with the single bank layout that
- * recognizes it. Text a layout cannot see — pages needing OCR, or positioned
- * text much shorter than the plain text — could hide lines, so such a file
- * is refused rather than read partially.
+ * recognizes it. Text a layout cannot see — pages needing OCR, positioned
+ * text much shorter than the plain text, or an amount the positioned text
+ * lost — could hide lines, so such a file is refused rather than read
+ * partially.
  */
 export const parsePdf = (
   pdf: PdfText,
@@ -95,6 +136,8 @@ export const parsePdf = (
   }
 
   const lines = groupLines(pdf.items)
+  if (!seesEveryAmount(pdf.text, lines))
+    return Result.fail('unsupported_format')
   const text = `${pdf.text}\n${lines.map((line) => line.text).join('\n')}`
   const matching = pdfLayouts.filter((layout) => layout.matches(text))
   if (matching.length !== 1) return Result.fail('unsupported_format')

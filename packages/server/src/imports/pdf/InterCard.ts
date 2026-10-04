@@ -40,10 +40,10 @@ const rowPattern =
  * printed at the end. Rows show the purchase date, so an installment is
  * booked in the month it is billed. Bill payments are recorded as money
  * arriving on the card on the day they were made, so they pair with the bank
- * debit; they stay out of the bill's totals.
+ * debit; they stay out of the bill's totals, so `parsePdf` refuses a file
+ * whose positioned text lost an amount, such as a payment.
  */
 export const parseInterCard = ({
-  text,
   lines,
 }: LayoutInput): Result.Result<LayoutStatement, StatementProblem> => {
   const dueDate = dateIn(
@@ -159,16 +159,7 @@ export const parseInterCard = ({
     monthlyExpenses === null ||
     statementTotal + (anticipated ?? 0) === monthlyExpenses ||
     (statementTotal === 0 && (anticipated ?? 0) >= monthlyExpenses)
-  // Every row the plain text shows must have been read from the layout, so a
-  // credit or payment lost in positioning cannot go unnoticed. Extraction may
-  // repeat text, so rows are compared as lines, not counted.
-  const squash = (line: string) => line.replace(/\s+/g, ' ').trim()
-  const read = new Set(rows.map((row) => squash(row.source.text)))
-  const lost = text
-    .split('\n')
-    .map(squash)
-    .some((line) => rowPattern.test(line) && !read.has(line))
-  if (billed.length === 0 || !balanced || !summaryCloses || lost) {
+  if (billed.length === 0 || !balanced || !summaryCloses) {
     return Result.fail('summary_balance_mismatch')
   }
 

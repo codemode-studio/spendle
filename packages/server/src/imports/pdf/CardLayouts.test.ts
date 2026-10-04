@@ -176,30 +176,6 @@ describe('Inter card bill', () => {
     )
   })
 
-  it('refuses a bill whose text shows a row the layout lost', () => {
-    const positioned = gross.filter((item) => !item.text.includes('CRED PARC'))
-    const fixed = positioned.map((item) =>
-      /^Fatura atual/.test(item.text)
-        ? { ...item, text: 'Fatura atual R$ 150,00' }
-        : /^Valor antecipado/.test(item.text)
-          ? { ...item, text: 'Valor antecipado R$ 0,00' }
-          : item,
-    )
-    const text = gross.map((item) => item.text).join('\n')
-    assert.isTrue(Result.isSuccess(read(parseInterCard, fixed)))
-    assert.deepStrictEqual(
-      parseInterCard({ text, lines: groupLines(fixed) }),
-      Result.fail('summary_balance_mismatch'),
-    )
-    // Extraction repeating every line is not a lost row.
-    const repeated = [...fixed, ...fixed].map((item) => item.text).join('\n')
-    assert.isTrue(
-      Result.isSuccess(
-        parseInterCard({ text: repeated, lines: groupLines(fixed) }),
-      ),
-    )
-  })
-
   it('refuses an impossible purchase date before shifting instalments', () => {
     const items = gross.map((item) =>
       item.text.includes('Compra A')
@@ -335,18 +311,6 @@ describe('Nubank card bill', () => {
         ['2026-07-08', 'Pagamento em 08 JUL', 50_000],
       ],
     })
-  })
-
-  it('refuses a bill whose text shows a payment the layout lost', () => {
-    const positioned = items.filter((item) => !item.text.includes('Pagamento'))
-    const text = items.map((item) => item.text).join('\n')
-    assert.deepStrictEqual(
-      parseNubankCard({ text, lines: groupLines(positioned) }),
-      Result.fail('summary_balance_mismatch'),
-    )
-    assert.isTrue(
-      Result.isSuccess(parseNubankCard({ text, lines: groupLines(items) })),
-    )
   })
 
   it('places a cycle spanning the new year in both years', () => {
