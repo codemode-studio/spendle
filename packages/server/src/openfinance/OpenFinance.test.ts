@@ -1094,7 +1094,7 @@ describe('OpenFinance', () => {
   // reports next; returns the booked checkpoints and the withdrawn days.
   const checkpointsAcross = (
     first: ReadonlyArray<PluggyTransaction>,
-    next: ReadonlyArray<PluggyTransaction>,
+    ...later: ReadonlyArray<ReadonlyArray<PluggyTransaction>>
   ) =>
     Effect.gen(function* () {
       const salary = tx('salary', '2026-10-01', {
@@ -1112,12 +1112,14 @@ describe('OpenFinance', () => {
         historyMonths: 3,
       })
       yield* drain
-      yield* Ref.update(state, (current) => ({
-        ...current,
-        transactions: { 'provider-bank': [salary, ...next] },
-      }))
-      yield* openFinance.requestSync({ connectionId })
-      yield* drain
+      for (const next of later) {
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: { 'provider-bank': [salary, ...next] },
+        }))
+        yield* openFinance.requestSync({ connectionId })
+        yield* drain
+      }
       return {
         booked: (yield* balancesOf(account.id))
           .filter((balance) => balance.kind === 'booked')
@@ -1188,6 +1190,25 @@ describe('OpenFinance', () => {
               ['2026-10-02', 85000],
             ],
             invalidated: ['2026-10-02'],
+          },
+        )
+      }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect(
+    'reinstates a withdrawn checkpoint once a complete read confirms it',
+    () =>
+      Effect.gen(function* () {
+        const market = tx('market', '2026-10-02', { amount: 100, balance: 900 })
+        const fee = tx('fee', '2026-10-02', { amount: 50, balance: 850 })
+        assert.deepStrictEqual(
+          yield* checkpointsAcross([market, fee], [market], [market, fee]),
+          {
+            booked: [
+              ['2026-10-01', 100000],
+              ['2026-10-02', 85000],
+            ],
+            invalidated: [],
           },
         )
       }).pipe(Effect.provide(TestLayer)),

@@ -67,13 +67,16 @@ export default Effect.gen(function* () {
   // running balance in the latest read (omitted, unconvertible, or moved to
   // or from the day), or its lines stopped agreeing on one closing balance.
   // The balance observation
-  // stays immutable; this row records that it was withdrawn. Readers of
-  // booked checkpoints from an open_finance source must take the day's latest
-  // observation and treat the day as having no checkpoint when that
-  // observation is listed here (never falling back to an older one).
+  // stays immutable; rows here record that it was withdrawn, or reinstated
+  // when a later complete read confirms the same balance again. The latest
+  // row for an observation decides. Readers of booked checkpoints from an
+  // open_finance source must take the day's latest observation and treat the
+  // day as having no checkpoint when that observation is currently withdrawn
+  // (never falling back to an older one).
   yield* sql`
     CREATE TABLE open_finance_checkpoint_invalidations (
-      balance_observation_id TEXT PRIMARY KEY REFERENCES balance_observations (id),
+      balance_observation_id TEXT NOT NULL REFERENCES balance_observations (id),
+      withdrawn INTEGER NOT NULL CHECK (withdrawn IN (0, 1)),
       account_id TEXT NOT NULL REFERENCES accounts (id),
       source_id TEXT NOT NULL REFERENCES sources (id),
       as_of TEXT NOT NULL,

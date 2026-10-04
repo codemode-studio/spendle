@@ -226,12 +226,14 @@ const make = Effect.gen(function* () {
     Result: Schema.Struct({
       id: Schema.String,
       asOf: Schema.String,
+      balanceCents: Schema.Int,
       invalidated: Schema.Number,
     }),
     execute: ({ accountId, sourceId, from, to }) => sql`
-        SELECT b.id, b.as_of AS asOf,
-          EXISTS (SELECT 1 FROM open_finance_checkpoint_invalidations i
-            WHERE i.balance_observation_id = b.id) AS invalidated
+        SELECT b.id, b.as_of AS asOf, b.balance_cents AS balanceCents,
+          COALESCE((SELECT i.withdrawn FROM open_finance_checkpoint_invalidations i
+            WHERE i.balance_observation_id = b.id ORDER BY i.rowid DESC LIMIT 1), 0)
+            AS invalidated
         FROM balance_observations b
         WHERE b.account_id = ${accountId} AND b.source_id = ${sourceId}
           AND b.kind = 'booked' AND b.as_of >= ${from} AND b.as_of < ${to}
@@ -246,10 +248,15 @@ const make = Effect.gen(function* () {
     Request: Schema.String,
     Result: InvalidatedCheckpoint,
     execute: (accountId) => sql`
-        SELECT balance_observation_id AS balanceObservationId, source_id AS sourceId,
-          as_of AS asOf
-        FROM open_finance_checkpoint_invalidations
-        WHERE account_id = ${accountId} ORDER BY as_of, balance_observation_id
+        SELECT i.balance_observation_id AS balanceObservationId, i.source_id AS sourceId,
+          i.as_of AS asOf
+        FROM open_finance_checkpoint_invalidations i
+        WHERE i.account_id = ${accountId} AND i.withdrawn = 1
+          AND i.rowid = (
+            SELECT max(l.rowid) FROM open_finance_checkpoint_invalidations l
+            WHERE l.balance_observation_id = i.balance_observation_id
+          )
+        ORDER BY i.as_of, i.balance_observation_id
       `,
   })
 
@@ -540,13 +547,23 @@ const make = Effect.gen(function* () {
     }
 
     const invalidatedAt = yield* now
-    for (const previous of previousCheckpoints) {
-      if (previous.invalidated === 1 || closings.has(previous.asOf)) continue
-      yield* sql`
-        INSERT INTO open_finance_checkpoint_invalidations (balance_observation_id, account_id,
-          source_id, as_of, invalidated_at)
-        VALUES (${previous.id}, ${accountId}, ${sourceId}, ${previous.asOf}, ${invalidatedAt})
+    const mark = (
+      previous: (typeof previousCheckpoints)[number],
+      withdrawn: 0 | 1,
+    ) =>
+      sql`
+        INSERT INTO open_finance_checkpoint_invalidations (balance_observation_id, withdrawn,
+          account_id, source_id, as_of, invalidated_at)
+        VALUES (${previous.id}, ${withdrawn}, ${accountId}, ${sourceId}, ${previous.asOf}, ${invalidatedAt})
       `
+    for (const previous of previousCheckpoints) {
+      const closing = closings.get(previous.asOf)
+      // A complete read that confirms a withdrawn balance reinstates it: the
+      // ledger would not record the same balance again.
+      if (previous.invalidated === 1 && closing === previous.balanceCents)
+        yield* mark(previous, 0)
+      else if (previous.invalidated === 0 && closing === undefined)
+        yield* mark(previous, 1)
     }
     for (const [asOf, balanceCents] of [...closings].sort(([a], [b]) =>
       a.localeCompare(b),
