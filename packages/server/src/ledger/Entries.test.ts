@@ -168,32 +168,50 @@ describe('Entries', () => {
     }).pipe(Effect.provide(openFinanceTest())),
   )
 
-  it.effect('leaves out a checkpoint its source withdrew', () =>
-    Effect.gen(function* () {
-      const { account, entries } = yield* linkedWithStatement(
-        new TextEncoder().encode(
-          new TextDecoder()
-            .decode(septemberOfx())
-            .replace('<BALAMT>900.00', '<BALAMT>930.00'),
-        ),
-      )
-      // The statement's 30 September close is withdrawn: its gap goes with it.
-      const sql = yield* SqlClient.SqlClient
-      yield* sql`
+  it.effect(
+    'leaves out a checkpoint its source withdrew, until reinstated',
+    () =>
+      Effect.gen(function* () {
+        const { account, entries } = yield* linkedWithStatement(
+          new TextEncoder().encode(
+            new TextDecoder()
+              .decode(septemberOfx())
+              .replace('<BALAMT>900.00', '<BALAMT>930.00'),
+          ),
+        )
+        // The statement's 30 September close is withdrawn: its gap goes with it.
+        const sql = yield* SqlClient.SqlClient
+        yield* sql`
         INSERT INTO open_finance_checkpoint_invalidations
-          (balance_observation_id, account_id, source_id, as_of, invalidated_at)
-        SELECT id, account_id, source_id, as_of, '2026-10-04T00:00:00Z'
+          (balance_observation_id, withdrawn, account_id, source_id, as_of, invalidated_at)
+        SELECT id, 1, account_id, source_id, as_of, '2026-10-04T00:00:00Z'
         FROM balance_observations
         WHERE account_id = ${account.id} AND kind = 'statement'
       `
-      const proof = yield* entries.balanceProof(account.id)
-      assert.deepStrictEqual(
-        proof.supported
-          ? proof.intervals.map((interval) => interval.differenceCents)
-          : [],
-        [0, 0],
-      )
-    }).pipe(Effect.provide(openFinanceTest())),
+        const differences = Effect.map(
+          entries.balanceProof(account.id),
+          (proof) =>
+            proof.supported
+              ? proof.intervals.map((interval) => interval.differenceCents)
+              : [],
+        )
+        const withdrawn = yield* differences
+        // A later complete read confirmed it again: the gap is back.
+        yield* sql`
+        INSERT INTO open_finance_checkpoint_invalidations
+          (balance_observation_id, withdrawn, account_id, source_id, as_of, invalidated_at)
+        SELECT id, 0, account_id, source_id, as_of, '2026-10-05T00:00:00Z'
+        FROM balance_observations
+        WHERE account_id = ${account.id} AND kind = 'statement'
+      `
+        assert.deepStrictEqual(
+          [withdrawn, yield* differences],
+          [
+            [0, 0],
+            [0, 3000, -3000],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect('keeps entry ids when the account is resolved again', () =>

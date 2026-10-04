@@ -186,10 +186,11 @@ const make = Effect.gen(function* () {
     execute: (accountId) => sql`
       SELECT b.source_id AS sourceId, b.as_of AS asOf, b.balance_cents AS balanceCents,
         b.rowid AS received,
-        EXISTS (
-          SELECT 1 FROM open_finance_checkpoint_invalidations i
-          WHERE i.balance_observation_id = b.id
-        ) AS invalidated
+        -- The latest withdrawal or reinstatement of the report decides.
+        COALESCE((
+          SELECT i.withdrawn FROM open_finance_checkpoint_invalidations i
+          WHERE i.balance_observation_id = b.id ORDER BY i.rowid DESC LIMIT 1
+        ), 0) AS invalidated
       FROM balance_observations b
       WHERE b.account_id = ${accountId} AND b.kind IN ('booked', 'statement')
       ORDER BY b.as_of, b.rowid
