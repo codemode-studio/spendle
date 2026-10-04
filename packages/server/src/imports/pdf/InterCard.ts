@@ -35,13 +35,20 @@ const trailingMoney = (line: PositionedLine | undefined) => {
 const rowPattern =
   /^(\d{2}) de (jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\. (\d{4}) (.+?) [-] (\+\s+)?R\$\s*((?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})$/i
 
+// A row that lost a cell still prints its amount, and starts with a date or
+// names a payment. Purchases must add up to the month's expenses, but a
+// payment is outside them and would vanish unnoticed.
+const rowCandidate =
+  /^\d{2} de (?:jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\.|\bpagamento\s+(?:on\s*line|de\s+fatura)\b/i
+
 /**
  * Reads an Inter card bill. The cycle ends a month before the next cut date
  * printed at the end. Rows show the purchase date, so an installment is
  * booked in the month it is billed. Bill payments are recorded as money
  * arriving on the card on the day they were made, so they pair with the bank
  * debit; they stay out of the bill's totals, so `parsePdf` refuses a file
- * whose positioned text lost an amount, such as a payment.
+ * whose positioned text lost an amount, such as a payment, and a payment row
+ * that kept its amount but cannot be read is rejected.
  */
 export const parseInterCard = ({
   lines,
@@ -82,10 +89,15 @@ export const parseInterCard = ({
   )
   const rows: Array<LayoutLine> = []
   const payments = new Set<LayoutLine>()
+  let rejectedRows = 0
   for (const line of readingOrder(lines)) {
     if (!transactionPages.has(line.bounds.page)) continue
     const match = line.text.match(rowPattern)
-    if (!match) continue
+    if (!match) {
+      if (trailingMoney(line) !== null && rowCandidate.test(line.text))
+        rejectedRows++
+      continue
+    }
     const [, day, rawMonth, year, rawDescription, creditMarker, rawAmount] =
       match
     const description = rawDescription!.replace(/\s+/g, ' ').trim()
@@ -176,7 +188,7 @@ export const parseInterCard = ({
           ...line.text.matchAll(/\b\d{4}\*{4}(\d{4})\b/g),
         ]),
       ) ?? null,
-    rejectedRows: 0,
+    rejectedRows,
   })
 }
 

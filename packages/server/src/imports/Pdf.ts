@@ -73,41 +73,43 @@ export const extractPdfText = Effect.fn('Pdf.extractText')(function* (
 
 const visibleLength = (value: string) => value.replace(/\s+/g, '').length
 
-const moneyToken = /R\$\s*[-−]?\s*((?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})/g
+/**
+ * An amount with two decimals, whatever currency sign precedes it or not:
+ * Brazilian `1.234,56` and dot-decimal `1,234.56`. Digits or a separator
+ * followed by a digit on either side mean it is part of a longer number.
+ */
+const amountToken =
+  /(?<!\d[.,]?)(?:(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}|(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})(?![.,]?\d)/g
 
-/** How many times each money amount is printed in the given lines. */
-const amountCounts = (lines: ReadonlyArray<string>) => {
+/** How many times each amount is printed in the given text. */
+const amountCounts = (text: string) => {
   const counts = new Map<string, number>()
-  for (const line of lines)
-    for (const match of line.matchAll(moneyToken)) {
-      const amount = match[1]!.replace(/\./g, '')
-      counts.set(amount, (counts.get(amount) ?? 0) + 1)
-    }
+  for (const [token] of text.matchAll(amountToken)) {
+    const amount = token.replace(/[.,]/g, '')
+    counts.set(amount, (counts.get(amount) ?? 0) + 1)
+  }
   return counts
 }
 
 /**
- * Whether every money amount the plain text prints was also seen by the
- * positioned extraction, as many times. Layouts read rows from positioned
- * lines and check purchases against the printed totals, but rows outside
- * those totals (bill payments, a statement's first movement) can only be
- * found missing by comparing the two extractions. Amounts are compared rather than
- * rows because the plain text splits table cells over separate lines, and
- * counted because two rows can print the same amount. The sign is ignored:
- * the count alone tells a lost row, and a sign printed apart from its amount
- * would otherwise make the two extractions disagree. Consecutive repeated
- * plain lines, such as text drawn twice to look bold, count once.
+ * Whether every amount the plain text prints was also seen by the positioned
+ * extraction, as many times. Layouts read rows from positioned lines and
+ * check them against the printed totals and balances, but rows those controls
+ * cannot see (bill payments, a statement's first movement, a day of an
+ * account without a running balance, movements that offset) can only be
+ * found missing by comparing the two extractions. Amounts are compared rather
+ * than rows because the plain text splits table cells over separate lines,
+ * even a currency sign from its amount, and counted because two rows can
+ * print the same amount. Currency signs and the sign of the amount are
+ * ignored: layouts print amounts bare, with `$` or with `R$`, and a sign
+ * printed apart from its amount would otherwise make the extractions disagree.
  */
 const seesEveryAmount = (
   text: string,
   lines: ReadonlyArray<PositionedLine>,
 ) => {
-  const plain = text
-    .split('\n')
-    .map((line) => line.replace(/\s+/g, ' ').trim())
-    .filter((line) => line !== '')
-  const positioned = amountCounts(lines.map((line) => line.text))
-  return [...amountCounts(plain)].every(
+  const positioned = amountCounts(lines.map((line) => line.text).join('\n'))
+  return [...amountCounts(text)].every(
     ([amount, count]) => (positioned.get(amount) ?? 0) >= count,
   )
 }

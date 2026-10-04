@@ -17,13 +17,16 @@ import type {
 
 const months = 'JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ'
 
+const trailingAmount = /R\$\s*(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2}$/
+
 /**
  * Reads a Nubank card bill. Rows print day and month only; the year comes
  * from the due date and the cycle, which can span a new year. Payments of
  * earlier bills are recorded as money arriving on the card, so the card
  * ledger and the bank debit can be paired; they are not part of the bill, so
  * only purchases and credits must add up to `Total a pagar`; `parsePdf`
- * refuses a file whose positioned text lost an amount, such as a payment.
+ * refuses a file whose positioned text lost an amount, such as a payment,
+ * and a payment row that kept its amount but cannot be read is rejected.
  */
 export const parseNubankCard = ({
   lines,
@@ -80,12 +83,24 @@ export const parseNubankCard = ({
     `^(\\d{2})\\s+(${months})\\s+(?:(?:[•*]{4})\\s*(\\d{4})\\s+)?(.+?)\\s+([−-]?\\s*R\\$)\\s*((?:\\d{1,3}(?:\\.\\d{3})*|\\d+),\\d{2})$`,
     'i',
   )
+  // A row that lost its date or another cell still prints its amount, and
+  // starts with a date or names a payment. Purchases must add up to the
+  // total, but a payment is outside it and would vanish unnoticed.
+  const rowCandidate = new RegExp(
+    `^\\d{2}\\s+(?:${months})\\b|\\bpagamento\\s+em\\b`,
+    'i',
+  )
   const rows: Array<LayoutLine> = []
   const payments = new Set<LayoutLine>()
+  let rejectedRows = 0
   for (const line of readingOrder(lines)) {
     if (!transactionPages.has(line.bounds.page)) continue
     const match = line.text.match(rowPattern)
-    if (!match) continue
+    if (!match) {
+      if (trailingAmount.test(line.text) && rowCandidate.test(line.text))
+        rejectedRows++
+      continue
+    }
     const [, day, rawMonth, , rawDescription, marker, rawAmount] = match
     const description = rawDescription!.replace(/\s+/g, ' ').trim()
     const payment = /^pagamento\s+em\b/i.test(description)
@@ -137,7 +152,7 @@ export const parseNubankCard = ({
           ...line.text.matchAll(/[•*]{4}\s*(\d{4})\b/g),
         ]),
       ) ?? null,
-    rejectedRows: 0,
+    rejectedRows,
   })
 }
 
