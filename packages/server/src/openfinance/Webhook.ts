@@ -1,8 +1,10 @@
+import * as ByteSize from 'effect/ByteSize'
 import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
 import * as Redacted from 'effect/Redacted'
 import * as Schema from 'effect/Schema'
+import * as IncomingMessage from 'effect/http/HttpIncomingMessage'
 import * as HttpRouter from 'effect/http/HttpRouter'
 import * as HttpServerRequest from 'effect/http/HttpServerRequest'
 import * as HttpServerResponse from 'effect/http/HttpServerResponse'
@@ -16,13 +18,19 @@ import { WebhookConfig } from './WebhookConfig.ts'
 export const webhookPath = '/api/pluggy/webhook'
 export const webhookReceived = 'PluggyWebhookReceived'
 
-/** Pluggy's webhook body. Unknown events are stored and ignored by the reactor. */
+/**
+ * Pluggy's webhook body. Only `eventId` and `event` are common to every event
+ * (connector events carry no item), so the rest is optional; unknown events
+ * are stored and ignored by the reactor.
+ */
 export const PluggyWebhook = Schema.Struct({
   eventId: Schema.NonEmptyString,
   event: Schema.String,
-  itemId: Schema.NonEmptyString,
+  itemId: Schema.optional(Schema.NonEmptyString),
   accountId: Schema.optional(Schema.NonEmptyString),
   transactionIds: Schema.optional(Schema.Array(Schema.NonEmptyString)),
+  /** On transactions/created: the earliest creation time of the new transactions. */
+  transactionsCreatedAtFrom: Schema.optional(Schema.String),
   triggeredBy: Schema.optional(Schema.NullOr(Schema.String)),
   error: Schema.optional(
     Schema.NullOr(
@@ -53,6 +61,20 @@ const constantTimeEquals = (a: string, b: string) => {
   return difference === 0
 }
 
+/** Checks the bearer secret; `None` means authorized. Runs before the body is read. */
+export const authorizeWebhook = Effect.fn('PluggyWebhook.authorize')(function* (
+  authorization: string | undefined,
+) {
+  const settings = yield* WebhookConfig
+  if (Option.isNone(settings))
+    return Option.some({ status: 503, body: { error: 'webhook_disabled' } })
+  const expected = `Bearer ${Redacted.value(settings.value.secret)}`
+  return authorization !== undefined &&
+    constantTimeEquals(authorization, expected)
+    ? Option.none()
+    : Option.some({ status: 401, body: { error: 'unauthorized' } })
+})
+
 /**
  * Validates a delivery and stores it as an event. Pluggy's `eventId` is the
  * event id, so a retried delivery is stored once. The work happens in the
@@ -63,16 +85,8 @@ export const acceptWebhook = Effect.fn('PluggyWebhook.accept')(
     readonly authorization: string | undefined
     readonly body: string
   }) {
-    const settings = yield* WebhookConfig
-    if (Option.isNone(settings))
-      return { status: 503, body: { error: 'webhook_disabled' } }
-    const expected = `Bearer ${Redacted.value(settings.value.secret)}`
-    if (
-      input.authorization === undefined ||
-      !constantTimeEquals(input.authorization, expected)
-    ) {
-      return { status: 401, body: { error: 'unauthorized' } }
-    }
+    const refused = yield* authorizeWebhook(input.authorization)
+    if (Option.isSome(refused)) return refused.value
     if (new TextEncoder().encode(input.body).length > maximumBodyBytes) {
       return { status: 413, body: { error: 'too_large' } }
     }
@@ -89,7 +103,7 @@ export const acceptWebhook = Effect.fn('PluggyWebhook.accept')(
     const stored = yield* log.append([
       {
         type: webhookReceived,
-        streamId: webhook.value.itemId,
+        streamId: webhook.value.itemId ?? webhook.value.event,
         eventId: `pluggy:${webhook.value.eventId}`,
         payload: json.value,
       },
@@ -109,6 +123,13 @@ export const routes = HttpRouter.use(
       webhookPath,
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
+        // Nothing is read from an unauthenticated caller.
+        const refused = yield* authorizeWebhook(request.headers.authorization)
+        if (Option.isSome(refused)) {
+          return HttpServerResponse.jsonUnsafe(refused.value.body, {
+            status: refused.value.status,
+          })
+        }
         const declared = Number(request.headers['content-length'] ?? '0')
         if (declared > maximumBodyBytes) {
           return HttpServerResponse.jsonUnsafe(
@@ -116,10 +137,23 @@ export const routes = HttpRouter.use(
             { status: 413 },
           )
         }
-        const body = yield* request.text.pipe(Effect.orElseSucceed(() => ''))
+        // The limit also applies while streaming, for bodies without Content-Length.
+        const body = yield* request.text.pipe(
+          Effect.provideService(
+            IncomingMessage.MaxBodySize,
+            ByteSize.bytes(maximumBodyBytes),
+          ),
+          Effect.option,
+        )
+        if (Option.isNone(body)) {
+          return HttpServerResponse.jsonUnsafe(
+            { error: 'too_large' },
+            { status: 413 },
+          )
+        }
         const result = yield* acceptWebhook({
           authorization: request.headers.authorization,
-          body,
+          body: body.value,
         })
         return HttpServerResponse.jsonUnsafe(result.body, {
           status: result.status,
@@ -134,7 +168,9 @@ export const routes = HttpRouter.use(
  * - item created or updated: refresh the item and sync every linked account
  * - item errors and waiting states: refresh so the connection shows attention
  * - item deleted: mark the connection disconnected
- * - transactions created or updated: sync the account (or the whole item)
+ * - transactions created or updated: read exactly those transactions (by id,
+ *   or created since the given time), whatever their dates; without those
+ *   details, sync the account or the whole item
  * - transactions deleted: record removed versions for those ids
  */
 export const reactor = Reactor.layer({
@@ -144,6 +180,11 @@ export const reactor = Reactor.layer({
     Effect.gen(function* () {
       const webhook = yield* decodeStored(event.payload)
       const openFinance = yield* OpenFinance
+      // Connector-wide events (e.g. connector/status_updated) concern no item.
+      if (webhook.itemId === undefined) {
+        yield* Effect.logDebug(`Ignoring Pluggy event ${webhook.event}`)
+        return
+      }
       const connection = yield* openFinance.connectionByItem(webhook.itemId)
       if (Option.isNone(connection)) {
         yield* Effect.logWarning(
@@ -168,8 +209,27 @@ export const reactor = Reactor.layer({
         case 'item/deleted':
           yield* openFinance.markItemDeleted(connectionId)
           return
-        case 'transactions/created':
         case 'transactions/updated':
+          if (webhook.accountId && webhook.transactionIds) {
+            yield* openFinance.refreshTransactions(webhook.accountId, {
+              ids: webhook.transactionIds,
+            })
+            return
+          }
+          yield* openFinance.requestSync({
+            connectionId,
+            ...(webhook.accountId
+              ? { providerAccountId: webhook.accountId }
+              : {}),
+          })
+          return
+        case 'transactions/created':
+          if (webhook.accountId && webhook.transactionsCreatedAtFrom) {
+            yield* openFinance.refreshTransactions(webhook.accountId, {
+              createdAtFrom: webhook.transactionsCreatedAtFrom,
+            })
+            return
+          }
           yield* openFinance.requestSync({
             connectionId,
             ...(webhook.accountId

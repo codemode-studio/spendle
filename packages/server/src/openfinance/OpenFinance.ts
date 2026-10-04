@@ -903,6 +903,73 @@ const make = Effect.gen(function* () {
       ),
   )
 
+  /**
+   * Reads specific transactions Pluggy says were created or updated,
+   * wherever they fall in time: a change to an old transaction is outside
+   * the regular sync's overlap. The account's history start still applies to
+   * transactions never seen before; known ones are always updated.
+   */
+  const refreshTransactions = Effect.fn('OpenFinance.refreshTransactions')(
+    (
+      providerAccountId: string,
+      query:
+        | { readonly ids: ReadonlyArray<string> }
+        | { readonly createdAtFrom: string },
+    ) =>
+      lockFor(providerAccountId).withPermits(1)(
+        Effect.gen(function* () {
+          const found = yield* findProviderAccount(providerAccountId)
+          if (
+            Option.isNone(found) ||
+            found.value.accountId === null ||
+            found.value.historyFrom === null
+          )
+            return 0
+          const provider = found.value
+          const accountId = found.value.accountId
+          const historyFrom = found.value.historyFrom
+          const owner = yield* connection(provider.connectionId)
+          if (
+            owner.status === 'disconnected' ||
+            owner.itemId === null ||
+            owner.sourceId === null
+          )
+            return 0
+          const sourceId = owner.sourceId
+          const item = (yield* pluggy.listAccounts(owner.itemId)).find(
+            (candidate) => candidate.id === providerAccountId,
+          )
+          if (!item) return 0
+          const fetched = yield* pluggy.listTransactions({
+            accountId: providerAccountId,
+            ...query,
+          })
+          const known = new Set(
+            (yield* observations.current(accountId))
+              .filter((observation) => observation.sourceId === sourceId)
+              .map((observation) => observation.externalId),
+          )
+          const reported: Array<ReportedTransaction> = []
+          for (const transaction of fetched) {
+            const normalized = toReportedTransaction(item, transaction)
+            if (Option.isNone(normalized)) continue
+            if (
+              normalized.value.bookedOn < historyFrom &&
+              !known.has(normalized.value.externalId)
+            )
+              continue
+            reported.push(normalized.value)
+          }
+          const result = yield* observations.recordTransactions({
+            sourceId,
+            accountId,
+            transactions: reported,
+          })
+          return result.recorded.length
+        }),
+      ),
+  )
+
   const requestSync = Effect.fn('OpenFinance.requestSync')(function* (
     request: typeof SyncRequest.Type,
   ) {
@@ -999,7 +1066,15 @@ const make = Effect.gen(function* () {
       providerAccountId: string,
       transactionIds: ReadonlyArray<string>,
     ) {
-      const provider = yield* providerAccount(providerAccountId)
+      // A deletion for an account that was never copied removes nothing.
+      const found = yield* findProviderAccount(providerAccountId)
+      if (Option.isNone(found)) {
+        yield* Effect.logInfo(
+          `No copied account for Pluggy account ${providerAccountId}; nothing to remove`,
+        )
+        return 0
+      }
+      const provider = found.value
       const owner = yield* connection(provider.connectionId)
       if (provider.accountId === null || owner.sourceId === null) return 0
       const sourceId = owner.sourceId
@@ -1026,6 +1101,7 @@ const make = Effect.gen(function* () {
   )
 
   return {
+    refreshTransactions,
     connectionByItem,
     markItemDeleted,
     removeTransactions,

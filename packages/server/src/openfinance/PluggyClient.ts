@@ -67,12 +67,23 @@ export interface PluggyClientShape {
     readonly secret: Redacted.Redacted
   }) => Effect.Effect<void, PluggyError>
   /** Every transaction booked in `[dateFrom, dateTo]`, following cursor pages. */
-  readonly listTransactions: (input: {
-    readonly accountId: string
-    readonly dateFrom: string
-    readonly dateTo: string
-  }) => Effect.Effect<ReadonlyArray<PluggyTransaction>, PluggyError>
+  readonly listTransactions: (
+    input: TransactionQuery,
+  ) => Effect.Effect<ReadonlyArray<PluggyTransaction>, PluggyError>
 }
+
+/**
+ * Which transactions of an account to read: those booked in a date range,
+ * specific ids (up to 500 per request), or those created since an instant.
+ */
+export type TransactionQuery =
+  | {
+      readonly accountId: string
+      readonly dateFrom: string
+      readonly dateTo: string
+    }
+  | { readonly accountId: string; readonly ids: ReadonlyArray<string> }
+  | { readonly accountId: string; readonly createdAtFrom: string }
 
 // API keys last two hours; refresh a little early so a request never races expiry.
 const apiKeyLifetime = Duration.toMillis(Duration.minutes(115))
@@ -200,6 +211,12 @@ export class PluggyClient extends Context.Service<
               response.status,
             )()
           }
+          // A 204 has no body; the schema decides whether null is acceptable.
+          if (response.status === 204) {
+            return yield* Schema.decodeUnknownEffect(schema)(null).pipe(
+              Effect.mapError(fail(operation, 'invalid', 204)),
+            )
+          }
           return yield* HttpClientResponse.schemaBodyJson(schema)(
             response,
           ).pipe(Effect.mapError(fail(operation, 'invalid')))
@@ -255,7 +272,7 @@ export class PluggyClient extends Context.Service<
           PluggyPage(PluggyAccount),
         ).pipe(Effect.map((page) => page.results))
 
-      const listTransactions: PluggyClientShape['listTransactions'] = (input) =>
+      const listPages = (params: Record<string, string>) =>
         Effect.gen(function* () {
           const all: Array<PluggyTransaction> = []
           let after: string | undefined
@@ -264,9 +281,7 @@ export class PluggyClient extends Context.Service<
               'listTransactions',
               HttpClientRequest.get('/v2/transactions').pipe(
                 HttpClientRequest.setUrlParams({
-                  accountId: input.accountId,
-                  dateFrom: input.dateFrom,
-                  dateTo: input.dateTo,
+                  ...params,
                   ...(after ? { after } : {}),
                 }),
               ),
@@ -282,6 +297,33 @@ export class PluggyClient extends Context.Service<
           return all
         })
 
+      const listTransactions: PluggyClientShape['listTransactions'] = (
+        input,
+      ) => {
+        if ('ids' in input) {
+          const chunks: Array<ReadonlyArray<string>> = []
+          for (let index = 0; index < input.ids.length; index += 500)
+            chunks.push(input.ids.slice(index, index + 500))
+          return Effect.map(
+            Effect.forEach(chunks, (ids) =>
+              listPages({ accountId: input.accountId, ids: ids.join(',') }),
+            ),
+            (pages) => pages.flat(),
+          )
+        }
+        if ('createdAtFrom' in input) {
+          return listPages({
+            accountId: input.accountId,
+            createdAtFrom: input.createdAtFrom,
+          })
+        }
+        return listPages({
+          accountId: input.accountId,
+          dateFrom: input.dateFrom,
+          dateTo: input.dateTo,
+        })
+      }
+
       const ensureWebhook: PluggyClientShape['ensureWebhook'] = (input) =>
         Effect.gen(function* () {
           const subscription = {
@@ -291,11 +333,13 @@ export class PluggyClient extends Context.Service<
               Authorization: `Bearer ${Redacted.value(input.secret)}`,
             },
           }
-          const { results } = yield* send(
+          // Pluggy answers 204 with no body when there are no subscriptions.
+          const listed = yield* send(
             'listWebhooks',
             HttpClientRequest.get('/webhooks'),
-            Webhooks,
+            Schema.NullOr(Webhooks),
           )
+          const results = listed?.results ?? []
           const existing = results.find((webhook) => webhook.url === input.url)
           yield* existing
             ? send(

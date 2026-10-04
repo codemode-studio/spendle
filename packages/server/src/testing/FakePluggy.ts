@@ -134,14 +134,19 @@ const makeFake = (state: Ref.Ref<FakePluggyData>) =>
         Ref.get(state),
         (current) => current.itemAccounts?.[itemId] ?? current.accounts,
       ),
-    listTransactions: ({ accountId, dateFrom, dateTo }) =>
-      Effect.map(Ref.get(state), (current) =>
-        (current.transactions[accountId] ?? []).filter(
+    listTransactions: (query) =>
+      Effect.map(Ref.get(state), (current) => {
+        const all = current.transactions[query.accountId] ?? []
+        if ('ids' in query)
+          return all.filter((transaction) => query.ids.includes(transaction.id))
+        // The fake does not model creation time: everything counts as new.
+        if ('createdAtFrom' in query) return all
+        return all.filter(
           (transaction) =>
-            transaction.date.slice(0, 10) >= dateFrom &&
-            transaction.date.slice(0, 10) <= dateTo,
-        ),
-      ),
+            transaction.date.slice(0, 10) >= query.dateFrom &&
+            transaction.date.slice(0, 10) <= query.dateTo,
+        )
+      }),
   })
 
 /** Open Finance over the in-memory ledger and a fake Pluggy, without reactors: tests drive the work. */

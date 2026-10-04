@@ -151,6 +151,26 @@ describe('PluggyClient', () => {
       }),
   )
 
+  it.effect('creates the subscription when Pluggy lists none with a 204', () =>
+    Effect.gen(function* () {
+      const { pluggy, calls } = yield* fakePluggy((url, method) => {
+        if (url.pathname === '/auth') return json({ apiKey: 'key' })
+        if (url.pathname === '/webhooks' && method === 'GET')
+          return new Response(null, { status: 204 })
+        if (url.pathname === '/webhooks' && method === 'POST')
+          return json({ id: 'wh-1' })
+      })
+      yield* pluggy.ensureWebhook({
+        url: 'https://spendle.example/api/pluggy/webhook',
+        secret: Redacted.make('s'),
+      })
+      assert.deepStrictEqual(
+        (yield* calls).filter((call) => !call.startsWith('POST /auth')),
+        ['GET /webhooks key', 'POST /webhooks key'],
+      )
+    }),
+  )
+
   it.effect('reports a missing configuration without calling Pluggy', () =>
     Effect.gen(function* () {
       const pluggy = yield* PluggyClient.make({

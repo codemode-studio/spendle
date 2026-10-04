@@ -3,6 +3,9 @@ import * as Effect from 'effect/Effect'
 import * as Option from 'effect/Option'
 import * as Redacted from 'effect/Redacted'
 import * as Ref from 'effect/Ref'
+import * as Layer from 'effect/Layer'
+import * as HttpRouter from 'effect/http/HttpRouter'
+import * as HttpServer from 'effect/http/HttpServer'
 
 import { EventLog } from '../events/EventLog.ts'
 import { Observations } from '../ledger/Observations.ts'
@@ -14,7 +17,7 @@ import {
   openFinanceTest,
   tx,
 } from '../testing/FakePluggy.ts'
-import { acceptWebhook, webhookReceived } from './Webhook.ts'
+import { acceptWebhook, routes, webhookReceived } from './Webhook.ts'
 
 const secret = 'whsec-0123456789abcdef0123456789abcdef'
 const settings = Option.some({
@@ -202,5 +205,168 @@ describe('webhook reactions', () => {
       })
       yield* drain
     }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect(
+    'reads exactly the transactions Pluggy says changed, however old',
+    () =>
+      Effect.gen(function* () {
+        const { account, state } = yield* linkedBank([
+          ['old', '2026-08-15'],
+          ['recent', '2026-10-03'],
+        ])
+        // 15 August is far outside the regular sync's overlap.
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: {
+            'provider-bank': [
+              tx('old', '2026-08-15', { amount: 99 }),
+              tx('recent', '2026-10-03'),
+              tx('late-arrival', '2026-08-20'),
+            ],
+          },
+        }))
+        yield* deliver({
+          eventId: 'evt-upd',
+          event: 'transactions/updated',
+          itemId: 'item-1',
+          accountId: 'provider-bank',
+          transactionIds: ['old'],
+        })
+        yield* deliver({
+          eventId: 'evt-new',
+          event: 'transactions/created',
+          itemId: 'item-1',
+          accountId: 'provider-bank',
+          transactionsCreatedAtFrom: '2026-10-04T10:00:00.000Z',
+        })
+        yield* drain
+        const current = yield* (yield* Observations).current(account.id)
+        assert.deepStrictEqual(
+          current.map((observation) => [
+            observation.externalId,
+            observation.amountCents,
+          ]),
+          [
+            ['old', -9900],
+            ['late-arrival', -1000],
+            ['recent', -1000],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect(
+    'keeps processing after a deletion for an account it never copied',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, connectionId } = yield* linkedBank()
+        yield* deliver({
+          eventId: 'evt-del',
+          event: 'transactions/deleted',
+          itemId: 'item-1',
+          accountId: 'provider-unknown',
+          transactionIds: ['x'],
+        })
+        yield* deliver({
+          eventId: 'evt-gone',
+          event: 'item/deleted',
+          itemId: 'item-1',
+        })
+        yield* drain
+        assert.strictEqual(
+          (yield* openFinance.connection(connectionId)).status,
+          'disconnected',
+        )
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect('accepts connector events, which carry no item', () =>
+    Effect.gen(function* () {
+      const result = yield* deliver({
+        eventId: 'evt-conn',
+        event: 'connector/status_updated',
+        data: { connectorId: 1, status: 'UNSTABLE' },
+      })
+      assert.strictEqual(result.status, 202)
+      yield* drain
+    }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+})
+
+describe('webhook route', () => {
+  // Serves the route in memory with the test services behind it.
+  const withRoute = <A, E>(
+    use: (
+      fetch: (request: Request) => Promise<Response>,
+    ) => Effect.Effect<A, E>,
+  ) =>
+    Effect.acquireRelease(
+      Effect.sync(() =>
+        HttpRouter.toWebHandler(
+          routes.pipe(
+            Layer.provideMerge(openFinanceTest(settings)),
+            Layer.provideMerge(HttpServer.layerServices),
+          ),
+        ),
+      ),
+      ({ dispose }) => Effect.promise(dispose),
+    ).pipe(
+      Effect.flatMap(({ handler }) => use((request) => handler(request))),
+      Effect.scoped,
+    )
+
+  it.live('rejects an unauthenticated caller without reading its body', () =>
+    withRoute((fetch) => {
+      let pulled = false
+      // With no buffer, the stream is pulled only when someone reads it.
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            pulled = true
+            controller.close()
+          },
+        },
+        { highWaterMark: 0 },
+      )
+      return Effect.promise(() =>
+        fetch(
+          new Request('http://spendle.test/api/pluggy/webhook', {
+            method: 'POST',
+            headers: { authorization: 'Bearer guess' },
+            body,
+            duplex: 'half',
+          } as RequestInit),
+        ),
+      ).pipe(
+        Effect.map((response) =>
+          assert.deepStrictEqual([response.status, pulled], [401, false]),
+        ),
+      )
+    }),
+  )
+
+  it.live('stops reading a streamed body past the limit', () =>
+    withRoute((fetch) => {
+      const chunk = new TextEncoder().encode('x'.repeat(16 * 1024))
+      let sent = 0
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          sent++
+          if (sent > 20) controller.close()
+          else controller.enqueue(chunk)
+        },
+      })
+      return Effect.promise(() =>
+        fetch(
+          new Request('http://spendle.test/api/pluggy/webhook', {
+            method: 'POST',
+            headers: { authorization: `Bearer ${secret}` },
+            body,
+            duplex: 'half',
+          } as RequestInit),
+        ),
+      ).pipe(Effect.map((response) => assert.strictEqual(response.status, 413)))
+    }),
   )
 })
