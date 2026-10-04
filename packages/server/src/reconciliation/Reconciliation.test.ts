@@ -153,6 +153,24 @@ describe('Reconciliation', () => {
           error._tag === 'ReconciliationError' && error.reason,
           'not_a_pair',
         )
+
+        // A second link for an entry the person already linked is refused,
+        // instead of succeeding without effect.
+        yield* (yield* Imports).importFile({
+          accountId: inter.id,
+          fileName: 'inter-3.ofx',
+          bytes: ofx(line('i3', '20260926', '80.00', 'Outro')),
+        })
+        yield* drain
+        const entries = yield* (yield* Entries).entries(inter.id)
+        const other = entries.find((item) => item.description === 'Outro')!.id
+        const again = yield* reconciliation
+          .link({ outflowEntryId: market, inflowEntryId: other })
+          .pipe(Effect.flip)
+        assert.strictEqual(
+          again._tag === 'ReconciliationError' && again.reason,
+          'already_linked',
+        )
       }).pipe(Effect.provide(openFinanceTest())),
   )
 })

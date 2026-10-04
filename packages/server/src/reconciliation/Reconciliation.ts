@@ -20,7 +20,7 @@ export class Relation extends Schema.Class<Relation>('Relation')({
   kind: Schema.Literals(['internal_transfer', 'card_payment']),
   outflowEntryId: Schema.String,
   inflowEntryId: Schema.String,
-  status: Schema.Literals(['suggested', 'confirmed']),
+  status: Schema.Literals(['suggested', 'confirmed', 'conflict']),
   origin: Schema.Literals(['auto', 'person']),
   score: Schema.Int,
   reasons: Schema.Array(Schema.String),
@@ -33,6 +33,7 @@ export class ReconciliationError extends Schema.TaggedError<ReconciliationError>
       'relation_not_found',
       'entry_not_found',
       'not_a_pair',
+      'already_linked',
     ]),
     detail: Schema.optional(Schema.String),
   },
@@ -54,6 +55,8 @@ const EntryRow = Schema.Struct({
   ]),
   bookedOn: Schema.String,
   amountCents: Schema.Int,
+  currency: Schema.String,
+  status: Schema.Literals(['pending', 'posted']),
   description: Schema.String,
 })
 
@@ -62,7 +65,7 @@ const RelationRow = Schema.Struct({
   kind: Schema.Literals(['internal_transfer', 'card_payment']),
   outflowEntryId: Schema.String,
   inflowEntryId: Schema.String,
-  status: Schema.Literals(['suggested', 'confirmed']),
+  status: Schema.Literals(['suggested', 'confirmed', 'conflict']),
   origin: Schema.Literals(['auto', 'person']),
   score: Schema.Int,
   reasons: Schema.fromJsonString(Schema.Array(Schema.String)),
@@ -72,19 +75,28 @@ const encodeReasons = Schema.encodeEffect(
   Schema.fromJsonString(Schema.Array(Schema.String)),
 )
 
+// Equal only when every stored relation matches in full: kind, legs, status,
+// origin, score and reasons all reach readers.
 const sameRelations = (
   stored: ReadonlyArray<Relation>,
   matched: ReadonlyArray<MatchedRelation>,
-) =>
-  stored.length === matched.length &&
-  matched.every((relation) => {
-    const found = stored.find((candidate) => candidate.key === relation.key)
+) => {
+  if (stored.length !== matched.length) return false
+  const byKey = new Map(stored.map((relation) => [relation.key, relation]))
+  return matched.every((relation) => {
+    const found = byKey.get(relation.key)
     return (
       found !== undefined &&
+      found.kind === relation.kind &&
+      found.outflowEntryId === relation.outflowId &&
+      found.inflowEntryId === relation.inflowId &&
       found.status === relation.status &&
-      found.score === relation.score
+      found.origin === relation.origin &&
+      found.score === relation.score &&
+      found.reasons.join('|') === relation.reasons.join('|')
     )
   })
+}
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -95,7 +107,7 @@ const make = Effect.gen(function* () {
     Result: EntryRow,
     execute: () => sql`
       SELECT e.id, e.account_id AS accountId, a.kind AS accountKind, e.booked_on AS bookedOn,
-        e.amount_cents AS amountCents, e.description
+        e.amount_cents AS amountCents, e.currency, e.status, e.description
       FROM ledger_entries e JOIN accounts a ON a.id = e.account_id
       WHERE a.archived_at IS NULL
     `,
@@ -105,7 +117,7 @@ const make = Effect.gen(function* () {
     Result: EntryRow,
     execute: (id) => sql`
       SELECT e.id, e.account_id AS accountId, a.kind AS accountKind, e.booked_on AS bookedOn,
-        e.amount_cents AS amountCents, e.description
+        e.amount_cents AS amountCents, e.currency, e.status, e.description
       FROM ledger_entries e JOIN accounts a ON a.id = e.account_id WHERE e.id = ${id}
     `,
   })
@@ -131,13 +143,27 @@ const make = Effect.gen(function* () {
     Effect.withSpan('Reconciliation.relations'),
   )
 
-  /** Recomputes every relation from entries and decisions; emits `RelationsChanged` on change. */
-  const rebuild = Effect.fn('Reconciliation.rebuild')(function* () {
+  const match = Effect.gen(function* () {
     const decisions = new Map<string, Decision>(
       (yield* findDecisions(undefined)).map((row) => [row.key, row.decision]),
     )
-    const matched = matchRelations(yield* findEntries(undefined), decisions)
-    if (sameRelations(yield* relations, matched)) return false
+    return matchRelations(yield* findEntries(undefined), decisions)
+  })
+
+  /** Confirmations whose entry no longer exists, for the person to resolve. */
+  const orphanedDecisions = match.pipe(
+    Effect.map((matching) => matching.orphaned),
+    Effect.withSpan('Reconciliation.orphanedDecisions'),
+  )
+
+  /** Recomputes every relation from entries and decisions; emits `RelationsChanged` on change. */
+  const rebuild = Effect.fn('Reconciliation.rebuild')(function* () {
+    const sequence = yield* log.latestSequence
+    const matched = (yield* match).relations
+    if (sameRelations(yield* relations, matched)) {
+      yield* markRebuilt(sequence)
+      return false
+    }
     yield* sql.withTransaction(
       Effect.gen(function* () {
         yield* sql`DELETE FROM relations`
@@ -155,20 +181,41 @@ const make = Effect.gen(function* () {
             payload: { relations: matched.length },
           },
         ])
+        yield* markRebuilt(sequence)
       }),
     )
     return true
   })
 
+  /** Whether relations already reflect events up to `sequence`. */
+  const rebuiltThrough = Effect.fn('Reconciliation.rebuiltThrough')(function* (
+    sequence: number,
+  ) {
+    const rows = yield* sql<{
+      sequence: number
+    }>`SELECT sequence FROM reconciliation_state WHERE id = 1`
+    return (rows[0]?.sequence ?? -1) >= sequence
+  })
+
+  const markRebuilt = (sequence: number) =>
+    sql`
+      INSERT INTO reconciliation_state (id, sequence) VALUES (1, ${sequence})
+      ON CONFLICT (id) DO UPDATE SET sequence = excluded.sequence
+    `
+
+  // The decision and the relations it changes commit together: a failed
+  // rebuild leaves no decision behind that relations do not reflect.
   const record = (key: string, decision: Decision) =>
-    Effect.gen(function* () {
-      const decidedAt = DateTime.formatIso(yield* DateTime.now)
-      yield* sql`
-        INSERT INTO relation_decisions (key, decision, decided_at) VALUES (${key}, ${decision}, ${decidedAt})
-        ON CONFLICT (key) DO UPDATE SET decision = excluded.decision, decided_at = excluded.decided_at
-      `
-      yield* rebuild()
-    })
+    sql.withTransaction(
+      Effect.gen(function* () {
+        const decidedAt = DateTime.formatIso(yield* DateTime.now)
+        yield* sql`
+          INSERT INTO relation_decisions (key, decision, decided_at) VALUES (${key}, ${decision}, ${decidedAt})
+          ON CONFLICT (key) DO UPDATE SET decision = excluded.decision, decided_at = excluded.decided_at
+        `
+        yield* rebuild()
+      }),
+    )
 
   /** The person confirms or rejects a suggested or automatic relation. */
   const decide = Effect.fn('Reconciliation.decide')(function* (
@@ -211,18 +258,32 @@ const make = Effect.gen(function* () {
     if (
       out.amountCents >= 0 ||
       into.amountCents !== -out.amountCents ||
+      out.currency !== into.currency ||
       out.accountId === into.accountId ||
       out.accountKind === 'credit_card'
     ) {
       return yield* new ReconciliationError({ reason: 'not_a_pair' })
     }
+    // A link never silently loses to an earlier confirmation of either entry.
+    const held = (yield* relations).find(
+      (relation) =>
+        relation.origin === 'person' &&
+        [relation.outflowEntryId, relation.inflowEntryId].some(
+          (id) => id === out.id || id === into.id,
+        ),
+    )
+    if (held)
+      return yield* new ReconciliationError({
+        reason: 'already_linked',
+        detail: held.key,
+      })
     const kind =
       into.accountKind === 'credit_card' ? 'card_payment' : 'internal_transfer'
     yield* record(relationKey(kind, out.id, into.id), 'confirmed')
     return relationKey(kind, out.id, into.id)
   })
 
-  return { relations, rebuild, decide, link }
+  return { relations, orphanedDecisions, rebuild, rebuiltThrough, decide, link }
 })
 
 export class Reconciliation extends Context.Service<
@@ -236,8 +297,10 @@ export class Reconciliation extends Context.Service<
 export const reactor = Reactor.layer({
   name: 'reconciliation',
   types: [entriesResolved],
-  handle: () =>
+  handle: (event) =>
     Effect.gen(function* () {
-      yield* (yield* Reconciliation).rebuild()
+      const reconciliation = yield* Reconciliation
+      if (yield* reconciliation.rebuiltThrough(event.sequence)) return
+      yield* reconciliation.rebuild()
     }),
 })

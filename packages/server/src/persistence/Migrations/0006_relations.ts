@@ -19,10 +19,18 @@ export default Effect.gen(function* () {
       kind TEXT NOT NULL CHECK (kind IN ('internal_transfer', 'card_payment')),
       outflow_entry_id TEXT NOT NULL UNIQUE,
       inflow_entry_id TEXT NOT NULL UNIQUE,
-      status TEXT NOT NULL CHECK (status IN ('suggested', 'confirmed')),
+      status TEXT NOT NULL CHECK (status IN ('suggested', 'confirmed', 'conflict')),
       origin TEXT NOT NULL CHECK (origin IN ('auto', 'person')),
       score INTEGER NOT NULL,
       reasons TEXT NOT NULL
+    )
+  `
+  // The last event sequence relations reflect, so a burst of entry changes
+  // rebuilds them once.
+  yield* sql`
+    CREATE TABLE reconciliation_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      sequence INTEGER NOT NULL
     )
   `
 })
