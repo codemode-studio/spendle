@@ -358,6 +358,47 @@ describe('Reconciliation', () => {
       }).pipe(Effect.provide(openFinanceTest())),
   )
 
+  it.effect(
+    'keeps every branch of a split confirmation rejected once the person rejects it',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, report, interEntries, inter } =
+          yield* twoAccounts
+        // Inter's feed and statement report one Pix, which the person confirms.
+        yield* report('a1', '2026-09-10', 'Pix recebido Donald')
+        yield* (yield* Imports).importFile({
+          accountId: inter.id,
+          fileName: 'inter.ofx',
+          bytes: ofx(line('i1', '20260910', '500.00', 'Pix recebido Donald')),
+        })
+        yield* drain
+        assert.strictEqual((yield* interEntries).length, 1)
+        const [transfer] = yield* reconciliation.relations
+        yield* reconciliation.decide(transfer!.key, 'confirmed')
+
+        // The feed corrects its report into another movement: the entry
+        // splits, one branch keeping the confirmed id.
+        yield* report('a1', '2026-09-11', 'Deposito')
+        const split = yield* interEntries
+        assert.isTrue(
+          split.length === 2 &&
+            split.some((entry) => entry.id === transfer!.inflowEntryId),
+        )
+        assert.deepStrictEqual(
+          (yield* reconciliation.orphanedDecisions).map((orphan) => [
+            orphan.key,
+            orphan.reason,
+          ]),
+          [[transfer!.key, 'entry_split']],
+        )
+
+        // Rejecting it rejects both branches, not only the one with its id.
+        yield* reconciliation.decide(transfer!.key, 'rejected')
+        assert.deepStrictEqual(yield* reconciliation.orphanedDecisions, [])
+        assert.deepStrictEqual(yield* reconciliation.relations, [])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
   it.effect('lets the person reject a confirmation whose entry vanished', () =>
     Effect.gen(function* () {
       const { reconciliation, report, nubankEntry } = yield* twoAccounts

@@ -219,7 +219,9 @@ const compareNames = (a: ReadonlySet<string>, b: ReadonlySet<string>) => {
  * What the descriptions say about the other side of a transfer: the same
  * counterparty on both (the person's own name, see `compareNames`), own-account wording, or the
  * other account's institution named are evidence it is the person's own
- * money moving; two different counterparties contradict it.
+ * money moving; two different counterparties contradict it. Names that
+ * disagree outweigh any other evidence: a bank or own-account wording never
+ * makes `Maria Silva` and `Joao Silva` one person.
  */
 const counterpartEvidence = (
   outflow: MatchableEntry,
@@ -235,6 +237,7 @@ const counterpartEvidence = (
   const reasons: Array<string> = []
   if (names === 'same') reasons.push('same_counterparty')
   if (different) reasons.push('different_counterparties')
+  if (names === 'uncertain') reasons.push('uncertain_counterparties')
   if (
     [outflow, inflow].some((entry) =>
       ownAccountWording.test(foldDescription(entry.description)),
@@ -257,9 +260,39 @@ const counterpartEvidence = (
     reasons.push('names_other_account')
   return {
     different,
-    evidenced: !different && reasons.length > 0,
+    evidenced: (names === 'same' || names === 'unnamed') && reasons.length > 0,
     reasons,
   }
+}
+
+// Wording about the card being paid, which names no payee.
+const cardWords = new Set(['fatura', 'final', 'credito', 'cartoes'])
+
+// Wording on the paying side that says the money goes to a card bill, not
+// just that something was paid.
+const cardBillWording = /\b(fatura|cartao|cartoes)\b/
+
+/**
+ * What the paying side says about which card it pays: whether it speaks of a
+ * card bill at all, and whether it names this card's institution, nobody, or
+ * someone else (another issuer, or a payee such as a school's boleto). A
+ * card only receives payments, so its side says nothing about the payer.
+ */
+const cardTarget = (outflow: MatchableEntry, card: MatchableEntry) => {
+  const issuer = institutionWords(card)
+  const named = new Set(
+    [...meaningfulWords(outflow.description)].filter(
+      (word) =>
+        !transferWords.has(word) && !cardWords.has(word) && !/\d/.test(word),
+    ),
+  )
+  const bill = cardBillWording.test(foldDescription(outflow.description))
+  const target = intersects(named, issuer)
+    ? 'named'
+    : named.size === 0
+      ? 'unnamed'
+      : 'other'
+  return { bill, target } as const
 }
 
 // TED/DOC and investment movements can land a few business days later.
@@ -308,6 +341,8 @@ interface Candidate {
   readonly hintedBoth: boolean
   readonly contradicted: boolean
   readonly evidenced: boolean
+  /** Evidenced only if it is the one card the outflow could pay. */
+  readonly needsSoleCard: boolean
   readonly reasons: ReadonlyArray<string>
 }
 
@@ -342,12 +377,13 @@ const evaluate = (
     score -= 30
     reasons.push('conflicting_description')
   }
-  // A card only receives payments, so its side is evidence enough; a bank
-  // account also receives money from other people.
+  // A bank account also receives money from other people, so a transfer
+  // needs counterpart evidence; a card payment needs the paying side to say
+  // it pays this card's bill. Naming another payee contradicts either.
   const counterpart =
     kind === 'internal_transfer'
-      ? counterpartEvidence(outflow, inflow)
-      : { different: false, evidenced: true, reasons: [] }
+      ? { ...counterpartEvidence(outflow, inflow), soleCard: false }
+      : cardEvidence(outflow, inflow)
   if (counterpart.different) score -= 30
   reasons.push(...counterpart.reasons)
   return {
@@ -355,6 +391,25 @@ const evaluate = (
     hintedBoth: hinted === 2,
     contradicted: described || counterpart.different,
     evidenced: counterpart.evidenced,
+    needsSoleCard: counterpart.soleCard,
+    reasons,
+  }
+}
+
+/**
+ * A card payment is evidenced when the paying side speaks of a card bill and
+ * names the card's institution, or names no one and turns out to be the only
+ * card it could pay (`soleCard`, checked once every candidate is known).
+ */
+const cardEvidence = (outflow: MatchableEntry, card: MatchableEntry) => {
+  const { bill, target } = cardTarget(outflow, card)
+  const reasons: Array<string> = []
+  if (target === 'named') reasons.push('names_card_institution')
+  if (target === 'other') reasons.push('names_other_payee')
+  return {
+    different: target === 'other',
+    evidenced: bill && target !== 'other',
+    soleCard: bill && target === 'unnamed',
     reasons,
   }
 }
@@ -378,7 +433,8 @@ const evaluate = (
  * make a suggestion: a pair is confirmed automatically when it scores at
  * least `autoConfirmScore`, both descriptions say what it is, nothing
  * contradicts it (including two different counterparties), a transfer's
- * descriptions show it stays with the person (see `counterpartEvidence`),
+ * descriptions show it stays with the person (see `counterpartEvidence`), a
+ * card payment's bank side says it pays this card (see `cardEvidence`),
  * both entries are posted, no rival comes within
  * `rivalMargin`, and the person never rejected a pairing for either entry.
  */
@@ -487,8 +543,15 @@ export const matchRelations = (
 
   // The two best scores each entry could reach, to tell clear pairs from ambiguous ones.
   const best = new Map<string, Array<number>>()
+  // How many cards each outflow could be paying.
+  const cardsOf = new Map<string, Set<string>>()
   for (const candidates of candidatesByGroup.values()) {
     for (const candidate of candidates) {
+      if (candidate.kind === 'card_payment') {
+        const cards = cardsOf.get(candidate.outflow.id) ?? new Set()
+        cards.add(candidate.inflow.accountId)
+        cardsOf.set(candidate.outflow.id, cards)
+      }
       for (const id of [candidate.outflow.id, candidate.inflow.id]) {
         const scores = best.get(id) ?? []
         scores.push(candidate.score)
@@ -559,6 +622,7 @@ export const matchRelations = (
         candidate.hintedBoth &&
         !candidate.contradicted &&
         candidate.evidenced &&
+        (!candidate.needsSoleCard || cardsOf.get(outflow.id)?.size === 1) &&
         posted &&
         unambiguous &&
         !contested

@@ -268,8 +268,9 @@ const make = Effect.gen(function* () {
       ON CONFLICT (id) DO UPDATE SET sequence = excluded.sequence
     `
 
-  // Stores the decision with the observations its entries have now. A side
-  // whose entry is gone keeps the observations recorded earlier.
+  // Stores the decision with the observations its entries have now, adding
+  // to those recorded earlier, never replacing them: a verdict changed after
+  // an entry split or vanished still covers every observation first decided.
   const write = Effect.fnUntraced(function* (key: string, decision: Decision) {
     const decidedAt = DateTime.formatIso(yield* DateTime.now)
     yield* sql`
@@ -284,10 +285,6 @@ const make = Effect.gen(function* () {
       ['outflow', outflowId],
       ['inflow', inflowId],
     ] as const) {
-      yield* sql`
-        DELETE FROM relation_decision_endpoints WHERE key = ${key} AND side = ${side}
-          AND EXISTS (SELECT 1 FROM entry_evidence WHERE entry_id = ${entryId})
-      `
       yield* sql`
         INSERT OR IGNORE INTO relation_decision_endpoints (key, side, source_id, account_id, external_id)
         SELECT ${key}, ${side}, source_id, account_id, external_id

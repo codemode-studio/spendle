@@ -80,6 +80,31 @@ describe('matchRelations', () => {
     )
   })
 
+  it('only suggests a transfer whose names disagree, whatever bank or wording it names', () => {
+    const pair = (outflow: string, inflow: string) =>
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: outflow,
+          institution: 'Nubank',
+        }),
+        entry('in', 'inter', 50000, {
+          description: inflow,
+          institution: 'Banco Inter',
+        }),
+      ]).map((relation) => relation.status)
+    assert.deepStrictEqual(
+      [
+        pair('Pix enviado Maria Silva Banco Inter', 'Pix recebido Joao Silva'),
+        pair('Pix enviado Maria Banco Inter', 'Pix recebido Joao'),
+        pair(
+          'Transferencia mesma titularidade Maria Silva',
+          'Pix recebido Joao Silva',
+        ),
+      ],
+      [['suggested'], ['suggested'], ['suggested']],
+    )
+  })
+
   it('confirms a transfer that names the other account or own-account wording', () => {
     const named = relations([
       entry('out', 'nubank', -50000, {
@@ -118,9 +143,52 @@ describe('matchRelations', () => {
         entry('credit', 'card-nu', 150000, {
           bookedOn: '2026-09-13',
           description: 'Pagamento recebido',
+          institution: 'Nubank',
         }),
       ]),
       [['card_payment', 'pay', 'credit', 'confirmed']],
+    )
+  })
+
+  it('confirms a card payment only when the bank side says it pays this card', () => {
+    const pay = (description: string, ...cards: Array<MatchableEntry>) =>
+      relations([
+        entry('pay', 'itau', -150000, { description, institution: 'Itaú' }),
+        ...cards,
+      ]).map((relation) => [relation.inflowId, relation.status])
+    const nubank = entry('nu', 'card-nu', 150000, {
+      description: 'Pagamento recebido',
+      institution: 'Nubank',
+    })
+    // Three days later: the Nubank card outscores it by more than the margin.
+    const itau = entry('it', 'card-itau', 150000, {
+      bookedOn: '2026-09-13',
+      description: 'Pagamento recebido',
+      institution: 'Itaú',
+    })
+    assert.deepStrictEqual(
+      [
+        // Another payee, another issuer, or no word about a card.
+        pay('Pagamento boleto Escola ABC', nubank),
+        pay('Pagamento fatura Escola ABC', nubank),
+        pay('Pagamento fatura Itau', nubank),
+        pay('Pagamento', nubank),
+        // The only card, named or not; one of two cards when it is named.
+        pay('Pagamento fatura', nubank),
+        pay('Pgto fatura cartao Nubank', nubank),
+        pay('Pagamento fatura', nubank, itau),
+        pay('Pagamento fatura Nubank', nubank, itau),
+      ],
+      [
+        [['nu', 'suggested']],
+        [['nu', 'suggested']],
+        [['nu', 'suggested']],
+        [['nu', 'suggested']],
+        [['nu', 'confirmed']],
+        [['nu', 'confirmed']],
+        [['nu', 'suggested']],
+        [['nu', 'confirmed']],
+      ],
     )
   })
 
