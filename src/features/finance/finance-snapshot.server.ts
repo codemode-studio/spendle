@@ -6,6 +6,10 @@ import {
   pendingRecurrencePayments,
 } from '#/domain/monthly-cash-flow'
 import { shiftDays } from '#/domain/period'
+import {
+  positionCurrentAmountMinor,
+  reserveProgressCents,
+} from '#/domain/investment-position'
 import { cardBudgetLines, temporaryFixedBucket } from '#/domain/card-budget'
 import { isCardPaymentRow } from '#/domain/card-payment'
 import { buildCardStatementLedger } from '#/domain/card-statement-ledger'
@@ -591,7 +595,10 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
         (t) => t.creditCardId === card.id && t.status !== 'excluded',
       ),
       accountPayments: transactionRows.filter(
-        (t) => t.accountId && t.status !== 'excluded',
+        (t) =>
+          t.accountId &&
+          t.status !== 'excluded' &&
+          t.currency === card.currency,
       ),
       reconciliations: reconciliationRows.map((group) => ({
         id: group.id,
@@ -675,9 +682,18 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       statements,
       currentStatement: statementSummary.current,
       nextStatement: statementSummary.next,
-      upcomingStatements: statementSummary.statements.filter(
-        (statement) => statement.dueDate >= referenceDate,
-      ),
+      upcomingStatements: statementSummary.statements
+        .filter((statement) => statement.dueDate >= referenceDate)
+        .map((statement) => {
+          const entry = ledger.find(
+            (item) => item.dueDate === statement.dueDate,
+          )
+          return {
+            ...statement,
+            paidCents: entry?.paidCents ?? 0,
+            paid: entry?.status === 'paid',
+          }
+        }),
       outstandingCents: statementSummary.outstandingCents,
       availableLimitCents: Math.max(
         0,
@@ -839,28 +855,33 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       emergencyGoal?.targetCents ||
       allocationAmount(baseIncomeCents, originalAllocation.essential) *
         settings.reserveMonths
-    const reserveCurrentCents = investmentPositionRows
-      .filter(
-        (position) => position.active && position.goalId === emergencyGoal?.id,
-      )
-      .reduce((sum, position) => {
-        const movementTotal = investmentMovementRows
-          .filter((movement) => movement.positionId === position.id)
-          .reduce(
-            (total, movement) =>
-              total +
-              (movement.kind === 'contribution'
-                ? movement.amountMinor
-                : -movement.amountMinor),
-            0,
-          )
-        const currentAmount =
-          position.manualCurrentAmountMinor ??
-          position.initialAmountMinor + movementTotal
-        return (
-          sum + (convertToBaseCurrency(currentAmount, position.currency) ?? 0)
-        )
-      }, 0)
+    const reserveCurrentCents = reserveProgressCents({
+      recordedCents: emergencyGoal?.currentCents ?? 0,
+      linkedPositionCents: emergencyGoal
+        ? investmentPositionRows
+            .filter(
+              (position) =>
+                position.active && position.goalId === emergencyGoal.id,
+            )
+            .map(
+              (position) =>
+                convertToBaseCurrency(
+                  positionCurrentAmountMinor(
+                    position,
+                    investmentMovementRows
+                      .filter((movement) => movement.positionId === position.id)
+                      .map((movement) => ({
+                        ...movement,
+                        postedAt:
+                          transactionById.get(movement.transactionId)
+                            ?.postedAt ?? null,
+                      })),
+                  ),
+                  position.currency,
+                ) ?? 0,
+            )
+        : [],
+    })
     const reserveComplete =
       derivedReserveTarget > 0 && reserveCurrentCents >= derivedReserveTarget
     const effectiveAllocation = selectedBudget

@@ -610,6 +610,10 @@ export interface CashProjectionFacts extends MonthlyCashFlowFacts {
       dueDate: string
       amountCents: number
       certainty?: 'closed' | 'installment_schedule' | 'open'
+      /** Already settled by linked or identified bank debits. */
+      paidCents?: number
+      /** Settled in full, including a person's non-partial manual link. */
+      paid?: boolean
     }>
   }>
   installmentPlans: ReadonlyArray<{ sourceTransactionId: string | null }>
@@ -931,12 +935,15 @@ export function projectCash(
   for (const card of input.cards) {
     for (const statement of card.upcomingStatements) {
       if (statement.dueDate <= today || statement.dueDate > horizon) continue
-      if (statement.amountCents === 0) continue
-      // Faturas sem cotação ficam fora em vez de entrar como se fossem reais.
-      const cents = convertToBaseCurrency(
-        Math.abs(statement.amountCents),
-        card.currency,
+      if (statement.amountCents === 0 || statement.paid) continue
+      // Só o que ainda falta pagar sai do caixa na data de vencimento.
+      const remainingCents = Math.max(
+        0,
+        Math.abs(statement.amountCents) - Math.max(0, statement.paidCents ?? 0),
       )
+      if (remainingCents === 0) continue
+      // Faturas sem cotação ficam fora em vez de entrar como se fossem reais.
+      const cents = convertToBaseCurrency(remainingCents, card.currency)
       if (cents === null) continue
       const certainty = statement.certainty ?? 'open'
       scheduled.push({

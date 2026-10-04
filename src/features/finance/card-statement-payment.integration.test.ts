@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest'
 import { eq } from 'drizzle-orm'
 
 import * as schema from '#/db/schema'
@@ -11,7 +19,10 @@ import {
   unlinkCardStatementPayment,
 } from './card-statement-payment.server'
 import { createManualTransaction } from './finance.server'
-import { getConfigurationSnapshot } from './finance-snapshot.server'
+import {
+  getConfigurationSnapshot,
+  getFinanceSnapshot,
+} from './finance-snapshot.server'
 
 describe('vínculo manual de pagamento de fatura', () => {
   let database: TestDatabase
@@ -100,5 +111,130 @@ describe('vínculo manual de pagamento de fatura', () => {
         transactionId: income.id,
       }),
     ).rejects.toThrow('débito')
+  })
+})
+
+describe('moeda do pagamento de fatura', () => {
+  let database: TestDatabase
+
+  beforeAll(async () => {
+    database = await openTestDatabase()
+  })
+
+  afterAll(() => database.close())
+
+  it('não oferece nem vincula débito em outra moeda', async () => {
+    await database.db.insert(schema.accounts).values({
+      id: 'usd-account',
+      ownershipScopeId: database.ids.personScope,
+      institutionId: database.ids.institution,
+      name: 'Conta USD',
+      kind: 'checking',
+      purpose: 'operating',
+      currency: 'USD',
+    })
+    await database.db.insert(schema.transactions).values({
+      id: 'usd-debit',
+      accountId: 'usd-account',
+      fingerprint: 'usd-debit',
+      postedAt: '2026-09-10',
+      description: 'Card payment',
+      normalizedDescription: 'card payment',
+      amountCents: -50_000,
+      currency: 'USD',
+      status: 'confirmed',
+    })
+    const candidates = await listCardStatementPaymentCandidates({
+      creditCardId: database.ids.card,
+      dueDate: '2026-09-12',
+      amountCents: 50_000,
+    })
+    expect(candidates.some((row) => row.id === 'usd-debit')).toBe(false)
+    await expect(
+      linkCardStatementPayment({
+        creditCardId: database.ids.card,
+        dueDate: '2026-09-12',
+        transactionId: 'usd-debit',
+      }),
+    ).rejects.toThrow('BRL')
+  })
+})
+
+describe('fatura paga na projeção de caixa', () => {
+  let database: TestDatabase | undefined
+
+  afterEach(() => {
+    database?.close()
+    vi.useRealTimers()
+  })
+
+  async function closedUnpaidStatement() {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-08T12:00:00Z'))
+    database = await openTestDatabase()
+    await database.db
+      .update(schema.creditCards)
+      .set({ dueDay: 15 })
+      .where(eq(schema.creditCards.id, database.ids.card))
+    await createManualTransaction({
+      targetType: 'card',
+      targetId: database.ids.card,
+      postedAt: '2026-08-20',
+      description: 'Compra no cartão',
+      direction: 'outflow',
+      amountCents: 30_000,
+      categoryId: 'groceries',
+    })
+    const debit = await createManualTransaction({
+      targetType: 'account',
+      targetId: database.ids.brlAccount,
+      postedAt: '2026-09-07',
+      description: 'Débito genérico',
+      direction: 'outflow',
+      amountCents: 10_000,
+      categoryId: 'groceries',
+    })
+    return { cardId: database.ids.card, debitId: debit.id }
+  }
+
+  function scheduledStatement(
+    snapshot: Awaited<ReturnType<typeof getFinanceSnapshot>>,
+    cardId: string,
+  ) {
+    return snapshot.cashProjection.scheduled.find(
+      (event) => event.id === `${cardId}-2026-09-15`,
+    )
+  }
+
+  it('não agenda de novo uma fatura marcada como paga', async () => {
+    const { cardId, debitId } = await closedUnpaidStatement()
+    expect(
+      scheduledStatement(await getFinanceSnapshot(), cardId)?.amountCents,
+    ).toBe(-30_000)
+
+    await linkCardStatementPayment({
+      creditCardId: cardId,
+      dueDate: '2026-09-15',
+      transactionId: debitId,
+    })
+    const snapshot = await getFinanceSnapshot()
+    const statement = snapshot.cards
+      .find((card) => card.id === cardId)
+      ?.statements.find((row) => row.dueDate === '2026-09-15')
+    expect(statement?.status).toBe('paid')
+    expect(scheduledStatement(snapshot, cardId)).toBeUndefined()
+  })
+
+  it('agenda só o restante de uma fatura paga parcialmente', async () => {
+    const { cardId, debitId } = await closedUnpaidStatement()
+    await linkCardStatementPayment({
+      creditCardId: cardId,
+      dueDate: '2026-09-15',
+      transactionId: debitId,
+      partial: true,
+    })
+    expect(
+      scheduledStatement(await getFinanceSnapshot(), cardId)?.amountCents,
+    ).toBe(-20_000)
   })
 })

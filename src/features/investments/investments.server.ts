@@ -6,6 +6,10 @@ import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
 import { convertMinorUnitsAtRate } from '#/domain/currency'
 import { allocationAmount, calculateConservativeBase } from '#/domain/finance'
+import {
+  positionCurrentAmountMinor,
+  reserveProgressCents,
+} from '#/domain/investment-position'
 
 type FxQuote = { rateMicros: number; date: string; source: string }
 
@@ -142,9 +146,14 @@ export async function getInvestmentsSnapshot(
             : -movement.amountMinor),
         0,
       )
-      const currentAmountMinor =
-        position.manualCurrentAmountMinor ??
-        position.initialAmountMinor + netMovementMinor
+      const currentAmountMinor = positionCurrentAmountMinor(
+        position,
+        positionMovements.map((movement) => ({
+          ...movement,
+          postedAt:
+            transactionById.get(movement.transactionId)?.postedAt ?? null,
+        })),
+      )
       const contributionAmountMinor =
         position.initialAmountMinor + netMovementMinor
       const contributedBaseCents = positionMovements.reduce<number | null>(
@@ -285,9 +294,14 @@ export async function getInvestmentsSnapshot(
       baseIncomeCents,
       selectedBudget?.essentialBps ?? activeStrategy.essentialBps,
     ) * settings.reserveMonths
-  const reserveCurrentCents = items
-    .filter((item) => item.goalId === emergencyGoal?.id)
-    .reduce((sum, item) => sum + (item.currentBaseCents ?? 0), 0)
+  const reserveCurrentCents = reserveProgressCents({
+    recordedCents: emergencyGoal?.currentCents ?? 0,
+    linkedPositionCents: emergencyGoal
+      ? items
+          .filter((item) => item.goalId === emergencyGoal.id)
+          .map((item) => item.currentBaseCents ?? 0)
+      : [],
+  })
   const totalCents = items.reduce(
     (sum, item) => sum + (item.currentBaseCents ?? 0),
     0,

@@ -33,6 +33,14 @@ export async function listCardStatementPaymentCandidates(input: {
 }): Promise<StatementPaymentCandidate[]> {
   assertIsoDate(input.dueDate)
   await ensureDatabase()
+  const card = (
+    await db
+      .select({ currency: schema.creditCards.currency })
+      .from(schema.creditCards)
+      .where(eq(schema.creditCards.id, input.creditCardId))
+      .limit(1)
+  ).at(0)
+  if (!card) throw new Error('Cartão não encontrado.')
   const [rows, links, groups, groupLinks, accounts, categories] =
     await Promise.all([
       db
@@ -42,6 +50,8 @@ export async function listCardStatementPaymentCandidates(input: {
           and(
             isNotNull(schema.transactions.accountId),
             eq(schema.transactions.status, 'confirmed'),
+            // Minor units of different currencies are not comparable.
+            eq(schema.transactions.currency, card.currency),
           ),
         ),
       db.select().from(schema.cardStatementPayments),
@@ -142,6 +152,10 @@ export async function linkCardStatementPayment(input: {
   if (!transaction) throw new Error('Lançamento não encontrado.')
   if (!transaction.accountId || transaction.amountCents >= 0)
     throw new Error('Escolha um débito de conta bancária.')
+  if (transaction.currency !== card.currency)
+    throw new Error(
+      `Escolha um débito em ${card.currency}, a moeda da fatura deste cartão.`,
+    )
 
   const id = randomUUID()
   db.transaction((tx) => {

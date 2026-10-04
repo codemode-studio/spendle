@@ -29,12 +29,9 @@ import {
 } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
 import { NativeSelect } from '#/components/ui/native-select'
-import {
-  currencyOptions,
-  formatCurrency,
-  parseCurrency,
-} from '#/domain/currency'
+import { currencyOptions, formatCurrency } from '#/domain/currency'
 import { formatInstrumentName } from '#/domain/finance'
+import { readAccountForm } from '#/features/finance/account-form'
 import { formatShortDate as formatDate } from '#/domain/period'
 import {
   createAccountFn,
@@ -50,7 +47,6 @@ import type {
   FinanceSnapshot,
 } from '#/features/finance/snapshot.types'
 
-type AccountKind = AccountSnapshot['kind']
 type AccountStatusSnapshot = Pick<
   AccountSnapshot,
   'coverage' | 'currency' | 'latestCheckpoint' | 'latestVerifiedCheckpoint'
@@ -63,6 +59,7 @@ type AccountFormSnapshot = Pick<
   | 'kind'
   | 'name'
   | 'ownershipScopeId'
+  | 'purpose'
 >
 type OwnershipScopeOption = Pick<
   FinanceSnapshot['scopes'][number],
@@ -391,11 +388,25 @@ function AccountFormFields({
           id={`${prefix}-kind`}
           name="kind"
           className="w-full"
-          defaultValue={account?.kind === 'savings' ? 'checking' : account?.kind}
+          defaultValue={account?.kind}
         >
           <option value="checking">Conta corrente</option>
+          <option value="savings">Poupança</option>
           <option value="cash">Dinheiro</option>
           <option value="investment">Corretora</option>
+        </NativeSelect>
+      </Field>
+      <Field>
+        <FieldLabel htmlFor={`${prefix}-purpose`}>Finalidade</FieldLabel>
+        <NativeSelect
+          id={`${prefix}-purpose`}
+          name="purpose"
+          className="w-full"
+          defaultValue={account?.purpose ?? 'operating'}
+        >
+          <option value="operating">Uso cotidiano</option>
+          <option value="reserve">Reserva</option>
+          <option value="investment">Investimentos</option>
         </NativeSelect>
       </Field>
       <Field>
@@ -415,18 +426,6 @@ function AccountFormFields({
       </Field>
     </FieldGroup>
   )
-}
-
-function readAccountForm(form: FormData) {
-  const kind = String(form.get('kind')) as AccountKind
-  return {
-    name: String(form.get('name')),
-    institutionName: String(form.get('institutionName')),
-    ownershipScopeId: String(form.get('ownershipScopeId')),
-    kind,
-    purpose: kind === 'investment' ? ('investment' as const) : ('operating' as const),
-    currency: parseCurrency(String(form.get('currency'))),
-  }
 }
 
 function isInvestment(account: Pick<AccountSnapshot, 'kind' | 'purpose'>) {

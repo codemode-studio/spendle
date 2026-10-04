@@ -185,3 +185,86 @@ describe('carteira de investimentos', () => {
     expect(afterDeletion.summary.reserveCurrentCents).toBe(3_660_000)
   })
 })
+
+describe('progresso da reserva e valor das posições', () => {
+  let database: TestDatabase
+
+  beforeAll(async () => {
+    database = await openTestDatabase()
+    await database.db.insert(database.schema.accounts).values({
+      id: 'broker',
+      ownershipScopeId: database.ids.personScope,
+      institutionId: database.ids.institution,
+      name: 'Corretora',
+      kind: 'investment',
+      purpose: 'investment',
+      currency: 'BRL',
+    })
+    await database.db.insert(database.schema.investmentGoals).values({
+      id: 'reserve-goal',
+      name: 'Reserva de emergência',
+      type: 'emergency_reserve',
+      targetCents: 1_000_000,
+      currentCents: 420_000,
+      priority: 1,
+    })
+  })
+
+  afterAll(() => database.close())
+
+  it('mantém o progresso registrado na meta enquanto nenhuma posição a acompanha', async () => {
+    const planning = await getPlanningSnapshot()
+    expect(planning.dashboard.reserve.currentCents).toBe(420_000)
+    const snapshot = await getInvestmentsSnapshot(quotes)
+    expect(snapshot.summary.reserveCurrentCents).toBe(420_000)
+  })
+
+  it('aplica movimentos posteriores à data da avaliação manual', async () => {
+    await database.db.insert(database.schema.investmentPositions).values({
+      id: 'cdb',
+      accountId: 'broker',
+      assetClassId: 'fixed-income',
+      goalId: 'reserve-goal',
+      name: 'CDB',
+      currency: 'BRL',
+      initialAmountMinor: 500_000,
+      initialBaseCents: 500_000,
+      manualCurrentAmountMinor: 510_000,
+      manualCurrentAt: '2026-09-05',
+    })
+    const entry = {
+      accountId: 'broker',
+      description: 'Aporte',
+      normalizedDescription: 'aporte',
+      currency: 'BRL',
+      status: 'confirmed' as const,
+    }
+    await database.db.insert(database.schema.transactions).values([
+      {
+        ...entry,
+        id: 'before-valuation',
+        fingerprint: 'before-valuation',
+        postedAt: '2026-09-05',
+        amountCents: 30_000,
+      },
+      {
+        ...entry,
+        id: 'after-valuation',
+        fingerprint: 'after-valuation',
+        postedAt: '2026-09-10',
+        amountCents: 100_000,
+      },
+    ])
+    for (const transactionId of ['before-valuation', 'after-valuation']) {
+      await classifyInvestmentTransaction({ transactionId, positionId: 'cdb' })
+    }
+
+    const snapshot = await getInvestmentsSnapshot(quotes)
+    const position = snapshot.positions.find((item) => item.id === 'cdb')!
+    // The valuation already includes the Sep 5 entry; Sep 10 comes on top.
+    expect(position.currentAmountMinor).toBe(610_000)
+    expect(snapshot.summary.reserveCurrentCents).toBe(610_000)
+    const planning = await getPlanningSnapshot()
+    expect(planning.dashboard.reserve.currentCents).toBe(610_000)
+  })
+})
