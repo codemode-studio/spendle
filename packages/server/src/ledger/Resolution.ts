@@ -173,6 +173,64 @@ const sameFileTransaction = (
   a.fileTransactionId === b.fileTransactionId &&
   a.sourceId !== b.sourceId
 
+/**
+ * Whether two reports carry different transaction ids the files gave them:
+ * the institution says they are two movements, so no entry holds both.
+ */
+const conflicting = (
+  a: Pick<ObservedTransaction, 'fileTransactionId'>,
+  b: Pick<ObservedTransaction, 'fileTransactionId'>,
+) =>
+  a.fileTransactionId !== null &&
+  b.fileTransactionId !== null &&
+  a.fileTransactionId !== b.fileTransactionId
+
+/** Whether every report of `a` may share an entry with every report of `b`. */
+const fitTogether = (
+  a: ReadonlyArray<ObservedTransaction>,
+  b: ReadonlyArray<ObservedTransaction>,
+) =>
+  a.every((x) =>
+    b.every(
+      (y) =>
+        x.sourceId !== y.sourceId && compatible(x, y) && !conflicting(x, y),
+    ),
+  )
+
+/**
+ * Reports placed together before any matching by dates and descriptions:
+ * each file line with the lines of other files of the account that carry the
+ * same transaction id (amounts are equal, as the caller groups by amount),
+ * one per file and dated within the window of each other; every other
+ * report alone. Units come in the order of their first report, which leads
+ * them, and are never split, so no pairing made for an earlier source can
+ * give one file's line a movement and its twin in another file another.
+ */
+const identityUnits = (
+  ordered: ReadonlyArray<ObservedTransaction>,
+): Array<Array<ObservedTransaction>> => {
+  const units: Array<Array<ObservedTransaction>> = []
+  const byTransaction = new Map<string, Array<Array<ObservedTransaction>>>()
+  for (const observation of ordered) {
+    const id = observation.fileTransactionId
+    if (id === null) {
+      units.push([observation])
+      continue
+    }
+    const open = byTransaction.get(id) ?? []
+    const unit = open.find((candidate) => fitTogether(candidate, [observation]))
+    if (unit !== undefined) {
+      unit.push(observation)
+      continue
+    }
+    const started = [observation]
+    open.push(started)
+    byTransaction.set(id, open)
+    units.push(started)
+  }
+  return units
+}
+
 interface Building {
   readonly evidence: Array<ObservedTransaction>
 }
@@ -187,13 +245,13 @@ const representative = (evidence: ReadonlyArray<ObservedTransaction>) =>
 const identifiedPremium = (matchWindowDays + 1) * 1000
 
 /**
- * The allowed pairs between one source's reports of an amount and the
- * entries of that amount, with their cost. Entries are looked up by date,
- * so only those within the window of a report are ever examined, and
- * entries out of every report's reach never become part of the problem.
+ * The allowed pairs between the units one source leads for an amount and
+ * the entries of that amount, with their cost. Entries are looked up by
+ * date, so only those within the window of a unit are ever examined, and
+ * entries out of every unit's reach never become part of the problem.
  */
 export const pairings = (
-  incoming: ReadonlyArray<ObservedTransaction>,
+  incoming: ReadonlyArray<ReadonlyArray<ObservedTransaction>>,
   entries: ReadonlyArray<{
     readonly evidence: ReadonlyArray<ObservedTransaction>
   }>,
@@ -209,17 +267,12 @@ export const pairings = (
     list.push(column)
     byEarliest.set(earliest, list)
   })
-  const reachable = incoming.map((observation) => {
-    const day = dayNumber(observation.bookedOn)
+  const reachable = incoming.map((unit) => {
+    const day = dayNumber(unit[0]!.bookedOn)
     const columns: Array<number> = []
     for (let offset = -matchWindowDays; offset <= matchWindowDays; offset++)
       for (const column of byEarliest.get(day + offset) ?? [])
-        if (
-          entries[column]!.evidence.every((evidence) =>
-            compatible(evidence, observation),
-          )
-        )
-          columns.push(column)
+        if (fitTogether(entries[column]!.evidence, unit)) columns.push(column)
     return columns.sort((a, b) => a - b)
   })
   const { named, shares, similarity: similar } = wordCache()
@@ -228,39 +281,43 @@ export const pairings = (
     for (const column of columns)
       reachedBy.set(column, (reachedBy.get(column) ?? 0) + 1)
 
-  return incoming.flatMap((observation, row) =>
+  return incoming.flatMap((unit, row) =>
     reachable[row]!.flatMap((column) => {
       const entry = entries[column]!
+      const pairs = entry.evidence.flatMap((evidence) =>
+        unit.map((observation) => [evidence, observation] as const),
+      )
       // The files' own transaction id settles it, whatever the descriptions.
-      const identified = entry.evidence.some((evidence) =>
+      const identified = pairs.some(([evidence, observation]) =>
         sameFileTransaction(evidence, observation),
       )
       const described =
         identified ||
-        entry.evidence.some((evidence) =>
+        pairs.some(([evidence, observation]) =>
           shares(evidence.description, observation.description),
         )
       if (!described) {
-        const sameDay = entry.evidence.some(
-          (evidence) => evidence.bookedOn === observation.bookedOn,
+        const sameDay = pairs.some(
+          ([evidence, observation]) =>
+            evidence.bookedOn === observation.bookedOn,
         )
         const alone =
           reachable[row]!.length === 1 && reachedBy.get(column) === 1
         // Both name a counterparty and the names share nothing: two payees.
         const contradicted =
-          named(observation.description).size > 0 &&
+          unit.some((observation) => named(observation.description).size > 0) &&
           entry.evidence.some(
             (evidence) => named(evidence.description).size > 0,
           )
         if (!sameDay || !alone || contradicted) return []
       }
       const distance = Math.min(
-        ...entry.evidence.map((evidence) =>
+        ...pairs.map(([evidence, observation]) =>
           daysBetween(evidence.bookedOn, observation.bookedOn),
         ),
       )
       const similarity = Math.max(
-        ...entry.evidence.map((evidence) =>
+        ...pairs.map(([evidence, observation]) =>
           similar(evidence.description, observation.description),
         ),
       )
@@ -300,60 +357,60 @@ const firstSequence = (entry: Building) =>
 
 /**
  * The fewest entries `items` fit in, when fewer than `limit`, cheapest
- * first; null when no grouping beats `limit`. A group holds one report per
- * source, pairwise compatible, each report sharing a meaningful word with
- * an earlier one (taken in the order they were stored).
+ * first; null when no grouping beats `limit`. Identity units stay whole. A
+ * group holds one report per source, pairwise compatible, no two file
+ * transaction ids, each unit sharing a meaningful word or a file
+ * transaction id with an earlier one (taken in the order they were stored).
  */
 const fewestGroups = (
   items: ReadonlyArray<ObservedTransaction>,
   limit: number,
+  unitOf: ReadonlyMap<ObservedTransaction, number>,
 ): Array<Array<ObservedTransaction>> | null => {
   // A source reports a movement once, so its reports need separate entries.
   if (mostFromOneSource(items) >= limit) return null
-  const sorted = [...items].sort(bySequence)
+  const byUnit = new Map<number, Array<ObservedTransaction>>()
+  for (const item of [...items].sort(bySequence)) {
+    const key = unitOf.get(item)!
+    byUnit.set(key, [...(byUnit.get(key) ?? []), item])
+  }
+  // Map insertion order: units by their first report.
+  const units = [...byUnit.values()]
   const { shares, similarity } = wordCache()
 
-  const pairCost = (a: number, b: number) =>
-    daysBetween(sorted[a]!.bookedOn, sorted[b]!.bookedOn) * 1000 +
-    Math.round(
-      (1 - similarity(sorted[a]!.description, sorted[b]!.description)) * 100,
+  const pairCost = (a: ObservedTransaction, b: ObservedTransaction) =>
+    daysBetween(a.bookedOn, b.bookedOn) * 1000 +
+    Math.round((1 - similarity(a.description, b.description)) * 100)
+  const unitCost = (a: number, b: number) =>
+    units[a]!.reduce(
+      (sum, x) => units[b]!.reduce((inner, y) => inner + pairCost(x, y), sum),
+      0,
     )
-  // Earlier items the files identify as the same transaction; each one left
-  // in another group costs more than any dates and descriptions can.
-  const identifiedWith = sorted.map((item, index) =>
-    sorted
-      .slice(0, index)
-      .flatMap((other, at) => (sameFileTransaction(other, item) ? [at] : [])),
-  )
-  const separated = (index: number, group: ReadonlyArray<number>) =>
-    identifiedWith[index]!.filter((other) => !group.includes(other)).length *
-    1e9
   let best = null as { groups: Array<Array<number>>; cost: number } | null
   const groups: Array<Array<number>> = []
   const place = (index: number, cost: number) => {
     const most = best === null ? limit - 1 : best.groups.length
     if (groups.length > most) return
     if (best !== null && groups.length === most && cost >= best.cost) return
-    if (index === sorted.length) {
+    if (index === units.length) {
       best = { groups: groups.map((group) => [...group]), cost }
       return
     }
-    const item = sorted[index]!
+    const unit = units[index]!
     for (const group of groups) {
-      const fits = group.every(
-        (other) =>
-          sorted[other]!.sourceId !== item.sourceId &&
-          compatible(sorted[other]!, item),
-      )
-      const described = group.some(
-        (other) =>
-          sameFileTransaction(sorted[other]!, item) ||
-          shares(sorted[other]!.description, item.description),
+      const fits = group.every((other) => fitTogether(units[other]!, unit))
+      const described = group.some((other) =>
+        units[other]!.some((x) =>
+          unit.some(
+            (y) =>
+              sameFileTransaction(x, y) || shares(x.description, y.description),
+          ),
+        ),
       )
       if (!fits || !described) continue
       const added = group.reduce(
-        (sum, other) => sum + pairCost(other, index),
-        separated(index, group),
+        (sum, other) => sum + unitCost(other, index),
+        0,
       )
       group.push(index)
       place(index + 1, cost + added)
@@ -361,14 +418,14 @@ const fewestGroups = (
     }
     if (groups.length < most) {
       groups.push([index])
-      place(index + 1, cost + separated(index, []))
+      place(index + 1, cost)
       groups.pop()
     }
   }
   place(0, 0)
   return best === null
     ? null
-    : best.groups.map((group) => group.map((index) => sorted[index]!))
+    : best.groups.map((group) => group.flatMap((index) => units[index]!))
 }
 
 /**
@@ -379,7 +436,10 @@ const fewestGroups = (
  * entry, so it ends; entries are visited oldest first, so the result is
  * deterministic.
  */
-const regroup = (built: ReadonlyArray<Building>): Array<Building> => {
+const regroup = (
+  built: ReadonlyArray<Building>,
+  unitOf: ReadonlyMap<ObservedTransaction, number>,
+): Array<Building> => {
   let current = [...built]
   let changed = true
   while (changed) {
@@ -399,7 +459,10 @@ const regroup = (built: ReadonlyArray<Building>): Array<Building> => {
     const born: Array<Building> = []
     const linked = (a: Building, b: Building) =>
       a.evidence.some((x) =>
-        b.evidence.some((y) => x.sourceId !== y.sourceId && compatible(x, y)),
+        b.evidence.some(
+          (y) =>
+            x.sourceId !== y.sourceId && compatible(x, y) && !conflicting(x, y),
+        ),
       )
     for (const entry of current) {
       if (gone.has(entry)) continue
@@ -422,7 +485,7 @@ const regroup = (built: ReadonlyArray<Building>): Array<Building> => {
       for (const set of sets) {
         const items = set.flatMap((member) => member.evidence)
         if (items.length > regroupLimit) continue
-        const groups = fewestGroups(items, set.length)
+        const groups = fewestGroups(items, set.length, unitOf)
         if (groups === null) continue
         for (const member of set) gone.add(member)
         born.push(...groups.map((evidence) => ({ evidence })))
@@ -438,9 +501,12 @@ const regroup = (built: ReadonlyArray<Building>): Array<Building> => {
 /**
  * Groups observations of one account into entries, one per real movement.
  *
- * Amounts are resolved independently. Within an amount, each source's
- * reports form one batch, taken in the order the sources first reported
- * that amount; a batch is paired with the entries built so far as a whole:
+ * Amounts are resolved independently. Within an amount, lines from two
+ * files of the account that carry the same transaction id the files gave
+ * them are first joined into one unit, which is never split; no entry ever
+ * holds two different such ids. Each source's units (led by their first
+ * report) form one batch, taken in the order the sources first led a unit
+ * of that amount; a batch is paired with the entries built so far as a whole:
  * the pairing maximizes how many reports find their movement, then prefers
  * close dates and similar descriptions. When pairs made for an earlier
  * source keep a later one from completing movements, neighbouring entries
@@ -451,9 +517,9 @@ const regroup = (built: ReadonlyArray<Building>): Array<Building> => {
  * A pair needs positive evidence, not just an equal amount nearby: the
  * descriptions share a meaningful word (not "pix", "compra"…), or both are
  * on the same day with no other candidate on either side and no conflicting
- * counterparty. Reports from two files of the account that carry the same
- * transaction id the files gave them are the same movement whatever their
- * descriptions, and such pairs come first. An entry's evidence never spans more than `matchWindowDays`,
+ * counterparty. A unit of file lines is the same movement whatever their
+ * descriptions, and pairs the files identify come first. An entry's
+ * evidence never spans more than `matchWindowDays`,
  * and a source that states its coverage rules out movements it covers but
  * listed on another date. Uncertain pairs stay separate.
  *
@@ -476,24 +542,30 @@ export const resolveEntries = (
 
   const entries: Array<Building> = []
   for (const group of byAmount.values()) {
-    // Map insertion order: the order each source first reported this amount.
-    const bySource = new Map<string, Array<ObservedTransaction>>()
-    for (const observation of group) {
-      const batch = bySource.get(observation.sourceId) ?? []
-      batch.push(observation)
-      bySource.set(observation.sourceId, batch)
+    const units = identityUnits(group)
+    const unitOf = new Map(
+      units.flatMap((unit, index) =>
+        unit.map((observation) => [observation, index] as const),
+      ),
+    )
+    // Map insertion order: the order each source first led a unit of this amount.
+    const bySource = new Map<string, Array<Array<ObservedTransaction>>>()
+    for (const unit of units) {
+      const batch = bySource.get(unit[0]!.sourceId) ?? []
+      batch.push(unit)
+      bySource.set(unit[0]!.sourceId, batch)
     }
     const built: Array<Building> = []
     for (const incoming of bySource.values()) {
       const chosen = assign(pairings(incoming, built))
       const existing = [...built]
-      incoming.forEach((observation, row) => {
+      incoming.forEach((unit, row) => {
         const column = chosen.get(row)
-        if (column === undefined) built.push({ evidence: [observation] })
-        else existing[column]!.evidence.push(observation)
+        if (column === undefined) built.push({ evidence: [...unit] })
+        else existing[column]!.evidence.push(...unit)
       })
     }
-    entries.push(...regroup(built))
+    entries.push(...regroup(built, unitOf))
   }
 
   const idOf = assignIds(entries)

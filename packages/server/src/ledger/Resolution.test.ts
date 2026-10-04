@@ -228,7 +228,7 @@ describe('resolveEntries', () => {
       evidence: [observation],
     }))
     // Only the entries within the window of the incoming report.
-    assert.deepStrictEqual(problemShapes(pairings([incoming], entries)), [
+    assert.deepStrictEqual(problemShapes(pairings([[incoming]], entries)), [
       [1, 2 * 3 + 1],
     ])
     const merged = resolveEntries([...history, incoming]).filter(
@@ -264,7 +264,7 @@ describe('resolveEntries', () => {
     const file = daily('file')
     const pluggy = daily('pluggy')
     const edges = pairings(
-      pluggy,
+      pluggy.map((observation) => [observation]),
       file.map((observation) => ({ evidence: [observation] })),
     )
     assert.strictEqual(edges.length, days * 7 - 12)
@@ -302,6 +302,47 @@ describe('resolveEntries', () => {
       [renamed.anchorId, later.anchorId],
       [lookalike.anchorId],
     ])
+  })
+
+  it('keeps lines two files identify as one together over an earlier pairing', () => {
+    // Pluggy dates two equal debits on the 1st and 2nd; two overlapping
+    // exports give them FITIDs T-0 and T-1 and date them differently.
+    const debit = { amountCents: -1000, description: 'Padaria Central' }
+    const p0 = observed({
+      sourceId: 'pluggy',
+      bookedOn: '2026-09-01',
+      ...debit,
+    })
+    const p1 = observed({
+      sourceId: 'pluggy',
+      bookedOn: '2026-09-02',
+      ...debit,
+    })
+    const line = (sourceId: string, bookedOn: string, fitid: string) =>
+      observed({ sourceId, bookedOn, fileTransactionId: fitid, ...debit })
+    const a0 = line('a', '2026-09-02', 'id:T-0')
+    const a1 = line('a', '2026-09-02', 'id:T-1')
+    const b0 = line('b', '2026-09-01', 'id:T-0')
+    const b1 = line('b', '2026-09-05', 'id:T-1')
+    assert.deepStrictEqual(groups([p0, p1, a0, a1, b0, b1]), [
+      [p0.anchorId, a0.anchorId, b0.anchorId],
+      [p1.anchorId, a1.anchorId, b1.anchorId],
+    ])
+    // Pluggy arriving after the files joins the same movements.
+    const late = [p0, p1].map((report) =>
+      observed({ sourceId: 'pluggy', bookedOn: report.bookedOn, ...debit }),
+    )
+    assert.deepStrictEqual(groups([a0, a1, b0, b1, ...late]), [
+      [a0.anchorId, b0.anchorId, late[0]!.anchorId],
+      [a1.anchorId, b1.anchorId, late[1]!.anchorId],
+    ])
+  })
+
+  it('never puts lines with different file transaction ids in one entry', () => {
+    // The descriptions agree and the dates fit, but the files say these are two movements.
+    const a = observed({ sourceId: 'a', fileTransactionId: 'id:T-1' })
+    const b = observed({ sourceId: 'b', fileTransactionId: 'id:T-2' })
+    assert.deepStrictEqual(groups([a, b]), [[a.anchorId], [b.anchorId]])
   })
 
   it('depends only on what was observed, not on input order', () => {

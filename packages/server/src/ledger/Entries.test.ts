@@ -469,6 +469,89 @@ CHARSET:UTF-8
       }).pipe(Effect.provide(openFinanceTest())),
   )
 
+  it.effect(
+    'never lets an earlier pairing split the lines two exports identify as one',
+    () =>
+      Effect.gen(function* () {
+        // Two equal bakery debits Pluggy dates on the 1st and 2nd; two
+        // overlapping exports of the account date them differently but give
+        // each the same FITID: T-0 is the 1st's, T-1 the 2nd's.
+        const debit = (fitid: string, day: string) =>
+          `<STMTTRN><DTPOSTED>202609${day}<TRNAMT>-10.00<FITID>${fitid}<MEMO>PADARIA CENTRAL</STMTTRN>`
+        const exported = (lines: string) =>
+          new TextEncoder().encode(`<OFX><STMTRS><CURDEF>BRL<BANKTRANLIST>
+            <DTSTART>20260901<DTEND>20260930
+            ${lines}
+            </BANKTRANLIST></STMTRS></OFX>`)
+        const { account, entries } = yield* linkedWithStatement(
+          exported(debit('T-0', '02') + debit('T-1', '02')),
+          {
+            accounts: [{ ...bank, balance: 980 }],
+            transactions: {
+              'provider-bank': [
+                tx('p-0', '2026-09-01', { description: 'Padaria Central' }),
+                tx('p-1', '2026-09-02', { description: 'Padaria Central' }),
+              ],
+            },
+          },
+        )
+        yield* (yield* Imports).importFile({
+          accountId: account.id,
+          fileName: 'b.ofx',
+          bytes: exported(debit('T-0', '01') + debit('T-1', '05')),
+        })
+        yield* drain
+
+        const sql = yield* SqlClient.SqlClient
+        const rows = yield* sql<{ entryId: string; externalId: string }>`
+          SELECT v.entry_id AS entryId, v.external_id AS externalId
+          FROM entry_evidence v JOIN sources s ON s.id = v.source_id
+          WHERE v.account_id = ${account.id} AND s.kind = 'file'
+          ORDER BY v.external_id
+        `
+        const fitidsOf = new Map<string, Array<string>>()
+        for (const row of rows)
+          fitidsOf.set(row.entryId, [
+            ...(fitidsOf.get(row.entryId) ?? []),
+            row.externalId,
+          ])
+        assert.deepStrictEqual([...fitidsOf.values()].sort(), [
+          ['id:T-0@1', 'id:T-0@1'],
+          ['id:T-1@1', 'id:T-1@1'],
+        ])
+        const resolved = yield* entries.entries(account.id)
+        assert.deepStrictEqual(
+          resolved.map((entry) => entry.sources),
+          [3, 3],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'looks up checkpoint withdrawals by index, not by scanning them all per balance',
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        // The checkpoint query balanceProof runs: one withdrawal lookup per balance.
+        const plan = yield* sql<{ detail: string }>`
+          EXPLAIN QUERY PLAN
+          SELECT b.id, COALESCE((
+            SELECT i.withdrawn FROM open_finance_checkpoint_invalidations i
+            WHERE i.balance_observation_id = b.id ORDER BY i.rowid DESC LIMIT 1
+          ), 0) AS invalidated
+          FROM balance_observations b
+          WHERE b.account_id = ${'account'} AND b.kind IN ('booked', 'statement')
+          ORDER BY b.as_of, b.rowid
+        `
+        const lookups = plan
+          .map((row) => row.detail)
+          .filter((detail) => / i\b/.test(detail))
+        assert.deepStrictEqual(lookups, [
+          'SEARCH i USING INDEX open_finance_checkpoint_invalidations_observation (balance_observation_id=?)',
+        ])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
   it.effect('reports a change when secondary evidence is corrected', () =>
     Effect.gen(function* () {
       const account = yield* openChecking

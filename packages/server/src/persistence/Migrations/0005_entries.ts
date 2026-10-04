@@ -43,6 +43,12 @@ export default Effect.gen(function* () {
       PRIMARY KEY (source_id, account_id, external_id)
     )
   `
+  // Balance proofs look up each balance report's latest withdrawal or
+  // reinstatement; without this, every lookup scans all of them.
+  yield* sql`
+    CREATE INDEX open_finance_checkpoint_invalidations_observation
+    ON open_finance_checkpoint_invalidations (balance_observation_id)
+  `
   // The last event sequence each account's entries reflect, so a burst of
   // observations resolves the account once.
   yield* sql`
