@@ -88,6 +88,7 @@ const issued = (
   cents,
   dueOn: null,
   netOfPayments: true,
+  floorsAtZero: false,
   ...fields,
 })
 
@@ -559,6 +560,164 @@ describe('cardCycles', () => {
       [0, 'paid', [], 0, 0],
     )
   })
+
+  it('pays a balance statement that carries an unpaid bill once', () => {
+    // July's R$ 100,00 is unpaid; August's balance of R$ 150,00 carries it
+    // with R$ 50,00 of new purchases.
+    const items = [
+      entry('market', '2026-06-10', -10000),
+      entry('bakery', '2026-07-15', -5000),
+    ]
+    const cycles = (
+      payments: ReadonlyArray<CyclePayment>,
+      statement: IssuedStatement,
+    ) => {
+      const result = build(payments, '2026-08-20', [statement], items)
+      return [
+        result.cycles
+          .slice(0, 2)
+          .map((cycle) => [
+            cycle.closingOn,
+            cycle.billedCents,
+            cycle.carriedCents,
+            cycle.paidCents,
+            cycle.status,
+            cycle.statement?.differenceCents ?? null,
+          ]),
+        result.unappliedCents,
+      ]
+    }
+    const balance = issued('2026-07-04', '2026-08-03', -15000)
+    assert.deepStrictEqual(cycles([], balance), [
+      [
+        ['2026-07-03', 10000, 0, 0, 'overdue', null],
+        ['2026-08-03', 15000, 10000, 0, 'overdue', 0],
+      ],
+      0,
+    ])
+    assert.deepStrictEqual(
+      cycles([payment('statement', '2026-08-05', 15000)], balance),
+      [
+        [
+          ['2026-07-03', 10000, 0, 10000, 'paid', null],
+          ['2026-08-03', 15000, 10000, 5000, 'paid', 0],
+        ],
+        0,
+      ],
+    )
+    // A charges-only statement does not carry July: the same payment pays both.
+    assert.deepStrictEqual(
+      cycles(
+        [payment('statement', '2026-08-05', 15000)],
+        issued('2026-07-04', '2026-08-03', -5000, { netOfPayments: false }),
+      ),
+      [
+        [
+          ['2026-07-03', 10000, 0, 10000, 'paid', null],
+          ['2026-08-03', 5000, 0, 5000, 'paid', 0],
+        ],
+        0,
+      ],
+    )
+    // A balance that shows only the new purchases does not carry July, so
+    // August still owes them.
+    assert.deepStrictEqual(
+      cycles([], issued('2026-07-04', '2026-08-03', -5000)),
+      [
+        [
+          ['2026-07-03', 10000, 0, 0, 'overdue', null],
+          ['2026-08-03', 5000, 0, 0, 'overdue', 0],
+        ],
+        0,
+      ],
+    )
+  })
+
+  it('keeps the refund credit a zero amount due cannot print', () => {
+    // Inter: R$ 100,00 of purchases and a R$ 200,00 refund leave R$ 100,00
+    // in the holder's favour, but the amount due is printed as zero.
+    const items = [
+      entry('market', '2026-07-10', -10000),
+      entry('refund', '2026-07-15', 20000),
+      entry('hotel', '2026-08-10', -10000),
+    ]
+    const september = (floorsAtZero: boolean) => {
+      const result = build(
+        [],
+        '2026-09-20',
+        [issued('2026-07-04', '2026-08-03', 0, { floorsAtZero })],
+        items,
+      )
+      return [
+        result.cycles
+          .slice(0, 2)
+          .map((cycle) => [
+            cycle.closingOn,
+            cycle.paidCents,
+            cycle.status,
+            cycle.payments.map((paid) => [paid.via, paid.entryId]),
+            cycle.statement?.differenceCents ?? null,
+          ]),
+        result.unappliedCents,
+      ]
+    }
+    assert.deepStrictEqual(september(true), [
+      [
+        ['2026-08-03', 0, 'paid', [], 0],
+        ['2026-09-03', 10000, 'paid', [['credit', 'refund']], null],
+      ],
+      0,
+    ])
+    // A balance of exactly zero leaves no credit: the entries differ from it.
+    assert.deepStrictEqual(september(false), [
+      [
+        ['2026-08-03', 0, 'paid', [], -10000],
+        ['2026-09-03', 0, 'overdue', [], null],
+      ],
+      0,
+    ])
+  })
+
+  it('spends refund credit beyond a zero amount due on the debt it carried, once', () => {
+    // July's R$ 100,00 is unpaid; August's R$ 300,00 refund covers it and
+    // leaves R$ 200,00. September's zero amount due already deducts R$ 150,00
+    // of it, so only R$ 50,00 is left for October.
+    const result = build(
+      [],
+      '2026-10-20',
+      [
+        issued('2026-07-04', '2026-08-03', 0, { floorsAtZero: true }),
+        issued('2026-08-04', '2026-09-03', 0, { floorsAtZero: true }),
+      ],
+      [
+        entry('market', '2026-06-10', -10000),
+        entry('refund', '2026-07-15', 30000),
+        entry('hotel', '2026-08-10', -15000),
+        entry('coffee', '2026-09-10', -10000),
+      ],
+    )
+    assert.deepStrictEqual(
+      [
+        result.cycles.map((cycle) => [
+          cycle.closingOn,
+          cycle.paidCents,
+          cycle.status,
+          cycle.statement?.differenceCents ?? null,
+        ]),
+        result.unappliedCents,
+      ],
+      [
+        [
+          ['2026-07-03', 10000, 'paid', null],
+          ['2026-08-03', 0, 'paid', 0],
+          ['2026-09-03', 0, 'paid', 0],
+          ['2026-10-03', 5000, 'overdue', null],
+          ['2026-11-03', 0, 'open', null],
+        ],
+        0,
+      ],
+    )
+  })
 })
 
 describe('billPayments', () => {
@@ -600,5 +759,35 @@ describe('billPayments', () => {
       ['august', '2026-08-03'],
     ])
     assert.deepStrictEqual(infer([], [debit('other', '2026-08-05', 15000)]), [])
+  })
+
+  it('names a balance statement whose total, carried bill included, the debit equals', () => {
+    const items = [
+      entry('market', '2026-06-10', -10000),
+      entry('bakery', '2026-07-15', -5000),
+    ]
+    const statements = [issued('2026-07-04', '2026-08-03', -15000)]
+    const input = { terms, entries: items, statements, today: '2026-08-20' }
+    const inferred = billPayments({
+      ...input,
+      payments: [],
+      debits: [debit('statement', '2026-08-05', 15000)],
+    })
+    const result = cardCycles({ ...input, payments: inferred })
+    assert.deepStrictEqual(
+      [
+        inferred.map((found) => found.settles),
+        result.cycles
+          .slice(0, 2)
+          .map((cycle) => [cycle.paidCents, cycle.status]),
+      ],
+      [
+        ['2026-08-03'],
+        [
+          [10000, 'paid'],
+          [5000, 'paid'],
+        ],
+      ],
+    )
   })
 })

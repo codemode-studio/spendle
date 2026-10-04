@@ -188,6 +188,7 @@ export const parsePdf = (
     closingBalance: statement.closingBalance,
     ...(statement.dueOn ? { dueOn: statement.dueOn } : {}),
     ...(statement.chargesOnly ? { chargesOnly: true } : {}),
+    ...(statement.floorsAtZero ? { floorsAtZero: true } : {}),
     lines: fingerprintIds(
       statement.lines.map(({ source, ...line }) => ({
         ...line,

@@ -113,6 +113,39 @@ const referenceNumber =
 const cardEnding =
   /(?:\bfinal|\bcartao|\bcard|[*•]+|\bx+)[\s:#.-]*(\d{4})(?!\d)/g
 
+// Words a bill payment's description may carry besides the card's issuer:
+// payment and bill wording, card brands and transfer channels. Any other
+// word may name an issuer, so it must be one of the card's.
+const billWords = new Set([
+  ...genericBankWords,
+  'pagamento',
+  'pagto',
+  'pgto',
+  'pag',
+  'fatura',
+  'final',
+  'dos',
+  'das',
+  'ref',
+  'referencia',
+  'competencia',
+  'vencimento',
+  'venc',
+  'boleto',
+  'pix',
+  'ted',
+  'doc',
+  'online',
+  'on',
+  'line',
+  'internet',
+  'app',
+  'visa',
+  'mastercard',
+  'master',
+  'elo',
+  'amex',
+])
 /** A card a bank debit may name. */
 export interface BillCard {
   readonly id: string
@@ -127,8 +160,9 @@ export interface BillCard {
  * (every card it could pay, `card` included): by its recorded ending marked
  * as one ("final 1234", "*1234"), or by naming its issuer when that issuer
  * has no other card. Naming another issuer or ending, or an ending no card
- * has, identifies no card. Numbers labeled as references are not endings,
- * and unmarked numbers say nothing.
+ * has, identifies no card; so does any other name besides bill wording, as
+ * it may be an issuer that no card or alias list knows. Numbers labeled as
+ * references are not endings, and unmarked numbers say nothing.
  */
 export const namesCardBill = (
   description: string,
@@ -147,12 +181,24 @@ export const namesCardBill = (
   const byIssuer = cards.filter((other) =>
     [...issuerWords(other.institutionName)].some((word) => said.has(word)),
   )
+  const unreferenced = text.replace(referenceNumber, ' ')
   const endings = new Set(
-    [...text.replace(referenceNumber, ' ').matchAll(cardEnding)].map(
-      (match) => match[1]!,
-    ),
+    [...unreferenced.matchAll(cardEnding)].map((match) => match[1]!),
   )
   if (endings.size > 1) return false
+  // A name left once bill wording, references and the ending are set aside
+  // may be an issuer no list knows: it must be this card's.
+  const unexplained = unreferenced
+    .replace(cardEnding, ' ')
+    .split(/[^a-z0-9]+/)
+    .filter(
+      (word) =>
+        word.length >= 2 &&
+        !/^\d+$/.test(word) &&
+        !billWords.has(word) &&
+        !own.has(word),
+    )
+  if (unexplained.length > 0) return false
   const [ending] = endings
   const candidates =
     ending === undefined
@@ -240,10 +286,12 @@ const make = Effect.gen(function* () {
       cents: Schema.Int,
       dueOn: Schema.NullOr(Schema.String),
       netOfPayments: Schema.BooleanFromBit,
+      floorsAtZero: Schema.BooleanFromBit,
     }),
     execute: (accountId) => sql`
       SELECT f.period_start AS startsOn, b.as_of AS closingOn, b.balance_cents AS cents,
-        f.due_on AS dueOn, f.charges_only = 0 AS netOfPayments
+        f.due_on AS dueOn, f.charges_only = 0 AS netOfPayments,
+        f.floors_at_zero AS floorsAtZero
       FROM balance_observations b
       JOIN import_files f ON f.source_id = b.source_id AND f.account_id = b.account_id
       WHERE b.account_id = ${accountId} AND b.kind = 'statement'

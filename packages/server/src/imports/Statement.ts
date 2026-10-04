@@ -34,6 +34,11 @@ export interface ParsedStatement {
    * within the period already reduced it.
    */
   readonly chargesOnly?: boolean
+  /**
+   * Whether the closing balance is an amount due printed as zero when credit
+   * exceeds what is owed, so a zero does not say how much credit is left.
+   */
+  readonly floorsAtZero?: boolean
 }
 
 export type StatementProblem =

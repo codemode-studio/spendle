@@ -110,6 +110,12 @@ export interface IssuedStatement {
    * charges and the payments printed with them settled earlier bills.
    */
   readonly netOfPayments: boolean
+  /**
+   * Whether `cents` is an amount due printed as zero when credit exceeds
+   * what is owed, as Inter's "Fatura atual": a zero then does not say how
+   * much credit is left. Otherwise `cents` is a signed balance.
+   */
+  readonly floorsAtZero: boolean
 }
 
 export type CycleStatus = 'open' | 'due' | 'paid' | 'partially_paid' | 'overdue'
@@ -120,8 +126,17 @@ export interface CardCycle extends CycleBounds {
   readonly status: CycleStatus
   /** Purchases and credits of the cycle; negative when something is owed. */
   readonly totalCents: number
-  /** What the cycle bills: the issued statement's total, else the entries' total. Positive when owed. */
+  /**
+   * What the cycle bills: the issued statement's total, else the entries'
+   * total. Positive when owed. When the statement prints nothing due but
+   * the entries prove credit beyond it, that credit, negative.
+   */
   readonly billedCents: number
+  /**
+   * Debt of earlier cycles a balance statement carries in `billedCents`.
+   * Those cycles still owe it, so this cycle owes `billedCents` less this.
+   */
+  readonly carriedCents: number
   readonly paidCents: number
   readonly entryIds: ReadonlyArray<string>
   /** The part of each payment applied to this cycle. */
@@ -131,7 +146,7 @@ export interface CardCycle extends CycleBounds {
     readonly observedCents: number
     /** Payment credit the statement already deducts: paid within the cycle or carried from before. */
     readonly deductedCents: number
-    /** The statement minus the entries and the payments it deducts. */
+    /** The statement minus the entries, the debt it carries and the payments it deducts. */
     readonly differenceCents: number
   } | null
 }
@@ -296,23 +311,36 @@ const schedule = (input: {
  * the credit it can reflect, so that part is not applied to it again; the
  * credit it shows as a balance in the holder's favour stays credit.
  *
+ * A balance statement also counts the debt carried into it from earlier
+ * unpaid cycles, as far as its total exceeds its own entries. That debt
+ * stays with the cycles that incurred it, so the balance cycle owes only the
+ * rest, and paying the whole balance settles both without charging the
+ * carried debt twice.
+ *
  * A closed cycle whose credits exceed its charges leaves that surplus as
- * credit too, for the cycles after it. When the cycle has a balance
- * statement, only the favour the payments it deducts do not explain is
- * surplus; a later balance statement that shows the credit deducts it.
+ * credit too: first for the debt it carried, then for the cycles after it.
+ * When the cycle has a balance statement, only the favour the payments it
+ * deducts do not explain is surplus; a later balance statement that shows
+ * the credit deducts it. An amount due printed as zero hides how much favour
+ * is left, so the entries, net of the carried debt, tell it.
  */
 const allocate = (
-  { bounds, statements, entries, totals, billed }: Schedule,
+  { bounds, statements, entries, totals, billed: scheduled }: Schedule,
   payments: ReadonlyArray<CyclePayment>,
 ) => {
   const applied = bounds.map((): Array<CyclePayment> => [])
   const paid = bounds.map(() => 0)
   const deducted = bounds.map(() => 0)
+  const billed = [...scheduled]
+  const carried = bounds.map(() => 0)
+  // What a cycle owes itself: its bill less the debt it carries.
+  const owes = (index: number) => billed[index]! - carried[index]!
+  const outstanding = (index: number) => Math.max(0, owes(index) - paid[index]!)
   // Payment money not applied yet, oldest first.
   const credit: Array<{ payment: CyclePayment; cents: number }> = []
   const creditCents = () => credit.reduce((sum, held) => sum + held.cents, 0)
   const pay = (index: number, payment: CyclePayment, cents: number) => {
-    const part = Math.min(billed[index]! - paid[index]!, cents)
+    const part = Math.min(owes(index) - paid[index]!, cents)
     if (part <= 0) return 0
     paid[index]! += part
     applied[index]!.push({ ...payment, amountCents: part })
@@ -348,26 +376,30 @@ const allocate = (
     })
   }
   const settle = (index: number) => {
-    if (statements[index]?.netOfPayments !== true) {
+    const statement = statements[index]
+    if (statement?.netOfPayments !== true) {
       spend(index)
       return leaveSurplus(index, -billed[index]!)
     }
     spend(index - 1)
     // A balance counts the cycle's charges and the debt carried into it,
     // less the payments it deducts: it can reflect no more than that.
-    let carried = 0
-    for (let older = 0; older < index; older++)
-      carried += Math.max(0, billed[older]! - paid[older]!)
-    const reflects = Math.max(0, carried - totals[index]! - billed[index]!)
+    let unpaid = 0
+    for (let older = 0; older < index; older++) unpaid += outstanding(older)
+    const own = totals[index]!
+    if (statement.floorsAtZero && billed[index] === 0)
+      billed[index] = Math.min(0, unpaid - own)
+    carried[index] = Math.min(unpaid, Math.max(0, billed[index]! + own))
+    const reflects = Math.max(0, carried[index]! - own - billed[index]!)
     deducted[index] = Math.min(creditCents(), reflects)
-    let consumed = deducted[index]! - Math.max(0, -billed[index]!)
+    let consumed = deducted[index]! - Math.max(0, -owes(index))
     for (const held of credit) {
       if (consumed <= 0) break
       const part = Math.min(held.cents, consumed)
       held.cents -= part
       consumed -= part
     }
-    leaveSurplus(index, -billed[index]! - deducted[index]!)
+    leaveSurplus(index, -owes(index) - deducted[index]!)
   }
   let closed = 0
   const closeBefore = (date: string) => {
@@ -397,7 +429,15 @@ const allocate = (
     if (remaining > 0) credit.push({ payment, cents: remaining })
   }
   while (closed < bounds.length) settle(closed++)
-  return { applied, paid, deducted, unappliedCents: creditCents() }
+  return {
+    applied,
+    paid,
+    deducted,
+    billed,
+    carried,
+    owes: bounds.map((_, index) => owes(index)),
+    unappliedCents: creditCents(),
+  }
 }
 
 /**
@@ -431,15 +471,12 @@ export const cardCycles = (input: {
 }): CardCycles => {
   const plan = schedule(input)
   if (plan === null) return { cycles: [], unappliedCents: 0 }
-  const { applied, paid, deducted, unappliedCents } = allocate(
-    plan,
-    input.payments,
-  )
+  const { applied, paid, deducted, billed, carried, owes, unappliedCents } =
+    allocate(plan, input.payments)
 
   const cycles = plan.bounds.map((cycle, index): CardCycle => {
     const statement = plan.statements[index]
-    const billed = plan.billed[index]!
-    const owed = billed - paid[index]!
+    const owed = owes[index]! - paid[index]!
     const payableUntil = nextBusinessDay(cycle.dueOn)
     const status: CycleStatus =
       input.today <= cycle.closingOn
@@ -456,7 +493,8 @@ export const cardCycles = (input: {
       payableUntil,
       status,
       totalCents: plan.totals[index]!,
-      billedCents: billed,
+      billedCents: billed[index]!,
+      carriedCents: carried[index]!,
       paidCents: paid[index]!,
       entryIds: plan.entries[index]!.map((entry) => entry.id),
       payments: applied[index]!,
@@ -465,7 +503,10 @@ export const cardCycles = (input: {
             observedCents: statement.cents,
             deductedCents: deducted[index]!,
             differenceCents:
-              statement.cents - plan.totals[index]! - deducted[index]!,
+              -billed[index]! -
+              plan.totals[index]! +
+              carried[index]! -
+              deducted[index]!,
           }
         : null,
     }
@@ -488,8 +529,10 @@ export const billPaymentWindowDays = 45
  * The bank debits that pay a bill, when the card side of the payment is
  * missing. Each debit is judged in date order against what was owed on its
  * own date, counting only the payments made before it: its amount must be
- * exactly what one cycle closed within the payment window still owed. The
- * payment carries that bill, so it pays it rather than the oldest one.
+ * exactly what one cycle closed within the payment window still owed, or
+ * what its balance statement still asks, the debt it carries included. The
+ * payment carries that bill, so it pays it (and then the debt it carries,
+ * oldest first) rather than the oldest one.
  */
 export const billPayments = (input: {
   readonly terms: CardTermsInput
@@ -507,16 +550,29 @@ export const billPayments = (input: {
       a.paidOn.localeCompare(b.paidOn) || a.entryId.localeCompare(b.entryId),
   )
   for (const debit of debits) {
-    const { paid } = allocate(plan, [
+    const { paid, owes, carried } = allocate(plan, [
       ...input.payments.filter((payment) => payment.paidOn < debit.paidOn),
       ...inferred,
     ])
-    const settles = plan.bounds.filter(
-      (cycle, index) =>
-        cycle.closingOn < debit.paidOn &&
-        debit.paidOn <= addDays(cycle.closingOn, billPaymentWindowDays) &&
-        plan.billed[index]! - paid[index]! === debit.amountCents,
+    const outstanding = owes.map((owed, index) =>
+      Math.max(0, owed - paid[index]!),
     )
+    const settles = plan.bounds.filter((cycle, index) => {
+      if (
+        cycle.closingOn >= debit.paidOn ||
+        debit.paidOn > addDays(cycle.closingOn, billPaymentWindowDays)
+      )
+        return false
+      const own = owes[index]! - paid[index]!
+      const stillCarried = Math.min(
+        carried[index]!,
+        outstanding.slice(0, index).reduce((sum, cents) => sum + cents, 0),
+      )
+      return (
+        own === debit.amountCents ||
+        (stillCarried > 0 && own + stillCarried === debit.amountCents)
+      )
+    })
     if (settles.length !== 1) continue
     inferred.push({
       entryId: debit.entryId,

@@ -246,6 +246,10 @@ describe('Cards', () => {
           'PAGAMENTO FATURA NUBANK FINAL: 9999 COMPETENCIA 08/2026',
           'PAGAMENTO FATURA NUBANK FINAL-9999',
           'PAGAMENTO FATURA FINAL 1234 FINAL 5678',
+          // An issuer no card has, even beside this card's ending.
+          'PAGAMENTO FATURA BANCO BRB FINAL 1234',
+          'PAGAMENTO FATURA BRB FINAL 1234',
+          'PAGAMENTO FATURA CARTAO BRB FINAL 1234',
           // A reference number, however formatted, is not an ending.
           'PAGAMENTO FATURA BOLETO REF 8765-1234',
           'PAGAMENTO FATURA DOC 8765.1234',
@@ -788,6 +792,84 @@ describe('Cards', () => {
             'statement',
             'due',
             { observedCents: -5000, deductedCents: 10000, differenceCents: 0 },
+            0,
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'keeps the refund credit an Inter statement prints as nothing due',
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(
+          DateTime.toEpochMillis(DateTime.makeUnsafe('2026-09-20T15:00:00Z')),
+        )
+        const accounts = yield* Accounts
+        const imports = yield* Imports
+        const owner = yield* accounts.createOwner({
+          name: 'Eu',
+          kind: 'person',
+        })
+        const card = yield* accounts.open({
+          ownerId: owner.id,
+          institutionName: 'Banco Inter',
+          purpose: 'operating',
+          currency: 'BRL',
+          name: 'Cartão Inter',
+          kind: 'credit_card',
+          card: new CardTerms({
+            closingDay: 3,
+            dueDay: 10,
+            limitCents: null,
+            lastFour: null,
+          }),
+        })
+        // R$ 100,00 of purchases and a R$ 200,00 refund: R$ 100,00 in the
+        // holder's favour, printed as R$ 0,00 due.
+        yield* imports.importFile({
+          accountId: card.id,
+          fileName: 'fatura-inter.pdf',
+          bytes: syntheticPdf([
+            'Banco Inter S/A',
+            'Resumo da fatura',
+            'Este e o valor que voce precisa pagar nesse mes 15/08/2026',
+            'Fatura atual R$ 0,00',
+            'Valor antecipado R$ 200,00',
+            'Despesas do mes R$ 100,00',
+            'Despesas da fatura',
+            'CARTAO 1234****5678',
+            '10 de jul. 2026 Mercado - R$ 100,00',
+            '15 de jul. 2026 Estorno loja - + R$ 200,00',
+            'Data de corte: 03/09/2026',
+          ]),
+        })
+        // September's purchase is paid by that credit.
+        yield* imports.importFile({
+          accountId: card.id,
+          fileName: 'cartao.ofx',
+          bytes: ofx('CCSTMTRS', line('c1', '20260810', '-100.00', 'Hotel')),
+        })
+        yield* drain
+        const result = yield* (yield* Cards).cycles(card.id)
+        assert.deepStrictEqual(
+          [
+            result.cycles
+              .slice(0, 2)
+              .map((cycle) => [
+                cycle.closingOn,
+                cycle.paidCents,
+                cycle.status,
+                cycle.payments.map((payment) => payment.via),
+                cycle.statement?.differenceCents ?? null,
+              ]),
+            result.unappliedCents,
+          ],
+          [
+            [
+              ['2026-08-03', 0, 'paid', [], 0],
+              ['2026-09-03', 10000, 'paid', ['credit'], null],
+            ],
             0,
           ],
         )
