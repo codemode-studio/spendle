@@ -904,6 +904,123 @@ describe('webhook reactions', () => {
   )
 
   it.effect(
+    'takes no close from a day whose other stored lines a full-day read contradicts',
+    () =>
+      Effect.gen(function* () {
+        const salary = tx('salary', '2026-08-14', {
+          type: 'CREDIT',
+          amount: 1000,
+          balance: 1000,
+        })
+        const { account, state } = yield* linkedBank([
+          [
+            'salary',
+            '2026-08-14',
+            { type: 'CREDIT', amount: 1000, balance: 1000 },
+          ],
+          ['income', '2026-08-15', { type: 'CREDIT', amount: 50 }],
+          ['refund', '2026-08-15', { type: 'CREDIT', amount: 100 }],
+        ])
+        // The bank closed Aug 15 at R$1,000: +R$100, then the "refund" turned
+        // out to be a R$100 debit. Only the income's correction is delivered.
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: {
+            'provider-bank': [
+              salary,
+              tx('income', '2026-08-15', {
+                type: 'CREDIT',
+                amount: 100,
+                balance: 1100,
+              }),
+              tx('refund', '2026-08-15', { amount: 100, balance: 1000 }),
+            ],
+          },
+        }))
+        yield* deliver({
+          eventId: 'evt-income',
+          event: 'transactions/updated',
+          itemId: 'item-1',
+          accountId: 'provider-bank',
+          transactionIds: ['income'],
+        })
+        yield* drain
+        assert.deepStrictEqual(yield* checkpointsOf(account.id), {
+          booked: [['2026-08-14', 100000]],
+          invalidated: [],
+        })
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect(
+    'converts a known transaction Pluggy moved before the history start',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, account, connectionId, state } = yield* linkedBank(
+          [
+            ['purchase', '2026-07-01', { amount: 100 }],
+            ['recent', '2026-10-03'],
+          ],
+        )
+        const recent = tx('recent', '2026-10-03')
+        const setPurchase = (purchase: ReturnType<typeof tx>) =>
+          Ref.update(state, (current) => ({
+            ...current,
+            transactions: { 'provider-bank': [purchase, recent] },
+          }))
+        // Pluggy moves it to June 30, in dollars, not yet converted.
+        yield* setPurchase(
+          tx('purchase', '2026-06-30', {
+            currencyCode: 'USD',
+            amount: 30,
+            amountInAccountCurrency: null,
+          }),
+        )
+        yield* deliver({
+          eventId: 'evt-moved',
+          event: 'transactions/updated',
+          itemId: 'item-1',
+          accountId: 'provider-bank',
+          transactionIds: ['purchase'],
+        })
+        yield* drain
+        // The conversion arrives without a webhook for it; an ordinary sync
+        // picks it up.
+        yield* setPurchase(
+          tx('purchase', '2026-06-30', {
+            currencyCode: 'USD',
+            amount: 30,
+            amountInAccountCurrency: 150,
+          }),
+        )
+        yield* openFinance.requestSync({ connectionId })
+        yield* drain
+        const sql = yield* SqlClient.SqlClient
+        assert.deepStrictEqual(
+          {
+            facts: (yield* (yield* Observations).current(account.id)).map(
+              (observation) => [
+                observation.externalId,
+                observation.bookedOn,
+                observation.amountCents,
+              ],
+            ),
+            unresolved: [
+              ...(yield* sql`SELECT provider_transaction_id FROM open_finance_unresolved`),
+            ],
+          },
+          {
+            facts: [
+              ['purchase', '2026-06-30', -15000],
+              ['recent', '2026-10-03', -1000],
+            ],
+            unresolved: [],
+          },
+        )
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect(
     'withdraws the checkpoint of a day whose transaction Pluggy deleted',
     () =>
       Effect.gen(function* () {

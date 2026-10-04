@@ -232,6 +232,20 @@ const make = Effect.gen(function* () {
       `,
   })
 
+  // Unresolved transactions a sync's date range no longer reaches: known ones
+  // a correction moved before the history start.
+  const findUnresolvedBefore = SqlSchema.findAll({
+    Request: Schema.Struct({
+      providerAccountId: Schema.String,
+      before: Schema.String,
+    }),
+    Result: Schema.Struct({ id: Schema.String }),
+    execute: ({ providerAccountId, before }) => sql`
+        SELECT provider_transaction_id AS id FROM open_finance_unresolved
+        WHERE provider_account_id = ${providerAccountId} AND booked_on < ${before}
+      `,
+  })
+
   const findUnresolvedDays = SqlSchema.findAll({
     Request: Schema.String,
     Result: Schema.Struct({ bookedOn: Schema.String }),
@@ -793,11 +807,29 @@ const make = Effect.gen(function* () {
     const item = items.find((candidate) => candidate.id === providerAccountId)
     if (!item)
       return yield* fail('provider_account_not_found', providerAccountId)
-    const fetched = yield* pluggy.listTransactions({
+    const inRange = yield* pluggy.listTransactions({
       accountId: providerAccountId,
       dateFrom,
       dateTo,
     })
+    // An unresolved transaction outside the range is re-read by id, so a
+    // known one moved before the history start still gains its amount.
+    const inRangeIds = new Set(inRange.map((transaction) => transaction.id))
+    const strayIds = (yield* findUnresolvedBefore({
+      providerAccountId,
+      before: dateFrom,
+    }))
+      .map((row) => row.id)
+      .filter((id) => !inRangeIds.has(id))
+    const strays =
+      strayIds.length > 0
+        ? (yield* pluggy.listTransactions({
+            accountId: providerAccountId,
+            ids: strayIds,
+          })).filter((transaction) => !inRangeIds.has(transaction.id))
+        : []
+    const fetched = [...inRange, ...strays]
+    const known = new Set(stored.map((observation) => observation.externalId))
 
     const reported: Array<ReportedTransaction> = []
     // The running balance this response gave each posted transaction.
@@ -808,17 +840,23 @@ const make = Effect.gen(function* () {
     const unresolved: Array<{ id: string; bookedOn: string }> = []
     let skipped = 0
     for (const transaction of fetched) {
+      // The history start gates only transactions never seen before; a
+      // known one is updated wherever Pluggy moves it.
+      const day = bookedOn(transaction.date)
+      if (day < historyFrom && !known.has(transaction.id)) continue
       const normalized = toReportedTransaction(item, transaction)
       if (Option.isNone(normalized)) {
         skipped++
-        const day = bookedOn(transaction.date)
-        if (day < historyFrom) continue
         unresolved.push({ id: transaction.id, bookedOn: day })
         continue
       }
-      if (normalized.value.bookedOn < historyFrom) continue
       reported.push(normalized.value)
-      if (normalized.value.status === 'posted') {
+      // A line read by id carries a running balance, but its day was not
+      // read whole: it backs no closing balance.
+      if (
+        normalized.value.status === 'posted' &&
+        inRangeIds.has(transaction.id)
+      ) {
         runningBalances.set(normalized.value.externalId, {
           bookedOn: normalized.value.bookedOn,
           balanceAfterCents: runningBalanceCents(item, transaction),
@@ -862,9 +900,10 @@ const make = Effect.gen(function* () {
           accountId,
           transactions: reported,
         })
-        // Every unresolved transaction from `dateFrom` on was covered by this
-        // read: one still unresolved is kept as seen today, one now recorded
-        // is done, and one absent is dropped only after a long absence.
+        // Every unresolved transaction was covered by this read, by range or
+        // by id: one still unresolved is kept as seen today, one now
+        // recorded is done, and one absent is dropped only after a long
+        // absence.
         for (const transaction of reported) {
           yield* sql`
             DELETE FROM open_finance_unresolved
@@ -874,7 +913,7 @@ const make = Effect.gen(function* () {
         }
         yield* sql`
           DELETE FROM open_finance_unresolved
-          WHERE provider_account_id = ${providerAccountId} AND booked_on >= ${dateFrom}
+          WHERE provider_account_id = ${providerAccountId}
             AND last_seen_on < ${addDays(dateTo, -unresolvedRetentionDays)}
         `
         for (const transaction of unresolved) {
@@ -1051,9 +1090,9 @@ const make = Effect.gen(function* () {
             if (Option.isNone(normalized)) {
               incompleteDays.add(day)
               if (known !== undefined) incompleteDays.add(known)
-              // A re-read covers history only from its start.
-              if (day >= historyFrom)
-                unresolved.push({ id: transaction.id, bookedOn: day })
+              // Known ones are tracked wherever they moved: a sync re-reads
+              // those before its range by id.
+              unresolved.push({ id: transaction.id, bookedOn: day })
               continue
             }
             reported.push(normalized.value)
@@ -1089,7 +1128,7 @@ const make = Effect.gen(function* () {
           >()
           // A judged day with a line that cannot be compared with the stored
           // facts yields no checkpoint.
-          const postedLines: Array<{ id: string; bookedOn: string }> = []
+          const postedLines: Array<ReportedTransaction> = []
           for (const transaction of wholeDays) {
             const normalized = toReportedTransaction(item, transaction)
             if (Option.isNone(normalized)) {
@@ -1097,10 +1136,7 @@ const make = Effect.gen(function* () {
               continue
             }
             if (normalized.value.status !== 'posted') continue
-            postedLines.push({
-              id: normalized.value.externalId,
-              bookedOn: normalized.value.bookedOn,
-            })
+            postedLines.push(normalized.value)
             runningBalances.set(normalized.value.externalId, {
               bookedOn: normalized.value.bookedOn,
               balanceAfterCents: runningBalanceCents(item, transaction),
@@ -1133,24 +1169,32 @@ const make = Effect.gen(function* () {
                 `
               }
               if (first === undefined || last === undefined) return recorded
-              // A posted line this account does not hold on that day (one
-              // never copied, or one settled since) leaves the day's stored
-              // facts incomplete.
-              const held = new Set(
+              // The day's stored facts are complete only when they hold
+              // every posted line of the full-day read as Pluggy reports it
+              // now. A line never copied, settled since, or whose stored
+              // amount, currency or day differs (a correction not delivered
+              // yet) would pair a stale amount with a newer running balance.
+              const held = new Map(
                 (yield* observations.current(accountId))
                   .filter(
                     (observation) =>
                       observation.sourceId === sourceId &&
                       observation.status === 'posted',
                   )
-                  .map(
-                    (observation) =>
-                      `${observation.bookedOn}|${observation.externalId}`,
-                  ),
+                  .map((observation) => [observation.externalId, observation]),
               )
-              for (const line of postedLines)
-                if (!held.has(`${line.bookedOn}|${line.id}`))
+              for (const line of postedLines) {
+                const fact = held.get(line.externalId)
+                if (
+                  fact === undefined ||
+                  fact.bookedOn !== line.bookedOn ||
+                  fact.amountCents !== line.amountCents ||
+                  fact.currency !== line.currency
+                ) {
                   incompleteDays.add(line.bookedOn)
+                  if (fact !== undefined) incompleteDays.add(fact.bookedOn)
+                }
+              }
               yield* reconcileCheckpoints({
                 accountId,
                 sourceId,
