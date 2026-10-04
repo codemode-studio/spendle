@@ -36,6 +36,7 @@ import { endOfDayBalances } from './EndOfDay.ts'
 import type { RunningLine } from './EndOfDay.ts'
 import type { PluggyAccount, PluggyItem } from './PluggyApi.ts'
 import { PluggyClient } from './PluggyClient.ts'
+import { WebhookConfig } from './WebhookConfig.ts'
 
 export const ConnectionStatus = Schema.Literals([
   'pending',
@@ -164,6 +165,11 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto
   const log = yield* EventLog
   const pluggy = yield* PluggyClient
+  // With webhooks on, each item is created pointing at our endpoint.
+  const webhookUrl = Option.map(
+    yield* WebhookConfig,
+    (settings) => settings.url,
+  ).pipe(Option.getOrUndefined)
   const accounts = yield* Accounts
   const observations = yield* Observations
 
@@ -354,6 +360,7 @@ const make = Effect.gen(function* () {
       `
       const accessToken = yield* pluggy.createConnectToken({
         clientUserId: connectionId,
+        webhookUrl,
       })
       return { connectionId, accessToken }
     },
@@ -368,6 +375,7 @@ const make = Effect.gen(function* () {
     return yield* pluggy.createConnectToken({
       clientUserId: current.id,
       itemId: current.itemId ?? undefined,
+      webhookUrl,
     })
   })
 
@@ -954,7 +962,73 @@ const make = Effect.gen(function* () {
     )
   })
 
+  const findConnectionByItem = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ id: Schema.String }),
+    execute: (itemId) =>
+      sql`SELECT id FROM open_finance_connections WHERE item_id = ${itemId}`,
+  })
+
+  /** The connection that owns a Pluggy item, if any. */
+  const connectionByItem = Effect.fn('OpenFinance.connectionByItem')(function* (
+    itemId: string,
+  ) {
+    const found = yield* findConnectionByItem(itemId)
+    return yield* Option.match(found, {
+      onNone: () => Effect.succeed(Option.none<Connection>()),
+      onSome: ({ id }) => Effect.map(connection(id), Option.some),
+    })
+  })
+
+  /** Pluggy deleted the item (consent revoked or expired); nothing to delete remotely. */
+  const markItemDeleted = Effect.fn('OpenFinance.markItemDeleted')(function* (
+    connectionId: string,
+  ) {
+    yield* sql`
+      UPDATE open_finance_connections SET status = 'disconnected', updated_at = ${yield* now}
+      WHERE id = ${connectionId}
+    `
+  })
+
+  /**
+   * Records Pluggy's deletion of transactions as removed versions. Unknown ids
+   * are ignored: Pluggy may delete transactions outside the copied window.
+   */
+  const removeTransactions = Effect.fn('OpenFinance.removeTransactions')(
+    function* (
+      providerAccountId: string,
+      transactionIds: ReadonlyArray<string>,
+    ) {
+      const provider = yield* providerAccount(providerAccountId)
+      const owner = yield* connection(provider.connectionId)
+      if (provider.accountId === null || owner.sourceId === null) return 0
+      const sourceId = owner.sourceId
+      const ids = new Set(transactionIds)
+      const doomed = (yield* observations.current(provider.accountId)).filter(
+        (observation) =>
+          observation.sourceId === sourceId && ids.has(observation.externalId),
+      )
+      const result = yield* observations.recordTransactions({
+        sourceId,
+        accountId: provider.accountId,
+        transactions: doomed.map((observation) => ({
+          externalId: observation.externalId,
+          bookedOn: observation.bookedOn,
+          amountCents: observation.amountCents,
+          currency: observation.currency,
+          description: observation.description,
+          status: 'removed' as const,
+          raw: { reason: 'deleted_by_provider' },
+        })),
+      })
+      return result.recorded.length
+    },
+  )
+
   return {
+    connectionByItem,
+    markItemDeleted,
+    removeTransactions,
     createConnectToken,
     reconnectToken,
     registerItem,

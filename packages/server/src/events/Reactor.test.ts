@@ -112,6 +112,39 @@ describe('Reactor', () => {
     }).pipe(Effect.provide(Database)),
   )
 
+  it.effect('drains events one reactor appends for another', () =>
+    Effect.gen(function* () {
+      const handled = yield* Ref.make<ReadonlyArray<string>>([])
+      const relay = Reactor.layer({
+        name: 'relay',
+        types: ['Request'],
+        handle: () => append('Work').pipe(Effect.orDie),
+      })
+      const worker = Reactor.layer({
+        name: 'worker',
+        types: ['Work'],
+        handle: (event: StoredEvent) =>
+          Ref.update(handled, (all) => [...all, `Work${event.sequence}`]),
+      })
+
+      yield* Effect.gen(function* () {
+        yield* append('Request')
+        yield* (yield* Reactor.Reactors).drain
+      }).pipe(
+        Effect.provide(
+          // The worker registers first, so a single pass would miss the relayed event.
+          Layer.mergeAll(worker, relay).pipe(
+            Layer.provideMerge(Reactor.Reactors.layer),
+            Layer.provideMerge(EventLog.layer),
+          ),
+        ),
+        Effect.scoped,
+      )
+
+      assert.deepStrictEqual(yield* Ref.get(handled), ['Work2'])
+    }).pipe(Effect.provide(Database)),
+  )
+
   it.effect('reacts to new events without being drained', () =>
     Effect.gen(function* () {
       const seen = yield* Deferred.make<number>()
@@ -165,39 +198,6 @@ describe('Reactor', () => {
       )
 
       assert.strictEqual(yield* Ref.get(attempts), 2)
-    }).pipe(Effect.provide(Database)),
-  )
-
-  it.effect('drains events one reactor appends for another', () =>
-    Effect.gen(function* () {
-      const handled = yield* Ref.make<ReadonlyArray<string>>([])
-      const relay = Reactor.layer({
-        name: 'relay',
-        types: ['Request'],
-        handle: () => append('Work').pipe(Effect.orDie),
-      })
-      const worker = Reactor.layer({
-        name: 'worker',
-        types: ['Work'],
-        handle: (event: StoredEvent) =>
-          Ref.update(handled, (all) => [...all, `Work${event.sequence}`]),
-      })
-
-      yield* Effect.gen(function* () {
-        yield* append('Request')
-        yield* (yield* Reactor.Reactors).drain
-      }).pipe(
-        Effect.provide(
-          // The worker registers first, so a single pass would miss the relayed event.
-          Layer.mergeAll(worker, relay).pipe(
-            Layer.provideMerge(Reactor.Reactors.layer),
-            Layer.provideMerge(EventLog.layer),
-          ),
-        ),
-        Effect.scoped,
-      )
-
-      assert.deepStrictEqual(yield* Ref.get(handled), ['Work2'])
     }).pipe(Effect.provide(Database)),
   )
 

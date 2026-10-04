@@ -16,6 +16,8 @@ import { Observations } from './ledger/Observations.ts'
 import { OpenFinance } from './openfinance/OpenFinance.ts'
 import { PluggyClient } from './openfinance/PluggyClient.ts'
 import * as SyncReactor from './openfinance/SyncReactor.ts'
+import * as Webhook from './openfinance/Webhook.ts'
+import { WebhookConfig } from './openfinance/WebhookConfig.ts'
 import { Api } from './http/Api.ts'
 import { SystemHandlers } from './http/System.ts'
 import * as Sqlite from './persistence/Sqlite.ts'
@@ -41,12 +43,22 @@ const CoreLive = Layer.mergeAll(
   Layer.provideMerge(Sqlite.layer),
 )
 
-const OpenFinanceLive = SyncReactor.layer.pipe(
+const OpenFinanceLive = Layer.mergeAll(
+  SyncReactor.layer,
+  Webhook.reactor,
+  Webhook.registration,
+).pipe(
   Layer.provideMerge(OpenFinance.layer),
-  Layer.provide(PluggyClient.layer.pipe(Layer.provide(FetchHttpClient.layer))),
+  Layer.provideMerge(
+    PluggyClient.layer.pipe(Layer.provide(FetchHttpClient.layer)),
+  ),
+  Layer.provideMerge(WebhookConfig.layer),
 )
 
-export const ServerLive = Layer.mergeAll(
-  HttpRouter.serve(ApiRoutes),
-  OpenFinanceLive,
-).pipe(Layer.provide(HttpServerLive), Layer.provide(CoreLive))
+const Routes = Layer.mergeAll(ApiRoutes, Webhook.routes)
+
+export const ServerLive = HttpRouter.serve(Routes).pipe(
+  Layer.provideMerge(OpenFinanceLive),
+  Layer.provide(HttpServerLive),
+  Layer.provide(CoreLive),
+)

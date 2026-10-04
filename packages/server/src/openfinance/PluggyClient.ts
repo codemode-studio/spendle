@@ -58,6 +58,14 @@ export interface PluggyClientShape {
   readonly listAccounts: (
     itemId: string,
   ) => Effect.Effect<ReadonlyArray<PluggyAccount>, PluggyError>
+  /**
+   * Makes Pluggy deliver every event to `url` with `Authorization: Bearer
+   * <secret>`, updating the existing subscription for that URL if there is one.
+   */
+  readonly ensureWebhook: (input: {
+    readonly url: string
+    readonly secret: Redacted.Redacted
+  }) => Effect.Effect<void, PluggyError>
   /** Every transaction booked in `[dateFrom, dateTo]`, following cursor pages. */
   readonly listTransactions: (input: {
     readonly accountId: string
@@ -70,6 +78,15 @@ export interface PluggyClientShape {
 const apiKeyLifetime = Duration.toMillis(Duration.minutes(115))
 
 const AuthResponse = Schema.Struct({ apiKey: Schema.String })
+const Webhooks = Schema.Struct({
+  results: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      url: Schema.String,
+      event: Schema.String,
+    }),
+  ),
+})
 const ConnectTokenResponse = Schema.Struct({ accessToken: Schema.String })
 
 const transient = (status: number) => status === 429 || status >= 500
@@ -265,8 +282,44 @@ export class PluggyClient extends Context.Service<
           return all
         })
 
+      const ensureWebhook: PluggyClientShape['ensureWebhook'] = (input) =>
+        Effect.gen(function* () {
+          const subscription = {
+            url: input.url,
+            event: 'all',
+            headers: {
+              Authorization: `Bearer ${Redacted.value(input.secret)}`,
+            },
+          }
+          const { results } = yield* send(
+            'listWebhooks',
+            HttpClientRequest.get('/webhooks'),
+            Webhooks,
+          )
+          const existing = results.find((webhook) => webhook.url === input.url)
+          yield* existing
+            ? send(
+                'updateWebhook',
+                HttpClientRequest.patch(`/webhooks/${existing.id}`).pipe(
+                  HttpClientRequest.bodyJsonUnsafe({
+                    ...subscription,
+                    enabled: true,
+                  }),
+                ),
+                Schema.Unknown,
+              )
+            : send(
+                'createWebhook',
+                HttpClientRequest.post('/webhooks').pipe(
+                  HttpClientRequest.bodyJsonUnsafe(subscription),
+                ),
+                Schema.Unknown,
+              )
+        })
+
       return PluggyClient.of({
         createConnectToken,
+        ensureWebhook,
         getItem,
         deleteItem,
         listAccounts,
