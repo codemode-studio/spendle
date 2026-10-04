@@ -65,15 +65,20 @@ const bankWords = (institutionName: string) =>
 // A four-digit number said to be a card's ending: "final 1234", "cartao 1234",
 // "****1234", "xxxx1234", "*1234".
 const cardEnding = /(?:\bfinal|\bcartao|\bcard|[*•]|\bx+)\s*(\d{4})(?!\d)/g
+// A number labeled as a reference rather than a card: "ref 1234",
+// "boleto 1234", "nsu: 1234", "cod. no 1234".
+const referenceNumber =
+  /\b(?:ref|referencia|doc|documento|nsu|protocolo|autenticacao|aut|codigo|cod|boleto|id)(?:[\s.:#º°-]+|n[º°o]?(?![a-z]))*\d+/g
 /**
- * The card endings a description states. A four-digit number counts only
- * when it is marked as one, or is the only number said: a reference or
- * document number is not a card.
+ * The card endings a description states. A four-digit number counts when it
+ * is marked as one, or is the only number said that is not labeled as a
+ * reference: a reference or document number is not a card.
  */
 const statedEndings = (text: string) => {
-  const marked = [...text.matchAll(cardEnding)].map((match) => match[1]!)
+  const unlabeled = text.replace(referenceNumber, ' ')
+  const marked = [...unlabeled.matchAll(cardEnding)].map((match) => match[1]!)
   if (marked.length > 0) return new Set(marked)
-  const numbers = text.match(/\d+/g) ?? []
+  const numbers = unlabeled.match(/\d+/g) ?? []
   return new Set(
     numbers.length === 1 && numbers[0]!.length === 4 ? numbers : [],
   )
@@ -101,7 +106,7 @@ const make = Effect.gen(function* () {
       WHERE e.account_id = ${accountId} AND e.status = 'posted'
     `,
   })
-  // Confirmed payments into the card, dated by the bank debit.
+  // Confirmed payments into the card and the date the bank debited them.
   const findPaymentRelations = SqlSchema.findAll({
     Request: Schema.String,
     Result: PaymentRelationRow,
@@ -171,14 +176,16 @@ const make = Effect.gen(function* () {
    * how its entries compare with the issued statement.
    *
    * Payments come from three places, most certain first:
-   * 1. a confirmed card payment relation, dated by the bank debit;
+   * 1. a confirmed card payment relation, made on the bank debit's date and
+   *    credited on the card's;
    * 2. a credit on the card that says it is a payment;
    * 3. only a bank debit, when the card side is missing (card PDFs may omit
    *    payments). The debit must be in the card's currency and identify
-   *    this card and no other one: it states the card's ending or names the
-   *    card's bank, without contradicting itself, or says "cartão"/"crédito"
-   *    when there is a single card. Its amount must be exactly what one closed
-   *    cycle still owed on the debit's date, and it pays that cycle.
+   *    this card and no other one: it states the card's ending, or states
+   *    no ending and names the card's bank, without contradicting itself, or
+   *    says "cartão"/"crédito" with no ending when there is a single card.
+   *    Its amount must be exactly what one closed cycle still owed on the
+   *    debit's date, and it pays that cycle.
    */
   const cycles = Effect.fn('Cards.cycles')(function* (accountId: string) {
     const card = yield* accounts.get(accountId)
@@ -203,6 +210,7 @@ const make = Effect.gen(function* () {
       payments.push({
         entryId: inflow.id,
         paidOn: relation.paidOn,
+        creditedOn: inflow.bookedOn,
         amountCents: inflow.amountCents,
         via: 'card',
       })
@@ -219,6 +227,7 @@ const make = Effect.gen(function* () {
         payments.push({
           entryId: entry.id,
           paidOn: entry.bookedOn,
+          creditedOn: entry.bookedOn,
           amountCents: entry.amountCents,
           via: 'card',
         })
@@ -243,20 +252,24 @@ const make = Effect.gen(function* () {
         account.currency === card.currency,
     )
     // A stated ending names one card; the bank's name, every card of that
-    // bank. When both are said they must agree.
-    const named = (text: string) => {
+    // bank, but only when no ending is said. An ending no card here has, or
+    // one of another bank than the one named, names no card.
+    const named = (text: string, endings: ReadonlySet<string>) => {
       const said = new Set(text.split(/[^a-z0-9]+/))
-      const endings = statedEndings(text)
+      const byBank = cards.filter((account) =>
+        bankWords(account.institutionName).some((word) => said.has(word)),
+      )
+      if (endings.size === 0) return byBank
       const byEnding = cards.filter(
         (account) =>
           account.card?.lastFour != null && endings.has(account.card.lastFour),
       )
-      const byBank = cards.filter((account) =>
-        bankWords(account.institutionName).some((word) => said.has(word)),
+      const known = [...endings].every((ending) =>
+        byEnding.some((account) => account.card?.lastFour === ending),
       )
-      if (byEnding.length === 0) return byBank
-      return byBank.length === 0 ||
-        byEnding.every((account) => byBank.includes(account))
+      return known &&
+        (byBank.length === 0 ||
+          byEnding.every((account) => byBank.includes(account)))
         ? byEnding
         : []
     }
@@ -271,11 +284,12 @@ const make = Effect.gen(function* () {
         return []
       const text = foldDescription(debit.description)
       if (!billHint.test(text)) return []
-      const candidates = named(text)
+      const endings = statedEndings(text)
+      const candidates = named(text, endings)
       const target =
         candidates.length === 1
           ? candidates[0]
-          : candidates.length === 0 && cards.length === 1 && cardHint.test(text)
+          : endings.size === 0 && cards.length === 1 && cardHint.test(text)
             ? cards[0]
             : undefined
       return target?.id === accountId

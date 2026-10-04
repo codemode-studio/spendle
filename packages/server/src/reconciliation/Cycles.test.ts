@@ -403,6 +403,120 @@ describe('cardCycles', () => {
       ['2026-08-15', 'statement', 'due'],
     )
   })
+
+  it('is not overdue before the business day a printed weekend due date moves to', () => {
+    // The statement prints Saturday 15 August; Monday 17 August is the deadline.
+    const result = build(
+      [],
+      '2026-08-16',
+      [issued('2026-07-04', '2026-08-03', -5000, { dueOn: '2026-08-15' })],
+      [entry('market', '2026-07-10', -5000)],
+    )
+    assert.deepStrictEqual(
+      [
+        result.cycles[0]?.dueOn,
+        result.cycles[0]?.payableUntil,
+        result.cycles[0]?.status,
+      ],
+      ['2026-08-15', '2026-08-17', 'due'],
+    )
+  })
+
+  it('pays a balance statement with a payment that reached the card after the cut', () => {
+    // Inter: R$ 100,00 due at the 3 August cut; the bank debits it that day
+    // and the card receives it on the 4th, after the statement was issued.
+    const cutDay = {
+      ...payment('cut-day', '2026-08-03', 10000),
+      creditedOn: '2026-08-04',
+    }
+    const august = (items: ReadonlyArray<CycleEntry>) => {
+      const result = build(
+        [cutDay],
+        '2026-08-05',
+        [issued('2026-07-04', '2026-08-03', -10000)],
+        items,
+      )
+      return [
+        result.cycles[0]?.paidCents,
+        result.cycles[0]?.status,
+        result.cycles[0]?.statement,
+      ]
+    }
+    assert.deepStrictEqual(august([entry('market', '2026-07-10', -10000)]), [
+      10000,
+      'paid',
+      { observedCents: -10000, deductedCents: 0, differenceCents: 0 },
+    ])
+    // Entries R$ 50,00 above the statement are a proof difference, not a
+    // payment the statement deducted.
+    assert.deepStrictEqual(
+      august([
+        entry('market', '2026-07-10', -10000),
+        entry('bakery', '2026-07-20', -5000),
+      ]),
+      [
+        10000,
+        'paid',
+        { observedCents: -10000, deductedCents: 0, differenceCents: 5000 },
+      ],
+    )
+  })
+
+  it('keeps as credit what a zero balance statement cannot have deducted', () => {
+    // R$ 100,00 of purchases, R$ 200,00 paid before the cut, nothing due.
+    const result = build(
+      [payment('early', '2026-07-20', 20000)],
+      '2026-08-05',
+      [issued('2026-07-04', '2026-08-03', 0)],
+      [entry('market', '2026-07-10', -10000)],
+    )
+    assert.deepStrictEqual(
+      [result.cycles[0]?.statement, result.unappliedCents],
+      [{ observedCents: 0, deductedCents: 10000, differenceCents: 0 }, 10000],
+    )
+  })
+
+  it('spends credit left by a payment on the bills that follow', () => {
+    // R$ 200,00 paid on 2 July against June's R$ 100,00 bill.
+    const items = [
+      entry('market', '2026-06-10', -10000),
+      entry('hotel', '2026-07-15', -10000),
+    ]
+    const august = (statements: ReadonlyArray<IssuedStatement>) => {
+      const result = build(
+        [payment('twice', '2026-07-02', 20000)],
+        '2026-08-12',
+        statements,
+        items,
+      )
+      return [
+        result.cycles[1]?.paidCents,
+        result.cycles[1]?.status,
+        result.cycles[1]?.statement?.differenceCents ?? null,
+        result.unappliedCents,
+      ]
+    }
+    // Forecast and charges-only bills are paid by the credit.
+    assert.deepStrictEqual(august([]), [10000, 'paid', null, 0])
+    assert.deepStrictEqual(
+      august([
+        issued('2026-07-04', '2026-08-03', -10000, { netOfPayments: false }),
+      ]),
+      [10000, 'paid', 0, 0],
+    )
+    // June's balance shows the credit in the holder's favour; it still pays July.
+    assert.deepStrictEqual(
+      august([issued('2026-06-04', '2026-07-03', 10000)]),
+      [10000, 'paid', null, 0],
+    )
+    // A balance statement already shows the credit: nothing left to pay.
+    assert.deepStrictEqual(august([issued('2026-07-04', '2026-08-03', 0)]), [
+      0,
+      'paid',
+      0,
+      0,
+    ])
+  })
 })
 
 describe('billPayments', () => {

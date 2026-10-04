@@ -73,7 +73,13 @@ export interface CycleEntry {
 
 export interface CyclePayment {
   readonly entryId: string
+  /** When the payment was made: the bank debit's date when it is known. */
   readonly paidOn: string
+  /**
+   * When the money reached the card, when it is known. An issued statement
+   * reflects the payment only if this falls within its period.
+   */
+  readonly creditedOn?: string
   /** Positive: money that reached the card. */
   readonly amountCents: number
   /** Where the payment was seen: the card's own credit, or only the bank debit. */
@@ -101,6 +107,8 @@ export interface IssuedStatement {
 export type CycleStatus = 'open' | 'due' | 'paid' | 'partially_paid' | 'overdue'
 
 export interface CardCycle extends CycleBounds {
+  /** The last day to pay without being late: the due date, or the business day it moves to. */
+  readonly payableUntil: string
   readonly status: CycleStatus
   /** Purchases and credits of the cycle; negative when something is owed. */
   readonly totalCents: number
@@ -113,7 +121,7 @@ export interface CardCycle extends CycleBounds {
   /** The issued statement's total and how far the entries are from it. */
   readonly statement: {
     readonly observedCents: number
-    /** Payments made within the cycle that the statement already deducts. */
+    /** Payment credit the statement already deducts: paid within the cycle or carried from before. */
     readonly deductedCents: number
     /** The statement minus the entries and the payments it deducts. */
     readonly differenceCents: number
@@ -188,8 +196,6 @@ interface Schedule {
   readonly totals: ReadonlyArray<number>
   /** Positive when owed. */
   readonly billed: ReadonlyArray<number>
-  /** The index of the cycle a date falls in; the last one after every closing. */
-  readonly cycleOf: (date: string) => number
 }
 
 const schedule = (input: {
@@ -243,6 +249,7 @@ const schedule = (input: {
       due: printed === null ? 'forecast' : 'statement',
     }
   })
+  // The cycle a date falls in; the last one after every closing.
   const cycleOf = (date: string) => {
     const index = bounds.findIndex((cycle) => date <= cycle.closingOn)
     return index === -1 ? bounds.length - 1 : index
@@ -270,57 +277,86 @@ const schedule = (input: {
   const billed = bounds.map(
     (_, index) => 0 - (statements[index]?.cents ?? totals[index]!),
   )
-  return { bounds, statements, entries, totals, billed, cycleOf }
+  return { bounds, statements, entries, totals, billed }
 }
 
 /**
- * Applies payments in date order. A payment identified as paying one bill
- * goes to it first; the rest pays the oldest cycle that still owes, among
- * those that had started when it was made. A statement net of payments
- * already deducts those made within its cycle, after they settle older
- * bills, so they are not applied to it again.
+ * Applies payments in the order they reached the card. A payment identified
+ * as paying one bill goes to it first, then to the bills closed before it
+ * reached the card, oldest first. What is left is credit, spent oldest first
+ * as each later cycle closes. A statement net of payments already deducts
+ * the credit it can reflect, so that part is not applied to it again; the
+ * credit it shows as a balance in the holder's favour stays credit.
  */
 const allocate = (
-  { bounds, statements, billed, cycleOf }: Schedule,
+  { bounds, statements, totals, billed }: Schedule,
   payments: ReadonlyArray<CyclePayment>,
 ) => {
   const applied = bounds.map((): Array<CyclePayment> => [])
   const paid = bounds.map(() => 0)
   const deducted = bounds.map(() => 0)
-  let unappliedCents = 0
+  // Payment money not applied yet, oldest first.
+  const credit: Array<{ payment: CyclePayment; cents: number }> = []
+  const creditCents = () => credit.reduce((sum, held) => sum + held.cents, 0)
+  const pay = (index: number, payment: CyclePayment, cents: number) => {
+    const part = Math.min(billed[index]! - paid[index]!, cents)
+    if (part <= 0) return 0
+    paid[index]! += part
+    applied[index]!.push({ ...payment, amountCents: part })
+    return part
+  }
+  const spend = (through: number) => {
+    for (const held of credit)
+      for (let index = 0; index <= through && held.cents > 0; index++)
+        held.cents -= pay(index, held.payment, held.cents)
+  }
+  const settle = (index: number) => {
+    if (statements[index]?.netOfPayments !== true) return spend(index)
+    spend(index - 1)
+    // A balance counts the cycle's charges and the debt carried into it,
+    // less the payments it deducts: it can reflect no more than that.
+    let carried = 0
+    for (let older = 0; older < index; older++)
+      carried += Math.max(0, billed[older]! - paid[older]!)
+    const reflects = Math.max(0, carried - totals[index]! - billed[index]!)
+    deducted[index] = Math.min(creditCents(), reflects)
+    let consumed = deducted[index]! - Math.max(0, -billed[index]!)
+    for (const held of credit) {
+      if (consumed <= 0) break
+      const part = Math.min(held.cents, consumed)
+      held.cents -= part
+      consumed -= part
+    }
+  }
+  let closed = 0
+  const closeBefore = (date: string) => {
+    while (closed < bounds.length && bounds[closed]!.closingOn < date)
+      settle(closed++)
+  }
+
+  const creditedOn = (payment: CyclePayment) =>
+    payment.creditedOn ?? payment.paidOn
   const ordered = [...payments].sort(
     (a, b) =>
-      a.paidOn.localeCompare(b.paidOn) || a.entryId.localeCompare(b.entryId),
+      creditedOn(a).localeCompare(creditedOn(b)) ||
+      a.paidOn.localeCompare(b.paidOn) ||
+      a.entryId.localeCompare(b.entryId),
   )
   for (const payment of ordered) {
+    closeBefore(creditedOn(payment))
     let remaining = payment.amountCents
-    const apply = (index: number) => {
-      const owed = billed[index]! - paid[index]!
-      if (owed <= 0 || remaining <= 0) return
-      const part = Math.min(owed, remaining)
-      paid[index]! += part
-      applied[index]!.push({ ...payment, amountCents: part })
-      remaining -= part
-    }
     if (payment.settles !== undefined) {
       const index = bounds.findIndex(
         (cycle) => cycle.closingOn === payment.settles,
       )
-      if (index !== -1) apply(index)
+      if (index !== -1) remaining -= pay(index, payment, remaining)
     }
-    const started = cycleOf(payment.paidOn)
-    const deducts =
-      payment.paidOn <= bounds[started]!.closingOn &&
-      statements[started]?.netOfPayments === true
-    for (let index = 0; index <= started - (deducts ? 1 : 0); index++)
-      apply(index)
-    if (deducts) {
-      deducted[started]! += remaining
-      remaining = 0
-    }
-    unappliedCents += remaining
+    for (let index = 0; index < closed && remaining > 0; index++)
+      remaining -= pay(index, payment, remaining)
+    if (remaining > 0) credit.push({ payment, cents: remaining })
   }
-  return { applied, paid, deducted, unappliedCents }
+  while (closed < bounds.length) settle(closed++)
+  return { applied, paid, deducted, unappliedCents: creditCents() }
 }
 
 /**
@@ -336,10 +372,14 @@ const allocate = (
  * imported entries may be incomplete; the difference from the entries is
  * reported as the statement proof, apart from payment status.
  *
- * Payments apply in date order: to the bill they were identified as paying,
- * else to the oldest cycle that still owes, among the cycles that had started
- * when the payment was made, so a payment can settle several bills or pay the
- * open one in advance. What exceeds everything billed is unapplied credit.
+ * Payments apply in the order they reached the card: to the bill they were
+ * identified as paying, else to the oldest cycle that still owes. What a
+ * payment leaves is credit that pays the following cycles as they close
+ * (and the open one in advance), so a payment can settle several bills.
+ * What exceeds everything billed is unapplied credit.
+ *
+ * A cycle is overdue only after `payableUntil`: a due date on a weekend,
+ * printed or forecast, moves to the next business day.
  */
 export const cardCycles = (input: {
   readonly terms: CardTermsInput
@@ -359,18 +399,20 @@ export const cardCycles = (input: {
     const statement = plan.statements[index]
     const billed = plan.billed[index]!
     const owed = billed - paid[index]!
+    const payableUntil = nextBusinessDay(cycle.dueOn)
     const status: CycleStatus =
       input.today <= cycle.closingOn
         ? 'open'
         : owed <= 0
           ? 'paid'
-          : input.today > cycle.dueOn
+          : input.today > payableUntil
             ? 'overdue'
             : paid[index]! > 0
               ? 'partially_paid'
               : 'due'
     return {
       ...cycle,
+      payableUntil,
       status,
       totalCents: plan.totals[index]!,
       billedCents: billed,

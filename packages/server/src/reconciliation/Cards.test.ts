@@ -178,16 +178,19 @@ const history = (cardLines: string, bankLines: string) =>
         lastFour: null,
       }),
     })
-    yield* imports.importFile({
-      accountId: card.id,
-      fileName: 'cartao.ofx',
-      bytes: ofx('CCSTMTRS', cardLines),
-    })
-    yield* imports.importFile({
-      accountId: bank.id,
-      fileName: 'conta.ofx',
-      bytes: ofx('STMTRS', bankLines),
-    })
+    // A statement with no lines is refused, so only histories are imported.
+    if (cardLines)
+      yield* imports.importFile({
+        accountId: card.id,
+        fileName: 'cartao.ofx',
+        bytes: ofx('CCSTMTRS', cardLines),
+      })
+    if (bankLines)
+      yield* imports.importFile({
+        accountId: bank.id,
+        fileName: 'conta.ofx',
+        bytes: ofx('STMTRS', bankLines),
+      })
     yield* drain
     return { cards: yield* Cards, bank, card, owner }
   })
@@ -432,6 +435,167 @@ describe('Cards', () => {
         [],
       ])
     }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'never pays a card from a reference number or an ending no card has',
+    () =>
+      Effect.gen(function* () {
+        yield* august20
+        const accounts = yield* Accounts
+        const owner = yield* accounts.createOwner({
+          name: 'Eu',
+          kind: 'person',
+        })
+        const bank = yield* accounts.open({
+          ownerId: owner.id,
+          institutionName: 'Itaú',
+          purpose: 'operating',
+          currency: 'BRL',
+          name: 'Conta',
+          kind: 'checking',
+        })
+        const nubank = yield* addCard(
+          owner.id,
+          '1234',
+          line('n1', '20260715', '-100.00', 'Livraria'),
+        )
+        yield* addCard(
+          owner.id,
+          '5678',
+          line('i1', '20260715', '-100.00', 'Mercado'),
+          'Banco Inter',
+        )
+        const cards = yield* Cards
+        const paid = Effect.map(
+          cards.cycles(nubank.id),
+          (result) => result.cycles[0]?.paidCents,
+        )
+        yield* payFromBank(
+          bank.id,
+          'b1',
+          '-100.00',
+          'PAGAMENTO FATURA BOLETO REF 1234',
+          '20260805',
+        )
+        const reference = yield* paid
+        yield* payFromBank(
+          bank.id,
+          'b2',
+          '-100.00',
+          'PAGAMENTO FATURA NUBANK FINAL 9999',
+          '20260812',
+        )
+        const unknownEnding = yield* paid
+        yield* payFromBank(
+          bank.id,
+          'b3',
+          '-100.00',
+          'PAGAMENTO FATURA NUBANK FINAL 1234',
+          '20260819',
+        )
+        assert.deepStrictEqual(
+          [reference, unknownEnding, yield* paid],
+          [0, 0, 10000],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'pays an Inter balance with a payment the card received after the cut',
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(
+          DateTime.toEpochMillis(DateTime.makeUnsafe('2026-08-12T15:00:00Z')),
+        )
+        const accounts = yield* Accounts
+        const imports = yield* Imports
+        const owner = yield* accounts.createOwner({
+          name: 'Eu',
+          kind: 'person',
+        })
+        const base = {
+          ownerId: owner.id,
+          institutionName: 'Banco Inter',
+          purpose: 'operating',
+          currency: 'BRL',
+        } as const
+        const bank = yield* accounts.open({
+          ...base,
+          name: 'Conta',
+          kind: 'checking',
+        })
+        const card = yield* accounts.open({
+          ...base,
+          name: 'Cartão Inter',
+          kind: 'credit_card',
+          card: new CardTerms({
+            closingDay: 3,
+            dueDay: 10,
+            limitCents: null,
+            lastFour: null,
+          }),
+        })
+        // The statement closing on 3 August leaves R$ 100,00 due.
+        yield* imports.importFile({
+          accountId: card.id,
+          fileName: 'fatura-inter.pdf',
+          bytes: syntheticPdf([
+            'Banco Inter S/A',
+            'Resumo da fatura',
+            'Este e o valor que voce precisa pagar nesse mes 15/08/2026',
+            'Fatura atual R$ 100,00',
+            'Despesas do mes R$ 100,00',
+            'Despesas da fatura',
+            'CARTAO 1234****5678',
+            '10 de jul. 2026 Mercado - R$ 100,00',
+            'Data de corte: 03/09/2026',
+          ]),
+        })
+        // Paid from the bank on the cut day; the card receives it the next
+        // day. The card's feed also has a purchase the statement leaves out.
+        yield* imports.importFile({
+          accountId: card.id,
+          fileName: 'cartao.ofx',
+          bytes: ofx(
+            'CCSTMTRS',
+            line('c1', '20260720', '-50.00', 'Padaria') +
+              line('c2', '20260804', '100.00', 'Pagamento recebido'),
+          ),
+        })
+        yield* payFromBank(
+          bank.id,
+          'b1',
+          '-100.00',
+          'PAGAMENTO FATURA INTER',
+          '20260803',
+        )
+        const reconciliation = yield* Reconciliation
+        const relation = (yield* reconciliation.relations).find(
+          (found) => found.kind === 'card_payment',
+        )
+        assert.isDefined(relation)
+        if (relation!.status !== 'confirmed')
+          yield* reconciliation.decide(relation!.key, 'confirmed')
+        const result = yield* (yield* Cards).cycles(card.id)
+        const cycle = result.cycles[0]
+        assert.deepStrictEqual(
+          [
+            cycle?.closingOn,
+            cycle?.paidCents,
+            cycle?.status,
+            cycle?.payments.map((payment) => payment.paidOn),
+            cycle?.statement,
+          ],
+          [
+            '2026-08-03',
+            10000,
+            'paid',
+            ['2026-08-03'],
+            { observedCents: -10000, deductedCents: 0, differenceCents: 5000 },
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
