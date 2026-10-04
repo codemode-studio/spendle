@@ -67,6 +67,7 @@ const CheckpointRow = Schema.Struct({
   asOf: Schema.String,
   balanceCents: Schema.Int,
   received: Schema.Int,
+  invalidated: Schema.Int,
 })
 
 const EvidenceRow = Schema.Struct({
@@ -172,11 +173,15 @@ const make = Effect.gen(function* () {
     Request: Schema.String,
     Result: CheckpointRow,
     execute: (accountId) => sql`
-      SELECT source_id AS sourceId, as_of AS asOf, balance_cents AS balanceCents,
-        rowid AS received
-      FROM balance_observations
-      WHERE account_id = ${accountId} AND kind IN ('booked', 'statement')
-      ORDER BY as_of, rowid
+      SELECT b.source_id AS sourceId, b.as_of AS asOf, b.balance_cents AS balanceCents,
+        b.rowid AS received,
+        EXISTS (
+          SELECT 1 FROM open_finance_checkpoint_invalidations i
+          WHERE i.balance_observation_id = b.id
+        ) AS invalidated
+      FROM balance_observations b
+      WHERE b.account_id = ${accountId} AND b.kind IN ('booked', 'statement')
+      ORDER BY b.as_of, b.rowid
     `,
   })
   // The evidence of each stored entry, as dated and with the status it had
@@ -295,9 +300,13 @@ const make = Effect.gen(function* () {
     const checkpoints: Array<Checkpoint> = []
     const conflicts: Array<CheckpointConflict> = []
     for (const [asOf, bySource] of byDay) {
-      const reports = [...bySource.values()].sort(
-        (a, b) => a.received - b.received,
-      )
+      // A source whose latest report of the day was withdrawn (its day
+      // gained movements it can no longer close) says nothing for that day;
+      // an older report of the same source does not stand in for it.
+      const reports = [...bySource.values()]
+        .filter((report) => report.invalidated === 0)
+        .sort((a, b) => a.received - b.received)
+      if (reports.length === 0) continue
       if (new Set(reports.map((report) => report.balanceCents)).size > 1) {
         conflicts.push({
           asOf,

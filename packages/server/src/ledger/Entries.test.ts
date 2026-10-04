@@ -1,5 +1,6 @@
 import { assert, describe, it } from '@effect/vitest'
 import * as Effect from 'effect/Effect'
+import * as SqlClient from 'effect/sql/SqlClient'
 import * as Ref from 'effect/Ref'
 import * as TestClock from 'effect/testing/TestClock'
 
@@ -163,6 +164,34 @@ describe('Entries', () => {
           ? proof.intervals.map((interval) => interval.differenceCents)
           : [],
         [0, 3000, -3000],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect('leaves out a checkpoint its source withdrew', () =>
+    Effect.gen(function* () {
+      const { account, entries } = yield* linkedWithStatement(
+        new TextEncoder().encode(
+          new TextDecoder()
+            .decode(septemberOfx())
+            .replace('<BALAMT>900.00', '<BALAMT>930.00'),
+        ),
+      )
+      // The statement's 30 September close is withdrawn: its gap goes with it.
+      const sql = yield* SqlClient.SqlClient
+      yield* sql`
+        INSERT INTO open_finance_checkpoint_invalidations
+          (balance_observation_id, account_id, source_id, as_of, invalidated_at)
+        SELECT id, account_id, source_id, as_of, '2026-10-04T00:00:00Z'
+        FROM balance_observations
+        WHERE account_id = ${account.id} AND kind = 'statement'
+      `
+      const proof = yield* entries.balanceProof(account.id)
+      assert.deepStrictEqual(
+        proof.supported
+          ? proof.intervals.map((interval) => interval.differenceCents)
+          : [],
+        [0, 0],
       )
     }).pipe(Effect.provide(openFinanceTest())),
   )
