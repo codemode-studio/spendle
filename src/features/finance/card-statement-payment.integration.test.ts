@@ -239,6 +239,140 @@ describe('fatura paga na projeção de caixa', () => {
   })
 })
 
+describe('pagamento recebido no cartão e conciliação na projeção', () => {
+  let database: TestDatabase | undefined
+
+  afterEach(() => {
+    database?.close()
+    vi.useRealTimers()
+  })
+
+  async function statementDueSept15() {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-08T12:00:00Z'))
+    database = await openTestDatabase()
+    await database.db
+      .update(schema.creditCards)
+      .set({ dueDay: 15 })
+      .where(eq(schema.creditCards.id, database.ids.card))
+    await createManualTransaction({
+      targetType: 'card',
+      targetId: database.ids.card,
+      postedAt: '2026-08-20',
+      description: 'Compra no cartão',
+      direction: 'outflow',
+      amountCents: 30_000,
+      categoryId: 'groceries',
+    })
+    return database
+  }
+
+  async function cardReceipt(input: {
+    id: string
+    postedAt: string
+    amountCents: number
+    status: 'pending' | 'confirmed'
+  }) {
+    await database!.db.insert(schema.transactions).values({
+      id: input.id,
+      creditCardId: database!.ids.card,
+      categoryId: 'card_payment',
+      fingerprint: input.id,
+      postedAt: input.postedAt,
+      description: 'Pagamento recebido',
+      normalizedDescription: 'pagamento recebido',
+      amountCents: input.amountCents,
+      currency: 'BRL',
+      status: input.status,
+    })
+  }
+
+  async function scheduledCents() {
+    const snapshot = await getFinanceSnapshot()
+    return snapshot.cashProjection.scheduled.find(
+      (event) => event.id === `${database!.ids.card}-2026-09-15`,
+    )?.amountCents
+  }
+
+  it('mantém a fatura agendada com recebimento futuro no cartão', async () => {
+    await statementDueSept15()
+    await cardReceipt({
+      id: 'future-pending-receipt',
+      postedAt: '2026-09-14',
+      amountCents: 30_000,
+      status: 'pending',
+    })
+    expect(await scheduledCents()).toBe(-30_000)
+    await database!.db
+      .update(schema.transactions)
+      .set({ status: 'confirmed' })
+      .where(eq(schema.transactions.id, 'future-pending-receipt'))
+    expect(await scheduledCents()).toBe(-30_000)
+  })
+
+  it('recebimento já lançado no cartão quita sem débito bancário', async () => {
+    await statementDueSept15()
+    await cardReceipt({
+      id: 'posted-receipt',
+      postedAt: '2026-09-07',
+      amountCents: 30_000,
+      status: 'confirmed',
+    })
+    expect(await scheduledCents()).toBeUndefined()
+  })
+
+  it('conta uma vez o débito vinculado à mão e conciliado com o recebimento', async () => {
+    const db = await statementDueSept15()
+    const debit = await createManualTransaction({
+      targetType: 'account',
+      targetId: db.ids.brlAccount,
+      postedAt: '2026-09-07',
+      description: 'Débito genérico',
+      direction: 'outflow',
+      amountCents: 10_000,
+      categoryId: 'groceries',
+    })
+    await linkCardStatementPayment({
+      creditCardId: db.ids.card,
+      dueDate: '2026-09-15',
+      transactionId: debit.id,
+      partial: true,
+    })
+    await cardReceipt({
+      id: 'partial-receipt',
+      postedAt: '2026-09-07',
+      amountCents: 10_000,
+      status: 'confirmed',
+    })
+    await db.db.insert(schema.reconciliationGroups).values({
+      id: 'partial-pair',
+      type: 'card_payment',
+      status: 'confirmed',
+      confidence: 100,
+    })
+    await db.db.insert(schema.reconciliationLinks).values([
+      {
+        id: 'partial-pair-bank',
+        groupId: 'partial-pair',
+        transactionId: debit.id,
+        role: 'outgoing',
+      },
+      {
+        id: 'partial-pair-card',
+        groupId: 'partial-pair',
+        transactionId: 'partial-receipt',
+        role: 'incoming',
+      },
+    ])
+    const snapshot = await getFinanceSnapshot()
+    const statement = snapshot.cards
+      .find((card) => card.id === db.ids.card)
+      ?.statements.find((row) => row.dueDate === '2026-09-15')
+    expect(statement).toMatchObject({ status: 'partial', paidCents: 10_000 })
+    expect(await scheduledCents()).toBe(-20_000)
+  })
+})
+
 describe('pagamento pendente na projeção de caixa', () => {
   let database: TestDatabase | undefined
 

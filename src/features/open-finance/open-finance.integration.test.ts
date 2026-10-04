@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm'
 import type { Account, Item, Transaction } from 'pluggy-sdk'
 import { TransactionStatus } from 'pluggy-sdk'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getFinanceSnapshot } from '#/features/finance/finance-snapshot.server'
 import { clearTransactionData } from '#/features/finance/import.server'
@@ -1018,6 +1018,88 @@ describe('Open Finance history window', () => {
       action: 'accept',
     })
     expect(await balance()).toBe(90_000)
+  })
+
+  it('derives the opening again when Pluggy deletes a copied fact', async () => {
+    const gateway = new FakePluggyGateway()
+    await connectedAccount(database, gateway)
+    const balance = async () =>
+      (await getFinanceSnapshot()).accounts.find(
+        (item) => item.id === database.ids.brlAccount,
+      )?.balanceCents
+    expect(await balance()).toBe(90_000)
+
+    await enqueuePluggyWebhook({
+      eventId: 'delete-copied',
+      event: 'transactions/deleted',
+      itemId: 'item-1',
+      accountId: 'provider-bank',
+      transactionIds: ['provider-transaction-1'],
+    })
+    await processNextPluggyWebhook(gateway)
+    // The booked 900.00 never contained the deleted debit.
+    expect(await balance()).toBe(90_000)
+  })
+
+  it('derives the opening again when a copied pending fact is confirmed', async () => {
+    const gateway = new FakePluggyGateway()
+    const pendingDebit = providerTransaction({
+      id: 'historical-pending',
+      date: new Date('2026-09-12T15:00:00Z'),
+      status: TransactionStatus.PENDING,
+    })
+    gateway.transactions.set('provider-bank', [
+      providerTransaction(),
+      pendingDebit,
+    ])
+    const connectionId = await connectedAccount(database, gateway)
+    const balance = async () =>
+      (await getFinanceSnapshot()).accounts.find(
+        (item) => item.id === database.ids.brlAccount,
+      )?.balanceCents
+    expect(await balance()).toBe(90_000)
+
+    gateway.transactions.set('provider-bank', [
+      providerTransaction(),
+      { ...pendingDebit, status: TransactionStatus.POSTED },
+    ])
+    await syncPluggyConnection({ connectionId }, gateway)
+    expect(await balance()).toBe(90_000)
+  })
+
+  it('derives the opening again for late facts inside the observed interval only', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-09-15T15:00:00Z'))
+      const gateway = new FakePluggyGateway()
+      const connectionId = await connectedAccount(database, gateway)
+      const balance = async () =>
+        (await getFinanceSnapshot()).accounts.find(
+          (item) => item.id === database.ids.brlAccount,
+        )?.balanceCents
+      expect(await balance()).toBe(90_000)
+
+      // Booked 900.00 was observed on Sep 15: the Sep 12 debit was already
+      // in it, the Sep 16 debit happened afterwards.
+      vi.setSystemTime(new Date('2026-09-17T15:00:00Z'))
+      gateway.transactions.set('provider-bank', [
+        providerTransaction(),
+        providerTransaction({
+          id: 'late-inside',
+          date: new Date('2026-09-12T15:00:00Z'),
+          amount: 20,
+        }),
+        providerTransaction({
+          id: 'after-observation',
+          date: new Date('2026-09-16T15:00:00Z'),
+          amount: 5,
+        }),
+      ])
+      await syncPluggyConnection({ connectionId }, gateway)
+      expect(await balance()).toBe(89_500)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('starts a new card at the statement cycle containing the window start', async () => {

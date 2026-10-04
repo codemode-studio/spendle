@@ -138,6 +138,17 @@ export function buildCardStatementLedger(input: {
       .flatMap((group) => group.transactionIds),
   )
 
+  // A person's decision outranks every inference.
+  const accountPaymentById = new Map(
+    input.accountPayments.map((payment) => [payment.id, payment]),
+  )
+  const manualLinks = (input.manualLinks ?? []).flatMap((link) => {
+    const entry = entries.find((item) => item.dueDate === link.dueDate)
+    const payment = accountPaymentById.get(link.transactionId)
+    return entry && payment ? [{ link, entry, payment }] : []
+  })
+  const manuallyLinked = new Set(manualLinks.map(({ payment }) => payment.id))
+
   for (const transaction of input.transactions) {
     const received = isReceivedCardPayment({
       creditCardId: 'card',
@@ -150,18 +161,29 @@ export function buildCardStatementLedger(input: {
       if (target < 0) continue
       const entry = entries[target]
       const group = groupByTransaction.get(transaction.id)
-      const bankIds =
+      const groupBankIds =
         group?.transactionIds.filter((id) => id !== transaction.id) ?? []
+      // A bank debit linked by hand already counts this receipt, with the
+      // person's partial or full decision; only the rest of the pair adds.
+      const bankIds = groupBankIds.filter((id) => !manuallyLinked.has(id))
+      if (groupBankIds.length && !bankIds.length) continue
+      const manualCents = groupBankIds
+        .filter((id) => manuallyLinked.has(id))
+        .reduce(
+          (sum, id) => sum - (accountPaymentById.get(id)?.amountCents ?? 0),
+          0,
+        )
       if (group && group.status === 'confirmed' && bankIds.length) {
+        const amountCents = Math.max(0, transaction.amountCents - manualCents)
         for (const id of bankIds)
           entry.payments.push({
             transactionId: id,
             kind: 'confirmed',
             groupId: group.id,
             linkId: null,
-            amountCents: transaction.amountCents,
+            amountCents,
           })
-        entry.paidCents += transaction.amountCents
+        entry.paidCents += amountCents
       } else if (group && group.status === 'suggested' && bankIds.length) {
         for (const id of bankIds)
           entry.payments.push({
@@ -189,16 +211,7 @@ export function buildCardStatementLedger(input: {
     )
   }
 
-  // A person's decision outranks every inference.
-  const accountPaymentById = new Map(
-    input.accountPayments.map((payment) => [payment.id, payment]),
-  )
-  const manuallyLinked = new Set<string>()
-  for (const link of input.manualLinks ?? []) {
-    const entry = entries.find((item) => item.dueDate === link.dueDate)
-    const payment = accountPaymentById.get(link.transactionId)
-    if (!entry || !payment) continue
-    manuallyLinked.add(payment.id)
+  for (const { link, entry, payment } of manualLinks) {
     entry.payments.push({
       transactionId: payment.id,
       kind: 'manual',
