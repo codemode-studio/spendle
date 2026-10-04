@@ -55,9 +55,9 @@ describe('parseOfx', () => {
         line.description,
       ]),
       [
-        ['a1', '2026-09-05', 100000, 'Salário'],
-        ['a2', '2026-09-10', -10000, 'Padaria São João'],
-        ['a2#2', '2026-09-10', -10000, 'Padaria São João'],
+        ['id:a1@1', '2026-09-05', 100000, 'Salário'],
+        ['id:a2@1', '2026-09-10', -10000, 'Padaria São João'],
+        ['id:a2@2', '2026-09-10', -10000, 'Padaria São João'],
       ],
     )
   })
@@ -80,5 +80,38 @@ describe('parseOfx', () => {
 
   it('refuses a file without a statement', () => {
     assert.deepStrictEqual(parseOfx('<OFX></OFX>'), Result.fail('no_statement'))
+  })
+
+  it('decodes UTF-8 XML whatever the declaration looks like', () => {
+    const body = (declaration: string) =>
+      new TextEncoder()
+        .encode(`${declaration}<OFX><STMTRS><CURDEF>BRL<BANKTRANLIST>
+        <STMTTRN><DTPOSTED>
+        20260905</DTPOSTED><TRNAMT>1.2300</TRNAMT><FITID>a</FITID>
+        <MEMO>Salário de Jo&#227;o &amp; Filhos</MEMO></STMTTRN></BANKTRANLIST></STMTRS></OFX>`)
+    for (const declaration of [
+      `<?xml version='1.0' encoding = 'UTF-8'?>`,
+      '<?xml version="1.0"?>',
+      '',
+    ]) {
+      const [line] = Result.getOrThrow(
+        parseOfx(decodeOfx(body(declaration))),
+      ).lines
+      assert.deepStrictEqual(
+        [line?.bookedOn, line?.amountCents, line?.description],
+        ['2026-09-05', 123, 'Salário de João & Filhos'],
+      )
+    }
+  })
+
+  it('says whether it is a card statement and offers no card balance as a bill total', () => {
+    const card = Result.getOrThrow(
+      parseOfx(`<OFX><CCSTMTRS><CURDEF>BRL<BANKTRANLIST></BANKTRANLIST>
+        <LEDGERBAL><BALAMT>-200.00<DTASOF>20260715</LEDGERBAL></CCSTMTRS></OFX>`),
+    )
+    assert.deepStrictEqual(
+      [card.accountKind, card.closingBalance],
+      ['card', null],
+    )
   })
 })

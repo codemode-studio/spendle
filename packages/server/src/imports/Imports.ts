@@ -28,6 +28,8 @@ export class ImportRejected extends Schema.TaggedError<ImportRejected>()(
       'multiple_statements',
       'running_balance_mismatch',
       'summary_balance_mismatch',
+      'mixed_currencies',
+      'malformed_csv',
       'currency_mismatch',
       'account_mismatch',
       'imported_to_other_account',
@@ -89,6 +91,18 @@ const check = (statement: ParsedStatement, account: Account) => {
       new ImportRejected({
         reason: 'currency_mismatch',
         detail: `${statement.currency} file, ${account.currency} account`,
+      }),
+    )
+  }
+  const accountKind = account.kind === 'credit_card' ? 'card' : 'account'
+  if (statement.accountKind !== null && statement.accountKind !== accountKind) {
+    return Effect.fail(
+      new ImportRejected({
+        reason: 'account_mismatch',
+        detail:
+          statement.accountKind === 'card'
+            ? 'card statement for a bank account'
+            : 'bank statement for a card',
       }),
     )
   }

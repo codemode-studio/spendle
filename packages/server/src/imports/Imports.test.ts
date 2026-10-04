@@ -105,8 +105,8 @@ describe('Imports', () => {
             observation.status,
           ]),
           [
-            ['a1', 100000, 'posted'],
-            ['a2', -10000, 'posted'],
+            ['id:a1@1', 100000, 'posted'],
+            ['id:a2@1', -10000, 'posted'],
           ],
         )
         const sql = yield* SqlClient.SqlClient
@@ -217,6 +217,26 @@ describe('Imports', () => {
         [2, '2026-09-05', '2026-09-10'],
       )
       assert.strictEqual((yield* observations.current(account.id)).length, 0)
+    }).pipe(Effect.provide(ImportsTest)),
+  )
+
+  it.effect('refuses a card OFX for a bank account', () =>
+    Effect.gen(function* () {
+      const { imports, open } = yield* setup
+      const account = yield* open('Conta')
+      const error = yield* imports
+        .importFile({
+          accountId: account.id,
+          fileName: 'cartao.ofx',
+          bytes: utf8(
+            '<OFX><CCSTMTRS><CURDEF>BRL<BANKTRANLIST></BANKTRANLIST></CCSTMTRS></OFX>',
+          ),
+        })
+        .pipe(Effect.flip)
+      assert.strictEqual(
+        error._tag === 'ImportRejected' && error.reason,
+        'account_mismatch',
+      )
     }).pipe(Effect.provide(ImportsTest)),
   )
 })

@@ -81,4 +81,81 @@ describe('splitCsv', () => {
       ['1', '2', '3'],
     ])
   })
+
+  it('reads a credit next to a zero debit and refuses two non-zero columns', () => {
+    const statement = Result.getOrThrow(
+      parseCsv(
+        'Data;Descrição;Débito;Crédito\n05/09/2026;Salário;0,00;1.000,00\n06/09/2026;Ambíguo;10,00;20,00\n',
+        'account',
+      ),
+    )
+    assert.deepStrictEqual(
+      [
+        statement.lines.map((line) => [line.description, line.amountCents]),
+        statement.rejectedRows,
+      ],
+      [[['Salário', 100000]], 1],
+    )
+  })
+
+  it('reports the currency column and refuses mixed currencies', () => {
+    const usd = Result.getOrThrow(
+      parseCsv(
+        'Data;Descrição;Valor;Moeda\n05/09/2026;Hotel;10,00;USD\n',
+        'account',
+      ),
+    )
+    assert.strictEqual(usd.currency, 'USD')
+    assert.deepStrictEqual(
+      parseCsv(
+        'Data;Descrição;Valor;Moeda\n05/09/2026;A;1,00;USD\n06/09/2026;B;1,00;BRL\n',
+        'account',
+      ),
+      Result.fail('mixed_currencies'),
+    )
+  })
+
+  it('checks known balances across rows that have none', () => {
+    const text =
+      'Data;Descrição;Valor;Saldo\n05/09/2026;A;100,00;100,00\n06/09/2026;B;-10,00;95,00\n07/09/2026;C;-5,00;\n'
+    assert.deepStrictEqual(
+      parseCsv(text, 'account'),
+      Result.fail('running_balance_mismatch'),
+    )
+  })
+
+  it('uses the dates when a balance chain reads both ways', () => {
+    const text =
+      'Data;Descrição;Valor;Saldo\n30/09/2026;A;100,00;1.000,00\n01/09/2026;B;-100,00;900,00\n'
+    assert.deepStrictEqual(
+      Result.getOrThrow(parseCsv(text, 'account')).closingBalance,
+      {
+        asOf: '2026-09-30',
+        cents: 100000,
+      },
+    )
+  })
+
+  it('reads card direction words and balances in the card statement convention', () => {
+    const statement = Result.getOrThrow(
+      parseCsv(
+        'Data;Descrição;Valor;Tipo;Saldo\n10/09/2026;Mercado;100,00;Compra;100,00\n11/09/2026;Posto;10,00;Compra;110,00\n20/09/2026;Pagamento recebido;-500,00;Pagamento;-390,00\n',
+        'card',
+      ),
+    )
+    assert.deepStrictEqual(
+      statement.lines.map((line) => line.amountCents),
+      [-10000, -1000, 50000],
+    )
+  })
+
+  it('refuses a file with an unclosed quote', () => {
+    assert.deepStrictEqual(
+      parseCsv(
+        'Data;Descrição;Valor\n05/09/2026;"Sem fim;10,00\n06/09/2026;B;5,00\n',
+        'account',
+      ),
+      Result.fail('malformed_csv'),
+    )
+  })
 })

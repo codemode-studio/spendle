@@ -40,6 +40,7 @@ const columns = {
   direction: ['tipo', 'natureza', 'direction', 'credito_debito', 'd_c'],
   balance: ['saldo', 'saldo_rs', 'balance', 'running_balance'],
   id: ['id', 'identificador', 'transaction_id', 'fitid', 'codigo'],
+  currency: ['moeda', 'currency', 'currency_code'],
 } as const
 
 const pick = (row: Record<string, string>, names: ReadonlyArray<string>) =>
@@ -47,7 +48,11 @@ const pick = (row: Record<string, string>, names: ReadonlyArray<string>) =>
     .map((name) => row[name])
     .find((value) => value !== undefined && value !== '') ?? ''
 
-/** Splits CSV text into rows of fields, honouring quotes and doubled quotes. */
+/**
+ * Splits CSV text into rows of fields, honouring quotes and doubled quotes.
+ * Returns null when a quote is never closed: the rest of the file would
+ * otherwise be swallowed into one field.
+ */
 export const splitCsv = (text: string, delimiter: string) => {
   const rows: Array<Array<string>> = []
   let row: Array<string> = []
@@ -73,6 +78,7 @@ export const splitCsv = (text: string, delimiter: string) => {
       field = ''
     } else field += char
   }
+  if (quoted) return null
   row.push(field.trim())
   if (row.some((value) => value !== '')) rows.push(row)
   return rows
@@ -131,27 +137,81 @@ const readPreamble = (lines: ReadonlyArray<string>, delimiter: string) => {
   return { accountHint, period, balance }
 }
 
+// Direction words differ by statement: on a card, "pagamento" is money in.
+const outflowWords = {
+  account: /deb|saida|compra|pagamento|^d$/,
+  card: /deb|compra|saida|^d$/,
+}
+const inflowWords = {
+  account: /cred|entrada|recebimento|estorno|^c$/,
+  card: /cred|pagamento|recebimento|estorno|entrada|^c$/,
+}
+
 const amountOf = (row: Record<string, string>, kind: 'account' | 'card') => {
-  const debit = pick(row, columns.debit)
-  if (debit) {
-    const cents = parseMoney(debit)
-    return cents === null ? null : -Math.abs(cents)
-  }
-  const credit = pick(row, columns.credit)
-  if (credit) {
-    const cents = parseMoney(credit)
-    return cents === null ? null : Math.abs(cents)
+  const debitText = pick(row, columns.debit)
+  const creditText = pick(row, columns.credit)
+  if (debitText || creditText) {
+    const debit = debitText ? parseMoney(debitText) : 0
+    const credit = creditText ? parseMoney(creditText) : 0
+    if (debit === null || credit === null) return null
+    // A zero in one column is a placeholder; two non-zero values contradict.
+    if (debit !== 0 && credit !== 0) return null
+    return debit !== 0 ? -Math.abs(debit) : Math.abs(credit)
   }
   const raw = pick(row, columns.amount)
   const cents = parseMoney(raw)
   if (cents === null) return null
   const direction = key(pick(row, columns.direction))
-  if (/deb|saida|compra|pagamento|^d$/.test(direction)) return -Math.abs(cents)
-  if (/cred|entrada|recebimento|estorno|^c$/.test(direction))
-    return Math.abs(cents)
+  if (outflowWords[kind].test(direction)) return -Math.abs(cents)
+  if (inflowWords[kind].test(direction)) return Math.abs(cents)
   // Card exports sign amounts from the statement's view: a purchase is
   // positive and a payment or refund negative, the opposite of the ledger.
   return kind === 'card' ? -cents : cents
+}
+
+interface BalancePoint {
+  /** Position among the parsed lines. */
+  readonly index: number
+  readonly bookedOn: string
+  readonly balanceCents: number
+}
+
+/**
+ * Checks known running balances against the amounts between them, in file
+ * order (oldest first) or reversed (newest first). Rows without a balance are
+ * crossed using their amounts, so a blank cell cannot hide a mismatch. Card
+ * exports may keep balances in the statement's sign, so both signs are tried.
+ */
+const balanceOrder = (
+  amounts: ReadonlyArray<number>,
+  points: ReadonlyArray<BalancePoint>,
+): 'ascending' | 'descending' | 'both' | null => {
+  const between = (from: number, to: number, sign: number) => {
+    let sum = 0
+    for (let index = from; index < to; index++) sum += amounts[index]! * sign
+    return sum
+  }
+  const fits = (order: 'ascending' | 'descending') =>
+    [1, -1].some((sign) =>
+      points.slice(1).every((point, position) => {
+        const previous = points[position]!
+        return order === 'ascending'
+          ? previous.balanceCents +
+              between(previous.index + 1, point.index + 1, sign) ===
+              point.balanceCents
+          : point.balanceCents + between(previous.index, point.index, sign) ===
+              previous.balanceCents
+      }),
+    )
+  const ascending = fits('ascending')
+  const descending = fits('descending')
+  return ascending && descending
+    ? 'both'
+    : ascending
+      ? 'ascending'
+      : descending
+        ? 'descending'
+        : null
 }
 
 /**
@@ -165,7 +225,9 @@ export const parseCsv = (
 ): Result.Result<ParsedStatement, StatementProblem> => {
   const table = findTable(text.replace(/^﻿/, ''))
   if (table === null) return Result.fail('no_statement')
-  const [headerRow = [], ...dataRows] = splitCsv(table.body, table.delimiter)
+  const split = splitCsv(table.body, table.delimiter)
+  if (split === null) return Result.fail('malformed_csv')
+  const [headerRow = [], ...dataRows] = split
   const headers = headerRow.map(key)
   const preamble = readPreamble(table.preamble, table.delimiter)
 
@@ -173,11 +235,8 @@ export const parseCsv = (
   const lines: Array<
     Omit<StatementLine, 'externalId'> & { externalId?: string }
   > = []
-  const balances: Array<{
-    bookedOn: string
-    amountCents: number
-    balanceCents: number
-  }> = []
+  const balances: Array<BalancePoint> = []
+  const currencies = new Set<string>()
   for (const values of dataRows) {
     const row = Object.fromEntries(
       headers.map((header, index) => [header, values[index] ?? '']),
@@ -197,31 +256,30 @@ export const parseCsv = (
       description,
       raw: row,
     })
+    const currency = pick(row, columns.currency).toUpperCase()
+    if (currency) currencies.add(currency)
     const balanceCents = parseMoney(pick(row, columns.balance))
     if (balanceCents !== null)
-      balances.push({ bookedOn, amountCents, balanceCents })
+      balances.push({ index: lines.length - 1, bookedOn, balanceCents })
   }
+  if (currencies.size > 1) return Result.fail('mixed_currencies')
 
-  let latestBalance: (typeof balances)[number] | undefined
-  if (balances.length > 0 && balances.length === lines.length) {
-    const chains = (ordered: typeof balances) =>
-      ordered
-        .slice(1)
-        .every(
-          (point, index) =>
-            ordered[index]!.balanceCents + point.amountCents ===
-            point.balanceCents,
-        )
-    const ascending = chains(balances)
-    const descending = chains([...balances].reverse())
-    if (balances.length > 1 && !ascending && !descending)
+  let latestBalance: BalancePoint | undefined
+  if (balances.length > 0) {
+    const order = balanceOrder(
+      lines.map((line) => line.amountCents),
+      balances,
+    )
+    if (balances.length > 1 && order === null)
       return Result.fail('running_balance_mismatch')
+    const first = balances[0]!
+    const last = balances.at(-1)!
+    // When both readings fit, the dates decide which end is the newest.
     latestBalance =
-      ascending && !descending
-        ? balances.at(-1)
-        : descending && !ascending
-          ? balances[0]
-          : balances.at(-1)
+      order === 'descending' ||
+      (order === 'both' && first.bookedOn > last.bookedOn)
+        ? first
+        : last
   }
   if (
     preamble.balance !== null &&
@@ -238,7 +296,8 @@ export const parseCsv = (
   const closingAsOf = preamble.period?.end ?? latestBalance?.bookedOn ?? null
   return Result.succeed({
     format: 'csv',
-    currency: null,
+    currency: currencies.size === 1 ? [...currencies][0]! : null,
+    accountKind: null,
     accountHint: kind === 'account' ? preamble.accountHint : null,
     period: preamble.period,
     closingBalance:
