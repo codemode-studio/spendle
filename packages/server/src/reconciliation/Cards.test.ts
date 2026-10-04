@@ -1179,6 +1179,102 @@ describe('Cards', () => {
   )
 
   it.effect(
+    'does not let the first imported Inter statement spend the payment of an earlier bill',
+    () =>
+      Effect.gen(function* () {
+        yield* august20
+        const accounts = yield* Accounts
+        const imports = yield* Imports
+        const owner = yield* accounts.createOwner({
+          name: 'Eu',
+          kind: 'person',
+        })
+        const card = yield* accounts.open({
+          ownerId: owner.id,
+          institutionName: 'Banco Inter',
+          purpose: 'operating',
+          currency: 'BRL',
+          name: 'Cartão Inter',
+          kind: 'credit_card',
+          card: new CardTerms({
+            closingDay: 3,
+            dueDay: 10,
+            limitCents: null,
+            lastFour: null,
+          }),
+        })
+        const bill = (
+          fileName: string,
+          due: string,
+          nextCut: string,
+          rows: ReadonlyArray<string>,
+        ) =>
+          imports.importFile({
+            accountId: card.id,
+            fileName,
+            bytes: syntheticPdf([
+              'Banco Inter S/A',
+              'Resumo da fatura',
+              `Este e o valor que voce precisa pagar nesse mes ${due}`,
+              'Fatura atual R$ 200,00',
+              'Despesas do mes R$ 200,00',
+              'Despesas da fatura',
+              'CARTAO 1234****5678',
+              ...rows,
+              `Data de corte: ${nextCut}`,
+            ]),
+          })
+        const outcome = Effect.gen(function* () {
+          const result = yield* (yield* Cards).cycles(card.id)
+          return [
+            result.cycles.map((cycle) => [
+              cycle.closingOn,
+              cycle.paidCents,
+              cycle.status,
+              cycle.statement?.differenceCents ?? null,
+            ]),
+            result.unappliedCents,
+            result.beforeHistoryCents,
+          ]
+        })
+        // August's bill prints the 8 July payment of July's bill and still
+        // asks R$ 200,00 for August's purchases.
+        yield* bill('agosto.pdf', '10/08/2026', '03/09/2026', [
+          '15 de jul. 2026 Hotel - R$ 200,00',
+          '08 de jul. 2026 PAGAMENTO ON LINE - + R$ 200,00',
+        ])
+        yield* drain
+        const alone = yield* outcome
+        yield* bill('julho.pdf', '10/07/2026', '03/08/2026', [
+          '10 de jun. 2026 Mercado - R$ 200,00',
+        ])
+        yield* drain
+        assert.deepStrictEqual(
+          [alone, yield* outcome],
+          [
+            [
+              [
+                ['2026-08-03', 0, 'overdue', 0],
+                ['2026-09-03', 0, 'open', null],
+              ],
+              0,
+              20000,
+            ],
+            [
+              [
+                ['2026-07-03', 20000, 'paid', 0],
+                ['2026-08-03', 0, 'overdue', 0],
+                ['2026-09-03', 0, 'open', null],
+              ],
+              0,
+              0,
+            ],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
     'keeps a bank payment of a bill that a later refund could also have paid',
     () =>
       Effect.gen(function* () {

@@ -98,8 +98,10 @@ export interface CyclePayment {
   readonly settles?: string
   /**
    * The closing of the imported statement that prints this payment, when
-   * one does. A statement that counts only its period's charges prints the
-   * payments of earlier bills, so the payment pays those first.
+   * one does. A statement prints the payments of earlier bills made in its
+   * period, so the payment pays those first: all of it when the statement
+   * counts only its period's charges, and what its balance does not show as
+   * paid in advance when it is a balance.
    */
   readonly statementClosing?: string | null
 }
@@ -164,9 +166,9 @@ export interface CardCycles {
   /** Payments and closed cycles' net credit beyond everything billed so far: credit on the card. */
   readonly unappliedCents: number
   /**
-   * Payments a charges-only statement prints for earlier bills when no
-   * earlier bill is imported: they paid debt from before the history, so
-   * they are neither applied to a cycle nor credit on the card.
+   * Payments a statement prints for earlier bills when no earlier bill is
+   * imported: they paid debt from before the history, so they are neither
+   * applied to a cycle nor credit on the card.
    */
   readonly beforeHistoryCents: number
 }
@@ -368,6 +370,14 @@ const schedule = (input: {
  * anything, the bill it paid is from before the history, so it is kept
  * apart rather than paying the statement that prints it in advance.
  *
+ * A balance statement's printed payments paid the debt from before it
+ * first; only what its balance shows beyond that, as less owed than its own
+ * entries, is an advance. That advance is what the entries exceed the
+ * balance by, whatever debt the balance carries, so the rest of the printed
+ * payments is treated like a charges-only statement's. An amount due
+ * printed as zero does not tell how far below zero the balance went, so its
+ * printed payments are all taken as advance.
+ *
  * With `asOf`, allocation stops at that date: only cycles closed before it
  * are settled, so credit that reached the card later is not spent.
  */
@@ -455,15 +465,13 @@ const allocate = (
     while (closed < bounds.length && bounds[closed]!.closingOn < until)
       settle(closed++)
   }
-  // The cycle of the charges-only statement that prints a payment.
+  // The cycle of the issued statement that prints a payment.
   const printedBy = (payment: CyclePayment) => {
     if (payment.statementClosing == null) return undefined
     const index = bounds.findIndex(
       (cycle) => cycle.closingOn === payment.statementClosing,
     )
-    return index !== -1 && statements[index]?.netOfPayments === false
-      ? index
-      : undefined
+    return index !== -1 && statements[index] !== undefined ? index : undefined
   }
   // Whether any cycle before `index` bills something: a debt the history shows.
   const billsBefore = (index: number) =>
@@ -483,6 +491,24 @@ const allocate = (
       a.paidOn.localeCompare(b.paidOn) ||
       a.entryId.localeCompare(b.entryId),
   )
+  // The part of each printed payment that paid debt from before its
+  // statement. A balance statement shows as paid in advance only what its
+  // entries exceed it by; its earliest printed payments paid the earlier debt.
+  const advance = statements.map((statement, index) =>
+    statement === undefined || !statement.netOfPayments
+      ? 0
+      : statement.floorsAtZero && statement.cents === 0
+        ? Infinity
+        : Math.max(0, -(scheduled[index]! + totals[index]!)),
+  )
+  const prior = new Map<CyclePayment, number>()
+  for (const payment of ordered) {
+    const index = printedBy(payment)
+    if (index === undefined) continue
+    const ahead = Math.min(payment.amountCents, advance[index]!)
+    advance[index]! -= ahead
+    prior.set(payment, payment.amountCents - ahead)
+  }
   for (const payment of ordered) {
     closeBefore(creditedOn(payment))
     let remaining = payment.amountCents
@@ -494,12 +520,18 @@ const allocate = (
     }
     const printed = printedBy(payment)
     const earlier = Math.min(closed, printed ?? closed)
-    for (let index = 0; index < earlier && remaining > 0; index++)
-      remaining -= pay(index, payment, remaining)
-    if (remaining <= 0) continue
-    if (printed !== undefined && !billsBefore(printed))
-      beforeHistory += remaining
-    else credit.push({ payment, cents: remaining })
+    let before = prior.get(payment) ?? 0
+    for (let index = 0; index < earlier && remaining > 0; index++) {
+      const part = pay(index, payment, remaining)
+      remaining -= part
+      before -= part
+    }
+    if (printed !== undefined && !billsBefore(printed)) {
+      const kept = Math.min(remaining, Math.max(0, before))
+      beforeHistory += kept
+      remaining -= kept
+    }
+    if (remaining > 0) credit.push({ payment, cents: remaining })
   }
   if (asOf === undefined) while (closed < bounds.length) settle(closed++)
   else closeBefore(asOf)
@@ -536,8 +568,9 @@ const allocate = (
  * payment leaves is credit that pays the following cycles as they close
  * (and the open one in advance), so a payment can settle several bills.
  * What exceeds everything billed is unapplied credit. A payment a
- * charges-only statement prints pays the bills before it; with none
- * imported, it paid debt from before the history and is kept apart.
+ * statement prints pays the bills before it, except what a balance
+ * statement shows as paid in advance; with none imported, that debt is
+ * from before the history and the payment is kept apart.
  *
  * A cycle is overdue only after `payableUntil`: a due date on a weekend or
  * national bank holiday, printed or forecast, moves to the next business day.

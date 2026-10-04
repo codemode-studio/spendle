@@ -899,6 +899,100 @@ describe('cardCycles', () => {
       0,
     ])
   })
+
+  it('lets a payment printed on a balance statement pay the bill before it, not the statement', () => {
+    // Inter prints the 8 July payment of the previous bill on August's
+    // statement, and still asks R$ 200,00 for August's purchases.
+    const hotel = {
+      ...entry('hotel', '2026-07-15', -20000),
+      statementClosing: '2026-08-03',
+    }
+    const market = {
+      ...entry('market', '2026-06-10', -20000),
+      statementClosing: '2026-07-03',
+    }
+    const outcome = (
+      amountCents: number,
+      august: IssuedStatement,
+      july?: IssuedStatement,
+    ) => {
+      const result = build(
+        [
+          {
+            ...payment('pay', '2026-07-08', amountCents),
+            statementClosing: '2026-08-03',
+          },
+        ],
+        '2026-08-20',
+        july === undefined ? [august] : [july, august],
+        july === undefined ? [hotel] : [market, hotel],
+      )
+      return [
+        result.cycles.map((cycle) => [
+          cycle.closingOn,
+          cycle.paidCents,
+          cycle.status,
+          cycle.statement?.differenceCents ?? null,
+        ]),
+        result.unappliedCents,
+        result.beforeHistoryCents,
+      ]
+    }
+    const inter = (startsOn: string, closingOn: string, cents: number) =>
+      issued(startsOn, closingOn, cents, { floorsAtZero: true })
+    // Only August's statement: the payment paid a bill no import shows.
+    assert.deepStrictEqual(
+      outcome(20000, inter('2026-07-04', '2026-08-03', -20000)),
+      [
+        [
+          ['2026-08-03', 0, 'overdue', 0],
+          ['2026-09-03', 0, 'open', null],
+        ],
+        0,
+        20000,
+      ],
+    )
+    // With July's statement, it pays July and August stays owed.
+    assert.deepStrictEqual(
+      outcome(
+        20000,
+        inter('2026-07-04', '2026-08-03', -20000),
+        inter('2026-06-04', '2026-07-03', -20000),
+      ),
+      [
+        [
+          ['2026-07-03', 20000, 'paid', 0],
+          ['2026-08-03', 0, 'overdue', 0],
+          ['2026-09-03', 0, 'open', null],
+        ],
+        0,
+        0,
+      ],
+    )
+    // R$ 250,00 paid against a R$ 200,00 previous bill: the balance of
+    // R$ 150,00 deducts only the R$ 50,00 beyond it, with or without July.
+    const balance = issued('2026-07-04', '2026-08-03', -15000)
+    assert.deepStrictEqual(outcome(25000, balance), [
+      [
+        ['2026-08-03', 0, 'overdue', 0],
+        ['2026-09-03', 0, 'open', null],
+      ],
+      0,
+      20000,
+    ])
+    assert.deepStrictEqual(
+      outcome(25000, balance, issued('2026-06-04', '2026-07-03', -20000)),
+      [
+        [
+          ['2026-07-03', 20000, 'paid', 0],
+          ['2026-08-03', 0, 'overdue', 0],
+          ['2026-09-03', 0, 'open', null],
+        ],
+        0,
+        0,
+      ],
+    )
+  })
 })
 
 describe('billPayments', () => {
