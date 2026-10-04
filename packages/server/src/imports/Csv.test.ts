@@ -158,4 +158,47 @@ describe('splitCsv', () => {
       Result.fail('malformed_csv'),
     )
   })
+
+  it('dates the closing balance at the closing position, past rows without a balance', () => {
+    const text = (summary: string) =>
+      [
+        'Período ;01/09/2026 a 30/09/2026',
+        ...(summary ? [`Saldo ;${summary}`] : []),
+        'Data;Descrição;Valor;Saldo',
+        '05/09/2026;Salário;100,00;100,00',
+        '30/09/2026;Padaria;-10,00;',
+      ].join('\n')
+    assert.deepStrictEqual(
+      Result.getOrThrow(parseCsv(text(''), 'account')).closingBalance,
+      { asOf: '2026-09-30', cents: 9000 },
+    )
+    assert.deepStrictEqual(
+      Result.getOrThrow(parseCsv(text('90,00'), 'account')).closingBalance,
+      { asOf: '2026-09-30', cents: 9000 },
+    )
+    assert.deepStrictEqual(
+      parseCsv(text('100,00'), 'account'),
+      Result.fail('summary_balance_mismatch'),
+    )
+    const newestFirst = Result.getOrThrow(
+      parseCsv(
+        'Data;Descrição;Valor;Saldo\n30/09/2026;Padaria;-10,00;\n05/09/2026;Salário;100,00;100,00\n',
+        'account',
+      ),
+    )
+    assert.deepStrictEqual(newestFirst.closingBalance, {
+      asOf: '2026-09-30',
+      cents: 9000,
+    })
+  })
+
+  it('refuses bank balances that chain only with inverted signs', () => {
+    assert.deepStrictEqual(
+      parseCsv(
+        'Data;Descrição;Valor;Saldo\n05/09/2026;A;-100,00;100,00\n06/09/2026;B;-10,00;110,00\n',
+        'account',
+      ),
+      Result.fail('running_balance_mismatch'),
+    )
+  })
 })

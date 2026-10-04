@@ -36,6 +36,21 @@ export type StatementProblem =
   | 'summary_balance_mismatch'
   | 'mixed_currencies'
   | 'malformed_csv'
+  | 'malformed_ofx'
+  | 'unsupported_encoding'
+
+/**
+ * Decodes text that declares no encoding: UTF-8 when the bytes are valid
+ * UTF-8, Windows-1252, the norm of older Brazilian bank exports, otherwise.
+ * A UTF-8 byte order mark is dropped.
+ */
+export const decodeUndeclared = (bytes: Uint8Array) => {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch {
+    return new TextDecoder('windows-1252').decode(bytes)
+  }
+}
 
 /** Folds a description for comparison: no accents, case or repeated spaces. */
 export const foldDescription = (value: string) =>

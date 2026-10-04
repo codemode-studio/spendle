@@ -15,6 +15,7 @@ import type { Account } from '../ledger/Accounts.ts'
 import { Observations } from '../ledger/Observations.ts'
 import { parseCsv } from './Csv.ts'
 import { decodeOfx, looksLikeOfx, parseOfx } from './Ofx.ts'
+import { decodeUndeclared } from './Statement.ts'
 import type { ParsedStatement, StatementProblem } from './Statement.ts'
 
 export const fileImported = 'FileImported'
@@ -30,6 +31,8 @@ export class ImportRejected extends Schema.TaggedError<ImportRejected>()(
       'summary_balance_mismatch',
       'mixed_currencies',
       'malformed_csv',
+      'malformed_ofx',
+      'unsupported_encoding',
       'currency_mismatch',
       'account_mismatch',
       'imported_to_other_account',
@@ -79,9 +82,12 @@ const parse = (
 ): Result.Result<ParsedStatement, StatementProblem> => {
   if (looksLikePdf(bytes)) return Result.fail('unsupported_format')
   const ofx = decodeOfx(bytes)
-  if (looksLikeOfx(ofx)) return parseOfx(ofx)
-  const text = new TextDecoder('utf-8').decode(bytes)
-  return parseCsv(text, account.kind === 'credit_card' ? 'card' : 'account')
+  if (Result.isFailure(ofx)) return Result.fail(ofx.failure)
+  if (looksLikeOfx(ofx.success)) return parseOfx(ofx.success)
+  return parseCsv(
+    decodeUndeclared(bytes),
+    account.kind === 'credit_card' ? 'card' : 'account',
+  )
 }
 
 // Checks the file can belong to the account before anything is stored.

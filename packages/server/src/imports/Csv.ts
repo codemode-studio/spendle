@@ -176,48 +176,90 @@ interface BalancePoint {
   readonly balanceCents: number
 }
 
+interface BalanceReading {
+  readonly order: 'ascending' | 'descending'
+  /** -1 when balances are kept in a card statement's sign. */
+  readonly sign: 1 | -1
+}
+
 /**
- * Checks known running balances against the amounts between them, in file
- * order (oldest first) or reversed (newest first). Rows without a balance are
- * crossed using their amounts, so a blank cell cannot hide a mismatch. Card
- * exports may keep balances in the statement's sign, so both signs are tried.
+ * Lists the readings under which known running balances chain with the
+ * amounts between them: file order (oldest first) or reversed (newest
+ * first). Rows without a balance are crossed using their amounts, so a blank
+ * cell cannot hide a mismatch. Only card exports may keep balances in the
+ * statement's sign; a bank balance moves with the signed amounts.
  */
-const balanceOrder = (
+const balanceReadings = (
   amounts: ReadonlyArray<number>,
   points: ReadonlyArray<BalancePoint>,
-): 'ascending' | 'descending' | 'both' | null => {
+  kind: 'account' | 'card',
+): ReadonlyArray<BalanceReading> => {
   const between = (from: number, to: number, sign: number) => {
     let sum = 0
     for (let index = from; index < to; index++) sum += amounts[index]! * sign
     return sum
   }
-  const fits = (order: 'ascending' | 'descending') =>
-    [1, -1].some((sign) =>
-      points.slice(1).every((point, position) => {
-        const previous = points[position]!
-        return order === 'ascending'
-          ? previous.balanceCents +
-              between(previous.index + 1, point.index + 1, sign) ===
-              point.balanceCents
-          : point.balanceCents + between(previous.index, point.index, sign) ===
-              previous.balanceCents
-      }),
+  const signs: ReadonlyArray<1 | -1> = kind === 'card' ? [1, -1] : [1]
+  return (['ascending', 'descending'] as const).flatMap((order) =>
+    signs
+      .filter((sign) =>
+        points.slice(1).every((point, position) => {
+          const previous = points[position]!
+          return order === 'ascending'
+            ? previous.balanceCents +
+                between(previous.index + 1, point.index + 1, sign) ===
+                point.balanceCents
+            : point.balanceCents +
+                between(previous.index, point.index, sign) ===
+                previous.balanceCents
+        }),
+      )
+      .map((sign) => ({ order, sign })),
+  )
+}
+
+/**
+ * The balance after the newest line: the newest known balance carried
+ * through the lines after it in chain order, one value per fitting sign.
+ */
+const closingPosition = (
+  lines: ReadonlyArray<{
+    readonly bookedOn: string
+    readonly amountCents: number
+  }>,
+  points: ReadonlyArray<BalancePoint>,
+  readings: ReadonlyArray<BalanceReading>,
+) => {
+  const ascending = readings.some((reading) => reading.order === 'ascending')
+  const descending = readings.some((reading) => reading.order === 'descending')
+  // When both readings fit, the dates decide which end is the newest.
+  const order =
+    descending && (!ascending || lines[0]!.bookedOn > lines.at(-1)!.bookedOn)
+      ? 'descending'
+      : 'ascending'
+  const latest = order === 'ascending' ? points.at(-1)! : points[0]!
+  const after =
+    order === 'ascending'
+      ? lines.slice(latest.index + 1)
+      : lines.slice(0, latest.index)
+  const candidates = readings
+    .filter((reading) => reading.order === order)
+    .map(
+      (reading) =>
+        latest.balanceCents +
+        after.reduce((sum, line) => sum + line.amountCents * reading.sign, 0),
     )
-  const ascending = fits('ascending')
-  const descending = fits('descending')
-  return ascending && descending
-    ? 'both'
-    : ascending
-      ? 'ascending'
-      : descending
-        ? 'descending'
-        : null
+  return {
+    asOf: order === 'ascending' ? lines.at(-1)!.bookedOn : lines[0]!.bookedOn,
+    candidates,
+  }
 }
 
 /**
  * Parses a bank or card CSV export by recognizing its column names. A
  * running balance column must chain with the amounts, read top to bottom or
- * bottom to top; when it does, its latest value is the closing balance.
+ * bottom to top; when it does, its newest value carried through any later
+ * lines is the closing balance.
  */
 export const parseCsv = (
   text: string,
@@ -264,36 +306,29 @@ export const parseCsv = (
   }
   if (currencies.size > 1) return Result.fail('mixed_currencies')
 
-  let latestBalance: BalancePoint | undefined
+  let closing: ReturnType<typeof closingPosition> | null = null
   if (balances.length > 0) {
-    const order = balanceOrder(
+    const readings = balanceReadings(
       lines.map((line) => line.amountCents),
       balances,
+      kind,
     )
-    if (balances.length > 1 && order === null)
-      return Result.fail('running_balance_mismatch')
-    const first = balances[0]!
-    const last = balances.at(-1)!
-    // When both readings fit, the dates decide which end is the newest.
-    latestBalance =
-      order === 'descending' ||
-      (order === 'both' && first.bookedOn > last.bookedOn)
-        ? first
-        : last
+    if (readings.length === 0) return Result.fail('running_balance_mismatch')
+    closing = closingPosition(lines, balances, readings)
   }
   if (
     preamble.balance !== null &&
-    latestBalance &&
-    preamble.balance !== latestBalance.balanceCents
+    closing !== null &&
+    !closing.candidates.includes(preamble.balance)
   ) {
     return Result.fail('summary_balance_mismatch')
   }
 
   const closingCents =
     kind === 'account'
-      ? (preamble.balance ?? latestBalance?.balanceCents ?? null)
+      ? (preamble.balance ?? closing?.candidates[0] ?? null)
       : null
-  const closingAsOf = preamble.period?.end ?? latestBalance?.bookedOn ?? null
+  const closingAsOf = preamble.period?.end ?? closing?.asOf ?? null
   return Result.succeed({
     format: 'csv',
     currency: currencies.size === 1 ? [...currencies][0]! : null,

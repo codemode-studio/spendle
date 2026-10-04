@@ -30,7 +30,9 @@ const windows1252 = (text: string) =>
 
 describe('parseOfx', () => {
   it('reads an SGML bank statement in Windows-1252', () => {
-    const statement = Result.getOrThrow(parseOfx(decodeOfx(windows1252(sgml))))
+    const statement = Result.getOrThrow(
+      parseOfx(Result.getOrThrow(decodeOfx(windows1252(sgml)))),
+    )
     assert.deepStrictEqual(
       {
         currency: statement.currency,
@@ -95,7 +97,7 @@ describe('parseOfx', () => {
       '',
     ]) {
       const [line] = Result.getOrThrow(
-        parseOfx(decodeOfx(body(declaration))),
+        parseOfx(Result.getOrThrow(decodeOfx(body(declaration)))),
       ).lines
       assert.deepStrictEqual(
         [line?.bookedOn, line?.amountCents, line?.description],
@@ -112,6 +114,73 @@ describe('parseOfx', () => {
     assert.deepStrictEqual(
       [card.accountKind, card.closingBalance],
       ['card', null],
+    )
+  })
+
+  it('reads CDATA literally and skips comments inside XML values', () => {
+    const statement = Result.getOrThrow(
+      parseOfx(`<?xml version="1.0"?><OFX><STMTRS><CURDEF><![CDATA[USD]]></CURDEF><BANKTRANLIST>
+        <STMTTRN><DTPOSTED>20260905</DTPOSTED><TRNAMT>-1.00</TRNAMT><FITID>a</FITID>
+        <MEMO><![CDATA[Loja <A&B> &amp;]]></MEMO></STMTTRN>
+        <STMTTRN><DTPOSTED>20260906</DTPOSTED><TRNAMT>-2.00</TRNAMT><FITID>b</FITID>
+        <MEMO>Padaria <!-- filial 2 -->S&#227;o Jo&#xE3;o</MEMO></STMTTRN>
+        </BANKTRANLIST></STMTRS></OFX>`),
+    )
+    assert.deepStrictEqual(
+      [
+        statement.currency,
+        statement.rejectedRows,
+        statement.lines.map((line) => line.description),
+      ],
+      ['USD', 0, ['Loja <A&B> &amp;', 'Padaria São João']],
+    )
+  })
+
+  it('refuses invalid character references and unterminated markup instead of throwing', () => {
+    const file = (memo: string) =>
+      `<OFX><STMTRS><CURDEF>BRL</CURDEF><BANKTRANLIST><STMTTRN><DTPOSTED>20260905</DTPOSTED>
+        <TRNAMT>-1.00</TRNAMT><MEMO>${memo}</MEMO></STMTTRN></BANKTRANLIST></STMTRS></OFX>`
+    for (const memo of [
+      'A&#1114112;',
+      'A&#xFFFFFFFFFF;',
+      'A&#55296;',
+      'A&#0;',
+      '<![CDATA[A',
+      'A<!-- B',
+    ]) {
+      assert.deepStrictEqual(parseOfx(file(memo)), Result.fail('malformed_ofx'))
+    }
+  })
+
+  it('refuses amounts in another currency and keeps converted ones', () => {
+    const file = (currency: string) =>
+      `<OFX><STMTRS><CURDEF>BRL<BANKTRANLIST><STMTTRN><DTPOSTED>20260905<TRNAMT>-10.00<FITID>a
+        <MEMO>Hotel${currency}</STMTTRN></BANKTRANLIST></STMTRS></OFX>`
+    assert.deepStrictEqual(
+      parseOfx(file('<CURRENCY><CURRATE>5.00<CURSYM>USD</CURRENCY>')),
+      Result.fail('mixed_currencies'),
+    )
+    const same = Result.getOrThrow(
+      parseOfx(file('<CURRENCY><CURRATE>1.00<CURSYM>BRL</CURRENCY>')),
+    )
+    assert.strictEqual(same.lines[0]?.amountCents, -1000)
+    const converted = Result.getOrThrow(
+      parseOfx(file('<ORIGCURRENCY><CURRATE>5.00<CURSYM>USD</ORIGCURRENCY>')),
+    )
+    assert.deepStrictEqual(
+      [converted.lines[0]?.amountCents, converted.lines[0]?.raw],
+      [
+        -1000,
+        {
+          fitid: 'a',
+          type: null,
+          name: null,
+          memo: 'Hotel',
+          checkNumber: null,
+          originalCurrency: 'USD',
+          originalRate: '5.00',
+        },
+      ],
     )
   })
 })

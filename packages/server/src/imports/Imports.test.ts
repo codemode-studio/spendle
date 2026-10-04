@@ -239,4 +239,92 @@ describe('Imports', () => {
       )
     }).pipe(Effect.provide(ImportsTest)),
   )
+
+  it.effect('reads legacy Windows-1252 CSV and UTF-16 OFX files', () =>
+    Effect.gen(function* () {
+      const { imports, observations, open } = yield* setup
+      const account = yield* open('Conta')
+      const windows1252 = (text: string) =>
+        Uint8Array.from([...text].map((char) => char.charCodeAt(0)))
+      yield* imports.importFile({
+        accountId: account.id,
+        fileName: 'extrato.csv',
+        bytes: windows1252(
+          'Data;Descrição;Valor\n05/09/2026;Salário;1.000,00\n',
+        ),
+      })
+      const utf16 = (text: string, littleEndian: boolean) => {
+        const bytes = new Uint8Array(2 + text.length * 2)
+        const view = new DataView(bytes.buffer)
+        view.setUint16(0, 0xfeff, littleEndian)
+        for (let index = 0; index < text.length; index++)
+          view.setUint16(2 + index * 2, text.charCodeAt(index), littleEndian)
+        return bytes
+      }
+      const xml = (fitid: string) => `<?xml version="1.0" encoding="UTF-16"?>
+<OFX><STMTRS><CURDEF>BRL</CURDEF><BANKTRANLIST><STMTTRN><DTPOSTED>20260910</DTPOSTED>
+<TRNAMT>-10.00</TRNAMT><FITID>${fitid}</FITID><MEMO>Padaria São João</MEMO></STMTTRN>
+</BANKTRANLIST></STMTRS></OFX>`
+      for (const [fitid, littleEndian] of [
+        ['le', true],
+        ['be', false],
+      ] as const) {
+        yield* imports.importFile({
+          accountId: account.id,
+          fileName: `${fitid}.ofx`,
+          bytes: utf16(xml(fitid), littleEndian),
+        })
+      }
+      const current = yield* observations.current(account.id)
+      assert.deepStrictEqual(
+        current.map((observation) => [
+          observation.description,
+          observation.amountCents,
+        ]),
+        [
+          ['Salário', 100000],
+          ['Padaria São João', -1000],
+          ['Padaria São João', -1000],
+        ],
+      )
+    }).pipe(Effect.provide(ImportsTest)),
+  )
+
+  it.effect(
+    'refuses foreign amounts, hidden currencies and undeclared encodings',
+    () =>
+      Effect.gen(function* () {
+        const { imports, observations, open } = yield* setup
+        const account = yield* open('Conta')
+        const reasons = yield* Effect.forEach(
+          [
+            ofx(
+              'BRL',
+              '\n<STMTTRN><DTPOSTED>20260911<TRNAMT>-10.00<FITID>a3<MEMO>Hotel<CURRENCY><CURRATE>5.00<CURSYM>USD</CURRENCY></STMTTRN>',
+            ),
+            utf8(
+              '<?xml version="1.0"?><OFX><STMTRS><CURDEF><![CDATA[USD]]></CURDEF><BANKTRANLIST></BANKTRANLIST></STMTRS></OFX>',
+            ),
+            utf8(
+              '<?xml version="1.0" encoding="EBCDIC-CP-US"?><OFX><STMTRS><CURDEF>BRL</CURDEF></STMTRS></OFX>',
+            ),
+          ],
+          (bytes) =>
+            imports
+              .importFile({ accountId: account.id, fileName: 'x', bytes })
+              .pipe(
+                Effect.flip,
+                Effect.map((error) =>
+                  error._tag === 'ImportRejected' ? error.reason : error._tag,
+                ),
+              ),
+        )
+        assert.deepStrictEqual(reasons, [
+          'mixed_currencies',
+          'currency_mismatch',
+          'unsupported_encoding',
+        ])
+        assert.strictEqual((yield* observations.current(account.id)).length, 0)
+      }).pipe(Effect.provide(ImportsTest)),
+  )
 })
