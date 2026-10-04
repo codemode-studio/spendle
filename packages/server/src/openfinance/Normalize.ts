@@ -1,14 +1,11 @@
-import * as DateTime from 'effect/DateTime'
+import { dateInSaoPaulo } from '../domain/LocalDate.ts'
 import * as Option from 'effect/Option'
 
 import type { ReportedTransaction } from '../ledger/Observations.ts'
 import type { PluggyAccount, PluggyTransaction } from './PluggyApi.ts'
 
-const zone = DateTime.zoneMakeNamedUnsafe('America/Sao_Paulo')
-
 /** Pluggy timestamps are instants; Brazilian banks book on the São Paulo calendar day. */
-export const bookedOn = (instant: string) =>
-  DateTime.formatIsoDate(DateTime.makeZonedUnsafe(instant, { timeZone: zone }))
+export const bookedOn = (instant: string) => dateInSaoPaulo(instant)
 
 const fractionDigits = (currency: string) =>
   new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions()
