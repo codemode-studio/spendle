@@ -148,6 +148,27 @@ export function buildCardStatementLedger(input: {
     return entry && payment ? [{ link, entry, payment }] : []
   })
   const manuallyLinked = new Set(manualLinks.map(({ payment }) => payment.id))
+  // A hand-linked bank debit with no card_payment group is still paired with
+  // the card's own "Pagamento recebido" for it: the receipt of the same
+  // amount, in the statement the link settles, within the payment window.
+  // Each debit pairs with at most one receipt; other receipts still count.
+  const unpairedManual = manualLinks.filter(
+    ({ payment }) => !groupByTransaction.has(payment.id),
+  )
+  const pairWithManualLink = (
+    receipt: LedgerCardTransaction,
+    entry: StatementLedgerEntry,
+  ) => {
+    const index = unpairedManual.findIndex(
+      ({ entry: linked, payment }) =>
+        linked === entry &&
+        -payment.amountCents === receipt.amountCents &&
+        distance(payment.postedAt, receipt.postedAt) <= INFERRED_WINDOW_DAYS,
+    )
+    if (index === -1) return false
+    unpairedManual.splice(index, 1)
+    return true
+  }
 
   for (const transaction of input.transactions) {
     const received = isReceivedCardPayment({
@@ -193,6 +214,8 @@ export function buildCardStatementLedger(input: {
             linkId: null,
             amountCents: transaction.amountCents,
           })
+      } else if (!group && pairWithManualLink(transaction, entry)) {
+        continue
       } else {
         entry.payments.push({
           transactionId: transaction.id,

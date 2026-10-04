@@ -1,26 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto'
 
-import {
-  and,
-  asc,
-  desc,
-  eq,
-  gte,
-  isNull,
-  lt,
-  lte,
-  max,
-  or,
-  sql,
-  sum,
-} from 'drizzle-orm'
+import { and, asc, desc, eq, isNull, lt, lte, max, or, sql } from 'drizzle-orm'
 import type { Account, Item, Transaction } from 'pluggy-sdk'
 
 import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
 import { suggestCategory } from '#/features/finance/categories.server'
 import {
+  activeInferredOpening,
   addBalanceCheckpoint,
+  deriveInferredOpening,
+  inferredOpeningCents,
+  inferredOpeningMethod,
   invalidateCheckpointChain,
   refreshStatementAnchor,
 } from '#/features/finance/checkpoint-chain.server'
@@ -394,29 +385,6 @@ export async function mapPluggyAccount(
   }
 }
 
-type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
-
-const inferredOpeningMethod = 'pluggy_booked_balance_minus_copied_movement'
-
-function copiedMovementCents(
-  transaction: DatabaseTransaction,
-  input: { accountId: string; historyStart: string; balanceAsOf: string },
-) {
-  const movement = transaction
-    .select({ totalCents: sum(schema.transactions.amountCents) })
-    .from(schema.transactions)
-    .where(
-      and(
-        eq(schema.transactions.accountId, input.accountId),
-        eq(schema.transactions.status, 'confirmed'),
-        gte(schema.transactions.postedAt, input.historyStart),
-        lte(schema.transactions.postedAt, input.balanceAsOf),
-      ),
-    )
-    .get()
-  return Number(movement?.totalCents ?? 0)
-}
-
 /**
  * A bank account copied from `historyStart` has no earlier facts, so its
  * opening balance is the booked balance Pluggy reports minus the copied
@@ -451,9 +419,12 @@ async function completeHistoryBootstrap(
       )
       .run()
     if (claimed.changes === 0) return null
-    const openingBalanceCents =
-      bookedBalanceCents -
-      copiedMovementCents(transaction, { accountId, historyStart, balanceAsOf })
+    const openingBalanceCents = inferredOpeningCents(transaction, {
+      accountId,
+      historyStart,
+      bookedBalanceCents,
+      balanceAsOf,
+    })
     addBalanceCheckpoint(transaction, {
       accountId,
       kind: 'opening',
@@ -478,146 +449,22 @@ async function completeHistoryBootstrap(
   })
 }
 
-function activeInferredOpening(
-  transaction: DatabaseTransaction,
-  input: { accountId: string; historyStart: string },
-) {
-  return transaction
-    .select()
-    .from(schema.balanceCheckpoints)
-    .where(
-      and(
-        eq(schema.balanceCheckpoints.accountId, input.accountId),
-        eq(schema.balanceCheckpoints.kind, 'opening'),
-        eq(schema.balanceCheckpoints.source, 'integration'),
-        eq(schema.balanceCheckpoints.asOf, shiftDays(input.historyStart, -1)),
-        sql`${schema.balanceCheckpoints.reviewState} <> 'invalidated'`,
-      ),
-    )
-    .get()
-}
-
 /**
- * The inferred opening is a projection of one booked balance observation
- * and the copied facts dated from `historyStart` to that observation. When
- * those facts change (an accepted correction, a deletion, a pending fact
- * confirmed, a late fact), the opening is derived again from the same
- * observation, so later movements still move the balance. Called after the
- * change is applied, with the opening that was active before it. `touched`
- * limits the rebuild to changes dated inside the observed interval.
+ * Settles the balance anchor of a bootstrapped bank account, deriving its
+ * inferred opening from the booked balance observation and the facts stored
+ * now. Idempotent, so it runs after every batch whatever the batch did:
+ * facts committed by a batch that later failed, or by an interrupted one,
+ * are explained on the next run without knowing which dates they touched.
  */
-function rebuildInferredOpening(
-  transaction: DatabaseTransaction,
-  input: {
-    accountId: string
-    historyStart: string
-    opening: typeof schema.balanceCheckpoints.$inferSelect
-    reason: string
-    touched?: ReadonlyArray<string>
-  },
-) {
-  const evidence = JSON.parse(input.opening.evidenceJson ?? '{}') as {
-    method?: string
-    providerBookedBalanceCents?: number
-    providerBalanceAsOf?: string
-  }
-  if (
-    evidence.method !== inferredOpeningMethod ||
-    typeof evidence.providerBookedBalanceCents !== 'number' ||
-    typeof evidence.providerBalanceAsOf !== 'string'
-  ) {
-    return false
-  }
-  const balanceAsOf = evidence.providerBalanceAsOf
-  if (
-    input.touched &&
-    !input.touched.some(
-      (date) => date >= input.historyStart && date <= balanceAsOf,
-    )
-  ) {
-    return false
-  }
-  const openingBalanceCents =
-    evidence.providerBookedBalanceCents -
-    copiedMovementCents(transaction, {
-      accountId: input.accountId,
-      historyStart: input.historyStart,
-      balanceAsOf: evidence.providerBalanceAsOf,
-    })
-  const current = transaction
-    .select({ reviewState: schema.balanceCheckpoints.reviewState })
-    .from(schema.balanceCheckpoints)
-    .where(eq(schema.balanceCheckpoints.id, input.opening.id))
-    .get()
-  if (
-    current?.reviewState !== 'invalidated' &&
-    openingBalanceCents === input.opening.balanceCents
-  ) {
-    return false
-  }
-  transaction
-    .update(schema.balanceCheckpoints)
-    .set({
-      verified: false,
-      reviewState: 'invalidated',
-      invalidatedAt: new Date(),
-      invalidatedReason: input.reason,
-    })
-    .where(eq(schema.balanceCheckpoints.id, input.opening.id))
-    .run()
-  addBalanceCheckpoint(transaction, {
-    accountId: input.accountId,
-    kind: 'opening',
-    balanceType: 'posted',
-    source: 'integration',
-    reviewState: 'observed',
-    verified: false,
-    balanceCents: openingBalanceCents,
-    asOf: input.opening.asOf,
-    evidenceJson: input.opening.evidenceJson,
-  })
-  return true
-}
-
-/**
- * Rebuilds the inferred opening of a bootstrapped bank account after Pluggy
- * deleted, confirmed or added facts dated `touched`.
- */
-function refreshInferredOpening(
-  account: OpenFinanceAccount,
-  touched: ReadonlyArray<string>,
-  reason: string,
-) {
-  const { accountId, historyStart } = account
-  if (
-    !touched.length ||
-    account.historyBootstrap !== 'complete' ||
-    !accountId ||
-    !historyStart
-  ) {
-    return
-  }
+function refreshBankAnchor(account: OpenFinanceAccount) {
+  const accountId = account.accountId
+  if (!accountId) return
   db.transaction((transaction) => {
-    const opening = activeInferredOpening(transaction, {
-      accountId,
-      historyStart,
+    refreshStatementAnchor(transaction, {
+      targetType: 'account',
+      targetId: accountId,
+      balanceType: 'posted',
     })
-    if (
-      opening &&
-      rebuildInferredOpening(transaction, {
-        accountId,
-        historyStart,
-        opening,
-        reason,
-        touched,
-      })
-    ) {
-      refreshStatementAnchor(transaction, {
-        targetType: 'account',
-        targetId: accountId,
-        balanceType: 'posted',
-      })
-    }
   })
 }
 
@@ -834,6 +681,13 @@ async function storeTransactionObservation(
           .set({ status: 'confirmed' })
           .where(eq(schema.transactions.id, canonical.id))
           .run()
+        if (account.accountId) {
+          refreshStatementAnchor(transaction, {
+            targetType: 'account',
+            targetId: account.accountId,
+            balanceType: 'posted',
+          })
+        }
       }
       transaction
         .insert(schema.openFinanceTransactionObservations)
@@ -855,10 +709,7 @@ async function storeTransactionObservation(
         })
         .run()
     })
-    return {
-      kind: 'evidence' as const,
-      touched: promoted ? canonical.postedAt : null,
-    }
+    return { kind: 'evidence' as const }
   }
 
   const suggestion = await suggestCategory({
@@ -925,7 +776,7 @@ async function storeTransactionObservation(
       balanceType: account.accountId ? 'posted' : 'card_statement',
     })
   })
-  return { kind: 'created' as const, touched: normalized.postedAt }
+  return { kind: 'created' as const }
 }
 
 async function syncProviderAccount(
@@ -962,21 +813,18 @@ async function syncProviderAccount(
     evidence: 0,
     corrections: 0,
   }
-  const touched: string[] = []
-  for (const providerTransaction of providerTransactions) {
-    const result = await storeTransactionObservation(
-      account,
-      providerTransaction,
-    )
-    if (result.kind === 'skipped') continue
-    counts[result.kind === 'correction' ? 'corrections' : result.kind] += 1
-    if ('touched' in result && result.touched) touched.push(result.touched)
+  try {
+    for (const providerTransaction of providerTransactions) {
+      const result = await storeTransactionObservation(
+        account,
+        providerTransaction,
+      )
+      if (result.kind === 'skipped') continue
+      counts[result.kind === 'correction' ? 'corrections' : result.kind] += 1
+    }
+  } finally {
+    refreshBankAnchor(account)
   }
-  refreshInferredOpening(
-    account,
-    touched,
-    'Recalculado por transações Open Finance novas ou confirmadas.',
-  )
   // Only a full read of the window explains the balance; filtered webhook
   // reads leave a pending bootstrap for the next full sync.
   const openingBalanceCents = filters
@@ -1138,12 +986,11 @@ export async function resolvePluggyCorrection(input: {
   }
   db.transaction((transaction) => {
     if (input.action === 'accept') {
-      const accountId = row.account.accountId
-      const historyStart = row.account.historyStart
-      const opening =
-        accountId && historyStart
-          ? activeInferredOpening(transaction, { accountId, historyStart })
-          : undefined
+      // Captured before the chain is reopened: a correction moving a fact
+      // before the window invalidates the opening it must re-derive.
+      const opening = row.account.accountId
+        ? activeInferredOpening(transaction, row.account.accountId)
+        : undefined
       transaction
         .update(schema.transactions)
         .set({
@@ -1182,12 +1029,11 @@ export async function resolvePluggyCorrection(input: {
         reason: `Reaberto pela correção Open Finance ${observation.id}.`,
       })
       if (opening) {
-        rebuildInferredOpening(transaction, {
-          accountId: accountId!,
-          historyStart: historyStart!,
+        deriveInferredOpening(
+          transaction,
           opening,
-          reason: `Recalculado pela correção Open Finance ${observation.id}.`,
-        })
+          `Recalculado pela correção Open Finance ${observation.id}.`,
+        )
       }
       refreshStatementAnchor(transaction, {
         ...target,
@@ -1212,7 +1058,6 @@ async function applyProviderDeletions(
   transactionIds: string[],
 ) {
   let deleted = 0
-  const touched: string[] = []
   for (const providerTransactionId of transactionIds) {
     const linked = (
       await db
@@ -1304,15 +1149,17 @@ async function applyProviderDeletions(
           .where(eq(schema.transactions.id, canonical.id))
           .run()
         deleted += 1
-        touched.push(canonical.postedAt)
+        if (account.accountId) {
+          refreshStatementAnchor(transaction, {
+            targetType: 'account',
+            targetId: account.accountId,
+            balanceType: 'posted',
+          })
+        }
       }
     })
   }
-  refreshInferredOpening(
-    account,
-    touched,
-    'Recalculado por transações removidas pela Pluggy.',
-  )
+  refreshBankAnchor(account)
   if (deleted) await refreshReconciliationAfterCommit()
   return deleted
 }

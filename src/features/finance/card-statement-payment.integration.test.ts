@@ -371,6 +371,37 @@ describe('pagamento recebido no cartão e conciliação na projeção', () => {
     expect(statement).toMatchObject({ status: 'partial', paidCents: 10_000 })
     expect(await scheduledCents()).toBe(-20_000)
   })
+
+  it('conta uma vez o débito vinculado à mão e o recebimento sem conciliação', async () => {
+    const db = await statementDueSept15()
+    const debit = await createManualTransaction({
+      targetType: 'account',
+      targetId: db.ids.brlAccount,
+      postedAt: '2026-09-07',
+      description: 'Débito genérico',
+      direction: 'outflow',
+      amountCents: 10_000,
+      categoryId: 'groceries',
+    })
+    await linkCardStatementPayment({
+      creditCardId: db.ids.card,
+      dueDate: '2026-09-15',
+      transactionId: debit.id,
+      partial: true,
+    })
+    await cardReceipt({
+      id: 'ungrouped-receipt',
+      postedAt: '2026-09-07',
+      amountCents: 10_000,
+      status: 'confirmed',
+    })
+    const snapshot = await getFinanceSnapshot()
+    const statement = snapshot.cards
+      .find((card) => card.id === db.ids.card)
+      ?.statements.find((row) => row.dueDate === '2026-09-15')
+    expect(statement).toMatchObject({ status: 'partial', paidCents: 10_000 })
+    expect(await scheduledCents()).toBe(-20_000)
+  })
 })
 
 describe('pagamento pendente na projeção de caixa', () => {

@@ -234,6 +234,47 @@ describe('livro-razão de faturas', () => {
     expect(ledger[0]).toMatchObject({ status: 'partial', paidCents: 50_000 })
   })
 
+  it('não soma de novo o recebimento do débito vinculado à mão sem conciliação', () => {
+    const receipt = (id: string, postedAt: string, amountCents: number) => ({
+      id,
+      postedAt,
+      amountCents,
+      description: 'Pagamento recebido',
+      categoryId: 'card_payment',
+    })
+    const ledger = buildCardStatementLedger({
+      statements,
+      transactions: [
+        receipt('same-payment', '2026-07-16', 50_000),
+        receipt('another-payment', '2026-07-25', 20_000),
+      ],
+      accountPayments: [
+        {
+          id: 'bank',
+          postedAt: '2026-07-16',
+          amountCents: -50_000,
+          description: 'Débito genérico',
+          categoryId: 'groceries',
+        },
+      ],
+      reconciliations: [],
+      manualLinks: [
+        {
+          id: 'link',
+          dueDate: '2026-07-15',
+          transactionId: 'bank',
+          partial: true,
+        },
+      ],
+      today: '2026-09-10',
+    })
+    expect(ledger[0]).toMatchObject({ status: 'partial', paidCents: 70_000 })
+    expect(ledger[0].payments.map((p) => p.transactionId).sort()).toEqual([
+      'another-payment',
+      'bank',
+    ])
+  })
+
   it('vínculo manual quita a fatura e tira o débito dos candidatos', () => {
     const ledger = buildCardStatementLedger({
       statements,

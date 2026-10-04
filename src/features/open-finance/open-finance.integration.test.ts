@@ -3,6 +3,10 @@ import type { Account, Item, Transaction } from 'pluggy-sdk'
 import { TransactionStatus } from 'pluggy-sdk'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import {
+  createManualBalanceCheckpoint,
+  createManualTransaction,
+} from '#/features/finance/finance.server'
 import { getFinanceSnapshot } from '#/features/finance/finance-snapshot.server'
 import { clearTransactionData } from '#/features/finance/import.server'
 import { transactionFingerprint } from '#/features/finance/canonicalization.server'
@@ -1097,6 +1101,155 @@ describe('Open Finance history window', () => {
       ])
       await syncPluggyConnection({ connectionId }, gateway)
       expect(await balance()).toBe(89_500)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('explains facts left by a failed batch on the next successful sync', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-09-15T15:00:00Z'))
+      const gateway = new FakePluggyGateway()
+      const connectionId = await connectedAccount(database, gateway)
+      const balance = async () =>
+        (await getFinanceSnapshot()).accounts.find(
+          (item) => item.id === database.ids.brlAccount,
+        )?.balanceCents
+      expect(await balance()).toBe(90_000)
+
+      vi.setSystemTime(new Date('2026-09-17T15:00:00Z'))
+      const lateInside = providerTransaction({
+        id: 'late-inside',
+        date: new Date('2026-09-12T15:00:00Z'),
+        amount: 20,
+      })
+      gateway.transactions.set('provider-bank', [
+        providerTransaction(),
+        lateInside,
+        providerTransaction({ id: 'broken', date: new Date('invalid') }),
+      ])
+      await expect(
+        syncPluggyConnection({ connectionId }, gateway),
+      ).rejects.toThrow()
+
+      gateway.transactions.set('provider-bank', [
+        providerTransaction(),
+        lateInside,
+        providerTransaction({
+          id: 'broken',
+          date: new Date('2026-09-16T15:00:00Z'),
+          amount: 5,
+        }),
+      ])
+      await syncPluggyConnection({ connectionId }, gateway)
+      // Booked 900.00 on Sep 15 already held the Sep 12 debit.
+      expect(await balance()).toBe(89_500)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the booked balance as anchor over an earlier checkpoint', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-09-15T15:00:00Z'))
+      const gateway = new FakePluggyGateway()
+      const pendingDebit = providerTransaction({
+        id: 'historical-pending',
+        date: new Date('2026-09-12T15:00:00Z'),
+        status: TransactionStatus.PENDING,
+      })
+      gateway.transactions.set('provider-bank', [
+        providerTransaction(),
+        pendingDebit,
+      ])
+      const connectionId = await connectedAccount(database, gateway)
+      const balance = async () =>
+        (await getFinanceSnapshot()).accounts.find(
+          (item) => item.id === database.ids.brlAccount,
+        )?.balanceCents
+      await createManualBalanceCheckpoint({
+        targetType: 'account',
+        targetId: database.ids.brlAccount,
+        balanceCents: 90_000,
+        asOf: '2026-09-11',
+        balanceType: 'posted',
+      })
+      expect(await balance()).toBe(90_000)
+
+      gateway.transactions.set('provider-bank', [
+        providerTransaction(),
+        { ...pendingDebit, status: TransactionStatus.POSTED },
+      ])
+      await syncPluggyConnection({ connectionId }, gateway)
+      expect(await balance()).toBe(90_000)
+
+      await enqueuePluggyWebhook({
+        eventId: 'delete-after-checkpoint',
+        event: 'transactions/deleted',
+        itemId: 'item-1',
+        accountId: 'provider-bank',
+        transactionIds: ['historical-pending'],
+      })
+      await processNextPluggyWebhook(gateway)
+      expect(await balance()).toBe(90_000)
+
+      // A later dated checkpoint still wins.
+      await createManualBalanceCheckpoint({
+        targetType: 'account',
+        targetId: database.ids.brlAccount,
+        balanceCents: 85_000,
+        asOf: '2026-09-16',
+        balanceType: 'posted',
+      })
+      expect(await balance()).toBe(85_000)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('derives the opening again for a manual fact inside the observed interval', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-09-15T15:00:00Z'))
+      const gateway = new FakePluggyGateway()
+      const connectionId = await connectedAccount(database, gateway)
+      const balance = async () =>
+        (await getFinanceSnapshot()).accounts.find(
+          (item) => item.id === database.ids.brlAccount,
+        )?.balanceCents
+      const opening = async () =>
+        (
+          await database.db
+            .select()
+            .from(database.schema.balanceCheckpoints)
+            .where(
+              eq(
+                database.schema.balanceCheckpoints.accountId,
+                database.ids.brlAccount,
+              ),
+            )
+        ).find(
+          (row) => row.kind === 'opening' && row.reviewState !== 'invalidated',
+        )?.balanceCents
+      expect(await opening()).toBe(91_000)
+
+      await createManualTransaction({
+        targetType: 'account',
+        targetId: database.ids.brlAccount,
+        postedAt: '2026-09-12',
+        description: 'Débito omitido',
+        direction: 'outflow',
+        amountCents: 2_000,
+        categoryId: 'groceries',
+      })
+      expect(await balance()).toBe(90_000)
+      expect(await opening()).toBe(93_000)
+
+      await syncPluggyConnection({ connectionId }, gateway)
+      expect(await balance()).toBe(90_000)
+      expect(await opening()).toBe(93_000)
     } finally {
       vi.useRealTimers()
     }

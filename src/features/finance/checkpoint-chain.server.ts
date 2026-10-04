@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, lte, sql, sum } from 'drizzle-orm'
 
 import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
@@ -12,7 +12,7 @@ import {
   getEffectiveImportValidationState,
   nextValidationState,
 } from '#/domain/import-audit'
-import { assertIsoDate } from '#/domain/period'
+import { assertIsoDate, shiftDays } from '#/domain/period'
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
@@ -288,13 +288,158 @@ export function invalidateCheckpointChain(
     .run()
 }
 
+type BalanceCheckpoint = typeof schema.balanceCheckpoints.$inferSelect
+
+export const inferredOpeningMethod =
+  'pluggy_booked_balance_minus_copied_movement'
+
+/** The booked balance observation an inferred opening was derived from. */
+function bookedObservation(opening: BalanceCheckpoint) {
+  const evidence = JSON.parse(opening.evidenceJson ?? '{}') as {
+    method?: string
+    providerBookedBalanceCents?: number
+    providerBalanceAsOf?: string
+  }
+  return evidence.method === inferredOpeningMethod &&
+    typeof evidence.providerBookedBalanceCents === 'number' &&
+    typeof evidence.providerBalanceAsOf === 'string'
+    ? {
+        balanceCents: evidence.providerBookedBalanceCents,
+        asOf: evidence.providerBalanceAsOf,
+      }
+    : null
+}
+
+/**
+ * An account copied from `historyStart` has no earlier facts, so its opening
+ * is the booked balance observed on `balanceAsOf` minus the confirmed
+ * movement from `historyStart` through that date.
+ */
+export function inferredOpeningCents(
+  transaction: DatabaseTransaction,
+  input: {
+    accountId: string
+    historyStart: string
+    bookedBalanceCents: number
+    balanceAsOf: string
+  },
+) {
+  const movement = transaction
+    .select({ totalCents: sum(schema.transactions.amountCents) })
+    .from(schema.transactions)
+    .where(
+      and(
+        eq(schema.transactions.accountId, input.accountId),
+        eq(schema.transactions.status, 'confirmed'),
+        gte(schema.transactions.postedAt, input.historyStart),
+        lte(schema.transactions.postedAt, input.balanceAsOf),
+      ),
+    )
+    .get()
+  return input.bookedBalanceCents - Number(movement?.totalCents ?? 0)
+}
+
+export function activeInferredOpening(
+  transaction: DatabaseTransaction,
+  accountId: string,
+) {
+  return transaction
+    .select()
+    .from(schema.balanceCheckpoints)
+    .where(
+      and(
+        eq(schema.balanceCheckpoints.accountId, accountId),
+        eq(schema.balanceCheckpoints.kind, 'opening'),
+        eq(schema.balanceCheckpoints.source, 'integration'),
+        sql`${schema.balanceCheckpoints.reviewState} <> 'invalidated'`,
+      ),
+    )
+    .orderBy(desc(schema.balanceCheckpoints.createdAt))
+    .all()
+    .find((checkpoint) => bookedObservation(checkpoint))
+}
+
+/**
+ * An inferred opening is a projection of its booked balance observation and
+ * the account's current confirmed facts, never a patched value. Deriving it
+ * is idempotent: the opening is replaced (keeping the old row for audit) only
+ * when the facts no longer explain it or when it had been invalidated.
+ */
+export function deriveInferredOpening(
+  transaction: DatabaseTransaction,
+  opening: BalanceCheckpoint,
+  reason: string,
+) {
+  const observation = bookedObservation(opening)
+  if (!observation || !opening.accountId) return false
+  const balanceCents = inferredOpeningCents(transaction, {
+    accountId: opening.accountId,
+    historyStart: shiftDays(opening.asOf, 1),
+    bookedBalanceCents: observation.balanceCents,
+    balanceAsOf: observation.asOf,
+  })
+  const current = transaction
+    .select({ reviewState: schema.balanceCheckpoints.reviewState })
+    .from(schema.balanceCheckpoints)
+    .where(eq(schema.balanceCheckpoints.id, opening.id))
+    .get()
+  if (
+    current?.reviewState !== 'invalidated' &&
+    balanceCents === opening.balanceCents
+  ) {
+    return false
+  }
+  transaction
+    .update(schema.balanceCheckpoints)
+    .set({
+      verified: false,
+      reviewState: 'invalidated',
+      invalidatedAt: new Date(),
+      invalidatedReason: reason,
+    })
+    .where(eq(schema.balanceCheckpoints.id, opening.id))
+    .run()
+  addBalanceCheckpoint(transaction, {
+    accountId: opening.accountId,
+    kind: 'opening',
+    balanceType: 'posted',
+    source: 'integration',
+    reviewState: 'observed',
+    verified: false,
+    balanceCents,
+    asOf: opening.asOf,
+    evidenceJson: opening.evidenceJson,
+  })
+  return true
+}
+
+/**
+ * The anchor is the latest dated balance the account has: its newest active
+ * checkpoint or, for an account bootstrapped from Pluggy, the booked balance
+ * observation its active inferred opening derives from. That observation
+ * already contains every fact dated up to it, so a fact added, confirmed or
+ * removed there re-derives the opening without moving the current balance;
+ * a checkpoint dated after it still wins.
+ */
 export function refreshStatementAnchor(
   transaction: DatabaseTransaction,
   input: CheckpointTarget & {
     balanceType: 'posted' | 'card_statement'
   },
 ) {
-  const latest = transaction
+  const opening =
+    input.targetType === 'account' && input.balanceType === 'posted'
+      ? activeInferredOpening(transaction, input.targetId)
+      : undefined
+  if (opening) {
+    deriveInferredOpening(
+      transaction,
+      opening,
+      'Recalculado a partir do saldo contábil observado pela Pluggy.',
+    )
+  }
+  const observation = opening ? bookedObservation(opening) : null
+  const latestCheckpoint = transaction
     .select({
       balanceCents: schema.balanceCheckpoints.balanceCents,
       asOf: schema.balanceCheckpoints.asOf,
@@ -309,6 +454,11 @@ export function refreshStatementAnchor(
     )
     .orderBy(desc(schema.balanceCheckpoints.asOf))
     .get()
+  const latest =
+    observation &&
+    (!latestCheckpoint || observation.asOf > latestCheckpoint.asOf)
+      ? observation
+      : latestCheckpoint
 
   if (input.targetType === 'account') {
     transaction
