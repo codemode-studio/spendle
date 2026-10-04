@@ -600,3 +600,163 @@ describe('pagamento antecipado de fatura', () => {
     ).toEqual([20_000, 0])
   })
 })
+
+describe('ordem de alocação dos recebimentos', () => {
+  const receipt = (id: string, postedAt: string, amountCents: number) => ({
+    id,
+    postedAt,
+    amountCents,
+    description: 'Pagamento recebido',
+    categoryId: 'card_payment',
+  })
+  const julyAugust = [
+    { closingDate: '2026-07-20', dueDate: '2026-07-27', amountCents: 100_000 },
+    { closingDate: '2026-08-20', dueDate: '2026-08-27', amountCents: 150_000 },
+  ]
+
+  it('aloca recebimentos com e sem conciliação do mais antigo ao mais novo', () => {
+    // July's bill is paid by its own receipt on Jul 27; the advance matched
+    // to a bank debit on Aug 19 belongs to August, not to the paid July bill.
+    const ledger = buildCardStatementLedger({
+      statements: julyAugust,
+      transactions: [
+        receipt('july-receipt', '2026-07-27', 100_000),
+        receipt('advance', '2026-08-19', 120_000),
+      ],
+      accountPayments: [
+        {
+          id: 'bank-advance',
+          postedAt: '2026-08-19',
+          amountCents: -120_000,
+          description: 'Pagamento fatura cartão',
+          categoryId: 'card_payment',
+        },
+      ],
+      reconciliations: [
+        {
+          id: 'group',
+          type: 'card_payment',
+          status: 'confirmed',
+          transactionIds: ['bank-advance', 'advance'],
+        },
+      ],
+      today: '2026-08-26',
+    })
+    expect(ledger.map((entry) => entry.paidCents)).toEqual([100_000, 120_000])
+    expect(ledger[0].payments.map((p) => p.transactionId)).toEqual([
+      'july-receipt',
+    ])
+    expect(ledger[1].payments).toEqual([
+      expect.objectContaining({
+        transactionId: 'bank-advance',
+        kind: 'confirmed',
+        evidenceIds: ['advance'],
+      }),
+    ])
+    expect(
+      ledger.map((entry) => statementCashSettlement(entry, () => true)),
+    ).toEqual([
+      { paidCents: 100_000, paid: true },
+      { paidCents: 120_000, paid: false },
+    ])
+  })
+
+  it('não infere outro débito para a fatura que um grupo conciliado já identifica', () => {
+    const debit = (id: string, postedAt: string) => ({
+      id,
+      postedAt,
+      amountCents: -100_000,
+      description: 'Pagamento fatura cartão',
+      categoryId: 'card_payment',
+    })
+    const ledger = buildCardStatementLedger({
+      statements: julyAugust,
+      transactions: [receipt('july-receipt', '2026-07-27', 100_000)],
+      accountPayments: [
+        debit('grouped', '2026-07-27'),
+        debit('other', '2026-07-28'),
+      ],
+      reconciliations: [
+        {
+          id: 'group',
+          type: 'card_payment',
+          status: 'confirmed',
+          transactionIds: ['grouped', 'july-receipt'],
+        },
+      ],
+      today: '2026-08-26',
+    })
+    expect(ledger[0]).toMatchObject({
+      paidCents: 100_000,
+      payments: [{ transactionId: 'grouped', kind: 'confirmed' }],
+    })
+  })
+
+  it('não deixa um débito vinculado à mão ainda não lançado desviar um recebimento lançado', () => {
+    // On Jul 26 the hand-linked debit is dated Jul 27: it has not left the
+    // account, so the posted R$ 200 receipt still pays July.
+    const isPosted = (id: string) => id !== 'future-debit'
+    const ledger = buildCardStatementLedger({
+      statements: [
+        julyAugust[0],
+        { ...julyAugust[1], amountCents: 100_000 },
+      ],
+      transactions: [receipt('posted', '2026-07-25', 20_000)],
+      accountPayments: [
+        {
+          id: 'future-debit',
+          postedAt: '2026-07-27',
+          amountCents: -100_000,
+          description: 'Débito genérico',
+          categoryId: 'card_payment',
+        },
+      ],
+      reconciliations: [],
+      manualLinks: [
+        { id: 'link', dueDate: '2026-07-27', transactionId: 'future-debit' },
+      ],
+      isPosted,
+      today: '2026-07-26',
+    })
+    expect(ledger[0].payments.map((p) => p.transactionId)).toEqual([
+      'posted',
+      'future-debit',
+    ])
+    expect(ledger[1].payments).toEqual([])
+    expect(
+      ledger.map((entry) => statementCashSettlement(entry, isPosted).paidCents),
+    ).toEqual([20_000, 0])
+  })
+
+  it('conta o débito vinculado à mão quando o recebimento dele já foi lançado', () => {
+    const isPosted = (id: string) => id !== 'future-debit'
+    const ledger = buildCardStatementLedger({
+      statements: [
+        julyAugust[0],
+        { ...julyAugust[1], amountCents: 100_000 },
+      ],
+      transactions: [
+        receipt('pair', '2026-07-24', 100_000),
+        receipt('advance', '2026-07-25', 20_000),
+      ],
+      accountPayments: [
+        {
+          id: 'future-debit',
+          postedAt: '2026-07-27',
+          amountCents: -100_000,
+          description: 'Débito genérico',
+          categoryId: 'card_payment',
+        },
+      ],
+      reconciliations: [],
+      manualLinks: [
+        { id: 'link', dueDate: '2026-07-27', transactionId: 'future-debit' },
+      ],
+      isPosted,
+      today: '2026-07-26',
+    })
+    expect(
+      ledger.map((entry) => statementCashSettlement(entry, isPosted).paidCents),
+    ).toEqual([100_000, 20_000])
+  })
+})

@@ -162,6 +162,21 @@ function crossesBrazilianCompanyBoundary(
   )
 }
 
+// A bill payment leaves a bank account and arrives on a card: the outflow is
+// a bank debit and the inflow is the card's credit. A credit on one card and
+// a purchase on another, or a bank credit and a card purchase, are not.
+function cardPaymentSides(
+  left: ReconciliationTransaction,
+  right: ReconciliationTransaction,
+) {
+  const debit = left.amountCents < 0 ? left : right
+  const receipt = left.amountCents < 0 ? right : left
+  if (debit.amountCents >= 0 || receipt.amountCents <= 0) return null
+  if (debit.creditCardId || !debit.accountId || !receipt.creditCardId)
+    return null
+  return { debit, receipt }
+}
+
 function isCardPaymentPair(
   left: ReconciliationTransaction,
   right: ReconciliationTransaction,
@@ -170,8 +185,7 @@ function isCardPaymentPair(
   return (
     sameAmount(left, right) &&
     days <= 5 &&
-    differentTargets(left, right) &&
-    Boolean(left.creditCardId || right.creditCardId) &&
+    cardPaymentSides(left, right) !== null &&
     (isCardPaymentDescription(left.description) ||
       isCardPaymentDescription(right.description))
   )
@@ -181,9 +195,7 @@ function cardPaymentReceipt(
   left: ReconciliationTransaction,
   right: ReconciliationTransaction,
 ) {
-  return [left, right].find(
-    (transaction) => transaction.creditCardId && transaction.amountCents > 0,
-  )
+  return cardPaymentSides(left, right)?.receipt
 }
 
 /**
@@ -308,10 +320,14 @@ export function buildReconciliationSuggestions(
         continue
       }
 
+      // Money does not move between two credit cards: a credit on one and a
+      // purchase on another are unrelated facts.
+      const betweenCards = Boolean(left.creditCardId && right.creditCardId)
       if (
         pairSameAmount &&
         days <= 3 &&
         pairDifferentTargets &&
+        !betweenCards &&
         left.currency === right.currency
       ) {
         suggestions.push({

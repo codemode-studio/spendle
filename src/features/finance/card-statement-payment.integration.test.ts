@@ -18,11 +18,12 @@ import {
   listCardStatementPaymentCandidates,
   unlinkCardStatementPayment,
 } from './card-statement-payment.server'
-import { createManualTransaction } from './finance.server'
+import { createCreditCard, createManualTransaction } from './finance.server'
 import {
   getConfigurationSnapshot,
   getFinanceSnapshot,
 } from './finance-snapshot.server'
+import { refreshReconciliationSuggestions } from './reconciliation-refresh.server'
 
 describe('vínculo manual de pagamento de fatura', () => {
   let database: TestDatabase
@@ -697,5 +698,237 @@ describe('débito de pagamento entre dois cartões', () => {
       ).toBe('candidate')
       expect(view.scheduledCents).toBe(-30_000)
     }
+  })
+})
+
+describe('alocação de recebimentos na projeção de caixa', () => {
+  let database: TestDatabase | undefined
+
+  afterEach(() => {
+    database?.close()
+    vi.useRealTimers()
+  })
+
+  // Closing on the 20th, due on the 27th.
+  async function cardDue27(today: string) {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(`${today}T12:00:00Z`))
+    database = await openTestDatabase()
+    await database.db
+      .update(schema.creditCards)
+      .set({ closingDay: 20, dueDay: 27 })
+      .where(eq(schema.creditCards.id, database.ids.card))
+    return database
+  }
+
+  async function purchase(postedAt: string, amountCents: number) {
+    await createManualTransaction({
+      targetType: 'card',
+      targetId: database!.ids.card,
+      postedAt,
+      description: 'Compra no cartão',
+      direction: 'outflow',
+      amountCents,
+      categoryId: 'groceries',
+    })
+  }
+
+  async function cardReceipt(id: string, postedAt: string, amountCents: number) {
+    await database!.db.insert(schema.transactions).values({
+      id,
+      creditCardId: database!.ids.card,
+      categoryId: 'card_payment',
+      fingerprint: id,
+      postedAt,
+      description: 'Pagamento recebido',
+      normalizedDescription: 'pagamento recebido',
+      amountCents,
+      currency: 'BRL',
+      status: 'confirmed',
+    })
+  }
+
+  async function view() {
+    const snapshot = await getFinanceSnapshot()
+    const card = snapshot.cards.find((row) => row.id === database!.ids.card)!
+    return {
+      paid: Object.fromEntries(
+        card.statements.map((row) => [row.dueDate, row.paidCents]),
+      ),
+      scheduled: Object.fromEntries(
+        snapshot.cashProjection.scheduled
+          .filter((event) => event.id.startsWith(`${card.id}-`))
+          .map((event) => [event.date, event.amountCents]),
+      ),
+    }
+  }
+
+  it('não leva um adiantamento conciliado para a fatura anterior já paga', async () => {
+    const db = await cardDue27('2026-08-26')
+    await purchase('2026-07-05', 100_000)
+    await purchase('2026-08-05', 150_000)
+    await cardReceipt('july-receipt', '2026-07-27', 100_000)
+    const debit = await createManualTransaction({
+      targetType: 'account',
+      targetId: db.ids.brlAccount,
+      postedAt: '2026-08-19',
+      description: 'Pagamento fatura cartão',
+      direction: 'outflow',
+      amountCents: 120_000,
+      categoryId: 'card_payment',
+    })
+    await cardReceipt('advance', '2026-08-19', 120_000)
+    await db.db.insert(schema.reconciliationGroups).values({
+      id: 'advance-pair',
+      type: 'card_payment',
+      status: 'confirmed',
+      confidence: 100,
+    })
+    await db.db.insert(schema.reconciliationLinks).values([
+      {
+        id: 'advance-pair-bank',
+        groupId: 'advance-pair',
+        transactionId: debit.id,
+        role: 'outgoing',
+      },
+      {
+        id: 'advance-pair-card',
+        groupId: 'advance-pair',
+        transactionId: 'advance',
+        role: 'incoming',
+      },
+    ])
+    const { paid, scheduled } = await view()
+    expect(paid).toMatchObject({
+      '2026-07-27': 100_000,
+      '2026-08-27': 120_000,
+    })
+    expect(scheduled['2026-08-27']).toBe(-30_000)
+  })
+
+  it('não deixa um débito futuro vinculado à mão desviar um recebimento lançado', async () => {
+    const db = await cardDue27('2026-07-26')
+    await purchase('2026-07-05', 100_000)
+    await purchase('2026-07-24', 100_000)
+    await cardReceipt('posted-receipt', '2026-07-25', 20_000)
+    const debit = await createManualTransaction({
+      targetType: 'account',
+      targetId: db.ids.brlAccount,
+      postedAt: '2026-07-27',
+      description: 'Débito genérico',
+      direction: 'outflow',
+      amountCents: 100_000,
+      categoryId: 'groceries',
+    })
+    await linkCardStatementPayment({
+      creditCardId: db.ids.card,
+      dueDate: '2026-07-27',
+      transactionId: debit.id,
+    })
+    const { paid, scheduled } = await view()
+    expect(scheduled['2026-07-27']).toBe(-80_000)
+    expect(paid['2026-08-27']).toBe(0)
+  })
+})
+
+describe('pagamento de fatura entre dois cartões', () => {
+  let database: TestDatabase | undefined
+
+  afterEach(() => {
+    database?.close()
+    vi.useRealTimers()
+  })
+
+  it('não apaga a compra de outro cartão com o pagamento de mesmo valor', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-25T12:00:00Z'))
+    database = await openTestDatabase()
+    const db = database
+    const otherCard = await createCreditCard({
+      name: 'Outro cartão',
+      institutionName: 'Banco Exemplo',
+      ownershipScopeId: db.ids.personScope,
+      currency: 'BRL',
+      limitCents: 500_000,
+      closingDay: 20,
+      dueDay: 27,
+    })
+    await createManualTransaction({
+      targetType: 'card',
+      targetId: db.ids.card,
+      postedAt: '2026-09-10',
+      description: 'Pagamento de fatura',
+      direction: 'inflow',
+      amountCents: 17_300,
+      categoryId: 'card_payment',
+    })
+    const purchase = await createManualTransaction({
+      targetType: 'card',
+      targetId: otherCard.id,
+      postedAt: '2026-09-10',
+      description: 'Supermercado Exemplo',
+      direction: 'outflow',
+      amountCents: 17_300,
+      categoryId: 'groceries',
+    })
+    const categoryOf = async () =>
+      (
+        await db.db
+          .select({ categoryId: schema.transactions.categoryId })
+          .from(schema.transactions)
+          .where(eq(schema.transactions.id, purchase.id))
+      )[0].categoryId
+    const groupsOfPurchase = () =>
+      db.db
+        .select({ id: schema.reconciliationLinks.groupId })
+        .from(schema.reconciliationLinks)
+        .where(eq(schema.reconciliationLinks.transactionId, purchase.id))
+    const statementCents = async () =>
+      (await getFinanceSnapshot()).cards
+        .find((card) => card.id === otherCard.id)
+        ?.statements.find((row) => row.dueDate === '2026-09-27')?.amountCents
+
+    await refreshReconciliationSuggestions()
+    expect(await groupsOfPurchase()).toEqual([])
+    expect(await categoryOf()).toBe('groceries')
+    expect(await statementCents()).toBe(17_300)
+
+    // A pair confirmed automatically by the earlier rule is dissolved and the
+    // purchase gets its category back.
+    const [creditRow] = await db.db
+      .select({ id: schema.transactions.id })
+      .from(schema.transactions)
+      .where(eq(schema.transactions.creditCardId, db.ids.card))
+    await db.db
+      .update(schema.transactions)
+      .set({ categoryId: 'card_payment' })
+      .where(eq(schema.transactions.id, purchase.id))
+    await db.db.insert(schema.reconciliationGroups).values({
+      id: 'legacy-pair',
+      type: 'card_payment',
+      status: 'confirmed',
+      confirmationSource: 'automatic',
+      confidence: 100,
+    })
+    await db.db.insert(schema.reconciliationLinks).values([
+      {
+        id: 'legacy-pair-purchase',
+        groupId: 'legacy-pair',
+        transactionId: purchase.id,
+        role: 'outgoing',
+        previousCategoryId: 'groceries',
+      },
+      {
+        id: 'legacy-pair-credit',
+        groupId: 'legacy-pair',
+        transactionId: creditRow.id,
+        role: 'incoming',
+        previousCategoryId: 'card_payment',
+      },
+    ])
+    await refreshReconciliationSuggestions()
+    expect(await groupsOfPurchase()).toEqual([])
+    expect(await categoryOf()).toBe('groceries')
+    expect(await statementCents()).toBe(17_300)
   })
 })

@@ -416,6 +416,54 @@ it('preserva a remessa correta quando outro crédito aparece antes no extrato', 
   ])
 })
 
+describe('pagamento de fatura exige débito bancário e crédito no cartão', () => {
+  const cardCredit = {
+    ...base,
+    id: 'card-a-credit',
+    amountCents: 17_300,
+    accountId: null,
+    creditCardId: 'card-a',
+    postedAt: '2026-09-10',
+    description: 'Pagamento de fatura',
+  }
+  const otherCardPurchase = {
+    ...base,
+    id: 'card-b-purchase',
+    amountCents: -17_300,
+    accountId: null,
+    creditCardId: 'card-b',
+    postedAt: '2026-09-10',
+    description: 'Supermercado Exemplo',
+  }
+
+  it('não liga o pagamento de um cartão a uma compra de outro cartão', () => {
+    expect(
+      buildReconciliationSuggestions([cardCredit, otherCardPurchase]),
+    ).toEqual([])
+    expect(
+      isAutomaticMatchStillValid('card_payment', cardCredit, otherCardPurchase),
+    ).toBe(false)
+  })
+
+  it('não liga um crédito bancário a uma compra do cartão', () => {
+    const bankCredit = {
+      ...base,
+      id: 'bank-credit',
+      amountCents: 17_300,
+      postedAt: '2026-09-10',
+      description: 'Pagamento fatura devolvido',
+    }
+    const suggestions = buildReconciliationSuggestions([
+      bankCredit,
+      otherCardPurchase,
+    ])
+    expect(suggestions.map((s) => s.type)).not.toContain('card_payment')
+    expect(
+      isAutomaticMatchStillValid('card_payment', bankCredit, otherCardPurchase),
+    ).toBe(false)
+  })
+})
+
 describe('revalidação de correspondências automáticas', () => {
   const bank = {
     ...base,

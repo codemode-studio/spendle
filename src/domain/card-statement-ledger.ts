@@ -209,29 +209,6 @@ export function buildCardStatementLedger(input: {
     return true
   }
 
-  // Settled so far by the person's links, before any receipt is placed.
-  const manualCents = new Map<StatementLedgerEntry, number>()
-  const settledByHand = new Set<StatementLedgerEntry>()
-  for (const { link, entry, payment } of manualLinks) {
-    manualCents.set(entry, (manualCents.get(entry) ?? 0) - payment.amountCents)
-    if (!link.partial) settledByHand.add(entry)
-  }
-  // What each bill still owes, counting only payments already posted: a
-  // pending receipt is shown on its bill but does not push a posted one to
-  // the next cycle, since cash settlement will not count it either.
-  const postedCents = new Map<StatementLedgerEntry, number>()
-  const addPosted = (entry: StatementLedgerEntry, amountCents: number) =>
-    postedCents.set(entry, (postedCents.get(entry) ?? 0) + amountCents)
-  const remainingCents = (entry: StatementLedgerEntry) =>
-    settledByHand.has(entry)
-      ? 0
-      : Math.max(
-          0,
-          entry.amountCents -
-            (postedCents.get(entry) ?? 0) -
-            (manualCents.get(entry) ?? 0),
-        )
-
   const receipts: LedgerCardTransaction[] = []
   for (const transaction of input.transactions) {
     // The card statement reports the payment by its wording or the provider
@@ -250,6 +227,49 @@ export function buildCardStatementLedger(input: {
       transaction.id,
     )
   }
+  receipts.sort((a, b) => a.postedAt.localeCompare(b.postedAt))
+
+  // A hand-linked debit has left the account when it or the card's receipt
+  // for it has posted, the same test as `statementCashSettlement`: the
+  // receipt in its bill payment group, or with no group the card receipt of
+  // the same amount within the payment window.
+  const manualLinkPosted = (payment: LedgerAccountPayment) =>
+    isPosted(payment.id) ||
+    receipts.some((receipt) => {
+      if (!isPosted(receipt.id)) return false
+      const group = groupByTransaction.get(receipt.id)
+      if (group) return group.transactionIds.includes(payment.id)
+      return (
+        !groupByTransaction.has(payment.id) &&
+        receipt.amountCents === -payment.amountCents &&
+        distance(payment.postedAt, receipt.postedAt) <= INFERRED_WINDOW_DAYS
+      )
+    })
+  // Settled so far by the person's links, before any receipt is placed. A
+  // link whose payment has not posted yet is still shown on its bill but does
+  // not send a posted receipt to the next one.
+  const manualCents = new Map<StatementLedgerEntry, number>()
+  const settledByHand = new Set<StatementLedgerEntry>()
+  for (const { link, entry, payment } of manualLinks) {
+    if (!manualLinkPosted(payment)) continue
+    manualCents.set(entry, (manualCents.get(entry) ?? 0) - payment.amountCents)
+    if (!link.partial) settledByHand.add(entry)
+  }
+  // What each bill still owes, counting only payments already posted: a
+  // pending receipt is shown on its bill but does not push a posted one to
+  // the next cycle, since cash settlement will not count it either.
+  const postedCents = new Map<StatementLedgerEntry, number>()
+  const addPosted = (entry: StatementLedgerEntry, amountCents: number) =>
+    postedCents.set(entry, (postedCents.get(entry) ?? 0) + amountCents)
+  const remainingCents = (entry: StatementLedgerEntry) =>
+    settledByHand.has(entry)
+      ? 0
+      : Math.max(
+          0,
+          entry.amountCents -
+            (postedCents.get(entry) ?? 0) -
+            (manualCents.get(entry) ?? 0),
+        )
 
   // A receipt posts in the cycle after the bill it usually settles, but it
   // may also pay that cycle's own bill in advance, before it closes. With no
@@ -308,8 +328,12 @@ export function buildCardStatementLedger(input: {
     ]
   }
 
-  // Bank debits of placed bill payment groups; they never count twice.
+  // Bank debits of this card's bill payment groups; they are never inferred
+  // or offered as candidates, so they never count twice.
   const groupedBankIds = new Set<string>()
+  for (const receipt of receipts)
+    for (const id of groupByTransaction.get(receipt.id)?.transactionIds ?? [])
+      if (id !== receipt.id && !manuallyLinked.has(id)) groupedBankIds.add(id)
   const settle = (transaction: LedgerCardTransaction) => {
     for (const { entry, amountCents: placedCents } of placements(transaction)) {
       const group = groupByTransaction.get(transaction.id)
@@ -327,7 +351,6 @@ export function buildCardStatementLedger(input: {
           (sum, id) => sum - (accountPaymentById.get(id)?.amountCents ?? 0),
           0,
         )
-      for (const id of bankIds) groupedBankIds.add(id)
       if (group && group.status === 'confirmed' && bankIds.length) {
         const amountCents = Math.max(0, transaction.amountCents - handCents)
         for (const id of bankIds)
@@ -367,14 +390,6 @@ export function buildCardStatementLedger(input: {
     }
   }
 
-  // Order matters only for what each bill still owes when a receipt is
-  // placed: bill payment groups first, then bank debits identified by amount
-  // and date, then the card's own receipts, oldest first. A receipt that is
-  // the card side of an identified debit is its evidence and counts once.
-  receipts.sort((a, b) => a.postedAt.localeCompare(b.postedAt))
-  for (const transaction of receipts)
-    if (groupByTransaction.has(transaction.id)) settle(transaction)
-
   // Bank-side evidence for a bill no group or link of the person settles.
   const bankPayments = input.accountPayments.filter(
     (payment) =>
@@ -386,10 +401,21 @@ export function buildCardStatementLedger(input: {
   const handLinkedEntries = new Set(manualLinks.map(({ entry }) => entry))
   const usedBankIds = new Set<string>()
   const pairedReceiptIds = new Set<string>()
+  // A bill payment group whose bank debit has the bill's exact total near
+  // its due date already identifies that bill.
+  const groupedBankPayments = input.accountPayments.filter((payment) =>
+    groupedBankIds.has(payment.id),
+  )
+  const identifiedByGroup = (entry: StatementLedgerEntry) =>
+    groupedBankPayments.some(
+      (payment) =>
+        -payment.amountCents === entry.amountCents &&
+        distance(payment.postedAt, entry.dueDate) <= INFERRED_WINDOW_DAYS,
+    )
   for (const entry of entries) {
     if (
-      entry.payments.length ||
       handLinkedEntries.has(entry) ||
+      identifiedByGroup(entry) ||
       entry.amountCents <= 0
     )
       continue
@@ -443,12 +469,12 @@ export function buildCardStatementLedger(input: {
       addPosted(entry, -payment.amountCents)
   }
 
+  // With bank evidence identified, every receipt, grouped or not, is placed
+  // oldest first: what each bill still owes when a receipt arrives depends
+  // only on the payments made before it. A receipt that is the card side of
+  // an identified debit is its evidence and counts once.
   for (const transaction of receipts)
-    if (
-      !groupByTransaction.has(transaction.id) &&
-      !pairedReceiptIds.has(transaction.id)
-    )
-      settle(transaction)
+    if (!pairedReceiptIds.has(transaction.id)) settle(transaction)
 
   for (const { link, entry, payment } of manualLinks) {
     entry.payments.push({
