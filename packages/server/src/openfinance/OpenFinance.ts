@@ -232,17 +232,19 @@ const make = Effect.gen(function* () {
       `,
   })
 
-  // Unresolved transactions a sync's date range no longer reaches: known ones
-  // a correction moved before the history start.
-  const findUnresolvedBefore = SqlSchema.findAll({
+  // Unresolved transactions a sync's date range does not reach: known ones a
+  // correction moved before the history start or past today.
+  const findUnresolvedOutside = SqlSchema.findAll({
     Request: Schema.Struct({
       providerAccountId: Schema.String,
-      before: Schema.String,
+      from: Schema.String,
+      to: Schema.String,
     }),
     Result: Schema.Struct({ id: Schema.String }),
-    execute: ({ providerAccountId, before }) => sql`
+    execute: ({ providerAccountId, from, to }) => sql`
         SELECT provider_transaction_id AS id FROM open_finance_unresolved
-        WHERE provider_account_id = ${providerAccountId} AND booked_on < ${before}
+        WHERE provider_account_id = ${providerAccountId}
+          AND (booked_on < ${from} OR booked_on > ${to})
       `,
   })
 
@@ -817,11 +819,13 @@ const make = Effect.gen(function* () {
       dateTo,
     })
     // An unresolved transaction outside the range is re-read by id, so a
-    // known one moved before the history start still gains its amount.
+    // known one moved before the history start or past today still gains its
+    // amount, and its previous fact is not taken for absent.
     const inRangeIds = new Set(inRange.map((transaction) => transaction.id))
-    const strayIds = (yield* findUnresolvedBefore({
+    const strayIds = (yield* findUnresolvedOutside({
       providerAccountId,
-      before: dateFrom,
+      from: dateFrom,
+      to: dateTo,
     }))
       .map((row) => row.id)
       .filter((id) => !inRangeIds.has(id))
@@ -833,7 +837,9 @@ const make = Effect.gen(function* () {
           })).filter((transaction) => !inRangeIds.has(transaction.id))
         : []
     const fetched = [...inRange, ...strays]
-    const known = new Set(stored.map((observation) => observation.externalId))
+    // Known means ever observed, removed or not: one inferred removed and
+    // returned on another day is restored wherever Pluggy moved it.
+    const known = yield* observations.observedIds({ sourceId, accountId })
 
     const reported: Array<ReportedTransaction> = []
     // The running balance this response gave each posted transaction.
@@ -1075,6 +1081,12 @@ const make = Effect.gen(function* () {
               observation.bookedOn,
             ]),
           )
+          // The history start gates only transactions never observed; one
+          // removed before is restored wherever Pluggy moved it.
+          const observed = yield* observations.observedIds({
+            sourceId,
+            accountId,
+          })
           const dateTo = yield* today
           const reported: Array<ReportedTransaction> = []
           // Every returned transaction in scope, recordable or not, by the
@@ -1089,14 +1101,14 @@ const make = Effect.gen(function* () {
           for (const transaction of fetched) {
             const day = bookedOn(transaction.date)
             const known = storedDay.get(transaction.id)
-            if (day < historyFrom && known === undefined) continue
+            if (day < historyFrom && !observed.has(transaction.id)) continue
             returned.push({ externalId: transaction.id, bookedOn: day })
             const normalized = toReportedTransaction(item, transaction)
             if (Option.isNone(normalized)) {
               incompleteDays.add(day)
               if (known !== undefined) incompleteDays.add(known)
               // Known ones are tracked wherever they moved: a sync re-reads
-              // those before its range by id.
+              // those outside its range by id.
               unresolved.push({ id: transaction.id, bookedOn: day })
               continue
             }

@@ -1065,6 +1065,128 @@ describe('webhook reactions', () => {
   )
 
   it.effect(
+    'keeps a pending purchase a correction moved past today until it converts',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, account, connectionId, state } = yield* linkedBank(
+          [
+            ['market', '2026-09-28'],
+            ['purchase', '2026-10-03', { status: 'PENDING', amount: 55.3 }],
+          ],
+        )
+        const market = tx('market', '2026-09-28')
+        const setPurchase = (purchase: ReturnType<typeof tx>) =>
+          Ref.update(state, (current) => ({
+            ...current,
+            transactions: { 'provider-bank': [market, purchase] },
+          }))
+        // Pluggy moves it to November 5, in dollars, not yet converted.
+        yield* setPurchase(
+          tx('purchase', '2026-11-05', {
+            status: 'PENDING',
+            currencyCode: 'USD',
+            amount: 10,
+            amountInAccountCurrency: null,
+          }),
+        )
+        yield* deliver({
+          eventId: 'evt-future-correction',
+          event: 'transactions/updated',
+          itemId: 'item-1',
+          accountId: 'provider-bank',
+          transactionIds: ['purchase'],
+        })
+        yield* drain
+        // An ordinary sync while it still awaits conversion keeps it.
+        yield* openFinance.requestSync({ connectionId })
+        yield* drain
+        const facts = Effect.gen(function* () {
+          return (yield* (yield* Observations).current(account.id)).map(
+            (observation) => [
+              observation.externalId,
+              observation.bookedOn,
+              observation.amountCents,
+              observation.status,
+            ],
+          )
+        })
+        assert.deepStrictEqual(yield* facts, [
+          ['market', '2026-09-28', -1000, 'posted'],
+          ['purchase', '2026-10-03', -5530, 'pending'],
+        ])
+        // The conversion arrives without a webhook; the next sync takes it.
+        yield* setPurchase(
+          tx('purchase', '2026-11-05', {
+            status: 'PENDING',
+            currencyCode: 'USD',
+            amount: 10,
+            amountInAccountCurrency: 56.1,
+          }),
+        )
+        yield* openFinance.requestSync({ connectionId })
+        yield* drain
+        assert.deepStrictEqual(yield* facts, [
+          ['market', '2026-09-28', -1000, 'posted'],
+          ['purchase', '2026-11-05', -5610, 'pending'],
+        ])
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect(
+    'restores before the history start a purchase a sync inferred removed',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, account, connectionId, state } = yield* linkedBank(
+          [
+            ['purchase', '2026-07-01', { status: 'PENDING', amount: 55.3 }],
+            ['recent', '2026-10-03'],
+          ],
+        )
+        const recent = tx('recent', '2026-10-03')
+        // Pluggy omits it from a response, so a sync infers it removed.
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: { 'provider-bank': [recent] },
+        }))
+        yield* openFinance.requestSync({ connectionId })
+        yield* drain
+        assert.deepStrictEqual(yield* currentIds(account.id), ['recent'])
+        // It returns posted, corrected to June 30.
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: {
+            'provider-bank': [
+              tx('purchase', '2026-06-30', { amount: 55.3 }),
+              recent,
+            ],
+          },
+        }))
+        yield* deliver({
+          eventId: 'evt-restored',
+          event: 'transactions/updated',
+          itemId: 'item-1',
+          accountId: 'provider-bank',
+          transactionIds: ['purchase'],
+        })
+        yield* drain
+        assert.deepStrictEqual(
+          (yield* (yield* Observations).current(account.id)).map(
+            (observation) => [
+              observation.externalId,
+              observation.bookedOn,
+              observation.amountCents,
+              observation.status,
+            ],
+          ),
+          [
+            ['purchase', '2026-06-30', -5530, 'posted'],
+            ['recent', '2026-10-03', -1000, 'posted'],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect(
     'withdraws the checkpoint of a day whose transaction Pluggy deleted',
     () =>
       Effect.gen(function* () {
