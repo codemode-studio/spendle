@@ -1,6 +1,7 @@
 import { assign } from '../domain/Assignment.ts'
 import { daysBetween } from '../domain/LocalDate.ts'
 import { foldDescription } from '../imports/Statement.ts'
+import { meaningfulWords } from '../ledger/Resolution.ts'
 
 export type RelationKind = 'internal_transfer' | 'card_payment'
 
@@ -15,6 +16,8 @@ export interface MatchableEntry {
   readonly currency: string
   readonly status: 'pending' | 'posted'
   readonly description: string
+  /** The account's institution, which a transfer description may name. */
+  readonly institution?: string
 }
 
 export type Decision = 'confirmed' | 'rejected'
@@ -86,6 +89,129 @@ const contradictions: Record<
   },
 }
 
+// Wording that only says a movement is a transfer, or when, not who is on the
+// other side.
+const transferWords = new Set([
+  'transferido',
+  'transferida',
+  'envio',
+  'recebimento',
+  'mesma',
+  'titularidade',
+  'titular',
+  'mesmo',
+  'entre',
+  'contas',
+  'propria',
+  'proprio',
+  'proprias',
+  'saida',
+  'entrada',
+  'agendado',
+  'agendada',
+  'banco',
+  'bank',
+  'instituicao',
+  'pagamentos',
+  'aplicacao',
+  'aplic',
+  'resgate',
+  'investimento',
+  'poupanca',
+  'cpf',
+  'cnpj',
+  'dos',
+  'das',
+  'pelo',
+  'pela',
+  'via',
+  'app',
+  'remetente',
+  'destinatario',
+  'favorecido',
+  'jan',
+  'fev',
+  'mar',
+  'abr',
+  'mai',
+  'jun',
+  'jul',
+  'ago',
+  'set',
+  'out',
+  'nov',
+  'dez',
+])
+
+// Wording that says both sides belong to the same person.
+const ownAccountWording =
+  /\b(mesma titularidade|mesmo titular|entre contas|conta propria|contas proprias)\b/
+
+const institutionWords = (entry: MatchableEntry) =>
+  new Set(
+    [...meaningfulWords(entry.institution ?? '')].filter(
+      (word) => !transferWords.has(word),
+    ),
+  )
+
+/** Who a transfer description names on the other side, without bank or institution wording. */
+const counterparties = (
+  description: string,
+  institutions: ReadonlySet<string>,
+) =>
+  new Set(
+    [...meaningfulWords(description)].filter(
+      (word) =>
+        !transferWords.has(word) && !/\d/.test(word) && !institutions.has(word),
+    ),
+  )
+
+const intersects = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
+  [...a].some((word) => b.has(word))
+
+/**
+ * What the descriptions say about the other side of a transfer: a shared
+ * counterparty (the person's own name on both), own-account wording, or the
+ * other account's institution named are evidence it is the person's own
+ * money moving; two different counterparties contradict it.
+ */
+const counterpartEvidence = (
+  outflow: MatchableEntry,
+  inflow: MatchableEntry,
+) => {
+  const outInstitution = institutionWords(outflow)
+  const inInstitution = institutionWords(inflow)
+  const institutions = new Set([...outInstitution, ...inInstitution])
+  const out = counterparties(outflow.description, institutions)
+  const into = counterparties(inflow.description, institutions)
+  const shared = intersects(out, into)
+  const different = !shared && out.size > 0 && into.size > 0
+  const reasons: Array<string> = []
+  if (shared) reasons.push('same_counterparty')
+  if (different) reasons.push('different_counterparties')
+  if (
+    [outflow, inflow].some((entry) =>
+      ownAccountWording.test(foldDescription(entry.description)),
+    )
+  )
+    reasons.push('own_account_wording')
+  const names = (entry: MatchableEntry, other: Set<string>, own: Set<string>) =>
+    intersects(
+      meaningfulWords(entry.description),
+      new Set([...other].filter((word) => !own.has(word))),
+    )
+  if (
+    names(outflow, inInstitution, outInstitution) ||
+    names(inflow, outInstitution, inInstitution)
+  )
+    reasons.push('names_other_account')
+  return {
+    different,
+    evidenced: !different && reasons.length > 0,
+    reasons,
+  }
+}
+
 // TED/DOC and investment movements can land a few business days later.
 const slowRail = /\b(ted|doc|aplicacao|aplic|resgate|investimento)\b/
 
@@ -131,6 +257,7 @@ interface Candidate {
   readonly score: number
   readonly hintedBoth: boolean
   readonly contradicted: boolean
+  readonly evidenced: boolean
   readonly reasons: ReadonlyArray<string>
 }
 
@@ -158,17 +285,26 @@ const evaluate = (
       hinted === 2 ? 'described_on_both_sides' : 'described_on_one_side',
     )
   }
-  const contradicted =
+  const described =
     contradictions[kind].outflow.test(out) ||
     contradictions[kind].inflow.test(into)
-  if (contradicted) {
+  if (described) {
     score -= 30
     reasons.push('conflicting_description')
   }
+  // A card only receives payments, so its side is evidence enough; a bank
+  // account also receives money from other people.
+  const counterpart =
+    kind === 'internal_transfer'
+      ? counterpartEvidence(outflow, inflow)
+      : { different: false, evidenced: true, reasons: [] }
+  if (counterpart.different) score -= 30
+  reasons.push(...counterpart.reasons)
   return {
     score: Math.max(0, Math.min(100, score)),
     hintedBoth: hinted === 2,
-    contradicted,
+    contradicted: described || counterpart.different,
+    evidenced: counterpart.evidenced,
     reasons,
   }
 }
@@ -189,7 +325,9 @@ const evaluate = (
  * many pairs are found, then their scores. Amount and dates alone only ever
  * make a suggestion: a pair is confirmed automatically when it scores at
  * least `autoConfirmScore`, both descriptions say what it is, nothing
- * contradicts it, both entries are posted, no rival comes within
+ * contradicts it (including two different counterparties), a transfer's
+ * descriptions show it stays with the person (see `counterpartEvidence`),
+ * both entries are posted, no rival comes within
  * `rivalMargin`, and the person never rejected a pairing for either entry.
  */
 export const matchRelations = (
@@ -296,7 +434,17 @@ export const matchRelations = (
     return scores[0] ?? -Infinity
   }
 
+  // `assign` solves each connected group of candidates on its own: entries
+  // that share no candidate cannot affect each other's pairing.
+  const pairKey = (outflowId: string, inflowId: string) =>
+    `${outflowId}|${inflowId}`
   for (const candidates of candidatesByGroup.values()) {
+    const byPair = new Map(
+      candidates.map((candidate) => [
+        pairKey(candidate.outflow.id, candidate.inflow.id),
+        candidate,
+      ]),
+    )
     const outflows = [
       ...new Map(
         candidates.map((candidate) => [
@@ -311,10 +459,7 @@ export const matchRelations = (
       ).values(),
     ]
     const find = (outflow: MatchableEntry, inflow: MatchableEntry) =>
-      candidates.find(
-        (candidate) =>
-          candidate.outflow === outflow && candidate.inflow === inflow,
-      )
+      byPair.get(pairKey(outflow.id, inflow.id))
     const rowOf = new Map(outflows.map((outflow, row) => [outflow.id, row]))
     const columnOf = new Map(
       inflows.map((inflow, column) => [inflow.id, column]),
@@ -344,6 +489,7 @@ export const matchRelations = (
         candidate.score >= autoConfirmScore &&
         candidate.hintedBoth &&
         !candidate.contradicted &&
+        candidate.evidenced &&
         posted &&
         unambiguous &&
         !contested

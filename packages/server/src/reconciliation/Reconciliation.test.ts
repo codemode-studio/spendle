@@ -4,6 +4,7 @@ import * as Effect from 'effect/Effect'
 import { Imports } from '../imports/Imports.ts'
 import { Accounts, CardTerms } from '../ledger/Accounts.ts'
 import { Entries } from '../ledger/Entries.ts'
+import { Observations } from '../ledger/Observations.ts'
 import { drain, openFinanceTest } from '../testing/FakePluggy.ts'
 import { Reconciliation } from './Reconciliation.ts'
 
@@ -77,6 +78,86 @@ const setup = Effect.gen(function* () {
       (found) => found.find((entry) => entry.amountCents === amountCents)!.id,
     )
   return { reconciliation: yield* Reconciliation, nubank, inter, card, entryId }
+})
+
+// Nubank sends R$ 500,00 by Pix; Inter's own reports are added by each test.
+const twoAccounts = Effect.gen(function* () {
+  const accounts = yield* Accounts
+  const owner = yield* accounts.createOwner({ name: 'Donald', kind: 'person' })
+  const open = (name: string) =>
+    accounts.open({
+      ownerId: owner.id,
+      institutionName: name,
+      name,
+      kind: 'checking',
+      purpose: 'operating',
+      currency: 'BRL',
+    })
+  const nubank = yield* open('Nubank')
+  const inter = yield* open('Inter')
+  yield* (yield* Imports).importFile({
+    accountId: nubank.id,
+    fileName: 'nubank.ofx',
+    bytes: ofx(line('n1', '20260910', '-500.00', 'Pix enviado Donald')),
+  })
+  yield* drain
+  const observations = yield* Observations
+  const bank = yield* observations.registerSource({
+    kind: 'manual',
+    externalRef: 'inter-bank',
+    label: 'Inter',
+  })
+  // What Inter's own feed reports, as a new version each time it changes.
+  const report = (
+    externalId: string,
+    bookedOn: string,
+    description: string,
+    status: 'posted' | 'removed' = 'posted',
+  ) =>
+    Effect.andThen(
+      observations.recordTransactions({
+        sourceId: bank.id,
+        accountId: inter.id,
+        transactions: [
+          {
+            externalId,
+            bookedOn,
+            amountCents: 50000,
+            currency: 'BRL',
+            description,
+            status,
+            raw: null,
+          },
+        ],
+      }),
+      drain,
+    )
+  const entries = yield* Entries
+  const nubankEntry = (yield* entries.entries(nubank.id))[0]!.id
+  return {
+    reconciliation: yield* Reconciliation,
+    accounts,
+    nubank,
+    inter,
+    nubankEntry,
+    report,
+    interEntries: entries.entries(inter.id),
+  }
+})
+
+// Inter's feed reports a deposit on 14 Sep; the statement then reports the
+// Pix on 10 Sep as a separate entry, which pairs with Nubank's.
+const separateReports = Effect.gen(function* () {
+  const setup = yield* twoAccounts
+  yield* setup.report('a1', '2026-09-14', 'Deposito')
+  yield* (yield* Imports).importFile({
+    accountId: setup.inter.id,
+    fileName: 'inter.ofx',
+    bytes: ofx(line('i1', '20260910', '500.00', 'Pix recebido Donald')),
+  })
+  yield* drain
+  const [transfer] = yield* setup.reconciliation.relations
+  return { ...setup, transfer: transfer! }
 })
 
 const shape = (
@@ -172,5 +253,122 @@ describe('Reconciliation', () => {
           'already_linked',
         )
       }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'keeps a rejection when the rejected entry merges into an older one',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, report, interEntries, transfer } =
+          yield* separateReports
+        yield* reconciliation.decide(transfer.key, 'rejected')
+
+        // Inter corrects its report: it is the same Pix, so both merge into
+        // the older entry, under a new relation key.
+        yield* report('a1', '2026-09-10', 'Pix recebido Donald')
+        assert.strictEqual((yield* interEntries).length, 1)
+        assert.deepStrictEqual(yield* reconciliation.relations, [])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'keeps a confirmation on the entries its movements merged into',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, report, interEntries, nubankEntry, transfer } =
+          yield* separateReports
+        yield* reconciliation.decide(transfer.key, 'confirmed')
+
+        yield* report('a1', '2026-09-10', 'Pix recebido Donald')
+        const [merged] = yield* interEntries
+        assert.deepStrictEqual(
+          (yield* reconciliation.relations).map((relation) => [
+            relation.outflowEntryId,
+            relation.inflowEntryId,
+            relation.status,
+            relation.origin,
+          ]),
+          [[nubankEntry, merged!.id, 'confirmed', 'person']],
+        )
+        assert.deepStrictEqual(yield* reconciliation.orphanedDecisions, [])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect('lets the person reject a confirmation whose entry vanished', () =>
+    Effect.gen(function* () {
+      const { reconciliation, report, nubankEntry } = yield* twoAccounts
+      yield* report('x1', '2026-09-10', 'Pix recebido Donald')
+      const [transfer] = yield* reconciliation.relations
+      yield* reconciliation.decide(transfer!.key, 'confirmed')
+      yield* report('x1', '2026-09-10', 'Pix recebido Donald', 'removed')
+      assert.deepStrictEqual(
+        (yield* reconciliation.orphanedDecisions).map((orphan) => [
+          orphan.key,
+          orphan.reason,
+          orphan.reserved,
+        ]),
+        [[transfer!.key, 'entry_missing', [nubankEntry]]],
+      )
+
+      yield* reconciliation.decide(transfer!.key, 'rejected')
+      assert.deepStrictEqual(yield* reconciliation.orphanedDecisions, [])
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'links the partner of an orphaned confirmation elsewhere, superseding it',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, report, interEntries, nubankEntry } =
+          yield* twoAccounts
+        yield* report('x1', '2026-09-10', 'Pix recebido Donald')
+        const [transfer] = yield* reconciliation.relations
+        yield* reconciliation.decide(transfer!.key, 'confirmed')
+        yield* report('x1', '2026-09-10', 'Pix recebido Donald', 'removed')
+        yield* report('x2', '2026-09-20', 'Credito')
+
+        const key = yield* reconciliation.link({
+          outflowEntryId: nubankEntry,
+          inflowEntryId: (yield* interEntries)[0]!.id,
+        })
+        assert.deepStrictEqual(
+          (yield* reconciliation.relations).map((relation) => [
+            relation.key,
+            relation.origin,
+          ]),
+          [[key, 'person']],
+        )
+        assert.deepStrictEqual(yield* reconciliation.orphanedDecisions, [])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect('revisits relations when an account changes kind', () =>
+    Effect.gen(function* () {
+      const { reconciliation, inter } = yield* setup
+      const accounts = yield* Accounts
+      const transfer = (yield* reconciliation.relations).find(
+        (relation) => relation.kind === 'internal_transfer',
+      )!
+      yield* reconciliation.decide(transfer.key, 'confirmed')
+
+      // Inter was a card all along: the confirmed transfer needs review.
+      yield* accounts.update(inter.id, {
+        kind: 'credit_card',
+        card: new CardTerms({
+          closingDay: 1,
+          dueDay: 8,
+          limitCents: null,
+          lastFour: null,
+        }),
+      })
+      yield* drain
+      const changed = (yield* reconciliation.relations).find(
+        (relation) => relation.key === transfer.key,
+      )
+      assert.deepStrictEqual(
+        [changed?.status, changed?.reasons],
+        ['conflict', ['confirmed_by_person', 'facts_changed']],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
   )
 })

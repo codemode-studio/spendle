@@ -1,5 +1,6 @@
 import { assert, describe, it } from '@effect/vitest'
 
+import { addDays } from '../domain/LocalDate.ts'
 import { matchRelations, relationKey } from './Matching.ts'
 import type { Decision, MatchableEntry } from './Matching.ts'
 
@@ -44,6 +45,51 @@ describe('matchRelations', () => {
         entry('in', 'inter', 50000, { description: 'Pix recebido Donald' }),
       ]).map((relation) => [relation.kind, relation.status, relation.score]),
       [['internal_transfer', 'confirmed', 100]],
+    )
+  })
+
+  it('only suggests a transfer whose descriptions name different people or no one', () => {
+    const different = relations([
+      entry('out', 'nubank', -50000, { description: 'Pix enviado Maria' }),
+      entry('in', 'inter', 50000, { description: 'Pix recebido Joao' }),
+    ])
+    const generic = relations([
+      entry('out', 'nubank', -50000, { description: 'Pix enviado' }),
+      entry('in', 'inter', 50000, { description: 'Pix recebido' }),
+    ])
+    assert.deepStrictEqual(
+      [...different, ...generic].map((relation) => relation.status),
+      ['suggested', 'suggested'],
+    )
+    assert.isTrue(different[0]!.reasons.includes('different_counterparties'))
+  })
+
+  it('confirms a transfer that names the other account or own-account wording', () => {
+    const named = relations([
+      entry('out', 'nubank', -50000, {
+        description: 'Pix enviado Banco Inter',
+        institution: 'Nubank',
+      }),
+      entry('in', 'inter', 50000, {
+        description: 'Pix recebido',
+        institution: 'Banco Inter',
+      }),
+    ])
+    const own = relations([
+      entry('out', 'nubank', -50000, {
+        description: 'Transferencia mesma titularidade',
+      }),
+      entry('in', 'inter', 50000, { description: 'Pix recebido' }),
+    ])
+    assert.deepStrictEqual(
+      [...named, ...own].map((relation) => [
+        relation.status,
+        relation.reasons.at(-1),
+      ]),
+      [
+        ['confirmed', 'names_other_account'],
+        ['confirmed', 'own_account_wording'],
+      ],
     )
   })
 
@@ -223,6 +269,30 @@ describe('matchRelations', () => {
     assert.deepStrictEqual(
       [result.relations, result.orphaned],
       [[], [{ key, missing: ['gone'] }]],
+    )
+  })
+
+  it('assigns entries that share no candidate apart from each other', () => {
+    // Many same-amount transfers, each far from the next: every pair is found.
+    const day = (index: number) => addDays('2020-01-01', index * 10)
+    const entries = Array.from({ length: 300 }, (_, index) => [
+      entry(`out-${index}`, 'nubank', -10000, {
+        bookedOn: day(index),
+        description: 'Pix enviado Donald',
+      }),
+      entry(`in-${index}`, 'inter', 10000, {
+        bookedOn: day(index),
+        description: 'Pix recebido Donald',
+      }),
+    ]).flat()
+    const result = relations(entries)
+    assert.isTrue(
+      result.length === 300 &&
+        result.every(
+          (relation) =>
+            relation.outflowId.slice(4) === relation.inflowId.slice(3) &&
+            relation.status === 'confirmed',
+        ),
     )
   })
 

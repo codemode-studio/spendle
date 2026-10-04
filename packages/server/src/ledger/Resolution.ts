@@ -99,7 +99,8 @@ const words = (description: string) =>
       .filter((word) => word.length > 1),
   )
 
-const meaningfulWords = (description: string) =>
+/** Words of a description that can name a party: not bank wording, at least three letters. */
+export const meaningfulWords = (description: string) =>
   new Set(
     [...words(description)].filter(
       (word) => word.length >= 3 && !genericWords.has(word),
