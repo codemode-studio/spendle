@@ -5,10 +5,11 @@ import * as Schema from 'effect/Schema'
 import * as SqlClient from 'effect/sql/SqlClient'
 import * as SqlSchema from 'effect/sql/SqlSchema'
 
-import { addDays, today } from '../domain/LocalDate.ts'
+import { addDays, daysBetween, today } from '../domain/LocalDate.ts'
 import { foldDescription } from '../imports/Statement.ts'
 import { Accounts } from '../ledger/Accounts.ts'
 import { billPaymentWindowDays, billPayments, cardCycles } from './Cycles.ts'
+import { cardPaymentWindowDays } from './Matching.ts'
 import type { CardCycle, CardCycles, CyclePayment } from './Cycles.ts'
 
 export class CardsError extends Schema.TaggedError<CardsError>()('CardsError', {
@@ -324,7 +325,9 @@ const make = Effect.gen(function* () {
    *    payments). The debit must be in the card's currency, say it pays a
    *    card bill and identify this card and no other (see `namesCardBill`).
    *    Its amount must be exactly what one closed cycle still owed on the
-   *    debit's date, and it pays that cycle.
+   *    debit's date, and it pays that cycle. A payment credit on the card
+   *    that could be its card side, unless another debit accounts for that
+   *    credit, means the debit is not shown to be another payment.
    */
   const cycles = Effect.fn('Cards.cycles')(function* (accountId: string) {
     const card = yield* accounts.get(accountId)
@@ -342,6 +345,8 @@ const make = Effect.gen(function* () {
 
     const payments: Array<CyclePayment> = []
     const paymentIds = new Set<string>()
+    // Card credits a confirmed relation already ties to their bank debit.
+    const relatedIds = new Set<string>()
     const amountOf = new Map(entries.map((entry) => [entry.id, entry]))
     for (const relation of paymentRelations) {
       const inflow = amountOf.get(relation.inflowEntryId)
@@ -355,6 +360,7 @@ const make = Effect.gen(function* () {
         statementClosing: inflow.statementClosing,
       })
       paymentIds.add(inflow.id)
+      relatedIds.add(inflow.id)
     }
     for (const entry of entries) {
       const text = foldDescription(entry.description)
@@ -408,19 +414,38 @@ const make = Effect.gen(function* () {
       from: firstCycle.closingOn,
       through: addDays(lastCycle.closingOn, billPaymentWindowDays),
     })
+    // Card credits another debit already accounts for: one confirmed or
+    // suggested as its card side. A credit is the card side of one debit.
+    const claimedIds = new Set([
+      ...relatedIds,
+      ...debits.flatMap((debit) =>
+        debit.pairedInflowId === null ? [] : [debit.pairedInflowId],
+      ),
+    ])
     const billDebits = debits.flatMap((debit) => {
       // Paired with a payment already counted on the card: the same money.
       if (debit.pairedInflowId !== null && paymentIds.has(debit.pairedInflowId))
         return []
-      return namesCardBill(debit.description, self, cards)
-        ? [
-            {
-              entryId: debit.id,
-              paidOn: debit.bookedOn,
-              amountCents: -debit.amountCents,
-            },
-          ]
-        : []
+      if (!namesCardBill(debit.description, self, cards)) return []
+      // A counted payment credit of the same amount within a card payment's
+      // window may be this debit's card side even when reconciliation paired
+      // it elsewhere or not at all: the debit is not shown to be another
+      // payment, so none is inferred.
+      const counterpart = payments.some(
+        (payment) =>
+          !claimedIds.has(payment.entryId) &&
+          payment.amountCents === -debit.amountCents &&
+          daysBetween(payment.creditedOn ?? payment.paidOn, debit.bookedOn) <=
+            cardPaymentWindowDays,
+      )
+      if (counterpart) return []
+      return [
+        {
+          entryId: debit.id,
+          paidOn: debit.bookedOn,
+          amountCents: -debit.amountCents,
+        },
+      ]
     })
     if (billDebits.length === 0) return known
     const inferred = billPayments({ ...history, payments, debits: billDebits })

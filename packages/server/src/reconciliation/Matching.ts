@@ -774,15 +774,18 @@ const cardTarget = (outflow: MatchableEntry, card: MatchableEntry) => {
 // TED/DOC and investment movements can land a few business days later.
 const slowRail = /\b(ted|doc|aplicacao|aplic|resgate|investimento)\b/
 
+/** Days a card payment may take between the bank debit and the card credit. */
+export const cardPaymentWindowDays = 7
+
 // The widest window any relation allows.
-const maxWindowDays = 7
+const maxWindowDays = cardPaymentWindowDays
 
 const windowDays = (
   kind: RelationKind,
   outflow: MatchableEntry,
   inflow: MatchableEntry,
 ) => {
-  if (kind === 'card_payment') return 7
+  if (kind === 'card_payment') return cardPaymentWindowDays
   const slow = [outflow, inflow].some((entry) => describes(entry, slowRail))
   return slow ? 5 : 3
 }
