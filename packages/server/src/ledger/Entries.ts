@@ -58,6 +58,8 @@ const ObservedRow = Schema.Struct({
   amountCents: Schema.Int,
   description: Schema.String,
   status: Schema.Literals(['pending', 'posted']),
+  coverageStart: Schema.NullOr(Schema.String),
+  coverageEnd: Schema.NullOr(Schema.String),
 })
 
 const CheckpointRow = Schema.Struct({
@@ -72,13 +74,15 @@ const EvidenceRow = Schema.Struct({
   sourceId: Schema.String,
   externalId: Schema.String,
   bookedOn: Schema.String,
+  status: Schema.Literals(['pending', 'posted']),
 })
 
 const evidenceKey = (sourceId: string, externalId: string) =>
   `${sourceId}\u0000${externalId}`
 
-// Equal when every entry has the same fields and the same evidence: a swap of
-// which observation confirms which entry is a change too.
+// Equal when every entry has the same fields and the same evidence, each as
+// dated and with the status it had: a swap of which observation confirms
+// which entry, or a correction of secondary evidence, is a change too.
 const sameEntries = (
   stored: ReadonlyArray<LedgerEntry>,
   storedEvidence: ReadonlyArray<typeof EvidenceRow.Type>,
@@ -95,7 +99,7 @@ const sameEntries = (
   const owner = new Map(
     storedEvidence.map((row) => [
       evidenceKey(row.sourceId, row.externalId),
-      row.entryId,
+      row,
     ]),
   )
   return resolved.every((entry) => {
@@ -106,11 +110,16 @@ const sameEntries = (
       match.amountCents === entry.amountCents &&
       match.description === entry.description &&
       match.status === entry.status &&
-      entry.evidence.every(
-        (evidence) =>
-          owner.get(evidenceKey(evidence.sourceId, evidence.externalId)) ===
-          entry.id,
-      )
+      entry.evidence.every((evidence) => {
+        const row = owner.get(
+          evidenceKey(evidence.sourceId, evidence.externalId),
+        )
+        return (
+          row?.entryId === entry.id &&
+          row.bookedOn === evidence.bookedOn &&
+          row.status === evidence.status
+        )
+      })
     )
   })
 }
@@ -126,12 +135,14 @@ const make = Effect.gen(function* () {
     execute: (accountId) => sql`
       SELECT f.id AS anchorId, f.rowid AS sequence, i.entry_id AS previousEntryId,
         l.source_id AS sourceId, l.external_id AS externalId, l.booked_on AS bookedOn,
-        l.amount_cents AS amountCents, l.description, l.status
+        l.amount_cents AS amountCents, l.description, l.status,
+        fi.period_start AS coverageStart, fi.period_end AS coverageEnd
       FROM transaction_observations l
       JOIN transaction_observations f ON f.source_id = l.source_id AND f.account_id = l.account_id
         AND f.external_id = l.external_id AND f.version = 1
       LEFT JOIN entry_identity i ON i.source_id = l.source_id AND i.account_id = l.account_id
         AND i.external_id = l.external_id
+      LEFT JOIN import_files fi ON fi.source_id = l.source_id
       WHERE l.account_id = ${accountId} AND l.status <> 'removed'
         AND l.version = (
           SELECT max(version) FROM transaction_observations v
@@ -168,22 +179,16 @@ const make = Effect.gen(function* () {
       ORDER BY as_of, rowid
     `,
   })
-  // The evidence of each stored entry, with the date each source gave it.
+  // The evidence of each stored entry, as dated and with the status it had
+  // when the entries were resolved.
   const findEvidence = SqlSchema.findAll({
     Request: Schema.String,
     Result: EvidenceRow,
     execute: (accountId) => sql`
-      SELECT v.entry_id AS entryId, v.source_id AS sourceId, v.external_id AS externalId,
-        o.booked_on AS bookedOn
-      FROM entry_evidence v
-      JOIN transaction_observations o ON o.source_id = v.source_id AND o.account_id = v.account_id
-        AND o.external_id = v.external_id
-        AND o.version = (
-          SELECT max(version) FROM transaction_observations l
-          WHERE l.source_id = o.source_id AND l.account_id = o.account_id
-            AND l.external_id = o.external_id
-        )
-      WHERE v.account_id = ${accountId}
+      SELECT entry_id AS entryId, source_id AS sourceId, external_id AS externalId,
+        booked_on AS bookedOn, status
+      FROM entry_evidence
+      WHERE account_id = ${accountId}
     `,
   })
 
@@ -201,7 +206,17 @@ const make = Effect.gen(function* () {
   ) {
     const account = yield* accounts.get(accountId)
     const sequence = yield* log.latestSequence
-    const resolved = resolveEntries(yield* findObserved(accountId))
+    const resolved = resolveEntries(
+      (yield* findObserved(accountId)).map(
+        ({ coverageStart, coverageEnd, ...observed }) => ({
+          ...observed,
+          coverage:
+            coverageStart !== null && coverageEnd !== null
+              ? { start: coverageStart, end: coverageEnd }
+              : null,
+        }),
+      ),
+    )
     const changed = !sameEntries(
       yield* findEntries(accountId),
       yield* findEvidence(accountId),
@@ -219,8 +234,9 @@ const make = Effect.gen(function* () {
             `
             for (const evidence of entry.evidence) {
               yield* sql`
-                INSERT INTO entry_evidence (source_id, account_id, external_id, entry_id)
-                VALUES (${evidence.sourceId}, ${accountId}, ${evidence.externalId}, ${entry.id})
+                INSERT INTO entry_evidence (source_id, account_id, external_id, entry_id, booked_on, status)
+                VALUES (${evidence.sourceId}, ${accountId}, ${evidence.externalId}, ${entry.id},
+                  ${evidence.bookedOn}, ${evidence.status})
               `
               yield* sql`
                 INSERT INTO entry_identity (source_id, account_id, external_id, entry_id)
@@ -299,13 +315,10 @@ const make = Effect.gen(function* () {
       })
     }
     const evidence = yield* findEvidence(accountId)
-    const evidenceOf = new Map<
-      string,
-      Array<{ sourceId: string; bookedOn: string }>
-    >()
+    const evidenceOf = new Map<string, Array<typeof EvidenceRow.Type>>()
     for (const row of evidence) {
       const list = evidenceOf.get(row.entryId) ?? []
-      list.push({ sourceId: row.sourceId, bookedOn: row.bookedOn })
+      list.push(row)
       evidenceOf.set(row.entryId, list)
     }
     const stored = (yield* findEntries(accountId)).map((entry) => ({

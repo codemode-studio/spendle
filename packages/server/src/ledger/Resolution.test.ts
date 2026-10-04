@@ -1,6 +1,8 @@
 import { assert, describe, it } from '@effect/vitest'
 
-import { proveBalances, resolveEntries } from './Resolution.ts'
+import { problemShapes } from '../domain/Assignment.ts'
+import { addDays } from '../domain/LocalDate.ts'
+import { pairings, proveBalances, resolveEntries } from './Resolution.ts'
 import type { ObservedTransaction } from './Resolution.ts'
 
 let sequence = 0
@@ -17,6 +19,7 @@ const observed = (
     description: 'Padaria São João',
     status: 'posted',
     previousEntryId: null,
+    coverage: null,
     ...fields,
   }
 }
@@ -126,6 +129,111 @@ describe('resolveEntries', () => {
     assert.strictEqual(after?.id, first?.id)
   })
 
+  it('keeps equal purchases apart when each statement covers only its own date', () => {
+    const purchase = { amountCents: -1000, description: 'PADARIA CENTRAL' }
+    const september = observed({
+      sourceId: 'sept',
+      coverage: { start: '2026-09-01', end: '2026-09-30' },
+      bookedOn: '2026-09-30',
+      ...purchase,
+    })
+    const october = observed({
+      sourceId: 'oct',
+      coverage: { start: '2026-10-01', end: '2026-10-31' },
+      bookedOn: '2026-10-01',
+      ...purchase,
+    })
+    assert.strictEqual(groups([september, october]).length, 2)
+
+    // Statements that both cover both dates may still date one movement apart.
+    const early = observed({
+      sourceId: 'early',
+      coverage: { start: '2026-09-01', end: '2026-10-15' },
+      bookedOn: '2026-09-30',
+      ...purchase,
+    })
+    const late = observed({
+      sourceId: 'late',
+      coverage: { start: '2026-09-15', end: '2026-10-31' },
+      bookedOn: '2026-10-01',
+      ...purchase,
+    })
+    assert.strictEqual(groups([early, late]).length, 1)
+  })
+
+  it('keeps same-day reports apart when they name different payees', () => {
+    const bakery = observed({ sourceId: 'pluggy', description: 'Padaria' })
+    const pharmacy = observed({ sourceId: 'file', description: 'Drogaria' })
+    assert.strictEqual(groups([bakery, pharmacy]).length, 2)
+  })
+
+  it('pairs each source as a whole even when another source reports in between', () => {
+    const a10 = observed({ sourceId: 'a', bookedOn: '2026-09-10' })
+    const a13 = observed({ sourceId: 'a', bookedOn: '2026-09-13' })
+    const b11 = observed({ sourceId: 'b', bookedOn: '2026-09-11' })
+    const c20 = observed({
+      sourceId: 'c',
+      bookedOn: '2026-09-20',
+      amountCents: -2000,
+    })
+    const b09 = observed({ sourceId: 'b', bookedOn: '2026-09-09' })
+    assert.deepStrictEqual(groups([a10, a13, b11, c20, b09]), [
+      [a10.anchorId, b09.anchorId],
+      [a13.anchorId, b11.anchorId],
+      [c20.anchorId],
+    ])
+  })
+
+  it('never gives two entries the same id when remembered ids collide', () => {
+    // A and B once formed the entry with B's id; A's amount changed and they split.
+    const a = observed({
+      sourceId: 'pluggy',
+      status: 'pending',
+      amountCents: -12000,
+      previousEntryId: 'obs-b',
+    })
+    const b = observed({
+      sourceId: 'file',
+      anchorId: 'obs-b',
+      previousEntryId: 'obs-b',
+    })
+    const first = resolveEntries([a, b])
+    const ids = first.map((entry) => entry.id)
+    assert.deepStrictEqual([...ids].sort(), ['obs-b', 'obs-b~1'])
+
+    // The next resolution keeps both.
+    const entryOf = (observation: ObservedTransaction) =>
+      first.find((entry) => entry.evidence.includes(observation))!.id
+    const again = resolveEntries(
+      [a, b].map((observation) => ({
+        ...observation,
+        previousEntryId: entryOf(observation),
+      })),
+    ).map((entry) => entry.id)
+    assert.deepStrictEqual(again, ids)
+  })
+
+  it('poses only reachable entries to the pairing, however long the history', () => {
+    const history = Array.from({ length: 2000 }, (_, day) =>
+      observed({ sourceId: 'file', bookedOn: addDays('2021-01-01', day) }),
+    )
+    const incoming = observed({ sourceId: 'pluggy', bookedOn: '2023-06-01' })
+    const entries = history.map((observation) => ({
+      evidence: [observation],
+    }))
+    // Only the entries within the window of the incoming report.
+    assert.deepStrictEqual(problemShapes(pairings([incoming], entries)), [
+      [1, 2 * 3 + 1],
+    ])
+    const merged = resolveEntries([...history, incoming]).filter(
+      (entry) => entry.evidence.length > 1,
+    )
+    assert.deepStrictEqual(
+      merged.map((entry) => entry.bookedOn),
+      ['2023-06-01'],
+    )
+  })
+
   it('depends only on what was observed, not on input order', () => {
     const observations = [
       observed({ sourceId: 'file' }),
@@ -191,8 +299,16 @@ describe('proveBalances', () => {
       amountCents: 100_00,
       status: 'posted' as const,
       evidence: [
-        { sourceId: 'pluggy', bookedOn: '2026-10-01' },
-        { sourceId: 'statement', bookedOn: '2026-09-30' },
+        {
+          sourceId: 'pluggy',
+          bookedOn: '2026-10-01',
+          status: 'posted' as const,
+        },
+        {
+          sourceId: 'statement',
+          bookedOn: '2026-09-30',
+          status: 'posted' as const,
+        },
       ],
     }
     const [interval] = proveBalances(
@@ -203,6 +319,67 @@ describe('proveBalances', () => {
       ],
     )
     assert.strictEqual(interval?.differenceCents, 0)
+  })
+
+  it('dates an entry by its posted report, not by a pending one from the checkpoint source', () => {
+    // Pluggy saw a hold on 1 October; the statement shows it posted on the 3rd.
+    const debit = {
+      bookedOn: '2026-10-03',
+      amountCents: -10_00,
+      status: 'posted' as const,
+      evidence: [
+        {
+          sourceId: 'pluggy',
+          bookedOn: '2026-10-01',
+          status: 'pending' as const,
+        },
+        { sourceId: 'file', bookedOn: '2026-10-03', status: 'posted' as const },
+      ],
+    }
+    const [interval] = proveBalances(
+      [debit],
+      [
+        { asOf: '2026-10-02', balanceCents: 1000_00, sourceId: 'pluggy' },
+        { asOf: '2026-10-03', balanceCents: 990_00, sourceId: 'file' },
+      ],
+    )
+    assert.strictEqual(interval?.differenceCents, 0)
+  })
+
+  it('counts a movement once across intervals whose sources date it differently', () => {
+    const credit = {
+      bookedOn: '2026-09-30',
+      amountCents: 10_00,
+      status: 'posted' as const,
+      evidence: [
+        { sourceId: 'file', bookedOn: '2026-09-30', status: 'posted' as const },
+        {
+          sourceId: 'pluggy',
+          bookedOn: '2026-10-02',
+          status: 'posted' as const,
+        },
+      ],
+    }
+    const intervals = proveBalances(
+      [credit],
+      [
+        { asOf: '2026-09-29', balanceCents: 0, sourceId: 'file' },
+        { asOf: '2026-09-30', balanceCents: 10_00, sourceId: 'file' },
+        { asOf: '2026-10-01', balanceCents: 0, sourceId: 'pluggy' },
+        { asOf: '2026-10-02', balanceCents: 10_00, sourceId: 'pluggy' },
+      ],
+    )
+    assert.deepStrictEqual(
+      intervals.map((interval) => [
+        interval.postedChangeCents,
+        interval.differenceCents,
+      ]),
+      [
+        [10_00, 0],
+        [-10_00, 0],
+        [10_00, 0],
+      ],
+    )
   })
 
   it('reports the amount a gap leaves unexplained', () => {

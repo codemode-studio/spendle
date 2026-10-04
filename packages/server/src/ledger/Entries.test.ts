@@ -12,7 +12,7 @@ import {
   openFinanceTest,
   tx,
 } from '../testing/FakePluggy.ts'
-import { CardTerms } from './Accounts.ts'
+import { Accounts, CardTerms } from './Accounts.ts'
 import { Entries } from './Entries.ts'
 import { Observations } from './Observations.ts'
 
@@ -84,6 +84,19 @@ const linkedWithStatement = (statement = septemberOfx(), data = pluggyData) =>
       entries: yield* Entries,
     }
   })
+
+const openChecking = Effect.gen(function* () {
+  const accounts = yield* Accounts
+  const owner = yield* accounts.createOwner({ name: 'Donald', kind: 'person' })
+  return yield* accounts.open({
+    ownerId: owner.id,
+    institutionName: 'Banco',
+    name: 'Conta',
+    kind: 'checking',
+    purpose: 'operating',
+    currency: 'BRL',
+  })
+})
 
 describe('Entries', () => {
   it.effect(
@@ -295,5 +308,102 @@ CHARSET:UTF-8
           ['2026-10-03', 0],
         )
       }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'keeps equal purchases from statements of different months apart',
+    () =>
+      Effect.gen(function* () {
+        const account = yield* openChecking
+        const statement = (start: string, end: string, line: string) =>
+          new TextEncoder().encode(`<OFX><STMTRS><CURDEF>BRL<BANKTRANLIST>
+            <DTSTART>${start}<DTEND>${end}${line}
+            </BANKTRANLIST></STMTRS></OFX>`)
+        const imports = yield* Imports
+        yield* imports.importFile({
+          accountId: account.id,
+          fileName: 'set.ofx',
+          bytes: statement(
+            '20260901',
+            '20260930',
+            '<STMTTRN><DTPOSTED>20260930<TRNAMT>-10.00<FITID>s1<MEMO>PADARIA CENTRAL</STMTTRN>',
+          ),
+        })
+        yield* imports.importFile({
+          accountId: account.id,
+          fileName: 'out.ofx',
+          bytes: statement(
+            '20261001',
+            '20261031',
+            '<STMTTRN><DTPOSTED>20261001<TRNAMT>-10.00<FITID>o1<MEMO>PADARIA CENTRAL</STMTTRN>',
+          ),
+        })
+        yield* drain
+        const resolved = yield* (yield* Entries).entries(account.id)
+        assert.deepStrictEqual(
+          resolved.map((entry) => [entry.bookedOn, entry.sources]),
+          [
+            ['2026-09-30', 1],
+            ['2026-10-01', 1],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect('reports a change when secondary evidence is corrected', () =>
+    Effect.gen(function* () {
+      const account = yield* openChecking
+      const observations = yield* Observations
+      const entries = yield* Entries
+      const source = (label: string) =>
+        observations.registerSource({
+          kind: 'manual',
+          externalRef: label,
+          label,
+        })
+      const statement = yield* source('statement')
+      const aggregator = yield* source('aggregator')
+      const report = (sourceId: string, bookedOn: string) =>
+        observations.recordTransactions({
+          sourceId,
+          accountId: account.id,
+          transactions: [
+            {
+              externalId: 'bakery',
+              bookedOn,
+              amountCents: -1000,
+              currency: 'BRL',
+              description: 'Padaria Central',
+              status: 'posted',
+              raw: {},
+            },
+          ],
+        })
+      const balance = (asOf: string, balanceCents: number) =>
+        observations.recordBalance({
+          sourceId: aggregator.id,
+          accountId: account.id,
+          balance: { kind: 'booked', asOf, balanceCents, currency: 'BRL' },
+        })
+      // The statement speaks for the entry; the aggregator also confirms it.
+      yield* report(statement.id, '2026-10-01')
+      yield* report(aggregator.id, '2026-10-01')
+      yield* balance('2026-09-30', 1000_00)
+      yield* balance('2026-10-01', 990_00)
+      assert.isTrue(yield* entries.resolveAccount(account.id))
+      const differences = Effect.map(
+        entries.balanceProof(account.id),
+        (proof) =>
+          proof.supported
+            ? proof.intervals.map((interval) => interval.differenceCents)
+            : [],
+      )
+      assert.deepStrictEqual(yield* differences, [0])
+
+      // The aggregator corrects its date: the entry is the same, the proof is not.
+      yield* report(aggregator.id, '2026-10-02')
+      assert.isTrue(yield* entries.resolveAccount(account.id))
+      assert.deepStrictEqual(yield* differences, [-1000])
+    }).pipe(Effect.provide(openFinanceTest())),
   )
 })

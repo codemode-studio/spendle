@@ -1,5 +1,13 @@
+import { assign } from '../domain/Assignment.ts'
+import type { Edge } from '../domain/Assignment.ts'
 import { daysBetween } from '../domain/LocalDate.ts'
 import { foldDescription } from '../imports/Statement.ts'
+
+/** The period a source states it covers in full, inclusive. */
+export interface Coverage {
+  readonly start: string
+  readonly end: string
+}
 
 /**
  * One observed transaction identity (source, account, external id) at its
@@ -19,6 +27,7 @@ export interface ObservedTransaction {
   readonly description: string
   readonly status: 'pending' | 'posted'
   readonly previousEntryId: string | null
+  readonly coverage: Coverage | null
 }
 
 /** A canonical transaction: one real movement of money, with every observation of it. */
@@ -104,8 +113,23 @@ const sharesMeaningfulWord = (a: string, b: string) => {
   return [...meaningfulWords(a)].some((word) => right.has(word))
 }
 
+// A source that states the period it covers lists every movement in it, so
+// a movement it covers but does not list on that date is not one it saw.
+const covers = (coverage: Coverage | null, date: string) =>
+  coverage === null || (coverage.start <= date && date <= coverage.end)
+
+/**
+ * Whether two reports may describe one movement: dated within the window,
+ * and, when both sources state their coverage, each dated inside the
+ * other's.
+ */
+const compatible = (a: ObservedTransaction, b: ObservedTransaction) =>
+  daysBetween(a.bookedOn, b.bookedOn) <= matchWindowDays &&
+  (a.coverage === null ||
+    b.coverage === null ||
+    (covers(a.coverage, b.bookedOn) && covers(b.coverage, a.bookedOn)))
+
 interface Building {
-  readonly order: number
   readonly evidence: Array<ObservedTransaction>
 }
 
@@ -115,184 +139,130 @@ const representative = (evidence: ReadonlyArray<ObservedTransaction>) =>
   evidence[0]!
 
 /**
- * Minimum-cost assignment of rows to columns (Hungarian method, O(n²m)).
- * `cost[i][j]` may be `Infinity` for forbidden pairs; returns the column of
- * each row, or -1.
+ * The allowed pairs between one source's reports of an amount and the
+ * entries of that amount, with their cost. Entries out of every report's
+ * reach never become part of the problem.
  */
-const assign = (cost: ReadonlyArray<ReadonlyArray<number>>): Array<number> => {
-  const rows = cost.length
-  const columns = cost[0]?.length ?? 0
-  if (rows === 0 || columns === 0) return Array.from({ length: rows }, () => -1)
-  // Pad to a square with a large finite cost, so leaving a row unmatched is
-  // always worse than any allowed match: cardinality comes first.
-  const size = Math.max(rows, columns)
-  const unmatched = 1e9
-  const at = (i: number, j: number) => {
-    const value = i < rows && j < columns ? cost[i]![j]! : unmatched
-    return Number.isFinite(value) ? value : unmatched
-  }
-  const u = new Array<number>(size + 1).fill(0)
-  const v = new Array<number>(size + 1).fill(0)
-  const p = new Array<number>(size + 1).fill(0)
-  const way = new Array<number>(size + 1).fill(0)
-  for (let i = 1; i <= size; i++) {
-    p[0] = i
-    let j0 = 0
-    const minv = new Array<number>(size + 1).fill(Infinity)
-    const used = new Array<boolean>(size + 1).fill(false)
-    do {
-      used[j0] = true
-      const i0 = p[j0]!
-      let delta = Infinity
-      let j1 = 0
-      for (let j = 1; j <= size; j++) {
-        if (used[j]) continue
-        const current = at(i0 - 1, j - 1) - u[i0]! - v[j]!
-        if (current < minv[j]!) {
-          minv[j] = current
-          way[j] = j0
-        }
-        if (minv[j]! < delta) {
-          delta = minv[j]!
-          j1 = j
-        }
+export const pairings = (
+  incoming: ReadonlyArray<ObservedTransaction>,
+  entries: ReadonlyArray<{
+    readonly evidence: ReadonlyArray<ObservedTransaction>
+  }>,
+): Array<Edge> => {
+  const reachable = incoming.map((observation) =>
+    entries.flatMap((entry, column) =>
+      entry.evidence.every((evidence) => compatible(evidence, observation))
+        ? [column]
+        : [],
+    ),
+  )
+  const reachedBy = new Map<number, number>()
+  for (const columns of reachable)
+    for (const column of columns)
+      reachedBy.set(column, (reachedBy.get(column) ?? 0) + 1)
+
+  return incoming.flatMap((observation, row) =>
+    reachable[row]!.flatMap((column) => {
+      const entry = entries[column]!
+      const described = entry.evidence.some((evidence) =>
+        sharesMeaningfulWord(evidence.description, observation.description),
+      )
+      if (!described) {
+        const sameDay = entry.evidence.some(
+          (evidence) => evidence.bookedOn === observation.bookedOn,
+        )
+        const alone =
+          reachable[row]!.length === 1 && reachedBy.get(column) === 1
+        // Both name a counterparty and the names share nothing: two payees.
+        const contradicted =
+          meaningfulWords(observation.description).size > 0 &&
+          entry.evidence.some(
+            (evidence) => meaningfulWords(evidence.description).size > 0,
+          )
+        if (!sameDay || !alone || contradicted) return []
       }
-      for (let j = 0; j <= size; j++) {
-        if (used[j]) {
-          u[p[j]!] = u[p[j]!]! + delta
-          v[j] = v[j]! - delta
-        } else minv[j] = minv[j]! - delta
-      }
-      j0 = j1
-    } while (p[j0] !== 0)
-    do {
-      const j1 = way[j0]!
-      p[j0] = p[j1]!
-      j0 = j1
-    } while (j0)
-  }
-  const result = Array.from({ length: rows }, () => -1)
-  for (let j = 1; j <= size; j++) {
-    const i = p[j]! - 1
-    if (i < rows && j - 1 < columns && Number.isFinite(cost[i]![j - 1]!))
-      result[i] = j - 1
-  }
-  return result
+      const distance = Math.min(
+        ...entry.evidence.map((evidence) =>
+          daysBetween(evidence.bookedOn, observation.bookedOn),
+        ),
+      )
+      const similarity = Math.max(
+        ...entry.evidence.map((evidence) =>
+          descriptionSimilarity(evidence.description, observation.description),
+        ),
+      )
+      // Close dates first, then similar descriptions, then older entries.
+      return [
+        {
+          row,
+          column,
+          cost:
+            distance * 1000 + Math.round((1 - similarity) * 100) + column / 1e6,
+        },
+      ]
+    }),
+  )
 }
 
 /**
  * Groups observations of one account into entries, one per real movement.
  *
- * Observations arrive in batches: consecutive reports of one source (a sync,
- * an imported file). Each batch is paired with the existing entries that
- * have no evidence from that source yet, per amount, as a whole: the pairing
- * maximizes how many observations find their movement, then prefers close
- * dates and similar descriptions. A batch is never matched greedily, so an
- * early choice cannot strand a later observation.
+ * Amounts are resolved independently. Within an amount, each source's
+ * reports form one batch, taken in the order the sources first reported
+ * that amount; a batch is paired with the entries built so far as a whole:
+ * the pairing maximizes how many reports find their movement, then prefers
+ * close dates and similar descriptions. Nothing is matched greedily, and
+ * reports of other amounts or from unrelated sources cannot change the
+ * outcome. A source never reports one movement twice, so identical lines
+ * from one source stay separate.
  *
  * A pair needs positive evidence, not just an equal amount nearby: the
- * descriptions share a meaningful word (not "pix", "compra"…), or both are on
- * the same day with no other candidate on either side. An entry's evidence
- * never spans more than `matchWindowDays`. A source never reports one
- * movement twice, so identical lines from one source stay separate.
+ * descriptions share a meaningful word (not "pix", "compra"…), or both are
+ * on the same day with no other candidate on either side and no conflicting
+ * counterparty. An entry's evidence never spans more than `matchWindowDays`,
+ * and a source that states its coverage rules out movements it covers but
+ * listed on another date. Uncertain pairs stay separate.
  *
- * Ids: an entry keeps the id its evidence had in the previous resolution;
- * a new entry takes its first observation's id. The result depends only on
- * the stored observations and those previous ids.
+ * Ids: an entry keeps the id its evidence had in the previous resolution
+ * (the oldest entry wins a contested id); a new entry takes the first anchor
+ * of its evidence that no other entry holds or remembers, else an id derived
+ * from it. Ids are unique. The result depends only on the stored
+ * observations and those previous ids.
  */
 export const resolveEntries = (
   observations: ReadonlyArray<ObservedTransaction>,
 ): ReadonlyArray<ResolvedEntry> => {
   const ordered = [...observations].sort((a, b) => a.sequence - b.sequence)
-  const entries: Array<Building> = []
-
-  const batches: Array<Array<ObservedTransaction>> = []
+  const byAmount = new Map<number, Array<ObservedTransaction>>()
   for (const observation of ordered) {
-    const last = batches.at(-1)
-    if (last && last[0]!.sourceId === observation.sourceId)
-      last.push(observation)
-    else batches.push([observation])
+    const group = byAmount.get(observation.amountCents) ?? []
+    group.push(observation)
+    byAmount.set(observation.amountCents, group)
   }
 
-  for (const batch of batches) {
-    const sourceId = batch[0]!.sourceId
-    const byAmount = new Map<number, Array<ObservedTransaction>>()
-    for (const observation of batch) {
-      const group = byAmount.get(observation.amountCents) ?? []
-      group.push(observation)
-      byAmount.set(observation.amountCents, group)
+  const entries: Array<Building> = []
+  for (const group of byAmount.values()) {
+    // Map insertion order: the order each source first reported this amount.
+    const bySource = new Map<string, Array<ObservedTransaction>>()
+    for (const observation of group) {
+      const batch = bySource.get(observation.sourceId) ?? []
+      batch.push(observation)
+      bySource.set(observation.sourceId, batch)
     }
-    for (const [amount, incoming] of byAmount) {
-      const candidates = entries.filter(
-        (entry) =>
-          representative(entry.evidence).amountCents === amount &&
-          !entry.evidence.some((evidence) => evidence.sourceId === sourceId),
-      )
-      const near = (observation: ObservedTransaction, entry: Building) =>
-        entry.evidence.every(
-          (evidence) =>
-            daysBetween(evidence.bookedOn, observation.bookedOn) <=
-            matchWindowDays,
-        )
-      const cost = incoming.map((observation) =>
-        candidates.map((entry) => {
-          if (!near(observation, entry)) return Infinity
-          const described = entry.evidence.some((evidence) =>
-            sharesMeaningfulWord(evidence.description, observation.description),
-          )
-          const sameDay = entry.evidence.some(
-            (evidence) => evidence.bookedOn === observation.bookedOn,
-          )
-          const alone =
-            candidates.filter((other) => near(observation, other)).length ===
-              1 && incoming.filter((other) => near(other, entry)).length === 1
-          if (!described && !(sameDay && alone)) return Infinity
-          const distance = Math.min(
-            ...entry.evidence.map((evidence) =>
-              daysBetween(evidence.bookedOn, observation.bookedOn),
-            ),
-          )
-          const similarity = Math.max(
-            ...entry.evidence.map((evidence) =>
-              descriptionSimilarity(
-                evidence.description,
-                observation.description,
-              ),
-            ),
-          )
-          // Close dates first, then similar descriptions, then older entries.
-          return (
-            distance * 1000 +
-            Math.round((1 - similarity) * 100) +
-            entry.order / 1e6
-          )
-        }),
-      )
-      const chosen = assign(cost)
-      incoming.forEach((observation, index) => {
-        const column = chosen[index]!
-        if (column >= 0) candidates[column]!.evidence.push(observation)
-        else entries.push({ order: entries.length, evidence: [observation] })
+    const built: Array<Building> = []
+    for (const incoming of bySource.values()) {
+      const chosen = assign(pairings(incoming, built))
+      const existing = [...built]
+      incoming.forEach((observation, row) => {
+        const column = chosen.get(row)
+        if (column === undefined) built.push({ evidence: [observation] })
+        else existing[column]!.evidence.push(observation)
       })
     }
+    entries.push(...built)
   }
 
-  // Each entry keeps the id its evidence carried before; the oldest entry
-  // wins a contested id, and a new entry takes its first observation's id.
-  const taken = new Set<string>()
-  const ids = [...entries]
-    .sort((a, b) => a.evidence[0]!.sequence - b.evidence[0]!.sequence)
-    .map((entry) => {
-      const previous = [...entry.evidence]
-        .sort((a, b) => a.sequence - b.sequence)
-        .map((evidence) => evidence.previousEntryId)
-        .find((id): id is string => id !== null && !taken.has(id))
-      const id = previous ?? entry.evidence[0]!.anchorId
-      taken.add(id)
-      return [entry, id] as const
-    })
-  const idOf = new Map(ids)
-
+  const idOf = assignIds(entries)
   return entries
     .map((entry) => {
       const evidence = [...entry.evidence].sort(
@@ -316,6 +286,55 @@ export const resolveEntries = (
     )
 }
 
+const assignIds = (entries: ReadonlyArray<Building>) => {
+  const oldestFirst = entries
+    .map((entry) => ({
+      entry,
+      evidence: [...entry.evidence].sort((a, b) => a.sequence - b.sequence),
+    }))
+    .sort((a, b) => a.evidence[0]!.sequence - b.evidence[0]!.sequence)
+  const remembered = new Set(
+    entries.flatMap((entry) =>
+      entry.evidence.flatMap((evidence) =>
+        evidence.previousEntryId === null ? [] : [evidence.previousEntryId],
+      ),
+    ),
+  )
+  const anchors = new Set(
+    entries.flatMap((entry) =>
+      entry.evidence.map((evidence) => evidence.anchorId),
+    ),
+  )
+  const taken = new Set<string>()
+  const idOf = new Map<Building, string>()
+
+  // Previous ids first, so no new entry can take one an older entry keeps.
+  for (const { entry, evidence } of oldestFirst) {
+    const previous = evidence
+      .map((item) => item.previousEntryId)
+      .find((id): id is string => id !== null && !taken.has(id))
+    if (previous === undefined) continue
+    taken.add(previous)
+    idOf.set(entry, previous)
+  }
+  // Then each remaining entry takes an anchor of its own that nobody holds
+  // or remembers, else an id derived from its first anchor.
+  for (const { entry, evidence } of oldestFirst) {
+    if (idOf.has(entry)) continue
+    const free = (id: string) => !taken.has(id) && !remembered.has(id)
+    let id = evidence.map((item) => item.anchorId).find(free)
+    if (id === undefined) {
+      const base = evidence[0]!.anchorId
+      let n = 1
+      while (!free(`${base}~${n}`) || anchors.has(`${base}~${n}`)) n++
+      id = `${base}~${n}`
+    }
+    taken.add(id)
+    idOf.set(entry, id)
+  }
+  return idOf
+}
+
 export interface Checkpoint {
   readonly asOf: string
   readonly balanceCents: number
@@ -337,9 +356,13 @@ export interface BalanceInterval {
  * Checks `balance(t1) = balance(t0) + posted entries in (t0, t1]` for each
  * pair of consecutive checkpoints. A checkpoint is the balance at the end of
  * its day, as its source dates things: an entry is on a checkpoint's side by
- * the date that source gave it, so a credit a statement books on the 30th
- * counts in that statement's close even if another source says the 1st.
- * Pending entries never count.
+ * the date that source posted it, so a credit a statement books on the 30th
+ * counts in that statement's close even if another source says the 1st. A
+ * source that only reported the entry as pending has not booked it, so the
+ * entry's posted date applies. Each interval counts what is included at its
+ * end and not at its start (and takes back the reverse), so consecutive
+ * intervals add up to the change between their outer checkpoints. Pending
+ * entries never count.
  */
 export const proveBalances = (
   entries: ReadonlyArray<
@@ -347,6 +370,7 @@ export const proveBalances = (
       readonly evidence: ReadonlyArray<{
         readonly sourceId: string
         readonly bookedOn: string
+        readonly status: 'pending' | 'posted'
       }>
     }
   >,
@@ -354,18 +378,22 @@ export const proveBalances = (
 ): ReadonlyArray<BalanceInterval> => {
   const ordered = [...checkpoints].sort((a, b) => a.asOf.localeCompare(b.asOf))
   const posted = entries.filter((entry) => entry.status === 'posted')
-  const dateFor = (entry: (typeof posted)[number], sourceId: string) =>
-    entry.evidence.find((evidence) => evidence.sourceId === sourceId)
-      ?.bookedOn ?? entry.bookedOn
+  const included = (entry: (typeof posted)[number], checkpoint: Checkpoint) =>
+    (entry.evidence.find(
+      (evidence) =>
+        evidence.sourceId === checkpoint.sourceId &&
+        evidence.status === 'posted',
+    )?.bookedOn ?? entry.bookedOn) <= checkpoint.asOf
+      ? 1
+      : 0
   return ordered.slice(1).map((end, index) => {
     const start = ordered[index]!
-    const postedChangeCents = posted
-      .filter(
-        (entry) =>
-          dateFor(entry, start.sourceId) > start.asOf &&
-          dateFor(entry, end.sourceId) <= end.asOf,
-      )
-      .reduce((sum, entry) => sum + entry.amountCents, 0)
+    const postedChangeCents = posted.reduce(
+      (sum, entry) =>
+        sum +
+        entry.amountCents * (included(entry, end) - included(entry, start)),
+      0,
+    )
     const expectedChangeCents = end.balanceCents - start.balanceCents
     return {
       from: start.asOf,

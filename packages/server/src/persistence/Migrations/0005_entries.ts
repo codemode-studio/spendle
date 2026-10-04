@@ -17,12 +17,16 @@ export default Effect.gen(function* () {
     )
   `
   yield* sql`CREATE INDEX ledger_entries_account ON ledger_entries (account_id, booked_on)`
+  // Each observation an entry rests on, with the date and status it had when
+  // resolved, so a correction to any of them is noticed as a change.
   yield* sql`
     CREATE TABLE entry_evidence (
       source_id TEXT NOT NULL,
       account_id TEXT NOT NULL,
       external_id TEXT NOT NULL,
       entry_id TEXT NOT NULL REFERENCES ledger_entries (id) ON DELETE CASCADE,
+      booked_on TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'posted')),
       PRIMARY KEY (source_id, account_id, external_id)
     )
   `
