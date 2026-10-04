@@ -18,7 +18,10 @@ import {
   CardTerms,
 } from '../ledger/Accounts.ts'
 import { Observations } from '../ledger/Observations.ts'
-import type { ReportedTransaction } from '../ledger/Observations.ts'
+import type {
+  ReportedTransaction,
+  TransactionObservation,
+} from '../ledger/Observations.ts'
 import { continuationStart, historyStart } from './HistoryWindow.ts'
 import type { HistoryMonths } from './HistoryWindow.ts'
 import {
@@ -199,6 +202,15 @@ const make = Effect.gen(function* () {
     execute: (providerAccountId) => sql`
         SELECT booked_on AS bookedOn FROM open_finance_unresolved
         WHERE provider_account_id = ${providerAccountId} ORDER BY booked_on LIMIT 1
+      `,
+  })
+
+  const findUnresolvedDays = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: Schema.Struct({ bookedOn: Schema.String }),
+    execute: (providerAccountId) => sql`
+        SELECT DISTINCT booked_on AS bookedOn FROM open_finance_unresolved
+        WHERE provider_account_id = ${providerAccountId}
       `,
   })
 
@@ -410,11 +422,24 @@ const make = Effect.gen(function* () {
     })
     yield* sql.withTransaction(
       Effect.gen(function* () {
-        yield* sql`
+        // A ledger account takes one live link; a disconnected connection's
+        // link no longer holds it.
+        const held = yield* sql`
+            SELECT 1 FROM open_finance_accounts
+            WHERE account_id = ${account.id} AND unlinked_at IS NULL
+          `
+        if (held.length > 0) return yield* fail('already_linked', account.id)
+        // A disconnect may have completed since the checks above.
+        const linked = yield* sql`
             UPDATE open_finance_accounts SET account_id = ${account.id},
               history_from = ${historyFrom}, linked_at = ${yield* now}
             WHERE provider_account_id = ${provider.providerAccountId}
+              AND account_id IS NULL
+              AND EXISTS (SELECT 1 FROM open_finance_connections c
+                WHERE c.id = connection_id AND c.status != 'disconnected')
+            RETURNING provider_account_id
           `
+        if (linked.length === 0) return yield* fail('connection_disconnected')
         yield* log.append([
           {
             type: syncRequested,
@@ -428,6 +453,115 @@ const make = Effect.gen(function* () {
       }),
     )
     return account
+  })
+
+  /**
+   * Booked checkpoints are a function of the current facts. A day yields one
+   * only when every posted transaction this source holds for it carries a
+   * running balance from this response, none of its transactions is still
+   * unresolved, and those lines agree on one closing balance; today never
+   * does, as it may still receive movements. Judged are the days this read
+   * covered and the days a changed transaction left or joined. A judged day
+   * that yields none withdraws the checkpoint an earlier read inferred for
+   * it, even when no posted line remains on it. Should a later read infer
+   * the withdrawn balance again, it is already known and not re-recorded, so
+   * the day stays without a checkpoint: a missing checkpoint is safe, a
+   * stale one is not.
+   */
+  const reconcileCheckpoints = Effect.fnUntraced(function* (input: {
+    readonly accountId: string
+    readonly sourceId: string
+    readonly providerAccountId: string
+    readonly currency: string
+    readonly dateFrom: string
+    readonly dateTo: string
+    readonly stored: ReadonlyArray<TransactionObservation>
+    readonly recorded: ReadonlyArray<TransactionObservation>
+    readonly runningBalances: ReadonlyMap<
+      string,
+      { readonly bookedOn: string; readonly balanceAfterCents: number | null }
+    >
+  }) {
+    const { accountId, sourceId, dateFrom, dateTo } = input
+    const inWindow = (day: string) => day >= dateFrom && day < dateTo
+    const posted = (yield* observations.current(accountId)).filter(
+      (observation) =>
+        observation.sourceId === sourceId && observation.status === 'posted',
+    )
+    const previousDay = new Map(
+      input.stored.map((observation) => [
+        observation.externalId,
+        observation.bookedOn,
+      ]),
+    )
+    const judged = new Set<string>()
+    for (const observation of input.recorded) {
+      judged.add(observation.bookedOn)
+      const previous = previousDay.get(observation.externalId)
+      if (previous !== undefined) judged.add(previous)
+    }
+    for (const observation of posted)
+      if (inWindow(observation.bookedOn)) judged.add(observation.bookedOn)
+    const earliest = [...judged].reduce(
+      (found, day) => (day < found ? day : found),
+      dateFrom,
+    )
+    const previousCheckpoints = (yield* findLatestCheckpoints({
+      accountId,
+      sourceId,
+      from: earliest,
+      to: addDays(dateTo, 1),
+    })).filter(
+      (checkpoint) => inWindow(checkpoint.asOf) || judged.has(checkpoint.asOf),
+    )
+    for (const checkpoint of previousCheckpoints) judged.add(checkpoint.asOf)
+    const unresolvedDays = new Set(
+      (yield* findUnresolvedDays(input.providerAccountId)).map(
+        (row) => row.bookedOn,
+      ),
+    )
+
+    const closings = new Map<string, number>()
+    for (const day of judged) {
+      if (day >= dateTo || unresolvedDays.has(day)) continue
+      const lines = posted
+        .filter((observation) => observation.bookedOn === day)
+        .map((observation): RunningLine => {
+          const line = input.runningBalances.get(observation.externalId)
+          return {
+            bookedOn: day,
+            amountCents: observation.amountCents,
+            balanceAfterCents:
+              line?.bookedOn === day ? line.balanceAfterCents : null,
+          }
+        })
+      const [checkpoint] = endOfDayBalances(lines)
+      if (checkpoint) closings.set(day, checkpoint.balanceCents)
+    }
+
+    const invalidatedAt = yield* now
+    for (const previous of previousCheckpoints) {
+      if (previous.invalidated === 1 || closings.has(previous.asOf)) continue
+      yield* sql`
+        INSERT INTO open_finance_checkpoint_invalidations (balance_observation_id, account_id,
+          source_id, as_of, invalidated_at)
+        VALUES (${previous.id}, ${accountId}, ${sourceId}, ${previous.asOf}, ${invalidatedAt})
+      `
+    }
+    for (const [asOf, balanceCents] of [...closings].sort(([a], [b]) =>
+      a.localeCompare(b),
+    )) {
+      yield* observations.recordBalance({
+        sourceId,
+        accountId,
+        balance: {
+          kind: 'booked',
+          asOf,
+          balanceCents,
+          currency: input.currency,
+        },
+      })
+    }
   })
 
   // One sync per provider account at a time: two overlapping syncs could
@@ -531,7 +665,11 @@ const make = Effect.gen(function* () {
     })
 
     const reported: Array<ReportedTransaction> = []
-    const running: Array<RunningLine> = []
+    // The running balance this response gave each posted transaction.
+    const runningBalances = new Map<
+      string,
+      { readonly bookedOn: string; readonly balanceAfterCents: number | null }
+    >()
     const unresolved: Array<{ id: string; bookedOn: string }> = []
     let skipped = 0
     for (const transaction of fetched) {
@@ -541,22 +679,13 @@ const make = Effect.gen(function* () {
         const day = bookedOn(transaction.date)
         if (day < historyFrom) continue
         unresolved.push({ id: transaction.id, bookedOn: day })
-        // Its amount is unknown, so its day cannot be closed.
-        if (transaction.status !== 'PENDING') {
-          running.push({
-            bookedOn: day,
-            amountCents: null,
-            balanceAfterCents: null,
-          })
-        }
         continue
       }
       if (normalized.value.bookedOn < historyFrom) continue
       reported.push(normalized.value)
       if (normalized.value.status === 'posted') {
-        running.push({
+        runningBalances.set(normalized.value.externalId, {
           bookedOn: normalized.value.bookedOn,
-          amountCents: normalized.value.amountCents,
           balanceAfterCents: runningBalanceCents(item, transaction),
         })
       }
@@ -643,49 +772,17 @@ const make = Effect.gen(function* () {
           },
         })
       }
-      // Booked checkpoints come from the bank's running balances, for
-      // complete days only: today may still receive movements.
-      const checkpoints = endOfDayBalances(running)
-      // A day this read covered that no longer closes on one balance (a line
-      // without a running balance, or lines that disagree) withdraws the
-      // checkpoint an earlier read inferred for it. Should a later read infer
-      // the same balance again, it is already known and not re-recorded, so
-      // the day stays without a checkpoint: a missing checkpoint is safe, a
-      // stale one is not.
-      const closed = new Set(checkpoints.map((checkpoint) => checkpoint.asOf))
-      const covered = new Set(running.map((line) => line.bookedOn))
-      const invalidatedAt = yield* now
-      for (const previous of yield* findLatestCheckpoints({
+      yield* reconcileCheckpoints({
         accountId,
         sourceId,
-        from: dateFrom,
-        to: dateTo,
-      })) {
-        if (
-          previous.invalidated === 1 ||
-          !covered.has(previous.asOf) ||
-          closed.has(previous.asOf)
-        )
-          continue
-        yield* sql`
-          INSERT INTO open_finance_checkpoint_invalidations (balance_observation_id, account_id,
-            source_id, as_of, invalidated_at)
-          VALUES (${previous.id}, ${accountId}, ${sourceId}, ${previous.asOf}, ${invalidatedAt})
-        `
-      }
-      for (const checkpoint of checkpoints) {
-        if (checkpoint.asOf >= dateTo) continue
-        yield* observations.recordBalance({
-          sourceId,
-          accountId,
-          balance: {
-            kind: 'booked',
-            asOf: checkpoint.asOf,
-            balanceCents: checkpoint.balanceCents,
-            currency: item.currencyCode,
-          },
-        })
-      }
+        providerAccountId,
+        currency: item.currencyCode,
+        dateFrom,
+        dateTo,
+        stored,
+        recorded: result.recorded,
+        runningBalances,
+      })
     }
     const summary: SyncResult = {
       recorded: result.recorded.length - vanished.length,
@@ -754,10 +851,23 @@ const make = Effect.gen(function* () {
         ),
       )
     }
-    yield* sql`
-        UPDATE open_finance_connections SET status = 'disconnected', updated_at = ${yield* now}
-        WHERE id = ${connectionId}
-      `
+    // Its links release their ledger accounts, which stay linkable through
+    // another connection; account_id is kept as history.
+    const disconnectedAt = yield* now
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        yield* sql`
+          UPDATE open_finance_connections SET status = 'disconnected',
+            updated_at = ${disconnectedAt}
+          WHERE id = ${connectionId}
+        `
+        yield* sql`
+          UPDATE open_finance_accounts SET unlinked_at = ${disconnectedAt}
+          WHERE connection_id = ${connectionId} AND account_id IS NOT NULL
+            AND unlinked_at IS NULL
+        `
+      }),
+    )
   })
 
   return {

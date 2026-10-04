@@ -23,7 +23,9 @@ export default Effect.gen(function* () {
   `
 
   // Accounts as Pluggy describes them. The provider's name and type stay here;
-  // a linked ledger account keeps the name and type the person chose.
+  // a linked ledger account keeps the name and type the person chose. A
+  // disconnect sets `unlinked_at` and keeps `account_id` as history: the
+  // ledger account can then be linked again through a new connection.
   yield* sql`
     CREATE TABLE open_finance_accounts (
       provider_account_id TEXT PRIMARY KEY,
@@ -33,11 +35,17 @@ export default Effect.gen(function* () {
       name TEXT NOT NULL,
       last_four TEXT,
       currency TEXT NOT NULL,
-      account_id TEXT UNIQUE REFERENCES accounts (id),
+      account_id TEXT REFERENCES accounts (id),
       history_from TEXT,
       linked_at TEXT,
+      unlinked_at TEXT,
       updated_at TEXT NOT NULL
     )
+  `
+  // A ledger account is fed by at most one live link at a time.
+  yield* sql`
+    CREATE UNIQUE INDEX open_finance_accounts_live_link
+    ON open_finance_accounts (account_id) WHERE unlinked_at IS NULL
   `
 
   // Transactions read without an amount in the account currency (a foreign
@@ -55,8 +63,10 @@ export default Effect.gen(function* () {
   `
 
   // Booked checkpoints inferred from running balances that a later read no
-  // longer supports: the day gained a line without a running balance, or its
-  // lines stopped agreeing on one closing balance. The balance observation
+  // longer supports: one of the day's stored posted transactions lacks a
+  // running balance in the latest read (omitted, unconvertible, or moved to
+  // or from the day), or its lines stopped agreeing on one closing balance.
+  // The balance observation
   // stays immutable; this row records that it was withdrawn. Readers of
   // booked checkpoints from an open_finance source must take the day's latest
   // observation and treat the day as having no checkpoint when that

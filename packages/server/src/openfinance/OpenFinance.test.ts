@@ -1090,4 +1090,156 @@ describe('OpenFinance', () => {
         )
       }).pipe(Effect.provide(TestLayer)),
   )
+  // Syncs a 1 October salary and the given lines, then the lines Pluggy
+  // reports next; returns the booked checkpoints and the withdrawn days.
+  const checkpointsAcross = (
+    first: ReadonlyArray<PluggyTransaction>,
+    next: ReadonlyArray<PluggyTransaction>,
+  ) =>
+    Effect.gen(function* () {
+      const salary = tx('salary', '2026-10-01', {
+        type: 'CREDIT',
+        amount: 1000,
+        balance: 1000,
+      })
+      const { openFinance, connectionId, state } = yield* connect({
+        accounts: [{ ...bank, balance: 900 }],
+        transactions: { 'provider-bank': [salary, ...first] },
+      })
+      const account = yield* openFinance.linkAccount({
+        providerAccountId: 'provider-bank',
+        target: { kind: 'checking', purpose: 'operating' },
+        historyMonths: 3,
+      })
+      yield* drain
+      yield* Ref.update(state, (current) => ({
+        ...current,
+        transactions: { 'provider-bank': [salary, ...next] },
+      }))
+      yield* openFinance.requestSync({ connectionId })
+      yield* drain
+      return {
+        booked: (yield* balancesOf(account.id))
+          .filter((balance) => balance.kind === 'booked')
+          .map((balance) => [balance.asOf, balance.balanceCents]),
+        invalidated: (yield* openFinance.invalidatedCheckpoints(
+          account.id,
+        )).map((checkpoint) => checkpoint.asOf),
+      }
+    })
+
+  it.effect(
+    'withdraws the checkpoint of the day a purchase was moved away from',
+    () =>
+      Effect.gen(function* () {
+        assert.deepStrictEqual(
+          yield* checkpointsAcross(
+            [tx('market', '2026-10-02', { amount: 100, balance: 900 })],
+            [tx('market', '2026-10-03', { amount: 100, balance: 900 })],
+          ),
+          {
+            booked: [
+              ['2026-10-01', 100000],
+              ['2026-10-02', 90000],
+              ['2026-10-03', 90000],
+            ],
+            invalidated: ['2026-10-02'],
+          },
+        )
+      }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect(
+    'gives no checkpoint to a day whose foreign purchase is still unresolved',
+    () =>
+      Effect.gen(function* () {
+        const market = tx('market', '2026-10-02', { amount: 100, balance: 900 })
+        // The next response leaves the unconverted purchase out.
+        assert.deepStrictEqual(
+          yield* checkpointsAcross(
+            [
+              market,
+              tx('abroad', '2026-10-02', {
+                currencyCode: 'USD',
+                amountInAccountCurrency: null,
+                balance: null,
+              }),
+            ],
+            [market],
+          ),
+          { booked: [['2026-10-01', 100000]], invalidated: [] },
+        )
+      }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect(
+    'withdraws the checkpoint of a day whose posted fee a response left out',
+    () =>
+      Effect.gen(function* () {
+        const market = tx('market', '2026-10-02', { amount: 100, balance: 900 })
+        assert.deepStrictEqual(
+          yield* checkpointsAcross(
+            [market, tx('fee', '2026-10-02', { amount: 50, balance: 850 })],
+            [market],
+          ),
+          {
+            booked: [
+              ['2026-10-01', 100000],
+              ['2026-10-02', 85000],
+            ],
+            invalidated: ['2026-10-02'],
+          },
+        )
+      }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect(
+    'links a ledger account again through a new connection after a disconnect',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, connectionId, state } = yield* connect({
+          accounts: [bank],
+          transactions: { 'provider-bank': [tx('market', '2026-09-28')] },
+        })
+        const account = yield* openFinance.linkAccount({
+          providerAccountId: 'provider-bank',
+          target: { kind: 'checking', purpose: 'operating' },
+          historyMonths: 3,
+        })
+        yield* drain
+        yield* openFinance.disconnect(connectionId)
+
+        const reconnected = yield* openFinance.createConnectToken({
+          ownerId: account.ownerId,
+        })
+        const bankAgain: PluggyAccount = { ...bank, id: 'provider-bank-2' }
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          clientUserId: reconnected.connectionId,
+          itemAccounts: { 'item-2': [bankAgain] },
+          transactions: {
+            'provider-bank-2': [
+              tx('pharmacy', '2026-10-02', { accountId: 'provider-bank-2' }),
+            ],
+          },
+        }))
+        yield* openFinance.registerItem({
+          connectionId: reconnected.connectionId,
+          itemId: 'item-2',
+        })
+        yield* openFinance.linkAccount({
+          providerAccountId: 'provider-bank-2',
+          target: { accountId: account.id },
+          historyMonths: 3,
+        })
+        yield* drain
+
+        assert.deepStrictEqual(
+          (yield* (yield* Observations).current(account.id)).map(
+            (observation) => observation.externalId,
+          ),
+          ['market', 'pharmacy'],
+        )
+      }).pipe(Effect.provide(TestLayer)),
+  )
 })
