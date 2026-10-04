@@ -1,8 +1,10 @@
+import * as Cause from 'effect/Cause'
 import * as Context from 'effect/Context'
 import * as DateTime from 'effect/DateTime'
 import * as Duration from 'effect/Duration'
 import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
+import * as Option from 'effect/Option'
 import * as Ref from 'effect/Ref'
 import * as Schedule from 'effect/Schedule'
 import * as Schema from 'effect/Schema'
@@ -67,14 +69,40 @@ export class Reactors extends Context.Service<
   static readonly layer = Layer.effect(
     Reactors,
     Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+      const log = yield* EventLog
       const drains = yield* Ref.make<
         ReadonlyArray<Effect.Effect<void, ReactorError>>
       >([])
-      return Reactors.of({
-        register: (drain) => Ref.update(drains, (all) => [...all, drain]),
-        drain: Ref.get(drains).pipe(
-          Effect.flatMap(Effect.forEach((drain) => drain, { discard: true })),
+      const latest = log.latestSequence.pipe(
+        Effect.mapError(
+          (cause) => new ReactorError({ reactor: 'drain', cause }),
         ),
+      )
+      // A reactor may append events another reactor handles, so passes repeat
+      // until one ends with no new events.
+      const drain = Effect.gen(function* () {
+        // Reactors write their cursors through the single SQLite connection,
+        // which an open transaction holds: draining inside one would deadlock.
+        if (
+          Option.isSome(yield* Effect.serviceOption(sql.transactionService))
+        ) {
+          return yield* new ReactorError({
+            reactor: 'drain',
+            cause: 'drain must run after the caller commits its transaction',
+          })
+        }
+        let before: number
+        do {
+          before = yield* latest
+          yield* Effect.forEach(yield* Ref.get(drains), (each) => each, {
+            discard: true,
+          })
+        } while ((yield* latest) !== before)
+      })
+      return Reactors.of({
+        register: (each) => Ref.update(drains, (all) => [...all, each]),
+        drain,
       })
     }),
   )
@@ -149,16 +177,25 @@ export const layer = <E, R>(spec: ReactorSpec<E, R>) =>
 
       yield* reactors.register(catchUp)
 
+      // The background loop must outlive any failure but shutdown: defects
+      // (a thrown handler, a failed COMMIT) are retried like typed errors.
+      const resilientCatchUp = catchUp.pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.fail(
+                new ReactorError({
+                  reactor: spec.name,
+                  cause: Cause.squash(cause),
+                }),
+              ),
+        ),
+        Effect.tapError((error) => Effect.logError(error.message, error.cause)),
+        Effect.retry(retrySchedule),
+      )
       const wake = log.appended.pipe(
         Stream.merge(Stream.tick(sweepInterval)),
-        Stream.runForEach(() =>
-          catchUp.pipe(
-            Effect.tapError((error) =>
-              Effect.logError(error.message, error.cause),
-            ),
-            Effect.retry(retrySchedule),
-          ),
-        ),
+        Stream.runForEach(() => resilientCatchUp),
       )
       yield* Effect.forkScoped(wake)
     }),

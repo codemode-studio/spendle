@@ -5,6 +5,8 @@ import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
 import * as Ref from 'effect/Ref'
 import * as Schema from 'effect/Schema'
+import * as SqlClient from 'effect/sql/SqlClient'
+import * as TestClock from 'effect/testing/TestClock'
 
 import * as Sqlite from '../persistence/Sqlite.ts'
 import { EventLog } from './EventLog.ts'
@@ -125,6 +127,94 @@ describe('Reactor', () => {
       )
 
       assert.strictEqual(sequence, 1)
+    }).pipe(Effect.provide(Database)),
+  )
+
+  it.effect('keeps processing in the background after a handler crashes', () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      const done = yield* Deferred.make<void>()
+      const spec = {
+        name: 'crashy',
+        types: ['A'],
+        handle: () =>
+          Effect.gen(function* () {
+            const attempt = yield* Ref.updateAndGet(
+              attempts,
+              (count) => count + 1,
+            )
+            if (attempt === 1) return yield* Effect.die('handler crashed')
+            yield* Deferred.succeed(done, undefined)
+          }),
+      }
+
+      yield* withReactor(
+        spec,
+        Effect.gen(function* () {
+          yield* append('A')
+          // Let the retry backoff elapse without ever calling drain.
+          yield* TestClock.adjust('1 second').pipe(
+            Effect.repeat({ until: () => Deferred.isDoneUnsafe(done) }),
+          )
+          yield* Deferred.await(done)
+        }),
+      )
+
+      assert.strictEqual(yield* Ref.get(attempts), 2)
+    }).pipe(Effect.provide(Database)),
+  )
+
+  it.effect('drains events one reactor appends for another', () =>
+    Effect.gen(function* () {
+      const handled = yield* Ref.make<ReadonlyArray<string>>([])
+      const relay = Reactor.layer({
+        name: 'relay',
+        types: ['Request'],
+        handle: () => append('Work').pipe(Effect.orDie),
+      })
+      const worker = Reactor.layer({
+        name: 'worker',
+        types: ['Work'],
+        handle: (event: StoredEvent) =>
+          Ref.update(handled, (all) => [...all, `Work${event.sequence}`]),
+      })
+
+      yield* Effect.gen(function* () {
+        yield* append('Request')
+        yield* (yield* Reactor.Reactors).drain
+      }).pipe(
+        Effect.provide(
+          // The worker registers first, so a single pass would miss the relayed event.
+          Layer.mergeAll(worker, relay).pipe(
+            Layer.provideMerge(Reactor.Reactors.layer),
+            Layer.provideMerge(EventLog.layer),
+          ),
+        ),
+        Effect.scoped,
+      )
+
+      assert.deepStrictEqual(yield* Ref.get(handled), ['Work2'])
+    }).pipe(Effect.provide(Database)),
+  )
+
+  it.effect('refuses to drain inside an open transaction', () =>
+    Effect.gen(function* () {
+      const spec = { name: 'noop', types: ['A'], handle: () => Effect.void }
+      const error = yield* withReactor(
+        spec,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          return yield* sql
+            .withTransaction(
+              Effect.gen(function* () {
+                yield* append('A')
+                yield* (yield* Reactor.Reactors).drain
+              }),
+            )
+            .pipe(Effect.flip)
+        }),
+      )
+      assert.strictEqual(error._tag, 'ReactorError')
     }).pipe(Effect.provide(Database)),
   )
 })
