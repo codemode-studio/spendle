@@ -261,6 +261,91 @@ const anotherDebit = (nubankId: string) =>
     assert.strictEqual((yield* (yield* Entries).entries(nubankId)).length, 2)
   })
 
+// Inter pays the Nubank card bill on 12 Sep; two sources report the card's receipt
+// on 14 Sep, one of them naming Maria Souza as the payer, in either order.
+const cardReceiptFromTwoSources = (payerNamedFirst: boolean) =>
+  Effect.gen(function* () {
+    const accounts = yield* Accounts
+    const imports = yield* Imports
+    const observations = yield* Observations
+    const owner = yield* accounts.createOwner({
+      name: 'Donald Silveira',
+      kind: 'person',
+    })
+    const bank = yield* accounts.open({
+      ownerId: owner.id,
+      institutionName: 'Inter',
+      name: 'Inter',
+      kind: 'checking',
+      purpose: 'operating',
+      currency: 'BRL',
+    })
+    const card = yield* accounts.open({
+      ownerId: owner.id,
+      institutionName: 'Nubank',
+      name: 'Nubank Cartão',
+      kind: 'credit_card',
+      purpose: 'operating',
+      currency: 'BRL',
+      card: new CardTerms({
+        closingDay: 3,
+        dueDay: 10,
+        limitCents: null,
+        lastFour: null,
+      }),
+    })
+    yield* imports.importFile({
+      accountId: bank.id,
+      fileName: 'inter.ofx',
+      bytes: ofx(line('n1', '20260912', '-1500.00', 'Pagamento fatura Nubank')),
+    })
+    const statement = imports.importFile({
+      accountId: card.id,
+      fileName: 'cartao.ofx',
+      bytes: ofx(
+        line('c1', '20260914', '1500.00', 'Pagamento recebido'),
+        'CCSTMTRS',
+      ),
+    })
+    const feed = Effect.gen(function* () {
+      const source = yield* observations.registerSource({
+        kind: 'manual',
+        externalRef: 'nubank-card-feed',
+        label: 'Nubank',
+      })
+      yield* observations.recordTransactions({
+        sourceId: source.id,
+        accountId: card.id,
+        transactions: [
+          {
+            externalId: 'f1',
+            bookedOn: '2026-09-14',
+            amountCents: 150000,
+            currency: 'BRL',
+            description: 'Pagamento recebido de Maria Souza',
+            status: 'posted',
+            raw: null,
+          },
+        ],
+      })
+    })
+    if (payerNamedFirst) {
+      yield* feed
+      yield* drain
+      yield* statement
+    } else {
+      yield* statement
+      yield* drain
+      yield* feed
+    }
+    yield* drain
+    const entries = yield* (yield* Entries).entries(card.id)
+    return {
+      sources: entries.map((entry) => entry.sources),
+      relations: yield* (yield* Reconciliation).relations,
+    }
+  })
+
 const shape = (
   relations: ReadonlyArray<{ kind: string; status: string; origin: string }>,
 ) =>
@@ -691,6 +776,27 @@ describe('Reconciliation', () => {
         yield* reconciliation.rebuild()
         assert.deepStrictEqual(yield* reconciliation.relations, [])
       }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'keeps a card payment suggested when any source of its receipt names another payer',
+    () =>
+      Effect.gen(function* () {
+        for (const payerNamedFirst of [false, true]) {
+          const { sources, relations } = yield* cardReceiptFromTwoSources(
+            payerNamedFirst,
+          ).pipe(Effect.provide(openFinanceTest()))
+          assert.deepStrictEqual(sources, [2])
+          assert.deepStrictEqual(
+            relations.map((relation) => [
+              relation.kind,
+              relation.status,
+              relation.reasons.includes('names_third_party_payer'),
+            ]),
+            [['card_payment', 'suggested', true]],
+          )
+        }
+      }),
   )
 
   it.effect('revisits relations when an account changes kind', () =>

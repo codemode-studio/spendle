@@ -62,8 +62,10 @@ describe('followDecisions', () => {
   it('treats a side as split even when one part kept the decided id', () => {
     // Two observations formed one outflow `out`; a correction separates them
     // and `out` keeps its id while `out-2` is new.
-    const pix = (id: string, accountId: string, amountCents: number) =>
-      ({
+    const pix = (id: string, accountId: string, amountCents: number) => {
+      const description =
+        amountCents < 0 ? 'Pix enviado Donald' : 'Pix recebido Donald'
+      return {
         id,
         accountId,
         accountKind: 'checking',
@@ -71,9 +73,10 @@ describe('followDecisions', () => {
         amountCents,
         currency: 'BRL',
         status: 'posted',
-        description:
-          amountCents < 0 ? 'Pix enviado Donald' : 'Pix recebido Donald',
-      }) satisfies MatchableEntry
+        description,
+        descriptions: [description],
+      } satisfies MatchableEntry
+    }
     const entries = [
       pix('out', 'nubank', -50000),
       pix('out-2', 'nubank', -50000),

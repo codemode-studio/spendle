@@ -80,6 +80,13 @@ const EntryRow = Schema.Struct({
   ownerName: Schema.String,
 })
 
+// An entry with what each of its sources currently reports: the latest
+// version of every observation it holds.
+const MatchableRow = Schema.Struct({
+  ...EntryRow.fields,
+  observedDescriptions: Schema.fromJsonString(Schema.Array(Schema.String)),
+})
+
 const RelationRow = Schema.Struct({
   key: Schema.String,
   kind: Schema.Literals(['internal_transfer', 'card_payment']),
@@ -130,11 +137,22 @@ const make = Effect.gen(function* () {
 
   const findEntries = SqlSchema.findAll({
     Request: Schema.Void,
-    Result: EntryRow,
+    Result: MatchableRow,
     execute: () => sql`
       SELECT e.id, e.account_id AS accountId, a.kind AS accountKind, e.booked_on AS bookedOn,
         e.amount_cents AS amountCents, e.currency, e.status, e.description, i.name AS institution,
-        o.name AS ownerName
+        o.name AS ownerName,
+        (
+          SELECT json_group_array(t.description)
+          FROM entry_evidence v JOIN transaction_observations t ON t.source_id = v.source_id
+            AND t.account_id = v.account_id AND t.external_id = v.external_id
+          WHERE v.entry_id = e.id AND t.status <> 'removed'
+            AND t.version = (
+              SELECT max(version) FROM transaction_observations l
+              WHERE l.source_id = t.source_id AND l.account_id = t.account_id
+                AND l.external_id = t.external_id
+            )
+        ) AS observedDescriptions
       FROM ledger_entries e JOIN accounts a ON a.id = e.account_id
       JOIN institutions i ON i.id = a.institution_id JOIN owners o ON o.id = a.owner_id
       WHERE a.archived_at IS NULL
@@ -196,7 +214,16 @@ const make = Effect.gen(function* () {
   )
 
   const match = Effect.gen(function* () {
-    const entries = yield* findEntries(undefined)
+    // Every source's description counts: one naming a third party keeps a
+    // pair suggested even when another source's speaks for the entry.
+    const entries = (yield* findEntries(undefined)).map(
+      ({ observedDescriptions, ...entry }) => ({
+        ...entry,
+        descriptions: [
+          ...new Set([entry.description, ...observedDescriptions.toSorted()]),
+        ],
+      }),
+    )
     const holders = new Map<string, Array<string>>()
     for (const row of yield* findHolders(undefined)) {
       const list = holders.get(`${row.side}:${row.key}`) ?? []

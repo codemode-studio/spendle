@@ -9,18 +9,22 @@ const entry = (
   accountId: string,
   amountCents: number,
   fields: Partial<MatchableEntry> = {},
-): MatchableEntry => ({
-  id,
-  accountId,
-  accountKind: accountId.startsWith('card') ? 'credit_card' : 'checking',
-  bookedOn: '2026-09-10',
-  amountCents,
-  currency: 'BRL',
-  status: 'posted',
-  description: 'Movimento',
-  ownerName: 'Donald Silveira',
-  ...fields,
-})
+): MatchableEntry => {
+  const description = fields.description ?? 'Movimento'
+  return {
+    id,
+    accountId,
+    accountKind: accountId.startsWith('card') ? 'credit_card' : 'checking',
+    bookedOn: '2026-09-10',
+    amountCents,
+    currency: 'BRL',
+    status: 'posted',
+    ownerName: 'Donald Silveira',
+    ...fields,
+    description,
+    descriptions: fields.descriptions ?? [description],
+  }
+}
 
 const relations = (
   entries: ReadonlyArray<MatchableEntry>,
@@ -359,11 +363,103 @@ describe('matchRelations', () => {
         pay('Pagamento recebido de Maria Souza'),
         pay('Pagamento recebido de Joao Silva'),
         pay('Pagamento de fatura efetuado'),
+        pay('Pagamento recebido de Silva S.A.'),
+        pay('Pagamento recebido de Silva SA'),
+        pay('Pagamento recebido de Silva S/A'),
+        pay('Pagamento recebido de Silva S-A'),
+        pay('Pagamento recebido de Silva Ltda'),
+        pay('Pagamento recebido de Joao Silva ME'),
+        pay('Pagamento recebido Nubank S.A.'),
       ],
       [
         ['names_third_party_payer', 'suggested'],
         ['names_card_institution', 'confirmed'],
         ['names_card_institution', 'confirmed'],
+        ['names_third_party_payer', 'suggested'],
+        ['names_third_party_payer', 'suggested'],
+        ['names_third_party_payer', 'suggested'],
+        ['names_third_party_payer', 'suggested'],
+        ['names_third_party_payer', 'suggested'],
+        ['names_third_party_payer', 'suggested'],
+        ['names_card_institution', 'confirmed'],
+      ],
+    )
+  })
+
+  it('keeps a pair suggested when any source of either side names a third party or contradicts it', () => {
+    const card = (descriptions: ReadonlyArray<string>) =>
+      relations([
+        entry('pay', 'inter', -50000, {
+          description: 'Pagamento fatura Nubank',
+          institution: 'Banco Inter',
+        }),
+        entry('nu', 'card-nu', 50000, {
+          description: descriptions[0]!,
+          descriptions,
+          institution: 'Nubank',
+        }),
+      ]).flatMap((relation) => [
+        relation.reasons.includes('conflicting_description')
+          ? 'conflicting_description'
+          : relation.reasons.at(-1),
+        relation.status,
+      ])
+    const transfer = (
+      outflow: ReadonlyArray<string>,
+      inflow: ReadonlyArray<string>,
+    ) =>
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: outflow[0]!,
+          descriptions: outflow,
+        }),
+        entry('in', 'inter', 50000, {
+          description: inflow[0]!,
+          descriptions: inflow,
+        }),
+      ]).map((relation) => relation.status)
+    assert.deepStrictEqual(
+      [
+        card(['Pagamento recebido', 'Pagamento recebido de Maria Souza']),
+        card(['Pagamento recebido de Maria Souza', 'Pagamento recebido']),
+        card(['Pagamento recebido', 'Pagamento recebido de Silva S.A.']),
+        card(['Pagamento recebido', 'Estorno']),
+        card(['Pagamento recebido', 'Pagamento de fatura efetuado']),
+      ],
+      [
+        ['names_third_party_payer', 'suggested'],
+        ['names_third_party_payer', 'suggested'],
+        ['names_third_party_payer', 'suggested'],
+        ['conflicting_description', 'suggested'],
+        ['names_card_institution', 'confirmed'],
+      ],
+    )
+    assert.deepStrictEqual(
+      [
+        transfer(
+          ['Pix enviado Donald'],
+          ['Pix recebido Donald', 'Pix recebido Maria Souza'],
+        ),
+        transfer(
+          ['Pix enviado Donald', 'Pix enviado Silva Comercio Ltda'],
+          ['Pix recebido Donald'],
+        ),
+        transfer(['Pix enviado Donald'], ['Pix recebido Donald', 'Estorno']),
+        transfer(
+          ['Pix enviado', 'Transferencia mesma titularidade'],
+          ['Pix recebido'],
+        ),
+        transfer(
+          ['Pix enviado Donald'],
+          ['Pix recebido Donald', 'Pix recebido'],
+        ),
+      ],
+      [
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['confirmed'],
+        ['confirmed'],
       ],
     )
   })

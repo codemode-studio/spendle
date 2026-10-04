@@ -15,7 +15,15 @@ export interface MatchableEntry {
   readonly amountCents: number
   readonly currency: string
   readonly status: 'pending' | 'posted'
+  /** The entry's own description, from the report that speaks for it. */
   readonly description: string
+  /**
+   * What every source currently reports for the entry, `description` first.
+   * Evidence for a pair may come from any of them; any one naming a third
+   * party or contradicting the pair keeps it suggested, whichever source
+   * came first.
+   */
+  readonly descriptions: ReadonlyArray<string>
   /** The account's institution, which a transfer description may name. */
   readonly institution?: string
   /** Who owns the account: a name both sides share is evidence only when it is theirs. */
@@ -311,8 +319,55 @@ const identityWords = (
       .map(unglue),
   )
 
+/** Every description of an entry, its own first. */
+const descriptionsOf = (entry: MatchableEntry) => [
+  ...new Set([entry.description, ...entry.descriptions]),
+]
+
+/** Whether any description of an entry, folded, matches. */
+const describes = (entry: MatchableEntry, pattern: RegExp) =>
+  descriptionsOf(entry).some((text) => pattern.test(foldDescription(text)))
+
+/** The words of every description of an entry. */
+const wordsOf = (
+  entry: MatchableEntry,
+  words: (text: string) => ReadonlySet<string>,
+) => new Set(descriptionsOf(entry).flatMap((text) => [...words(text)]))
+
 const institutionWords = (entry: MatchableEntry) =>
   nameWords(entry.institution ?? '')
+
+/**
+ * Whether a description may name someone other than the owner: a word that
+ * could identify a party and is not within every owner's name (`Donald`
+ * fits `Donald Silveira`, `Joao Silva Junior` is not `Joao Silva`), a word
+ * that marks a business (`Silva Comercio Ltda` is not `Joao Silva`), or a
+ * corporation's suffix anywhere but right after an institution's own name
+ * (`Inter S.A.` is the bank's, left to the institution evidence). Both
+ * transfer legs and a card's payer are read through it.
+ */
+const namesThirdParty = (
+  description: string,
+  owners: ReadonlyArray<ReadonlySet<string>>,
+  institutions: ReadonlySet<string>,
+) => {
+  const words = identityWords(description, institutions)
+  if (
+    words.size > 0 &&
+    !owners.every((owner) => owner.size > 0 && within(words, owner))
+  )
+    return true
+  // Read from the folded text itself: shared word filters drop `ltda`.
+  const text = foldDescription(description)
+  return (
+    text
+      .split(/[^a-z0-9]+/)
+      .some((word) => businessWords.has(word) && !institutions.has(word)) ||
+    [...text.matchAll(corporation)].some(
+      ([, before]) => before === undefined || !institutions.has(unglue(before)),
+    )
+  )
+}
 
 /** Who a text names, without generic name words or institution wording. */
 const counterparties = (text: string, institutions: ReadonlySet<string>) =>
@@ -357,51 +412,27 @@ const counterpartEvidence = (
   const outInstitution = institutionWords(outflow)
   const inInstitution = institutionWords(inflow)
   const institutions = new Set([...outInstitution, ...inInstitution])
-  const out = counterparties(outflow.description, institutions)
-  const into = counterparties(inflow.description, institutions)
-  const names = compareNames(out, into)
-  const different = names === 'different'
+  const names = (entry: MatchableEntry) =>
+    wordsOf(entry, (text) => counterparties(text, institutions))
+  const out = names(outflow)
+  const into = names(inflow)
+  const compared = compareNames(out, into)
+  const different = compared === 'different'
   const owners = [outflow, inflow].map((entry) =>
     counterparties(entry.ownerName ?? '', institutions),
   )
-  // A name is the owner's when every word of it belongs to every account's
-  // owner: `Donald` fits `Donald Silveira`, but `Joao Silva Junior` names
-  // someone else than `Joao Silva`.
-  const isOwner = (name: ReadonlySet<string>) =>
-    owners.every((owner) => owner.size > 0 && within(name, owner))
-  // Read from the folded text itself: shared word filters drop `ltda`.
-  const namesBusiness = (entry: MatchableEntry) => {
-    const text = foldDescription(entry.description)
-    return (
-      text
-        .split(/[^a-z0-9]+/)
-        .some((word) => businessWords.has(word) && !institutions.has(word)) ||
-      // A suffix right after a bank's own name (`Inter S.A.`) is that bank's,
-      // left to the institution evidence; any other names a company.
-      [...text.matchAll(corporation)].some(
-        ([, before]) =>
-          before === undefined || !institutions.has(unglue(before)),
-      )
-    )
-  }
-  const identity = (entry: MatchableEntry) =>
-    identityWords(entry.description, institutions)
-  const thirdParty =
-    [outflow, inflow].some((entry) => {
-      const words = identity(entry)
-      return words.size > 0 && !isOwner(words)
-    }) || [outflow, inflow].some(namesBusiness)
+  const thirdParty = [outflow, inflow].some((entry) =>
+    descriptionsOf(entry).some((text) =>
+      namesThirdParty(text, owners, institutions),
+    ),
+  )
   const reasons: Array<string> = []
-  if (names === 'same')
+  if (compared === 'same')
     reasons.push(thirdParty ? 'same_third_party' : 'same_counterparty')
   if (different) reasons.push('different_counterparties')
-  if (names === 'uncertain') reasons.push('uncertain_counterparties')
-  if (names === 'unnamed' && thirdParty) reasons.push('names_third_party')
-  if (
-    [outflow, inflow].some((entry) =>
-      ownAccountWording.test(foldDescription(entry.description)),
-    )
-  )
+  if (compared === 'uncertain') reasons.push('uncertain_counterparties')
+  if (compared === 'unnamed' && thirdParty) reasons.push('names_third_party')
+  if ([outflow, inflow].some((entry) => describes(entry, ownAccountWording)))
     reasons.push('own_account_wording')
   const namesOther = (
     entry: MatchableEntry,
@@ -409,7 +440,7 @@ const counterpartEvidence = (
     own: Set<string>,
   ) =>
     intersects(
-      nameWords(entry.description),
+      wordsOf(entry, nameWords),
       new Set([...other].filter((word) => !own.has(word))),
     )
   if (
@@ -428,7 +459,7 @@ const counterpartEvidence = (
     // two people even when both fit the owner's name: no wording outweighs it.
     evidenced:
       !thirdParty &&
-      names !== 'uncertain' &&
+      compared !== 'uncertain' &&
       reasons.some((reason) => evidence.includes(reason)),
     reasons,
   }
@@ -452,9 +483,9 @@ const cardBillWording = /\b(fatura|cartao|cartoes)\b/
 const cardTarget = (outflow: MatchableEntry, card: MatchableEntry) => {
   const issuer = institutionWords(card)
   const named = new Set(
-    [...nameWords(outflow.description)].filter((word) => !cardWords.has(word)),
+    [...wordsOf(outflow, nameWords)].filter((word) => !cardWords.has(word)),
   )
-  const bill = cardBillWording.test(foldDescription(outflow.description))
+  const bill = describes(outflow, cardBillWording)
   const target =
     named.size === 0 ? 'unnamed' : within(named, issuer) ? 'named' : 'other'
   return { bill, target } as const
@@ -472,9 +503,7 @@ const windowDays = (
   inflow: MatchableEntry,
 ) => {
   if (kind === 'card_payment') return 7
-  const slow = [outflow, inflow].some((entry) =>
-    slowRail.test(foldDescription(entry.description)),
-  )
+  const slow = [outflow, inflow].some((entry) => describes(entry, slowRail))
   return slow ? 5 : 3
 }
 
@@ -529,9 +558,9 @@ const evaluate = (
     score += 10
     reasons.push('next_day')
   }
-  const out = foldDescription(outflow.description)
-  const into = foldDescription(inflow.description)
-  const hinted = [out, into].filter((text) => hints[kind].test(text)).length
+  const hinted = [outflow, inflow].filter((entry) =>
+    describes(entry, hints[kind]),
+  ).length
   if (hinted > 0) {
     score += hinted * 15
     reasons.push(
@@ -539,8 +568,8 @@ const evaluate = (
     )
   }
   const described =
-    contradictions[kind].outflow.test(out) ||
-    contradictions[kind].inflow.test(into)
+    describes(outflow, contradictions[kind].outflow) ||
+    describes(inflow, contradictions[kind].inflow)
   if (described) {
     score -= 30
     reasons.push('conflicting_description')
@@ -572,15 +601,16 @@ const evaluate = (
 const cardEvidence = (outflow: MatchableEntry, card: MatchableEntry) => {
   const { bill, target } = cardTarget(outflow, card)
   // A card receipt naming anyone but the owner (`Pagamento recebido de Maria
-  // Souza`) may be someone else paying the card: never confirmed alone.
+  // Souza`, `de Silva S.A.`), in any source's report, may be someone else
+  // paying the card: never confirmed alone.
   const institutions = new Set([
     ...institutionWords(outflow),
     ...institutionWords(card),
   ])
-  const payer = identityWords(card.description, institutions)
   const owner = counterparties(card.ownerName ?? '', institutions)
-  const thirdPartyPayer =
-    payer.size > 0 && (owner.size === 0 || !within(payer, owner))
+  const thirdPartyPayer = descriptionsOf(card).some((text) =>
+    namesThirdParty(text, [owner], institutions),
+  )
   const reasons: Array<string> = []
   if (target === 'named') reasons.push('names_card_institution')
   if (target === 'other') reasons.push('names_other_payee')
