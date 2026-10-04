@@ -1255,6 +1255,86 @@ describe('Open Finance history window', () => {
     }
   })
 
+  it('keeps the booked anchor after a manual fact dated before the window', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-09-15T15:00:00Z'))
+      const gateway = new FakePluggyGateway()
+      const connectionId = await registeredConnection(database, gateway)
+      const mapped = await mapPluggyAccount(
+        {
+          providerAccountId: 'provider-bank',
+          newTarget: {
+            type: 'account',
+            name: 'Conta Pluggy',
+            kind: 'checking',
+            purpose: 'operating',
+          },
+        },
+        gateway,
+        mappedAt,
+      )
+      expect(mapped.historyStart).toBe('2026-06-01')
+      const balance = async () =>
+        (await getFinanceSnapshot()).accounts.find(
+          (item) => item.id === mapped.accountId,
+        )?.balanceCents
+      expect(await balance()).toBe(90_000)
+
+      await createManualTransaction({
+        targetType: 'account',
+        targetId: mapped.accountId!,
+        postedAt: '2026-05-30',
+        description: 'Débito anterior à janela',
+        direction: 'outflow',
+        amountCents: 2_000,
+        categoryId: 'groceries',
+      })
+      expect(await balance()).toBe(90_000)
+
+      await syncPluggyConnection({ connectionId }, gateway)
+      expect(await balance()).toBe(90_000)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the same balance across a sync after replacing an earlier checkpoint', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-09-15T15:00:00Z'))
+      const gateway = new FakePluggyGateway()
+      const connectionId = await connectedAccount(database, gateway)
+      const balance = async () =>
+        (await getFinanceSnapshot()).accounts.find(
+          (item) => item.id === database.ids.brlAccount,
+        )?.balanceCents
+      await createManualBalanceCheckpoint({
+        targetType: 'account',
+        targetId: database.ids.brlAccount,
+        balanceCents: 90_000,
+        asOf: '2026-09-11',
+        balanceType: 'posted',
+      })
+      await createManualBalanceCheckpoint({
+        targetType: 'account',
+        targetId: database.ids.brlAccount,
+        balanceCents: 80_000,
+        asOf: '2026-09-11',
+        balanceType: 'posted',
+        replaceExisting: true,
+      })
+      const afterReplacement = await balance()
+
+      await syncPluggyConnection({ connectionId }, gateway)
+      expect(await balance()).toBe(afterReplacement)
+      // The booked observation of Sept 15 is newer than the replaced checkpoint.
+      expect(afterReplacement).toBe(90_000)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('starts a new card at the statement cycle containing the window start', async () => {
     const gateway = new FakePluggyGateway()
     gateway.accounts = [account('CREDIT')]

@@ -78,6 +78,11 @@ export interface StatementPayment {
   /** Manual link flagged as partial by the person. */
   partial?: boolean
   amountCents: number
+  /**
+   * The other side of the same payment, such as the card's "Pagamento
+   * recebido" paired with a bank debit. Either side posted settles it once.
+   */
+  evidenceIds?: string[]
 }
 
 export interface StatementLedgerEntry extends LedgerStatement {
@@ -148,6 +153,13 @@ export function buildCardStatementLedger(input: {
     return entry && payment ? [{ link, entry, payment }] : []
   })
   const manuallyLinked = new Set(manualLinks.map(({ payment }) => payment.id))
+  // Card receipts recording a hand-linked debit, kept as its evidence.
+  const manualEvidence = new Map<string, string[]>()
+  const addManualEvidence = (paymentId: string, receiptId: string) =>
+    manualEvidence.set(paymentId, [
+      ...(manualEvidence.get(paymentId) ?? []),
+      receiptId,
+    ])
   // A hand-linked bank debit with no card_payment group is still paired with
   // the card's own "Pagamento recebido" for it: the receipt of the same
   // amount, in the statement the link settles, within the payment window.
@@ -166,6 +178,7 @@ export function buildCardStatementLedger(input: {
         distance(payment.postedAt, receipt.postedAt) <= INFERRED_WINDOW_DAYS,
     )
     if (index === -1) return false
+    addManualEvidence(unpairedManual[index].payment.id, receipt.id)
     unpairedManual.splice(index, 1)
     return true
   }
@@ -187,6 +200,8 @@ export function buildCardStatementLedger(input: {
       // A bank debit linked by hand already counts this receipt, with the
       // person's partial or full decision; only the rest of the pair adds.
       const bankIds = groupBankIds.filter((id) => !manuallyLinked.has(id))
+      for (const id of groupBankIds)
+        if (manuallyLinked.has(id)) addManualEvidence(id, transaction.id)
       if (groupBankIds.length && !bankIds.length) continue
       const manualCents = groupBankIds
         .filter((id) => manuallyLinked.has(id))
@@ -203,6 +218,7 @@ export function buildCardStatementLedger(input: {
             groupId: group.id,
             linkId: null,
             amountCents,
+            evidenceIds: [transaction.id],
           })
         entry.paidCents += amountCents
       } else if (group && group.status === 'suggested' && bankIds.length) {
@@ -242,6 +258,7 @@ export function buildCardStatementLedger(input: {
       linkId: link.id,
       partial: Boolean(link.partial),
       amountCents: -payment.amountCents,
+      evidenceIds: manualEvidence.get(payment.id) ?? [],
     })
     entry.paidCents += -payment.amountCents
   }
@@ -312,17 +329,18 @@ export function buildCardStatementLedger(input: {
 
 /**
  * What a statement has settled in cash: the same settling payments as its
- * status, limited to those `isPosted` accepts. A pending or future bank
- * debit is shown on the statement but has not left the account yet.
+ * status, limited to those with a transaction `isPosted` accepts on either
+ * side of the payment. A pending or future bank debit with no posted card
+ * receipt is shown on the statement but has not left the account yet.
  */
 export function statementCashSettlement(
   entry: StatementLedgerEntry,
-  isPosted: (payment: StatementPayment) => boolean,
+  isPosted: (transactionId: string) => boolean,
 ) {
   const settled = entry.payments.filter(
     (p) =>
       ['manual', 'confirmed', 'received', 'inferred'].includes(p.kind) &&
-      isPosted(p),
+      [p.transactionId, ...(p.evidenceIds ?? [])].some(isPosted),
   )
   // A confirmed group lists each bank debit with the card row's amount.
   const groups = new Set<string>()

@@ -402,6 +402,120 @@ describe('pagamento recebido no cartão e conciliação na projeção', () => {
     expect(statement).toMatchObject({ status: 'partial', paidCents: 10_000 })
     expect(await scheduledCents()).toBe(-20_000)
   })
+  it('conta o recebimento lançado quando o débito vinculado à mão é futuro', async () => {
+    const db = await statementDueSept15()
+    const debit = await createManualTransaction({
+      targetType: 'account',
+      targetId: db.ids.brlAccount,
+      postedAt: '2026-09-09',
+      description: 'Débito genérico',
+      direction: 'outflow',
+      amountCents: 10_000,
+      categoryId: 'groceries',
+    })
+    await linkCardStatementPayment({
+      creditCardId: db.ids.card,
+      dueDate: '2026-09-15',
+      transactionId: debit.id,
+      partial: true,
+    })
+    await cardReceipt({
+      id: 'posted-receipt-future-debit',
+      postedAt: '2026-09-07',
+      amountCents: 10_000,
+      status: 'confirmed',
+    })
+    expect(await scheduledCents()).toBe(-20_000)
+  })
+
+  it('conta o recebimento conciliado quando o débito vinculado à mão está pendente', async () => {
+    const db = await statementDueSept15()
+    await db.db.insert(schema.transactions).values({
+      id: 'pending-debit',
+      accountId: db.ids.brlAccount,
+      categoryId: 'groceries',
+      fingerprint: 'pending-debit',
+      postedAt: '2026-09-07',
+      description: 'Débito genérico',
+      normalizedDescription: 'debito generico',
+      amountCents: -10_000,
+      currency: 'BRL',
+      status: 'pending',
+    })
+    await linkCardStatementPayment({
+      creditCardId: db.ids.card,
+      dueDate: '2026-09-15',
+      transactionId: 'pending-debit',
+      partial: true,
+    })
+    await cardReceipt({
+      id: 'posted-receipt-pending-debit',
+      postedAt: '2026-09-07',
+      amountCents: 10_000,
+      status: 'confirmed',
+    })
+    await db.db.insert(schema.reconciliationGroups).values({
+      id: 'pending-pair',
+      type: 'card_payment',
+      status: 'confirmed',
+      confidence: 100,
+    })
+    await db.db.insert(schema.reconciliationLinks).values([
+      {
+        id: 'pending-pair-bank',
+        groupId: 'pending-pair',
+        transactionId: 'pending-debit',
+        role: 'outgoing',
+      },
+      {
+        id: 'pending-pair-card',
+        groupId: 'pending-pair',
+        transactionId: 'posted-receipt-pending-debit',
+        role: 'incoming',
+      },
+    ])
+    expect(await scheduledCents()).toBe(-20_000)
+  })
+
+  it('conta uma vez o recebimento conciliado com débito bancário futuro', async () => {
+    const db = await statementDueSept15()
+    const debit = await createManualTransaction({
+      targetType: 'account',
+      targetId: db.ids.brlAccount,
+      postedAt: '2026-09-09',
+      description: 'Pagamento fatura cartão',
+      direction: 'outflow',
+      amountCents: 10_000,
+      categoryId: 'card_payment',
+    })
+    await cardReceipt({
+      id: 'grouped-receipt-future-debit',
+      postedAt: '2026-09-07',
+      amountCents: 10_000,
+      status: 'confirmed',
+    })
+    await db.db.insert(schema.reconciliationGroups).values({
+      id: 'future-pair',
+      type: 'card_payment',
+      status: 'confirmed',
+      confidence: 100,
+    })
+    await db.db.insert(schema.reconciliationLinks).values([
+      {
+        id: 'future-pair-bank',
+        groupId: 'future-pair',
+        transactionId: debit.id,
+        role: 'outgoing',
+      },
+      {
+        id: 'future-pair-card',
+        groupId: 'future-pair',
+        transactionId: 'grouped-receipt-future-debit',
+        role: 'incoming',
+      },
+    ])
+    expect(await scheduledCents()).toBe(-20_000)
+  })
 })
 
 describe('pagamento pendente na projeção de caixa', () => {

@@ -7,9 +7,7 @@ import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
 import { suggestCategory } from '#/features/finance/categories.server'
 import {
-  activeInferredOpening,
   addBalanceCheckpoint,
-  deriveInferredOpening,
   inferredOpeningCents,
   inferredOpeningMethod,
   invalidateCheckpointChain,
@@ -986,11 +984,6 @@ export async function resolvePluggyCorrection(input: {
   }
   db.transaction((transaction) => {
     if (input.action === 'accept') {
-      // Captured before the chain is reopened: a correction moving a fact
-      // before the window invalidates the opening it must re-derive.
-      const opening = row.account.accountId
-        ? activeInferredOpening(transaction, row.account.accountId)
-        : undefined
       transaction
         .update(schema.transactions)
         .set({
@@ -1028,13 +1021,6 @@ export async function resolvePluggyCorrection(input: {
         from: observation.postedAt!,
         reason: `Reaberto pela correção Open Finance ${observation.id}.`,
       })
-      if (opening) {
-        deriveInferredOpening(
-          transaction,
-          opening,
-          `Recalculado pela correção Open Finance ${observation.id}.`,
-        )
-      }
       refreshStatementAnchor(transaction, {
         ...target,
         balanceType: row.account.accountId ? 'posted' : 'card_statement',

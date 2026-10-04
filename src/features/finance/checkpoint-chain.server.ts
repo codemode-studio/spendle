@@ -267,11 +267,21 @@ export function addBalanceCheckpoint(
   return id
 }
 
+/**
+ * Reopens the chain from `from`. An inferred opening reached by it is a
+ * projection, not an observation the new fact contradicts: it is captured
+ * first and derived again from its booked balance observation, so the
+ * account keeps its anchor whatever the date of the fact.
+ */
 export function invalidateCheckpointChain(
   transaction: DatabaseTransaction,
   input: CheckpointTarget & { from: string; reason: string },
 ) {
-  return transaction
+  const opening =
+    input.targetType === 'account'
+      ? activeInferredOpening(transaction, input.targetId)
+      : undefined
+  const result = transaction
     .update(schema.balanceCheckpoints)
     .set({
       verified: false,
@@ -286,6 +296,10 @@ export function invalidateCheckpointChain(
       ),
     )
     .run()
+  if (opening && opening.asOf >= input.from) {
+    deriveInferredOpening(transaction, opening, input.reason)
+  }
+  return result
 }
 
 type BalanceCheckpoint = typeof schema.balanceCheckpoints.$inferSelect
@@ -685,21 +699,15 @@ export async function recordManualBalanceCheckpoint(input: {
         evidenceJson: JSON.stringify({ note: input.note?.trim() || null }),
       })
       .run()
-    if (
-      input.targetType === 'account' &&
-      input.balanceType === 'posted' &&
-      (input.replaceExisting ||
-        !target.statementBalanceAt ||
-        target.statementBalanceAt < input.asOf)
-    ) {
-      transaction
-        .update(schema.accounts)
-        .set({
-          statementBalanceCents: input.balanceCents,
-          statementBalanceAt: input.asOf,
-        })
-        .where(eq(schema.accounts.id, input.targetId))
-        .run()
+    // The same anchor selection a later sync runs, so the balance shown now
+    // is the one it keeps: a booked observation newer than this checkpoint
+    // still wins, replacement included.
+    if (input.targetType === 'account' && input.balanceType === 'posted') {
+      refreshStatementAnchor(transaction, {
+        targetType: 'account',
+        targetId: input.targetId,
+        balanceType: 'posted',
+      })
     }
     if (input.targetType === 'card' && input.balanceType === 'card_statement') {
       if (

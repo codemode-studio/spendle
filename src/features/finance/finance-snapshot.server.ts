@@ -692,12 +692,12 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
           const entry = ledger.find(
             (item) => item.dueDate === statement.dueDate,
           )
-          // Only payments already posted settle the projected cash: a bank
-          // debit, or the card's own received payment when no bank row is
-          // linked. A pending or future one still leaves the debit scheduled.
+          // Only payments already posted settle the projected cash: the bank
+          // debit or the card's own received payment for it, counted once.
+          // With neither posted, the debit stays scheduled.
           const settlement = entry
-            ? statementCashSettlement(entry, (payment) => {
-                const row = transactionById.get(payment.transactionId)
+            ? statementCashSettlement(entry, (transactionId) => {
+                const row = transactionById.get(transactionId)
                 return (
                   row?.status === 'confirmed' && row.postedAt <= referenceDate
                 )
