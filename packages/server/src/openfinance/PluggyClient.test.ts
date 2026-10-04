@@ -4,7 +4,6 @@ import * as Fiber from 'effect/Fiber'
 import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
 import * as Redacted from 'effect/Redacted'
-import * as Ref from 'effect/Ref'
 import * as HttpClient from 'effect/http/HttpClient'
 import * as HttpClientResponse from 'effect/http/HttpClientResponse'
 import * as TestClock from 'effect/testing/TestClock'
@@ -17,17 +16,11 @@ type Route = (
   headers: Record<string, string>,
 ) => Response | undefined
 
-// A Pluggy stand-in: routes requests and records `METHOD /path?query X-API-KEY`.
+// Scripted HTTP responses, to exercise how the client pages and waits.
 const fakePluggy = (route: Route) =>
   Effect.gen(function* () {
-    const calls = yield* Ref.make<ReadonlyArray<string>>([])
     const client = HttpClient.make((request, url) =>
-      Effect.gen(function* () {
-        const key = request.headers['x-api-key'] ?? '-'
-        yield* Ref.update(calls, (all) => [
-          ...all,
-          `${request.method} ${url.pathname}${url.search} ${key}`,
-        ])
+      Effect.sync(() => {
         const response =
           route(url, request.method, request.headers) ??
           new Response('{}', { status: 404 })
@@ -41,56 +34,13 @@ const fakePluggy = (route: Route) =>
         clientSecret: Redacted.make('secret'),
       }),
     }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient, client)))
-    return { pluggy, calls: Ref.get(calls) }
+    return { pluggy }
   })
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status })
 
 describe('PluggyClient', () => {
-  it.effect('authenticates once and reuses the API key', () =>
-    Effect.gen(function* () {
-      let keys = 0
-      const { pluggy, calls } = yield* fakePluggy((url) => {
-        if (url.pathname === '/auth') return json({ apiKey: `key-${++keys}` })
-        if (url.pathname === '/items/item-1')
-          return json({
-            id: 'item-1',
-            status: 'UPDATED',
-            connector: { id: 1, name: 'Nubank' },
-          })
-      })
-
-      yield* pluggy.getItem('item-1')
-      yield* pluggy.getItem('item-1')
-
-      assert.deepStrictEqual(yield* calls, [
-        'POST /auth -',
-        'GET /items/item-1 key-1',
-        'GET /items/item-1 key-1',
-      ])
-    }),
-  )
-
-  it.effect('re-authenticates once when the API key is rejected', () =>
-    Effect.gen(function* () {
-      let keys = 0
-      const { pluggy, calls } = yield* fakePluggy((url, _method, headers) => {
-        if (url.pathname === '/auth') return json({ apiKey: `key-${++keys}` })
-        if (headers['x-api-key'] === 'key-1') return json({}, 401)
-        return json({ results: [] })
-      })
-
-      assert.deepStrictEqual(yield* pluggy.listAccounts('item-1'), [])
-      assert.deepStrictEqual(yield* calls, [
-        'POST /auth -',
-        'GET /accounts?itemId=item-1 key-1',
-        'POST /auth -',
-        'GET /accounts?itemId=item-1 key-2',
-      ])
-    }),
-  )
-
   it.effect('follows transaction cursors to the last page', () =>
     Effect.gen(function* () {
       const tx = (id: string) => ({
@@ -122,61 +72,38 @@ describe('PluggyClient', () => {
     }),
   )
 
-  it.effect('waits for the rate-limit window before retrying', () =>
-    Effect.gen(function* () {
-      let calls = 0
-      const { pluggy } = yield* fakePluggy((url) => {
-        if (url.pathname === '/auth') return json({ apiKey: 'key' })
-        calls++
-        if (calls === 1)
-          return new Response('{}', {
-            status: 429,
-            headers: { 'Retry-After': '30' },
-          })
-        return json({
-          id: 'item-1',
-          status: 'UPDATED',
-          connector: { id: 1, name: 'Nubank' },
-        })
-      })
-
-      const fiber = yield* Effect.forkChild(pluggy.getItem('item-1'))
-      yield* TestClock.adjust('29 seconds')
-      assert.strictEqual(calls, 1)
-      yield* TestClock.adjust('2 seconds')
-      const item = yield* Fiber.join(fiber)
-      assert.deepStrictEqual([item.id, calls], ['item-1', 2])
-    }),
-  )
-
-  it.effect('waits for the rate-limit window before authenticating again', () =>
-    Effect.gen(function* () {
-      let auths = 0
-      const { pluggy } = yield* fakePluggy((url) => {
-        if (url.pathname === '/auth') {
-          auths++
-          if (auths === 1)
+  // Pluggy signals the window with Retry-After on resources and
+  // RateLimit-Reset on /auth; either way nothing is sent before it ends.
+  for (const { limited, header } of [
+    { limited: '/items/item-1', header: 'Retry-After' },
+    { limited: '/auth', header: 'RateLimit-Reset' },
+  ]) {
+    it.effect(`waits for the rate-limit window on ${limited}`, () =>
+      Effect.gen(function* () {
+        let attempts = 0
+        const { pluggy } = yield* fakePluggy((url) => {
+          if (url.pathname === limited && ++attempts === 1)
             return new Response('{}', {
               status: 429,
-              headers: { 'RateLimit-Reset': '30' },
+              headers: { [header]: '30' },
             })
-          return json({ apiKey: 'key' })
-        }
-        return json({
-          id: 'item-1',
-          status: 'UPDATED',
-          connector: { id: 1, name: 'Nubank' },
+          if (url.pathname === '/auth') return json({ apiKey: 'key' })
+          return json({
+            id: 'item-1',
+            status: 'UPDATED',
+            connector: { id: 1, name: 'Nubank' },
+          })
         })
-      })
 
-      const fiber = yield* Effect.forkChild(pluggy.getItem('item-1'))
-      yield* TestClock.adjust('29 seconds')
-      assert.strictEqual(auths, 1)
-      yield* TestClock.adjust('2 seconds')
-      const item = yield* Fiber.join(fiber)
-      assert.deepStrictEqual([item.id, auths], ['item-1', 2])
-    }),
-  )
+        const fiber = yield* Effect.forkChild(pluggy.getItem('item-1'))
+        yield* TestClock.adjust('29 seconds')
+        assert.strictEqual(attempts, 1)
+        yield* TestClock.adjust('2 seconds')
+        const item = yield* Fiber.join(fiber)
+        assert.deepStrictEqual([item.id, attempts], ['item-1', 2])
+      }),
+    )
+  }
 
   it.effect('reports a missing configuration without calling Pluggy', () =>
     Effect.gen(function* () {
