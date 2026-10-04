@@ -1,13 +1,10 @@
 import { assert, describe, it } from '@effect/vitest'
 import * as Effect from 'effect/Effect'
-import * as Layer from 'effect/Layer'
 import * as Predicate from 'effect/Predicate'
 
 import { EventLog } from '../events/EventLog.ts'
-import { CoreTest } from '../testing/layers.ts'
+import { CategoriesTest } from '../testing/layers.ts'
 import { Categories, CategoriesError, categoryChanged } from './Categories.ts'
-
-const TestLayer = Categories.layer.pipe(Layer.provideMerge(CoreTest))
 
 // The domain reason a call fails with; other failures fail the test.
 const failure = <A, E, R>(effect: Effect.Effect<A, E | CategoriesError, R>) =>
@@ -35,7 +32,7 @@ describe('Categories', () => {
       )
       assert.isFalse(byId.get('food')!.active)
       assert.isFalse(byId.get('uncategorized')!.system)
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(CategoriesTest)),
   )
 
   it.effect('creates, edits and archives the person’s categories', () =>
@@ -66,7 +63,7 @@ describe('Categories', () => {
         events.filter((event) => event.type === categoryChanged).length,
         3,
       )
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(CategoriesTest)),
   )
 
   it.effect('refuses to change system categories or lose uncategorized', () =>
@@ -101,6 +98,6 @@ describe('Categories', () => {
         yield* failure(categories.create({ name: '  ', bucket: 'tax' })),
         'invalid_input',
       )
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(CategoriesTest)),
   )
 })

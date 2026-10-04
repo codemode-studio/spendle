@@ -855,3 +855,17 @@ export const modelReactor = Reactor.layer({
       yield* (yield* Categorizer).classifyPending()
     }),
 })
+
+/**
+ * Rebuilds every inference when the server starts under a policy version
+ * other than the one they were computed with, so a categorizer change
+ * applies to the whole history without waiting for new entries.
+ */
+export const startup = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const categorizer = yield* Categorizer
+    const stored = yield* categorizer.storedPolicyVersion
+    if (Option.isNone(stored) || stored.value !== POLICY_VERSION)
+      yield* categorizer.rebuild()
+  }),
+)

@@ -8,6 +8,10 @@ import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder'
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createServer } from 'node:http'
 
+import { Categories } from './categories/Categories.ts'
+import * as Categorizer from './categories/Categorizer.ts'
+import { Classifier } from './categories/Classifier.ts'
+import { KnowledgeStore } from './categories/KnowledgeStore.ts'
 import { ServerConfig } from './config.ts'
 import { EventLog } from './events/EventLog.ts'
 import * as Reactor from './events/Reactor.ts'
@@ -37,6 +41,15 @@ const HttpServerLive = Layer.unwrap(
   }),
 )
 
+// Category learning; the model is called only when `TYPESAFE_API_KEY` is set.
+const CategoriesLive = Categorizer.Categorizer.layer.pipe(
+  Layer.provideMerge(KnowledgeStore.layer),
+  Layer.provideMerge(Categories.layer),
+  Layer.provideMerge(
+    Classifier.layer.pipe(Layer.provide(FetchHttpClient.layer)),
+  ),
+)
+
 // Services every feature builds on. Feature reactors are added beside the routes.
 const CoreLive = Layer.mergeAll(
   Reactor.Reactors.layer,
@@ -44,6 +57,7 @@ const CoreLive = Layer.mergeAll(
   Entries.Entries.layer,
   Reconciliation.Reconciliation.layer,
   Cards.layer,
+  CategoriesLive,
 ).pipe(
   Layer.provideMerge(Observations.layer),
   Layer.provideMerge(Accounts.layer),
@@ -55,6 +69,9 @@ const OpenFinanceLive = Layer.mergeAll(
   Entries.reactor,
   Reconciliation.reactor,
   Reconciliation.startup,
+  Categorizer.reactor,
+  Categorizer.modelReactor,
+  Categorizer.startup,
   SyncReactor.layer,
   Webhook.reactor,
   Webhook.registration,

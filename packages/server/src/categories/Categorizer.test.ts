@@ -1,6 +1,8 @@
 import { assert, describe, it } from '@effect/vitest'
 import * as Effect from 'effect/Effect'
+import * as Layer from 'effect/Layer'
 import * as Ref from 'effect/Ref'
+import * as SqlClient from 'effect/sql/SqlClient'
 
 import { Imports } from '../imports/Imports.ts'
 import { Accounts, CardTerms } from '../ledger/Accounts.ts'
@@ -14,8 +16,9 @@ import {
   drain,
   tx,
 } from '../testing/FakePluggy.ts'
-import { Categorizer } from './Categorizer.ts'
+import { Categorizer, startup } from './Categorizer.ts'
 import { KnowledgeStore } from './KnowledgeStore.ts'
+import { POLICY_VERSION } from './Policy.ts'
 
 const ofx = (lines: string, tag = 'STMTRS') =>
   new TextEncoder().encode(`OFXHEADER:100
@@ -575,5 +578,53 @@ describe('Categorizer with reconciliation', () => {
           [['amazon marketplace', 'expense']],
         )
       }).pipe(Effect.provide(categoriesTest())),
+  )
+})
+
+describe('Categorizer startup', () => {
+  it.effect('rebuilds every inference left by another policy version', () =>
+    Effect.gen(function* () {
+      const { categorizer, entry, inferenceOf } = yield* statement(
+        line('a', '20260901', '-23.90', 'Uber *Trip 0109') +
+          line('b', '20260915', '-31.10', 'Uber *Trip 1509'),
+      )
+      yield* categorizer.decide(yield* entry('Uber *Trip 0109'), 'transport')
+      yield* drain
+      // What an older policy left behind.
+      const sql = yield* SqlClient.SqlClient
+      yield* sql`UPDATE categorization_state SET policy_version = ${POLICY_VERSION - 1}`
+      yield* sql`
+        UPDATE category_inferences SET policy_version = ${POLICY_VERSION - 1},
+          category_id = NULL, origin = 'none', status = 'none'
+      `
+      const second = yield* entry('Uber *Trip 1509')
+      assert.strictEqual((yield* inferenceOf(second)).status, 'none')
+
+      yield* Effect.scoped(Layer.build(startup))
+      assert.deepStrictEqual(yield* inferenceOf(second), {
+        categoryId: 'transport',
+        origin: 'pattern',
+        status: 'applied',
+        confidence: 98,
+      })
+      const versions = yield* sql<{ version: number }>`
+        SELECT DISTINCT policy_version AS version FROM category_inferences
+      `
+      assert.deepStrictEqual(versions, [{ version: POLICY_VERSION }])
+      assert.isTrue(yield* categorizer.rebuiltThrough(0))
+    }).pipe(Effect.provide(categoriesTest())),
+  )
+
+  it.effect('leaves inferences of the current policy as they are', () =>
+    Effect.gen(function* () {
+      const { entry, inferenceOf } = yield* statement(
+        line('a', '20260901', '-12.00', 'Padaria Real'),
+      )
+      const sql = yield* SqlClient.SqlClient
+      const id = yield* entry('Padaria Real')
+      yield* sql`UPDATE category_inferences SET confidence = 7 WHERE entry_id = ${id}`
+      yield* Effect.scoped(Layer.build(startup))
+      assert.strictEqual((yield* inferenceOf(id)).confidence, 7)
+    }).pipe(Effect.provide(categoriesTest())),
   )
 })
