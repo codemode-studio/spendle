@@ -38,8 +38,9 @@ const rowPattern =
 /**
  * Reads an Inter card bill. The cycle ends a month before the next cut date
  * printed at the end. Rows show the purchase date, so an installment is
- * booked in the month it is billed. Bill payments are left out: the bank
- * account records them as transfers.
+ * booked in the month it is billed. Bill payments are recorded as money
+ * arriving on the card on the day they were made, so they pair with the bank
+ * debit; they stay out of the bill's totals.
  */
 export const parseInterCard = ({
   lines,
@@ -79,6 +80,7 @@ export const parseInterCard = ({
       .map((line) => line.bounds.page),
   )
   const rows: Array<LayoutLine> = []
+  const payments = new Set<LayoutLine>()
   for (const line of readingOrder(lines)) {
     if (!transactionPages.has(line.bounds.page)) continue
     const match = line.text.match(rowPattern)
@@ -86,8 +88,6 @@ export const parseInterCard = ({
     const [, day, rawMonth, year, rawDescription, creditMarker, rawAmount] =
       match
     const description = rawDescription!.replace(/\s+/g, ' ').trim()
-    if (/^pagamento(?:\s+on\s*line|\s+de\s+fatura)$/i.test(description))
-      continue
     const amount = cents(rawAmount!)
     if (amount === null) return Result.fail('summary_balance_mismatch')
     const purchasedOn = isoDate(
@@ -95,6 +95,17 @@ export const parseInterCard = ({
       monthNumber(rawMonth!),
       Number(day),
     )
+    if (/^pagamento(?:\s+on\s*line|\s+de\s+fatura)$/i.test(description)) {
+      const row = {
+        bookedOn: purchasedOn,
+        description,
+        amountCents: Math.abs(amount),
+        source: line,
+      }
+      rows.push(row)
+      payments.add(row)
+      continue
+    }
     const installment = description.match(/\bparcela\s+(\d+)\s+de\s+\d+\b/i)
     const billedOn = installment
       ? addMonths(purchasedOn, Number(installment[1]) - 1)
@@ -111,7 +122,8 @@ export const parseInterCard = ({
     })
   }
 
-  const charged = -rows.reduce((sum, row) => sum + row.amountCents, 0)
+  const billed = rows.filter((row) => !payments.has(row))
+  const charged = -billed.reduce((sum, row) => sum + row.amountCents, 0)
   const acceptedTotals = [
     statementTotal,
     ...(monthlyExpenses !== null ? [monthlyExpenses] : []),
@@ -120,7 +132,7 @@ export const parseInterCard = ({
   // both statement credits and payments in "Valor antecipado". Check the
   // gross purchases and the summary equation independently; each credit
   // stays a positive line and the remaining payment is never invented.
-  const credits = rows.reduce(
+  const credits = billed.reduce(
     (sum, row) => sum + Math.max(row.amountCents, 0),
     0,
   )
@@ -132,7 +144,7 @@ export const parseInterCard = ({
     charged + credits === monthlyExpenses &&
     statementTotal + anticipated === monthlyExpenses
   if (
-    rows.length === 0 ||
+    billed.length === 0 ||
     (!acceptedTotals.includes(charged) && !reconciledGross)
   ) {
     return Result.fail('summary_balance_mismatch')

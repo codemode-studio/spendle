@@ -250,45 +250,48 @@ describe('Imports', () => {
     }).pipe(Effect.provide(ImportsTest)),
   )
 
-  it.effect('imports a PDF card bill as outflows owed on the card', () =>
-    Effect.gen(function* () {
-      const { imports, observations, card } = yield* setup
-      const result = yield* imports.importFile({
-        accountId: card.id,
-        fileName: 'fatura-2026-10.pdf',
-        bytes: syntheticPdf([
-          'Nu Pagamentos S.A.',
-          'RESUMO DA FATURA ATUAL',
-          'Data de vencimento: 10 OUT 2026',
-          'Periodo vigente: 03 SET a 03 OUT',
-          'Total de compras de todos os cartoes R$ 139,90',
-          'Total a pagar R$ 139,90',
-          'TRANSACOES DE 03 SET A 03 OUT',
-          '05 SET **** 1889 Mercado R$ 89,90',
-          '12 SET Plano celular R$ 50,00',
-          '20 SET Pagamento em 20 SET -R$ 300,00',
-        ]),
-      })
-      assert.deepStrictEqual(
-        [result.period, result.closingBalance],
-        [
-          { start: '2026-09-03', end: '2026-10-03' },
-          { asOf: '2026-10-03', cents: -13990 },
-        ],
-      )
-      const current = yield* observations.current(card.id)
-      assert.deepStrictEqual(
-        current.map((observation) => [
-          observation.bookedOn,
-          observation.description,
-          observation.amountCents,
-        ]),
-        [
-          ['2026-09-05', 'Mercado', -8990],
-          ['2026-09-12', 'Plano celular', -5000],
-        ],
-      )
-    }).pipe(Effect.provide(ImportsTest)),
+  it.effect(
+    'imports a PDF card bill with purchases out and the payment in',
+    () =>
+      Effect.gen(function* () {
+        const { imports, observations, card } = yield* setup
+        const result = yield* imports.importFile({
+          accountId: card.id,
+          fileName: 'fatura-2026-10.pdf',
+          bytes: syntheticPdf([
+            'Nu Pagamentos S.A.',
+            'RESUMO DA FATURA ATUAL',
+            'Data de vencimento: 10 OUT 2026',
+            'Periodo vigente: 03 SET a 03 OUT',
+            'Total de compras de todos os cartoes R$ 139,90',
+            'Total a pagar R$ 139,90',
+            'TRANSACOES DE 03 SET A 03 OUT',
+            '05 SET **** 1889 Mercado R$ 89,90',
+            '12 SET Plano celular R$ 50,00',
+            '20 SET Pagamento em 20 SET -R$ 300,00',
+          ]),
+        })
+        assert.deepStrictEqual(
+          [result.period, result.closingBalance],
+          [
+            { start: '2026-09-03', end: '2026-10-03' },
+            { asOf: '2026-10-03', cents: -13990 },
+          ],
+        )
+        const current = yield* observations.current(card.id)
+        assert.deepStrictEqual(
+          current.map((observation) => [
+            observation.bookedOn,
+            observation.description,
+            observation.amountCents,
+          ]),
+          [
+            ['2026-09-05', 'Mercado', -8990],
+            ['2026-09-12', 'Plano celular', -5000],
+            ['2026-09-20', 'Pagamento em 20 SET', 30000],
+          ],
+        )
+      }).pipe(Effect.provide(ImportsTest)),
   )
 
   it.effect('previews a file without storing it', () =>

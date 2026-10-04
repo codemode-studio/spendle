@@ -27,7 +27,7 @@ const summary = (result: ReturnType<typeof parseInterCard>) => {
 
 describe('Inter card bill', () => {
   for (const separator of ['-', '']) {
-    it(`reads purchases with separator ${JSON.stringify(separator)}, leaves the payment out and books late installments in the cycle`, () => {
+    it(`reads purchases with separator ${JSON.stringify(separator)}, records the payment and books late installments in the cycle`, () => {
       const items = [
         positionedText(
           'Este é o valor que você precisa pagar nesse mês 15/05/2026',
@@ -75,6 +75,7 @@ describe('Inter card bill', () => {
         lines: [
           ['2026-04-09', 'Compra capturada tarde (Parcela 01 de 02)', -5_000],
           ['2026-04-20', 'Compra antiga (Parcela 02 de 03)', -10_000],
+          ['2026-04-09', 'PAGAMENTO ON LINE', 50_000],
           ['2026-04-10', 'PAGAMENTO*Estetica T (Parcela 01 de 03)', -25_000],
         ],
       })
@@ -163,7 +164,7 @@ describe('Inter card bill', () => {
       [
         { start: '2026-07-09', end: '2026-08-08' },
         { asOf: '2026-08-08', cents: -15_000 },
-        2,
+        3,
       ],
     )
     assert.deepStrictEqual(
@@ -199,7 +200,7 @@ describe('Nubank card bill', () => {
     positionedText('08 JUL Pagamento em 08 JUL −R$ 500,00', 5, 120, 580),
   ]
 
-  it('reads purchases and other charges, leaving the payment out', () => {
+  it('reads purchases and other charges, and the payment as money in', () => {
     assert.deepStrictEqual(summary(read(parseNubankCard, items)), {
       period: { start: '2026-07-02', end: '2026-08-02' },
       closingBalance: { asOf: '2026-08-02', cents: -35_000 },
@@ -207,6 +208,7 @@ describe('Nubank card bill', () => {
       lines: [
         ['2026-07-02', 'Compra parcelada - Parcela 3/5', -10_000],
         ['2026-07-11', 'Plano NuCel', -25_000],
+        ['2026-07-08', 'Pagamento em 08 JUL', 50_000],
       ],
     })
   })

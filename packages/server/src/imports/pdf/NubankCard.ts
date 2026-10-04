@@ -20,8 +20,9 @@ const months = 'JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ'
 /**
  * Reads a Nubank card bill. Rows print day and month only; the year comes
  * from the due date and the cycle, which can span a new year. Payments of
- * earlier bills are left out: the bank account records them as transfers.
- * The purchases must add up to `Total a pagar`.
+ * earlier bills are recorded as money arriving on the card, so the card
+ * ledger and the bank debit can be paired; they are not part of the bill, so
+ * only purchases and credits must add up to `Total a pagar`.
  */
 export const parseNubankCard = ({
   lines,
@@ -73,19 +74,31 @@ export const parseNubankCard = ({
     'i',
   )
   const rows: Array<LayoutLine> = []
+  const payments = new Set<LayoutLine>()
   for (const line of readingOrder(lines)) {
     if (!transactionPages.has(line.bounds.page)) continue
     const match = line.text.match(rowPattern)
     if (!match) continue
     const [, day, rawMonth, , rawDescription, marker, rawAmount] = match
     const description = rawDescription!.replace(/\s+/g, ' ').trim()
-    if (/^pagamento\s+em\b/i.test(description)) continue
+    const payment = /^pagamento\s+em\b/i.test(description)
     const amount = cents(rawAmount!)
     if (amount === null) return Result.fail('summary_balance_mismatch')
     const month = monthNumber(rawMonth!)
     const year =
       startYear !== endYear && month >= startMonth ? startYear : endYear
     const bookedOn = isoDate(year, month, Number(day))
+    if (payment) {
+      const row = {
+        bookedOn,
+        description,
+        amountCents: Math.abs(amount),
+        source: line,
+      }
+      rows.push(row)
+      payments.add(row)
+      continue
+    }
     if (bookedOn < periodStart || bookedOn > periodEnd)
       return Result.fail('summary_balance_mismatch')
     rows.push({
@@ -97,8 +110,9 @@ export const parseNubankCard = ({
     })
   }
 
-  const charged = -rows.reduce((sum, row) => sum + row.amountCents, 0)
-  if (rows.length === 0 || charged !== totalCents)
+  const billed = rows.filter((row) => !payments.has(row))
+  const charged = -billed.reduce((sum, row) => sum + row.amountCents, 0)
+  if (billed.length === 0 || charged !== totalCents)
     return Result.fail('summary_balance_mismatch')
 
   return Result.succeed({
