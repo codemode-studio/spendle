@@ -517,6 +517,48 @@ describe('cardCycles', () => {
       0,
     ])
   })
+
+  it('spends the credit a refund leaves on the bills that follow', () => {
+    // June's R$ 200,00 refund exceeds its R$ 100,00 purchase.
+    const items = [
+      entry('market', '2026-06-10', -10000),
+      entry('refund', '2026-06-20', 20000),
+      entry('hotel', '2026-07-15', -10000),
+    ]
+    const august = (statements: ReadonlyArray<IssuedStatement>) => {
+      const result = build([], '2026-08-20', statements, items)
+      return [
+        result.cycles[1]?.paidCents,
+        result.cycles[1]?.status,
+        result.cycles[1]?.payments.map((paid) => [paid.via, paid.entryId]),
+        result.cycles[1]?.statement?.differenceCents ?? null,
+        result.unappliedCents,
+      ]
+    }
+    assert.deepStrictEqual(august([]), [
+      10000,
+      'paid',
+      [['credit', 'refund']],
+      null,
+      0,
+    ])
+    // June's balance shows the credit; a charges-only July bill is paid by it.
+    assert.deepStrictEqual(
+      august([
+        issued('2026-06-04', '2026-07-03', 10000),
+        issued('2026-07-04', '2026-08-03', -10000, { netOfPayments: false }),
+      ]),
+      [10000, 'paid', [['credit', 'refund']], 0, 0],
+    )
+    // July's balance already deducts it: nothing is paid twice.
+    assert.deepStrictEqual(
+      august([
+        issued('2026-06-04', '2026-07-03', 10000),
+        issued('2026-07-04', '2026-08-03', 0),
+      ]),
+      [0, 'paid', [], 0, 0],
+    )
+  })
 })
 
 describe('billPayments', () => {

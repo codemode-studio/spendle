@@ -195,7 +195,73 @@ const history = (cardLines: string, bankLines: string) =>
     return { cards: yield* Cards, bank, card, owner }
   })
 
+// What a lone Nubank card ending in 1234 that owes R$ 100,00 on 3 August
+// gets paid by one R$ 100,00 debit from an Itaú account with this memo.
+const paidByDebit = (memo: string) =>
+  Effect.gen(function* () {
+    yield* august20
+    const accounts = yield* Accounts
+    const owner = yield* accounts.createOwner({ name: 'Eu', kind: 'person' })
+    const bank = yield* accounts.open({
+      ownerId: owner.id,
+      institutionName: 'Itaú',
+      purpose: 'operating',
+      currency: 'BRL',
+      name: 'Conta',
+      kind: 'checking',
+    })
+    const card = yield* addCard(
+      owner.id,
+      '1234',
+      line('n1', '20260715', '-100.00', 'Livraria'),
+    )
+    yield* payFromBank(bank.id, 'b1', '-100.00', memo)
+    const result = yield* (yield* Cards).cycles(card.id)
+    return result.cycles[0]?.paidCents
+  }).pipe(Effect.provide(openFinanceTest()))
+
 describe('Cards', () => {
+  it.effect(
+    'infers a bank-only payment only from bill wording that names this card',
+    () =>
+      Effect.gen(function* () {
+        const pays = [
+          'PAGAMENTO FATURA NUBANK',
+          'PAGTO CARTAO DE CREDITO NUBANK',
+          'PAGAMENTO FATURA FINAL: 1234',
+          'PAGAMENTO FATURA CARTAO-1234',
+          'PAGAMENTO FATURA NUBANK NSU 8765.1234 FINAL 1234',
+        ]
+        const ignores = [
+          // A debit-card purchase is not a bill payment.
+          'COMPRA CARTAO DEBITO',
+          'COMPRA CARTAO DEBITO NUBANK FINAL 1234',
+          'SAQUE CARTAO NUBANK',
+          // Bill wording without naming the card: no single-card fallback.
+          'PAGAMENTO FATURA CARTAO',
+          'PAGAMENTO CARTAO DE CREDITO',
+          // Another issuer or ending named.
+          'PAGAMENTO FATURA CARTAO INTER',
+          'PAGAMENTO FATURA INTER FINAL 1234',
+          'PAGAMENTO FATURA NUBANK FINAL: 9999 COMPETENCIA 08/2026',
+          'PAGAMENTO FATURA NUBANK FINAL-9999',
+          'PAGAMENTO FATURA FINAL 1234 FINAL 5678',
+          // A reference number, however formatted, is not an ending.
+          'PAGAMENTO FATURA BOLETO REF 8765-1234',
+          'PAGAMENTO FATURA DOC 8765.1234',
+          // Payment wording without a card bill.
+          'PAGAMENTO NUBANK FINAL 1234',
+        ]
+        const results = yield* Effect.forEach([...pays, ...ignores], (memo) =>
+          Effect.map(paidByDebit(memo), (paid) => [memo, paid]),
+        )
+        assert.deepStrictEqual(results, [
+          ...pays.map((memo) => [memo, 10000]),
+          ...ignores.map((memo) => [memo, 0]),
+        ])
+      }),
+  )
+
   it.effect(
     'settles each closed cycle from the card credit or only the bank debit',
     () =>
@@ -228,7 +294,7 @@ describe('Cards', () => {
           bank.id,
           'b4',
           '-90.00',
-          'PAGAMENTO FATURA NUBANK 1234',
+          'PAGAMENTO FATURA NUBANK FINAL 1234',
           '20260815',
         )
         const named = yield* cards.cycles(other.id)

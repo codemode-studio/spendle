@@ -72,6 +72,11 @@ export interface CycleEntry {
 }
 
 export interface CyclePayment {
+  /**
+   * The payment's entry. For credit a cycle left (`via: 'credit'`), the
+   * latest credit entry of that cycle, or `statement:<closing>` when only
+   * its issued statement shows the credit.
+   */
   readonly entryId: string
   /** When the payment was made: the bank debit's date when it is known. */
   readonly paidOn: string
@@ -82,8 +87,11 @@ export interface CyclePayment {
   readonly creditedOn?: string
   /** Positive: money that reached the card. */
   readonly amountCents: number
-  /** Where the payment was seen: the card's own credit, or only the bank debit. */
-  readonly via: 'card' | 'bank'
+  /**
+   * Where the payment was seen: the card's own credit, only the bank debit,
+   * or credit an earlier cycle left when its refunds exceeded its charges.
+   */
+  readonly via: 'card' | 'bank' | 'credit'
   /** The closing of the bill it was identified as paying; others pay the oldest bill first. */
   readonly settles?: string
 }
@@ -130,7 +138,7 @@ export interface CardCycle extends CycleBounds {
 
 export interface CardCycles {
   readonly cycles: ReadonlyArray<CardCycle>
-  /** Payments beyond everything billed so far: credit on the card. */
+  /** Payments and closed cycles' net credit beyond everything billed so far: credit on the card. */
   readonly unappliedCents: number
 }
 
@@ -287,9 +295,14 @@ const schedule = (input: {
  * as each later cycle closes. A statement net of payments already deducts
  * the credit it can reflect, so that part is not applied to it again; the
  * credit it shows as a balance in the holder's favour stays credit.
+ *
+ * A closed cycle whose credits exceed its charges leaves that surplus as
+ * credit too, for the cycles after it. When the cycle has a balance
+ * statement, only the favour the payments it deducts do not explain is
+ * surplus; a later balance statement that shows the credit deducts it.
  */
 const allocate = (
-  { bounds, statements, totals, billed }: Schedule,
+  { bounds, statements, entries, totals, billed }: Schedule,
   payments: ReadonlyArray<CyclePayment>,
 ) => {
   const applied = bounds.map((): Array<CyclePayment> => [])
@@ -310,8 +323,35 @@ const allocate = (
       for (let index = 0; index <= through && held.cents > 0; index++)
         held.cents -= pay(index, held.payment, held.cents)
   }
+  // The open cycle's credit is not left for anything yet.
+  const leaveSurplus = (index: number, cents: number) => {
+    if (cents <= 0 || index === bounds.length - 1) return
+    const closingOn = bounds[index]!.closingOn
+    const latest = (items: ReadonlyArray<CycleEntry>) =>
+      items.reduce<CycleEntry | undefined>(
+        (found, item) =>
+          found === undefined || item.bookedOn >= found.bookedOn ? item : found,
+        undefined,
+      )
+    const source =
+      latest(entries[index]!.filter((item) => item.amountCents > 0)) ??
+      latest(entries[index]!)
+    credit.push({
+      payment: {
+        entryId: source?.id ?? `statement:${closingOn}`,
+        paidOn: closingOn,
+        creditedOn: closingOn,
+        amountCents: cents,
+        via: 'credit',
+      },
+      cents,
+    })
+  }
   const settle = (index: number) => {
-    if (statements[index]?.netOfPayments !== true) return spend(index)
+    if (statements[index]?.netOfPayments !== true) {
+      spend(index)
+      return leaveSurplus(index, -billed[index]!)
+    }
     spend(index - 1)
     // A balance counts the cycle's charges and the debt carried into it,
     // less the payments it deducts: it can reflect no more than that.
@@ -327,6 +367,7 @@ const allocate = (
       held.cents -= part
       consumed -= part
     }
+    leaveSurplus(index, -billed[index]! - deducted[index]!)
   }
   let closed = 0
   const closeBefore = (date: string) => {

@@ -44,9 +44,14 @@ const PaymentRelationRow = Schema.Struct({
 
 const paymentHint = /\b(pagamento|pgto|pag)\b/
 const refundHint = /\b(estorno|reembolso|cancelamento)\b/
-const billHint = /\b(fatura|cartao|credito)\b/
-// Says it pays a card, not just any bill ("fatura" also names utility bills).
-const cardHint = /\b(cartao|credito)\b/
+
+// Explicit bill-payment wording: "fatura", or a payment of a "cartão de crédito".
+const billPaymentHint = (text: string) =>
+  /\bfatura\b/.test(text) ||
+  (/\b(pagamento|pagto|pgto|pag)\b/.test(text) &&
+    /\bcartao (de )?credito\b/.test(text))
+// A purchase, debit-card movement or withdrawal, not a bill payment.
+const purchaseHint = /\b(compras?|debito|saque)\b/
 // Words in institution names that do not tell banks apart.
 const genericBankWords = new Set([
   'banco',
@@ -57,31 +62,107 @@ const genericBankWords = new Set([
   'da',
   'pagamentos',
   'instituicao',
+  'cartao',
+  'cartoes',
+  'credito',
+  'card',
 ])
-const bankWords = (institutionName: string) =>
-  foldDescription(institutionName)
+// Card issuers a description may name, with the words each is known by.
+const knownIssuers: ReadonlyArray<ReadonlyArray<string>> = [
+  ['nubank', 'nu'],
+  ['inter'],
+  ['itau', 'itaucard', 'unibanco'],
+  ['bradesco', 'bradescard'],
+  ['santander'],
+  ['caixa'],
+  ['bb', 'brasil', 'ourocard'],
+  ['c6'],
+  ['xp'],
+  ['btg'],
+  ['picpay'],
+  ['mercadopago'],
+  ['neon'],
+  ['pan'],
+  ['sicredi'],
+  ['sicoob'],
+  ['porto'],
+  ['credicard'],
+  ['hipercard'],
+  ['digio'],
+  ['banrisul'],
+  ['safra'],
+]
+/** The words naming an institution: its distinctive words and their known aliases. */
+const issuerWords = (institutionName: string) => {
+  const own = foldDescription(institutionName)
     .split(/[^a-z0-9]+/)
     .filter((word) => word.length >= 2 && !genericBankWords.has(word))
-// A four-digit number said to be a card's ending: "final 1234", "cartao 1234",
-// "****1234", "xxxx1234", "*1234".
-const cardEnding = /(?:\bfinal|\bcartao|\bcard|[*•]|\bx+)\s*(\d{4})(?!\d)/g
-// A number labeled as a reference rather than a card: "ref 1234",
-// "boleto 1234", "nsu: 1234", "cod. no 1234".
+  return new Set([
+    ...own,
+    ...knownIssuers
+      .filter((aliases) => aliases.some((alias) => own.includes(alias)))
+      .flat(),
+  ])
+}
+// A number labeled as a reference rather than a card, taken whole with its
+// formatting: "ref 1234", "boleto 8765-1234", "nsu: 1234.5678", "cod. no 1234".
 const referenceNumber =
-  /\b(?:ref|referencia|doc|documento|nsu|protocolo|autenticacao|aut|codigo|cod|boleto|id)(?:[\s.:#º°-]+|n[º°o]?(?![a-z]))*\d+/g
+  /\b(?:ref|referencia|doc|documento|nsu|protocolo|autenticacao|aut|codigo|cod|boleto|id|identificador)(?:[\s.:#º°-]+|n[º°o]?(?![a-z]))*\d+(?:[\s./-]+\d+)*/g
+// A four-digit number marked as a card's ending: "final 1234", "final: 1234",
+// "cartao 1234", "****1234", "•1234", "xxxx-1234".
+const cardEnding =
+  /(?:\bfinal|\bcartao|\bcard|[*•]+|\bx+)[\s:#.-]*(\d{4})(?!\d)/g
+
+/** A card a bank debit may name. */
+export interface BillCard {
+  readonly id: string
+  readonly institutionName: string
+  readonly lastFour: string | null
+}
+
 /**
- * The card endings a description states. A four-digit number counts when it
- * is marked as one, or is the only number said that is not labeled as a
- * reference: a reference or document number is not a card.
+ * Whether a bank debit's description says it pays `card`'s bill. It must
+ * say it pays a card bill ("fatura", or a payment of a "cartão de crédito")
+ * without purchase or debit-card wording, and identify `card` among `cards`
+ * (every card it could pay, `card` included): by its recorded ending marked
+ * as one ("final 1234", "*1234"), or by naming its issuer when that issuer
+ * has no other card. Naming another issuer or ending, or an ending no card
+ * has, identifies no card. Numbers labeled as references are not endings,
+ * and unmarked numbers say nothing.
  */
-const statedEndings = (text: string) => {
-  const unlabeled = text.replace(referenceNumber, ' ')
-  const marked = [...unlabeled.matchAll(cardEnding)].map((match) => match[1]!)
-  if (marked.length > 0) return new Set(marked)
-  const numbers = unlabeled.match(/\d+/g) ?? []
-  return new Set(
-    numbers.length === 1 && numbers[0]!.length === 4 ? numbers : [],
+export const namesCardBill = (
+  description: string,
+  card: BillCard,
+  cards: ReadonlyArray<BillCard>,
+): boolean => {
+  const text = foldDescription(description)
+  if (!billPaymentHint(text) || purchaseHint.test(text)) return false
+  const said = new Set(text.split(/[^a-z0-9]+/))
+  const own = issuerWords(card.institutionName)
+  const others = [
+    ...knownIssuers.flat(),
+    ...cards.flatMap((other) => [...issuerWords(other.institutionName)]),
+  ]
+  if (others.some((word) => said.has(word) && !own.has(word))) return false
+  const byIssuer = cards.filter((other) =>
+    [...issuerWords(other.institutionName)].some((word) => said.has(word)),
   )
+  const endings = new Set(
+    [...text.replace(referenceNumber, ' ').matchAll(cardEnding)].map(
+      (match) => match[1]!,
+    ),
+  )
+  if (endings.size > 1) return false
+  const [ending] = endings
+  const candidates =
+    ending === undefined
+      ? byIssuer
+      : cards.filter(
+          (other) =>
+            other.lastFour === ending &&
+            (byIssuer.length === 0 || byIssuer.includes(other)),
+        )
+  return candidates.length === 1 && candidates[0]!.id === card.id
 }
 
 const make = Effect.gen(function* () {
@@ -180,10 +261,8 @@ const make = Effect.gen(function* () {
    *    credited on the card's;
    * 2. a credit on the card that says it is a payment;
    * 3. only a bank debit, when the card side is missing (card PDFs may omit
-   *    payments). The debit must be in the card's currency and identify
-   *    this card and no other one: it states the card's ending, or states
-   *    no ending and names the card's bank, without contradicting itself, or
-   *    says "cartão"/"crédito" with no ending when there is a single card.
+   *    payments). The debit must be in the card's currency, say it pays a
+   *    card bill and identify this card and no other (see `namesCardBill`).
    *    Its amount must be exactly what one closed cycle still owed on the
    *    debit's date, and it pays that cycle.
    */
@@ -245,33 +324,22 @@ const make = Effect.gen(function* () {
     const lastCycle = known.cycles.at(-1)
     if (firstCycle === undefined || lastCycle === undefined) return known
 
-    const cards = all.filter(
-      (account) =>
-        account.kind === 'credit_card' &&
-        !account.archived &&
-        account.currency === card.currency,
-    )
-    // A stated ending names one card; the bank's name, every card of that
-    // bank, but only when no ending is said. An ending no card here has, or
-    // one of another bank than the one named, names no card.
-    const named = (text: string, endings: ReadonlySet<string>) => {
-      const said = new Set(text.split(/[^a-z0-9]+/))
-      const byBank = cards.filter((account) =>
-        bankWords(account.institutionName).some((word) => said.has(word)),
-      )
-      if (endings.size === 0) return byBank
-      const byEnding = cards.filter(
+    const cards = all
+      .filter(
         (account) =>
-          account.card?.lastFour != null && endings.has(account.card.lastFour),
+          account.kind === 'credit_card' &&
+          !account.archived &&
+          account.currency === card.currency,
       )
-      const known = [...endings].every((ending) =>
-        byEnding.some((account) => account.card?.lastFour === ending),
-      )
-      return known &&
-        (byBank.length === 0 ||
-          byEnding.every((account) => byBank.includes(account)))
-        ? byEnding
-        : []
+      .map((account): BillCard => ({
+        id: account.id,
+        institutionName: account.institutionName,
+        lastFour: account.card?.lastFour ?? null,
+      }))
+    const self: BillCard = {
+      id: card.id,
+      institutionName: card.institutionName,
+      lastFour: terms.lastFour,
     }
     const debits = yield* findBillDebits({
       currency: card.currency,
@@ -282,17 +350,7 @@ const make = Effect.gen(function* () {
       // Paired with a payment already counted on the card: the same money.
       if (debit.pairedInflowId !== null && paymentIds.has(debit.pairedInflowId))
         return []
-      const text = foldDescription(debit.description)
-      if (!billHint.test(text)) return []
-      const endings = statedEndings(text)
-      const candidates = named(text, endings)
-      const target =
-        candidates.length === 1
-          ? candidates[0]
-          : endings.size === 0 && cards.length === 1 && cardHint.test(text)
-            ? cards[0]
-            : undefined
-      return target?.id === accountId
+      return namesCardBill(debit.description, self, cards)
         ? [
             {
               entryId: debit.id,
