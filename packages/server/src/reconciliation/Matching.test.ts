@@ -340,6 +340,34 @@ describe('matchRelations', () => {
     )
   })
 
+  it('never confirms a card payment whose card side names a third-party payer', () => {
+    const pay = (receipt: string) =>
+      relations([
+        entry('pay', 'inter', -50000, {
+          description: 'Pagamento fatura Nubank',
+          institution: 'Banco Inter',
+          ownerName: 'Joao Silva',
+        }),
+        entry('nu', 'card-nu', 50000, {
+          description: receipt,
+          institution: 'Nubank',
+          ownerName: 'Joao Silva',
+        }),
+      ]).flatMap((relation) => [relation.reasons.at(-1), relation.status])
+    assert.deepStrictEqual(
+      [
+        pay('Pagamento recebido de Maria Souza'),
+        pay('Pagamento recebido de Joao Silva'),
+        pay('Pagamento de fatura efetuado'),
+      ],
+      [
+        ['names_third_party_payer', 'suggested'],
+        ['names_card_institution', 'confirmed'],
+        ['names_card_institution', 'confirmed'],
+      ],
+    )
+  })
+
   it('reads alphanumeric issuers and payees as names, and codes as no one', () => {
     const pay = (description: string, card: MatchableEntry) =>
       relations([

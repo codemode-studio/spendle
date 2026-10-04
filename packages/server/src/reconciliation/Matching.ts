@@ -239,6 +239,12 @@ const movementWords = new Set([
   'telefone',
   'email',
   'evp',
+  'fatura',
+  'final',
+  'cartao',
+  'cartoes',
+  'efetuado',
+  'obrigado',
 ])
 
 // Wording that says both sides belong to the same person.
@@ -276,6 +282,31 @@ const nameWords = (text: string) =>
       .filter(
         (word) =>
           !transferWords.has(word) && /[a-z]/.test(word) && !isCode(word),
+      )
+      .map(unglue),
+  )
+
+/**
+ * Every word of a description that could identify a party: whatever is not
+ * a bank, transfer, Pix or card-bill wording, or a code may be someone else.
+ * Read from the folded text, not through the shared filters that drop
+ * company words such as `ltda` or `online`.
+ */
+const identityWords = (
+  description: string,
+  institutions: ReadonlySet<string>,
+) =>
+  new Set(
+    foldDescription(description)
+      .split(/[^a-z0-9]+/)
+      .filter(
+        (word) =>
+          word.length > 1 &&
+          /[a-z]/.test(word) &&
+          !isCode(word) &&
+          !transferWords.has(word) &&
+          !movementWords.has(word) &&
+          !institutions.has(unglue(word)),
       )
       .map(unglue),
   )
@@ -353,25 +384,8 @@ const counterpartEvidence = (
       )
     )
   }
-  // Every word that could identify the other side: whatever is not the
-  // owner's name, a bank, transfer wording or a code may be someone else, so
-  // it keeps the pair suggested. Read from the folded text, not through the
-  // shared filters that drop company words such as `ltda` or `online`.
   const identity = (entry: MatchableEntry) =>
-    new Set(
-      foldDescription(entry.description)
-        .split(/[^a-z0-9]+/)
-        .filter(
-          (word) =>
-            word.length > 1 &&
-            /[a-z]/.test(word) &&
-            !isCode(word) &&
-            !transferWords.has(word) &&
-            !movementWords.has(word) &&
-            !institutions.has(unglue(word)),
-        )
-        .map(unglue),
-    )
+    identityWords(entry.description, institutions)
   const thirdParty =
     [outflow, inflow].some((entry) => {
       const words = identity(entry)
@@ -557,13 +571,24 @@ const evaluate = (
  */
 const cardEvidence = (outflow: MatchableEntry, card: MatchableEntry) => {
   const { bill, target } = cardTarget(outflow, card)
+  // A card receipt naming anyone but the owner (`Pagamento recebido de Maria
+  // Souza`) may be someone else paying the card: never confirmed alone.
+  const institutions = new Set([
+    ...institutionWords(outflow),
+    ...institutionWords(card),
+  ])
+  const payer = identityWords(card.description, institutions)
+  const owner = counterparties(card.ownerName ?? '', institutions)
+  const thirdPartyPayer =
+    payer.size > 0 && (owner.size === 0 || !within(payer, owner))
   const reasons: Array<string> = []
   if (target === 'named') reasons.push('names_card_institution')
   if (target === 'other') reasons.push('names_other_payee')
+  if (thirdPartyPayer) reasons.push('names_third_party_payer')
   return {
     different: target === 'other',
-    evidenced: bill && target !== 'other',
-    soleCard: bill && target === 'unnamed',
+    evidenced: bill && target !== 'other' && !thirdPartyPayer,
+    soleCard: bill && target === 'unnamed' && !thirdPartyPayer,
     reasons,
   }
 }
