@@ -16,7 +16,7 @@ import type { PdfLayout, PositionedText } from './pdf/Layout.ts'
 import { mercadoPagoAccount } from './pdf/MercadoPagoAccount.ts'
 import { nubankAccount } from './pdf/NubankAccount.ts'
 import { nubankCard } from './pdf/NubankCard.ts'
-import { fingerprintIds } from './Statement.ts'
+import { fingerprintIds, parseDate } from './Statement.ts'
 import type { ParsedStatement, StatementProblem } from './Statement.ts'
 
 export const pdfLayouts: ReadonlyArray<PdfLayout> = [
@@ -104,6 +104,15 @@ export const parsePdf = (
   const parsed = layout.parse({ text, lines })
   if (Result.isFailure(parsed)) return Result.fail(parsed.failure)
   const statement = parsed.success
+  // Layouts build dates from printed day and month; one that does not exist
+  // (31 SET, 32-08) means the text was misread, so the file is refused.
+  const dates = [
+    ...statement.lines.map((line) => line.bookedOn),
+    ...(statement.period ? [statement.period.start, statement.period.end] : []),
+    ...(statement.closingBalance ? [statement.closingBalance.asOf] : []),
+  ]
+  if (dates.some((date) => parseDate(date) !== date))
+    return Result.fail('invalid_date')
   return Result.succeed({
     format: 'pdf',
     currency: layout.currency,

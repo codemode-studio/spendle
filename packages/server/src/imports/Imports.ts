@@ -34,6 +34,7 @@ export class ImportRejected extends Schema.TaggedError<ImportRejected>()(
       'malformed_csv',
       'malformed_ofx',
       'unsupported_encoding',
+      'invalid_date',
       'currency_mismatch',
       'account_mismatch',
       'imported_to_other_account',

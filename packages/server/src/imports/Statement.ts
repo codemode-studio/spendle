@@ -38,6 +38,7 @@ export type StatementProblem =
   | 'malformed_csv'
   | 'malformed_ofx'
   | 'unsupported_encoding'
+  | 'invalid_date'
   /** The file is a statement of another kind of account, such as a card bill for a bank account. */
   | 'account_mismatch'
 

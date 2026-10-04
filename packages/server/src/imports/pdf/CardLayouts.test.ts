@@ -104,13 +104,39 @@ describe('Inter card bill', () => {
     positionedText('Data de corte: 08/10/2026', 7, 230, 530),
   ]
 
+  it('refuses a bill missing a purchase that equals what is still due', () => {
+    // R$ 150,00 of expenses, R$ 50,00 paid early, R$ 100,00 due; the R$ 50,00
+    // purchase was lost in extraction.
+    const missing = gross
+      .filter((item) => !/Compra B|CRED PARC/.test(item.text))
+      .map((item) =>
+        /^Fatura atual/.test(item.text)
+          ? { ...item, text: 'Fatura atual R$ 100,00' }
+          : /^Valor antecipado/.test(item.text)
+            ? { ...item, text: 'Valor antecipado R$ 50,00' }
+            : item,
+      )
+    assert.deepStrictEqual(
+      read(parseInterCard, missing),
+      Result.fail('summary_balance_mismatch'),
+    )
+    // Without the expenses line, an early payment rules the amount due out as a target.
+    assert.deepStrictEqual(
+      read(
+        parseInterCard,
+        missing.filter((item) => !/^Despesas do m/.test(item.text)),
+      ),
+      Result.fail('summary_balance_mismatch'),
+    )
+  })
+
   it('reconciles gross purchases while keeping credits and anticipated payments', () => {
     const statement = summary(read(parseInterCard, gross))
     assert.deepStrictEqual(
       statement.lines.map(([, , amount]) => amount),
       [-10_000, -5_000, 2_000],
     )
-    assert.deepStrictEqual(statement.closingBalance?.cents, -13_000)
+    assert.deepStrictEqual(statement.closingBalance?.cents, -12_000)
   })
 
   it('refuses a bill whose lines or summary do not close', () => {
@@ -163,7 +189,7 @@ describe('Inter card bill', () => {
       [statement.period, statement.closingBalance, statement.lines.length],
       [
         { start: '2026-07-09', end: '2026-08-08' },
-        { asOf: '2026-08-08', cents: -15_000 },
+        { asOf: '2026-08-08', cents: 0 },
         3,
       ],
     )

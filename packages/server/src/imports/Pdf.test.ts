@@ -60,6 +60,23 @@ describe('PDF layout selection', () => {
     )
   })
 
+  it('refuses a statement with a date that does not exist', () => {
+    assert.deepStrictEqual(
+      parsePdf(
+        pdf(`Nu Pagamentos S.A.
+RESUMO DA FATURA ATUAL
+Data de vencimento: 10 OUT 2026
+Período vigente: 03 SET a 03 OUT
+Total de compras de todos os cartões R$ 10,00
+Total a pagar R$ 10,00
+TRANSAÇÕES DE 03 SET A 03 OUT
+31 SET Mercado R$ 10,00`),
+        'card',
+      ),
+      Result.fail('invalid_date'),
+    )
+  })
+
   it('refuses a statement of the other kind of account', () => {
     assert.deepStrictEqual(
       parsePdf(pdf(mercadoPagoStatement.join('\n')), 'card'),

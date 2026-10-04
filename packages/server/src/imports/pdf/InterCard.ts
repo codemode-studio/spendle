@@ -124,10 +124,6 @@ export const parseInterCard = ({
 
   const billed = rows.filter((row) => !payments.has(row))
   const charged = -billed.reduce((sum, row) => sum + row.amountCents, 0)
-  const acceptedTotals = [
-    statementTotal,
-    ...(monthlyExpenses !== null ? [monthlyExpenses] : []),
-  ]
   // Inter can report gross purchases under "Despesas do mês" and include
   // both statement credits and payments in "Valor antecipado". Check the
   // gross purchases and the summary equation independently; each credit
@@ -143,20 +139,24 @@ export const parseInterCard = ({
     anticipated >= credits &&
     charged + credits === monthlyExpenses &&
     statementTotal + anticipated === monthlyExpenses
-  if (
-    billed.length === 0 ||
-    (!acceptedTotals.includes(charged) && !reconciledGross)
-  ) {
+  // Purchases must add up to the month's expenses when the bill prints them.
+  // The amount due is only a valid target when nothing was paid early:
+  // otherwise a missing purchase could equal what is still due.
+  const balanced =
+    monthlyExpenses !== null
+      ? charged === monthlyExpenses || reconciledGross
+      : (anticipated ?? 0) === 0 && charged === statementTotal
+  if (billed.length === 0 || !balanced) {
     return Result.fail('summary_balance_mismatch')
   }
 
   return Result.succeed({
     lines: rows,
     period: { start: periodStart, end: periodEnd },
-    // Like V1, the balance is the net of this bill's lines, not the amount
-    // still due after anticipated payments. Money owed on a card is
-    // negative in the ledger.
-    closingBalance: { asOf: periodEnd, cents: -charged },
+    // What is owed at the cut: "Fatura atual", net of payments made before
+    // it, which are recorded as lines. Money owed on a card is negative in
+    // the ledger.
+    closingBalance: { asOf: periodEnd, cents: 0 - statementTotal },
     accountHint:
       mostFrequent(
         lines.flatMap((line) => [
