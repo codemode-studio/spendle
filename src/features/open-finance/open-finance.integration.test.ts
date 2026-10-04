@@ -7,6 +7,7 @@ import {
   createManualBalanceCheckpoint,
   createManualTransaction,
   setReconciliationStatus,
+  updateAccount,
   updateTransactionCategory,
 } from '#/features/finance/finance.server'
 import {
@@ -27,6 +28,7 @@ import {
   createPluggyConnectToken,
   disconnectPluggyConnection,
   enqueuePluggyWebhook,
+  getOpenFinanceSnapshot,
   mapPluggyAccount,
   processNextPluggyWebhook,
   recoverAbandonedPluggyEvents,
@@ -556,6 +558,33 @@ describe('Open Finance history window', () => {
   })
 
   afterEach(() => database.close())
+
+  it('shows a linked account by the name and type the person set', async () => {
+    const gateway = new FakePluggyGateway()
+    const connectionId = await connectedAccount(database, gateway)
+
+    await updateAccount({
+      id: database.ids.brlAccount,
+      name: 'Reserva da família',
+      institutionName: 'Banco renomeado',
+      ownershipScopeId: database.ids.personScope,
+      kind: 'savings',
+      purpose: 'reserve',
+      currency: 'BRL',
+    })
+    await syncPluggyConnection({ connectionId }, gateway)
+
+    const snapshot = await getOpenFinanceSnapshot()
+    const linked = snapshot.accounts.find(
+      (provider) => provider.accountId === database.ids.brlAccount,
+    )
+    expect(linked?.localName).toBe('Reserva da família')
+    const [local] = await database.db
+      .select()
+      .from(database.schema.accounts)
+      .where(eq(database.schema.accounts.id, database.ids.brlAccount))
+    expect(local).toMatchObject({ kind: 'savings', purpose: 'reserve' })
+  })
 
   it('copies three months to a new account and opens it at the booked bank balance', async () => {
     const gateway = new FakePluggyGateway()

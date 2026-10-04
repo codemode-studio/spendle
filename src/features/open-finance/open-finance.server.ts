@@ -1571,7 +1571,13 @@ export async function processNextPluggyWebhook(
 export async function getOpenFinanceSnapshot() {
   await ensureDatabase()
   const configuration = getPluggyConfiguration()
-  const [connections, accounts, corrections] = await Promise.all([
+  const [
+    connections,
+    providerAccounts,
+    localAccounts,
+    localCards,
+    corrections,
+  ] = await Promise.all([
     db
       .select()
       .from(schema.openFinanceConnections)
@@ -1580,6 +1586,12 @@ export async function getOpenFinanceSnapshot() {
       .select()
       .from(schema.openFinanceAccounts)
       .orderBy(asc(schema.openFinanceAccounts.name)),
+    db
+      .select({ id: schema.accounts.id, name: schema.accounts.name })
+      .from(schema.accounts),
+    db
+      .select({ id: schema.creditCards.id, name: schema.creditCards.name })
+      .from(schema.creditCards),
     db
       .select()
       .from(schema.openFinanceTransactionObservations)
@@ -1591,6 +1603,15 @@ export async function getOpenFinanceSnapshot() {
       )
       .orderBy(desc(schema.openFinanceTransactionObservations.observedAt)),
   ])
+  // A linked account is shown by the name the person gave it, not the provider's.
+  const localNames = new Map(
+    [...localAccounts, ...localCards].map((target) => [target.id, target.name]),
+  )
+  const accounts = providerAccounts.map((account) => ({
+    ...account,
+    localName:
+      localNames.get(account.accountId ?? account.creditCardId ?? '') ?? null,
+  }))
   return {
     configuration: {
       enabled: configuration.enabled,

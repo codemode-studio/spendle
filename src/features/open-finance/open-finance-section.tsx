@@ -726,7 +726,7 @@ export function OpenFinanceSection() {
               .map((account) => (
                 <div key={account.id} className="rounded-lg border p-3">
                   <span className="block truncate text-sm font-medium">
-                    {account.name}
+                    {account.localName ?? account.name}
                   </span>
                   <strong className="mt-1 block text-lg tabular-nums">
                     {formatCurrency(
