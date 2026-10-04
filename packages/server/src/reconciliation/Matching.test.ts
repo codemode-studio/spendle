@@ -537,6 +537,38 @@ describe('matchRelations', () => {
     )
   })
 
+  it('never takes Banco do Brasil for another bank that has Brasil in its name', () => {
+    const santander = (description: string, kind: 'card' | 'bank') =>
+      relations([
+        entry('pay', 'inter', -150000, {
+          description,
+          institution: 'Banco Inter',
+        }),
+        entry('sa', kind === 'card' ? 'card-sa' : 'santander', 150000, {
+          description: kind === 'card' ? 'Pagamento recebido' : 'Pix recebido',
+          institution: 'Banco Santander (Brasil) S.A.',
+        }),
+      ]).flatMap((relation) => [relation.status])
+    const bb = relations([
+      entry('pay', 'inter', -150000, {
+        description: 'Pagamento fatura Banco do Brasil',
+        institution: 'Banco Inter',
+      }),
+      entry('bb', 'card-bb', 150000, {
+        description: 'Pagamento recebido',
+        institution: 'Banco do Brasil S.A.',
+      }),
+    ]).flatMap((relation) => [relation.status, relation.reasons.at(-1)])
+    assert.deepStrictEqual(
+      [
+        santander('Pagamento fatura Banco do Brasil', 'card'),
+        santander('Pix enviado Banco do Brasil', 'bank'),
+        bb,
+      ],
+      [['suggested'], ['suggested'], ['confirmed', 'names_card_institution']],
+    )
+  })
+
   it('reads alphanumeric issuers and payees as names, and codes as no one', () => {
     const pay = (description: string, card: MatchableEntry) =>
       relations([

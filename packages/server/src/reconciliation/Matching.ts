@@ -279,6 +279,23 @@ const isCode = (word: string) => {
 const unglue = (word: string) =>
   word.length > 5 && word.endsWith('bank') ? word.slice(0, -4) : word
 
+// Banks whose names are made of common words, folded into one token so
+// their words never pass for another institution's (`Banco do Brasil` is
+// `bb`, never Santander's `Brasil`).
+const bankNames: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bbanco do brasil\b/g, 'bb'],
+  [/\bcaixa economica( federal)?\b/g, 'caixa'],
+  [/\bbanco do nordeste\b/g, 'bnb'],
+  [/\bbanco da amazonia\b/g, 'basa'],
+]
+
+/** A folded text with multi-word bank names as single tokens. */
+const bankAliases = (text: string) =>
+  bankNames.reduce(
+    (folded, [name, token]) => folded.replace(name, token),
+    foldDescription(text),
+  )
+
 /**
  * Words of a text that can name a party, short names and alphanumeric ones
  * (`nu`, `c6`, `99pay`) included: not bank or transfer wording, not numbers
@@ -286,7 +303,7 @@ const unglue = (word: string) =>
  */
 const nameWords = (text: string) =>
   new Set(
-    [...descriptionWords(text)]
+    [...descriptionWords(bankAliases(text))]
       .filter(
         (word) =>
           !transferWords.has(word) && /[a-z]/.test(word) && !isCode(word),
@@ -305,7 +322,7 @@ const identityWords = (
   institutions: ReadonlySet<string>,
 ) =>
   new Set(
-    foldDescription(description)
+    bankAliases(description)
       .split(/[^a-z0-9]+/)
       .filter(
         (word) =>
@@ -334,8 +351,28 @@ const wordsOf = (
   words: (text: string) => ReadonlySet<string>,
 ) => new Set(descriptionsOf(entry).flatMap((text) => [...words(text)]))
 
+// Words of an institution's registered name that say where or what it is,
+// not which one: `Banco Santander (Brasil) S.A.` is `santander`, so a
+// description naming `Banco do Brasil` never passes for it.
+const institutionNoise = new Set([
+  'brasil',
+  'brazil',
+  'br',
+  'sa',
+  'financeira',
+  'holding',
+  'investimentos',
+  'multiplo',
+  'sociedade',
+  'cooperativa',
+])
+
 const institutionWords = (entry: MatchableEntry) =>
-  nameWords(entry.institution ?? '')
+  new Set(
+    [...nameWords(entry.institution ?? '')].filter(
+      (word) => !institutionNoise.has(word),
+    ),
+  )
 
 /**
  * Whether a description may name someone other than the owner: a word that
