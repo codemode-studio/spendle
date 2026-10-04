@@ -18,7 +18,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --exclude 'data/**' --exclude 'packages/**' --exclude '.repos/**'",
-    "test:watch": "vitest",
+    "test:watch": "vitest --exclude 'data/**' --exclude 'packages/**' --exclude '.repos/**'",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm --filter @spendle/server verify",
     "format": "prettier --write . && eslint --fix",
     "check": "prettier --check .",

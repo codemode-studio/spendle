@@ -30,7 +30,14 @@ export class ServerConfig extends Context.Service<
       const port = yield* Config.Port('SPENDLE_SERVER_PORT').pipe(
         Config.withDefault(4100),
       )
-      return ServerConfig.of({ databasePath: path.resolve(databasePath), port })
+      // `:memory:` is SQLite's in-memory database, not a file to resolve.
+      return ServerConfig.of({
+        databasePath:
+          databasePath === ':memory:'
+            ? databasePath
+            : path.resolve(databasePath),
+        port,
+      })
     }),
   )
 
