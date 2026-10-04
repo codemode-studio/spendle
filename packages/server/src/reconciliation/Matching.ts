@@ -301,10 +301,11 @@ const counterpartEvidence = (
   // someone else than `Joao Silva`.
   const isOwner = (name: ReadonlySet<string>) =>
     owners.every((owner) => owner.size > 0 && within(name, owner))
+  // Read from the folded text itself: shared word filters drop `ltda`.
   const namesBusiness = (entry: MatchableEntry) =>
-    [...descriptionWords(entry.description)].some(
-      (word) => businessWords.has(word) && !institutions.has(word),
-    )
+    foldDescription(entry.description)
+      .split(/[^a-z0-9]+/)
+      .some((word) => businessWords.has(word) && !institutions.has(word))
   const thirdParty =
     [out, into].some((name) => name.size > 0 && !isOwner(name)) ||
     [outflow, inflow].some(namesBusiness)
