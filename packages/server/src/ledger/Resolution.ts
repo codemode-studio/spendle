@@ -99,6 +99,10 @@ const words = (description: string) =>
       .filter((word) => word.length > 1),
   )
 
+/** Every word of a description that is not bank wording, short ones (`nu`, `c6`) included. */
+export const descriptionWords = (description: string) =>
+  new Set([...words(description)].filter((word) => !genericWords.has(word)))
+
 /** Words of a description that can name a party: not bank wording, at least three letters. */
 export const meaningfulWords = (description: string) =>
   new Set(

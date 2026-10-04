@@ -76,6 +76,7 @@ const EntryRow = Schema.Struct({
   status: Schema.Literals(['pending', 'posted']),
   description: Schema.String,
   institution: Schema.String,
+  ownerName: Schema.String,
 })
 
 const RelationRow = Schema.Struct({
@@ -125,9 +126,10 @@ const make = Effect.gen(function* () {
     Result: EntryRow,
     execute: () => sql`
       SELECT e.id, e.account_id AS accountId, a.kind AS accountKind, e.booked_on AS bookedOn,
-        e.amount_cents AS amountCents, e.currency, e.status, e.description, i.name AS institution
+        e.amount_cents AS amountCents, e.currency, e.status, e.description, i.name AS institution,
+        o.name AS ownerName
       FROM ledger_entries e JOIN accounts a ON a.id = e.account_id
-      JOIN institutions i ON i.id = a.institution_id
+      JOIN institutions i ON i.id = a.institution_id JOIN owners o ON o.id = a.owner_id
       WHERE a.archived_at IS NULL
     `,
   })
@@ -136,9 +138,10 @@ const make = Effect.gen(function* () {
     Result: EntryRow,
     execute: (id) => sql`
       SELECT e.id, e.account_id AS accountId, a.kind AS accountKind, e.booked_on AS bookedOn,
-        e.amount_cents AS amountCents, e.currency, e.status, e.description, i.name AS institution
+        e.amount_cents AS amountCents, e.currency, e.status, e.description, i.name AS institution,
+        o.name AS ownerName
       FROM ledger_entries e JOIN accounts a ON a.id = e.account_id
-      JOIN institutions i ON i.id = a.institution_id WHERE e.id = ${id}
+      JOIN institutions i ON i.id = a.institution_id JOIN owners o ON o.id = a.owner_id WHERE e.id = ${id}
     `,
   })
   const findDecisions = SqlSchema.findAll({
@@ -150,7 +153,9 @@ const make = Effect.gen(function* () {
     }),
     execute: () => sql`SELECT key, decision, revision FROM relation_decisions`,
   })
-  // The entries now holding the observations each decided side had.
+  // The entries now holding the observations each decided side had. An
+  // observation withdrawn since points to the entry it last belonged to, if
+  // that entry still exists, so the decision keeps the side it can still hold.
   const findHolders = SqlSchema.findAll({
     Request: Schema.Void,
     Result: Schema.Struct({
@@ -159,10 +164,13 @@ const make = Effect.gen(function* () {
       entryId: Schema.String,
     }),
     execute: () => sql`
-      SELECT DISTINCT p.key, p.side, v.entry_id AS entryId
+      SELECT DISTINCT p.key, p.side, e.id AS entryId
       FROM relation_decision_endpoints p
-      JOIN entry_evidence v ON v.source_id = p.source_id AND v.account_id = p.account_id
+      LEFT JOIN entry_evidence v ON v.source_id = p.source_id AND v.account_id = p.account_id
         AND v.external_id = p.external_id
+      LEFT JOIN entry_identity i ON i.source_id = p.source_id AND i.account_id = p.account_id
+        AND i.external_id = p.external_id
+      JOIN ledger_entries e ON e.id = coalesce(v.entry_id, i.entry_id)
     `,
   })
   const findRelations = SqlSchema.findAll({

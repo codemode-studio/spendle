@@ -1,7 +1,7 @@
 import { assign } from '../domain/Assignment.ts'
-import { daysBetween } from '../domain/LocalDate.ts'
+import { dayNumber, daysBetween } from '../domain/LocalDate.ts'
 import { foldDescription } from '../imports/Statement.ts'
-import { meaningfulWords } from '../ledger/Resolution.ts'
+import { descriptionWords } from '../ledger/Resolution.ts'
 
 export type RelationKind = 'internal_transfer' | 'card_payment'
 
@@ -18,6 +18,8 @@ export interface MatchableEntry {
   readonly description: string
   /** The account's institution, which a transfer description may name. */
   readonly institution?: string
+  /** Who owns the account: a name both sides share is evidence only when it is theirs. */
+  readonly ownerName?: string
 }
 
 export type Decision = 'confirmed' | 'rejected'
@@ -128,8 +130,25 @@ const transferWords = new Set([
   'poupanca',
   'cpf',
   'cnpj',
+  'de',
+  'da',
+  'do',
   'dos',
   'das',
+  'em',
+  'no',
+  'na',
+  'nos',
+  'nas',
+  'ao',
+  'aos',
+  'os',
+  'as',
+  'ag',
+  'cc',
+  'cp',
+  'nr',
+  'sa',
   'pelo',
   'pela',
   'via',
@@ -175,25 +194,29 @@ const genericNameWords = new Set([
 const ownAccountWording =
   /\b(mesma titularidade|mesmo titular|entre contas|conta propria|contas proprias)\b/
 
-const institutionWords = (entry: MatchableEntry) =>
+/**
+ * Words of a text that can name a party, short names and alphanumeric ones
+ * (`nu`, `c6`, `bb`) included: not bank or transfer wording, not numbers or
+ * codes.
+ */
+const nameWords = (text: string) =>
   new Set(
-    [...meaningfulWords(entry.institution ?? '')].filter(
-      (word) => !transferWords.has(word),
+    [...descriptionWords(text)].filter(
+      (word) =>
+        !transferWords.has(word) &&
+        /[a-z]/.test(word) &&
+        (!/\d/.test(word) || word.length <= 4),
     ),
   )
 
-/** Who a transfer description names on the other side, without bank or institution wording. */
-const counterparties = (
-  description: string,
-  institutions: ReadonlySet<string>,
-) =>
+const institutionWords = (entry: MatchableEntry) =>
+  nameWords(entry.institution ?? '')
+
+/** Who a text names, without generic name words or institution wording. */
+const counterparties = (text: string, institutions: ReadonlySet<string>) =>
   new Set(
-    [...meaningfulWords(description)].filter(
-      (word) =>
-        !transferWords.has(word) &&
-        !genericNameWords.has(word) &&
-        !/\d/.test(word) &&
-        !institutions.has(word),
+    [...nameWords(text)].filter(
+      (word) => !genericNameWords.has(word) && !institutions.has(word),
     ),
   )
 
@@ -216,12 +239,14 @@ const compareNames = (a: ReadonlySet<string>, b: ReadonlySet<string>) => {
 }
 
 /**
- * What the descriptions say about the other side of a transfer: the same
- * counterparty on both (the person's own name, see `compareNames`), own-account wording, or the
- * other account's institution named are evidence it is the person's own
- * money moving; two different counterparties contradict it. Names that
- * disagree outweigh any other evidence: a bank or own-account wording never
- * makes `Maria Silva` and `Joao Silva` one person.
+ * What the descriptions say about the other side of a transfer: the
+ * accounts' owner named on both sides (see `compareNames`), own-account
+ * wording, or the other account's institution named are evidence it is the
+ * person's own money moving; two different counterparties contradict it.
+ * Any name other than the owner's outweighs every other evidence: a bank or
+ * own-account wording never makes `Maria Silva` and `Joao Silva` one person,
+ * and `Maria Silva` on both sides of the owner's accounts is a payment to
+ * and from her, not proof the money stayed.
  */
 const counterpartEvidence = (
   outflow: MatchableEntry,
@@ -234,10 +259,19 @@ const counterpartEvidence = (
   const into = counterparties(inflow.description, institutions)
   const names = compareNames(out, into)
   const different = names === 'different'
+  const owners = [outflow, inflow].map((entry) =>
+    counterparties(entry.ownerName ?? '', institutions),
+  )
+  // A name is the owner's when it agrees with every account's owner.
+  const isOwner = (name: ReadonlySet<string>) =>
+    owners.every((owner) => compareNames(name, owner) === 'same')
+  const thirdParty = [out, into].some((name) => name.size > 0 && !isOwner(name))
   const reasons: Array<string> = []
-  if (names === 'same') reasons.push('same_counterparty')
+  if (names === 'same')
+    reasons.push(thirdParty ? 'same_third_party' : 'same_counterparty')
   if (different) reasons.push('different_counterparties')
   if (names === 'uncertain') reasons.push('uncertain_counterparties')
+  if (names === 'unnamed' && thirdParty) reasons.push('names_third_party')
   if (
     [outflow, inflow].some((entry) =>
       ownAccountWording.test(foldDescription(entry.description)),
@@ -250,7 +284,7 @@ const counterpartEvidence = (
     own: Set<string>,
   ) =>
     intersects(
-      meaningfulWords(entry.description),
+      nameWords(entry.description),
       new Set([...other].filter((word) => !own.has(word))),
     )
   if (
@@ -258,9 +292,15 @@ const counterpartEvidence = (
     namesOther(inflow, outInstitution, inInstitution)
   )
     reasons.push('names_other_account')
+  const evidence = [
+    'same_counterparty',
+    'own_account_wording',
+    'names_other_account',
+  ]
   return {
     different,
-    evidenced: (names === 'same' || names === 'unnamed') && reasons.length > 0,
+    evidenced:
+      !thirdParty && reasons.some((reason) => evidence.includes(reason)),
     reasons,
   }
 }
@@ -274,29 +314,28 @@ const cardBillWording = /\b(fatura|cartao|cartoes)\b/
 
 /**
  * What the paying side says about which card it pays: whether it speaks of a
- * card bill at all, and whether it names this card's institution, nobody, or
- * someone else (another issuer, or a payee such as a school's boleto). A
- * card only receives payments, so its side says nothing about the payer.
+ * card bill at all, and whether it names only this card's institution,
+ * nobody, or anyone else (another issuer, even beside this one, or a payee
+ * such as a school's boleto). A name it does not recognize is someone else
+ * too. A card only receives payments, so its side says nothing about the
+ * payer.
  */
 const cardTarget = (outflow: MatchableEntry, card: MatchableEntry) => {
   const issuer = institutionWords(card)
   const named = new Set(
-    [...meaningfulWords(outflow.description)].filter(
-      (word) =>
-        !transferWords.has(word) && !cardWords.has(word) && !/\d/.test(word),
-    ),
+    [...nameWords(outflow.description)].filter((word) => !cardWords.has(word)),
   )
   const bill = cardBillWording.test(foldDescription(outflow.description))
-  const target = intersects(named, issuer)
-    ? 'named'
-    : named.size === 0
-      ? 'unnamed'
-      : 'other'
+  const target =
+    named.size === 0 ? 'unnamed' : within(named, issuer) ? 'named' : 'other'
   return { bill, target } as const
 }
 
 // TED/DOC and investment movements can land a few business days later.
 const slowRail = /\b(ted|doc|aplicacao|aplic|resgate|investimento)\b/
+
+// The widest window any relation allows.
+const maxWindowDays = 7
 
 const windowDays = (
   kind: RelationKind,
@@ -507,20 +546,35 @@ export const matchRelations = (
       }),
   )
 
-  const inflowsByAmount = new Map<string, Array<MatchableEntry>>()
+  // Inflows by amount, then by day, so each outflow only looks at the days
+  // its window could reach, in the order entries came.
+  const order = new Map(entries.map((entry, index) => [entry.id, index]))
+  const inflowsByAmount = new Map<string, Map<number, Array<MatchableEntry>>>()
   for (const entry of entries) {
     if (entry.amountCents <= 0 || used.has(entry.id)) continue
     const group = `${entry.currency}:${entry.amountCents}`
-    const list = inflowsByAmount.get(group) ?? []
+    const byDay = inflowsByAmount.get(group) ?? new Map()
+    const day = dayNumber(entry.bookedOn)
+    const list = byDay.get(day) ?? []
     list.push(entry)
-    inflowsByAmount.set(group, list)
+    byDay.set(day, list)
+    inflowsByAmount.set(group, byDay)
+  }
+  const reachable = (outflow: MatchableEntry, group: string) => {
+    const byDay = inflowsByAmount.get(group)
+    if (!byDay) return []
+    const day = dayNumber(outflow.bookedOn)
+    const found: Array<MatchableEntry> = []
+    for (let offset = -maxWindowDays; offset <= maxWindowDays; offset++)
+      found.push(...(byDay.get(day + offset) ?? []))
+    return found.sort((a, b) => order.get(a.id)! - order.get(b.id)!)
   }
 
   const candidatesByGroup = new Map<string, Array<Candidate>>()
   for (const outflow of entries) {
     if (outflow.amountCents >= 0 || used.has(outflow.id)) continue
     const group = `${outflow.currency}:${-outflow.amountCents}`
-    for (const inflow of inflowsByAmount.get(group) ?? []) {
+    for (const inflow of reachable(outflow, group)) {
       const kind = kindFor(outflow, inflow)
       if (kind === null) continue
       if (
