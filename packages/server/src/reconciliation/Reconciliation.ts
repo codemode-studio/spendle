@@ -81,7 +81,7 @@ const EntryRow = Schema.Struct({
   description: Schema.String,
   institution: Schema.String,
   ownerName: Schema.String,
-  operationType: Schema.NullOr(Schema.String),
+  operationTypes: Schema.fromJsonString(Schema.Array(Schema.String)),
 })
 
 // An entry with what each of its sources currently reports: the latest
@@ -139,12 +139,18 @@ const make = Effect.gen(function* () {
   const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     lock.withPermit(effect).pipe(Effect.withSpan('Reconciliation.serialize'))
 
-  // What any observation of the entry says its provider operation was.
-  const operationType = sql.literal(`(
-    SELECT MAX(json_extract(o.raw, '$.operationType'))
-    FROM entry_evidence v JOIN transaction_observations o
-      ON o.source_id = v.source_id AND o.account_id = v.account_id AND o.external_id = v.external_id
-    WHERE v.entry_id = e.id)`)
+  // What the current version of each observation of the entry says its
+  // provider operation was; sources may disagree, so every one is kept.
+  const operationTypes = sql.literal(`(
+    SELECT json_group_array(DISTINCT json_extract(t.raw, '$.operationType'))
+    FROM entry_evidence v JOIN transaction_observations t
+      ON t.source_id = v.source_id AND t.account_id = v.account_id AND t.external_id = v.external_id
+    WHERE v.entry_id = e.id AND json_type(t.raw, '$.operationType') = 'text'
+      AND t.version = (
+        SELECT max(version) FROM transaction_observations l
+        WHERE l.source_id = t.source_id AND l.account_id = t.account_id
+          AND l.external_id = t.external_id
+      ))`)
 
   const findEntries = SqlSchema.findAll({
     Request: Schema.Void,
@@ -164,7 +170,7 @@ const make = Effect.gen(function* () {
                 AND l.external_id = t.external_id
             )
         ) AS observedDescriptions,
-        ${operationType} AS operationType
+        ${operationTypes} AS operationTypes
       FROM ledger_entries e JOIN accounts a ON a.id = e.account_id
       JOIN institutions i ON i.id = a.institution_id JOIN owners o ON o.id = a.owner_id
       WHERE a.archived_at IS NULL
@@ -176,7 +182,7 @@ const make = Effect.gen(function* () {
     execute: (id) => sql`
       SELECT e.id, e.account_id AS accountId, a.kind AS accountKind, e.booked_on AS bookedOn,
         e.amount_cents AS amountCents, e.currency, e.status, e.description, i.name AS institution,
-        o.name AS ownerName, ${operationType} AS operationType
+        o.name AS ownerName, ${operationTypes} AS operationTypes
       FROM ledger_entries e JOIN accounts a ON a.id = e.account_id
       JOIN institutions i ON i.id = a.institution_id JOIN owners o ON o.id = a.owner_id WHERE e.id = ${id}
     `,
@@ -505,10 +511,19 @@ const make = Effect.gen(function* () {
     const key = relationKey(kind, out.id, into.id)
     // The link supersedes orphaned confirmations that reserve either entry,
     // and must show up as the person's relation, or nothing is stored.
+    // Refunds share their purchase: a refund never supersedes another refund
+    // only for holding the same purchase.
     yield* sql.withTransaction(
       Effect.gen(function* () {
         for (const orphan of yield* orphanedDecisions) {
-          if (orphan.reserved.some((id) => id === out.id || id === into.id))
+          const shared = orphan.reserved.filter(
+            (id) => id === out.id || id === into.id,
+          )
+          const sharesPurchase =
+            kind === 'refund' &&
+            parseRelationKey(orphan.key).kind === 'refund' &&
+            shared.every((id) => id === out.id)
+          if (shared.length > 0 && !sharesPurchase)
             yield* write(orphan.key, 'rejected')
         }
         yield* writeDecision(key, 'confirmed')
@@ -540,10 +555,10 @@ export class Reconciliation extends Context.Service<
  * Re-matches relations whenever an account's entries change, the account
  * itself (a new kind turns a transfer into a card payment, or invalidates a
  * confirmation), or an observation: matching reads every source's latest
- * description, so a correction that leaves entries alone (a secondary source
- * now naming a third party) still changes relations. A rebuild reads current
- * state, so one that runs before the entries resolve is followed by another
- * on their `EntriesResolved`.
+ * description and operation type, so a correction that leaves entries alone
+ * (a secondary source now naming a third party) still changes relations. A
+ * rebuild reads current state, so one that runs before the entries resolve
+ * is followed by another on their `EntriesResolved`.
  */
 export const reactor = Reactor.layer({
   name: 'reconciliation',

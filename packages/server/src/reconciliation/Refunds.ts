@@ -46,17 +46,103 @@ const storeWords = new Set([
   'curitiba',
 ])
 
+// Words that name a kind of business, not which one: two pharmacies are not
+// the same shop.
+const businessKinds = new Set([
+  'mercado',
+  'supermercado',
+  'supermercados',
+  'hipermercado',
+  'mercearia',
+  'atacado',
+  'atacadao',
+  'farmacia',
+  'farmacias',
+  'drogaria',
+  'drogarias',
+  'posto',
+  'combustivel',
+  'combustiveis',
+  'padaria',
+  'panificadora',
+  'confeitaria',
+  'restaurante',
+  'bar',
+  'lanchonete',
+  'pizzaria',
+  'churrascaria',
+  'cafe',
+  'cafeteria',
+  'sorveteria',
+  'acougue',
+  'hortifruti',
+  'hotel',
+  'pousada',
+  'auto',
+  'autopecas',
+  'pecas',
+  'oficina',
+  'pet',
+  'petshop',
+  'clinica',
+  'hospital',
+  'laboratorio',
+  'otica',
+  'livraria',
+  'papelaria',
+  'academia',
+  'estacionamento',
+  'magazine',
+])
+
+// Wording a credit uses to say it gives money back, not who gives it.
+const refundWords = new Set([
+  'estorno',
+  'estornado',
+  'estornada',
+  'reembolso',
+  'devolucao',
+  'cancelamento',
+  'cancelado',
+  'cancelada',
+  'chargeback',
+  'compra',
+  'credito',
+  'parcial',
+  'total',
+  'valor',
+])
+
+/** The words of a description that tell one shop from another. */
 const merchantWords = (description: string) =>
   new Set(
     [...meaningfulWords(description)].filter(
-      (word) => !storeWords.has(word) && !/^\d+$/.test(word),
+      (word) =>
+        !storeWords.has(word) &&
+        !businessKinds.has(word) &&
+        !refundWords.has(word) &&
+        !/^\d+$/.test(word),
     ),
   )
 
-/** Whether two descriptions share a word that names a shop. */
-const sameMerchant = (a: string, b: string) => {
+/**
+ * Whether two descriptions name one shop: every distinctive word of one
+ * appears in the other (`Amazon Marketplace` and `Estorno Amazon
+ * Marketplace`), `same`; a shared word with others that disagree
+ * (`Amazon Prime` and `Amazon Marketplace`), `uncertain`; nothing
+ * distinctive in common, `different`.
+ */
+const compareMerchants = (
+  a: string,
+  b: string,
+): 'same' | 'uncertain' | 'different' => {
+  const left = merchantWords(a)
   const right = merchantWords(b)
-  return [...merchantWords(a)].some((word) => right.has(word))
+  const shared = [...left].filter((word) => right.has(word))
+  if (shared.length === 0) return 'different'
+  return shared.length === left.size || shared.length === right.size
+    ? 'same'
+    : 'uncertain'
 }
 
 /** Whether a credit can give back part of a purchase; checked on every rebuild. */
@@ -73,7 +159,7 @@ interface Candidate {
   readonly refund: MatchableEntry
   readonly days: number
   readonly score: number
-  readonly merchant: boolean
+  readonly merchant: 'same' | 'uncertain' | 'different'
   readonly reasons: ReadonlyArray<string>
 }
 
@@ -84,10 +170,13 @@ const evaluate = (
 ) => {
   const reasons = ['same_account']
   let score = 40
-  const merchant = sameMerchant(purchase.description, refund.description)
-  if (merchant) {
+  const merchant = compareMerchants(purchase.description, refund.description)
+  if (merchant === 'same') {
     score += 30
     reasons.push('same_merchant')
+  } else if (merchant === 'uncertain') {
+    score += 15
+    reasons.push('similar_merchant')
   }
   if (refundHint.test(foldDescription(refund.description))) {
     score += 15
@@ -114,6 +203,10 @@ const evaluate = (
  * merchant, scores at least `autoConfirmScore`, both entries are posted, no
  * rival comes within `rivalMargin`, and the person never rejected a
  * pairing for either entry. Refund wording alone leaves it for review.
+ *
+ * `takes` says whether a pairing may take its entries from other relations
+ * competing for them; one it refuses leaves the purchase's amount to the
+ * next refund.
  */
 export const matchRefunds = (
   entries: ReadonlyArray<MatchableEntry>,
@@ -121,6 +214,7 @@ export const matchRefunds = (
   used: ReadonlySet<string>,
   refundedCents: ReadonlyMap<string, number>,
   rejectedEntries: ReadonlySet<string>,
+  takes: (relation: MatchedRelation) => boolean = () => true,
 ): ReadonlyArray<MatchedRelation> => {
   const refunded = new Map(refundedCents)
   const remaining = (purchase: MatchableEntry) =>
@@ -138,9 +232,10 @@ export const matchRefunds = (
   for (const refund of entries) {
     if (refund.amountCents <= 0 || used.has(refund.id)) continue
     const text = foldDescription(refund.description)
+    // Any source calling it something else is enough to doubt it.
     if (
       otherCredit.test(text) ||
-      otherOperation.test(refund.operationType ?? '')
+      (refund.operationTypes ?? []).some((type) => otherOperation.test(type))
     )
       continue
     const wording = refundHint.test(text)
@@ -155,7 +250,7 @@ export const matchRefunds = (
       )
         continue
       const evaluated = evaluate(purchase, refund, remaining(purchase))
-      if (!wording && !evaluated.merchant) continue
+      if (!wording && evaluated.merchant === 'different') continue
       candidates.push({ purchase, refund, days, ...evaluated })
     }
   }
@@ -186,22 +281,17 @@ export const matchRefunds = (
     const { purchase, refund } = candidate
     if (paired.has(refund.id) || refund.amountCents > remaining(purchase))
       continue
-    paired.add(refund.id)
-    refunded.set(
-      purchase.id,
-      (refunded.get(purchase.id) ?? 0) + refund.amountCents,
-    )
     const unambiguous = rival(candidate) < candidate.score - rivalMargin
     const contested =
       rejectedEntries.has(purchase.id) || rejectedEntries.has(refund.id)
     const posted = purchase.status === 'posted' && refund.status === 'posted'
     const confident =
-      candidate.merchant &&
+      candidate.merchant === 'same' &&
       candidate.score >= autoConfirmScore &&
       posted &&
       unambiguous &&
       !contested
-    relations.push({
+    const relation: MatchedRelation = {
       key: relationKey('refund', purchase.id, refund.id),
       kind: 'refund',
       outflowId: purchase.id,
@@ -215,7 +305,14 @@ export const matchRefunds = (
         ...(unambiguous ? [] : ['ambiguous']),
         ...(contested ? ['previously_rejected'] : []),
       ],
-    })
+    }
+    if (!takes(relation)) continue
+    paired.add(refund.id)
+    refunded.set(
+      purchase.id,
+      (refunded.get(purchase.id) ?? 0) + refund.amountCents,
+    )
+    relations.push(relation)
   }
   return relations
 }

@@ -1074,4 +1074,168 @@ describe('Reconciliation', () => {
         )
       }).pipe(Effect.provide(openFinanceTest())),
   )
+
+  // A purchase and a same-merchant credit on the card, reported by `source`.
+  const cardCredit = Effect.gen(function* () {
+    const { reconciliation, card } = yield* setup
+    const observations = yield* Observations
+    const register = (ref: string) =>
+      observations.registerSource({
+        kind: 'open_finance',
+        externalRef: ref,
+        label: ref,
+      })
+    const report = (
+      sourceId: string,
+      externalId: string,
+      amountCents: number,
+      bookedOn: string,
+      raw: Record<string, string>,
+    ) =>
+      Effect.andThen(
+        observations.recordTransactions({
+          sourceId,
+          accountId: card.id,
+          transactions: [
+            {
+              externalId,
+              bookedOn,
+              amountCents,
+              currency: 'BRL',
+              description: 'Amazon Marketplace',
+              status: 'posted',
+              raw,
+            },
+          ],
+        }),
+        drain,
+      )
+    const source = yield* register('feed')
+    yield* report(source.id, 'order', -25000, '2026-09-16', {})
+    const refunds = Effect.map(reconciliation.relations, (relations) =>
+      relations
+        .filter((relation) => relation.kind === 'refund')
+        .map((relation) => relation.status),
+    )
+    return { reconciliation, source, register, report, refunds }
+  })
+
+  it.effect('drops a refund once a credit is corrected to cashback', () =>
+    Effect.gen(function* () {
+      const { source, report, refunds } = yield* cardCredit
+      yield* report(source.id, 'credit', 25000, '2026-09-25', {})
+      const before = yield* refunds
+      // Only the operation changes: entries stay the same.
+      yield* report(source.id, 'credit', 25000, '2026-09-25', {
+        operationType: 'CASHBACK',
+      })
+      assert.deepStrictEqual([before, yield* refunds], [['confirmed'], []])
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'reads the current operation of each source, and doubts a credit any source calls cashback',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, source, register, report, refunds } =
+          yield* cardCredit
+        yield* report(source.id, 'credit', 25000, '2026-09-25', {
+          operationType: 'ESTORNO',
+        })
+        yield* report(source.id, 'credit', 25000, '2026-09-25', {
+          operationType: 'CASHBACK',
+        })
+        yield* reconciliation.rebuild()
+        const corrected = yield* refunds
+
+        yield* report(source.id, 'credit', 25000, '2026-09-25', {
+          operationType: 'ESTORNO',
+        })
+        const other = yield* register('other-feed')
+        yield* report(other.id, 'credit', 25000, '2026-09-25', {
+          operationType: 'CASHBACK',
+        })
+        yield* reconciliation.rebuild()
+        assert.deepStrictEqual([corrected, yield* refunds], [[], []])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'keeps a refund whose credit vanished when another refund of the purchase is linked',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, card } = yield* setup
+        const observations = yield* Observations
+        const entries = yield* Entries
+        const source = yield* observations.registerSource({
+          kind: 'manual',
+          externalRef: 'card-feed',
+          label: 'Card',
+        })
+        const report = (
+          externalId: string,
+          bookedOn: string,
+          amountCents: number,
+          description: string,
+          status: 'posted' | 'removed' = 'posted',
+        ) =>
+          Effect.andThen(
+            observations.recordTransactions({
+              sourceId: source.id,
+              accountId: card.id,
+              transactions: [
+                {
+                  externalId,
+                  bookedOn,
+                  amountCents,
+                  currency: 'BRL',
+                  description,
+                  status,
+                  raw: null,
+                },
+              ],
+            }),
+            drain,
+          )
+        const entryId = (amountCents: number) =>
+          Effect.map(
+            entries.entries(card.id),
+            (found) =>
+              found.find((entry) => entry.amountCents === amountCents)!.id,
+          )
+        yield* report('order', '2026-09-16', -25000, 'Loja Online')
+        yield* report('first', '2026-09-20', 5000, 'Credito')
+        const order = yield* entryId(-25000)
+        const first = yield* reconciliation.link({
+          outflowEntryId: order,
+          inflowEntryId: yield* entryId(5000),
+        })
+        yield* report('first', '2026-09-20', 5000, 'Credito', 'removed')
+        yield* report('second', '2026-09-22', 20000, 'Credito ajuste')
+        const second = yield* reconciliation.link({
+          outflowEntryId: order,
+          inflowEntryId: yield* entryId(20000),
+        })
+        const orphans = (yield* reconciliation.orphanedDecisions).map(
+          (orphan) => [orphan.key, orphan.reason, orphan.reserved],
+        )
+
+        // The credit returns: its confirmation still holds.
+        yield* report('first', '2026-09-20', 5000, 'Credito')
+        const statuses = (yield* reconciliation.relations)
+          .filter((relation) => relation.kind === 'refund')
+          .map((relation) => [relation.status, relation.origin])
+        assert.deepStrictEqual(
+          [orphans, statuses, first !== second],
+          [
+            [[first, 'entry_missing', []]],
+            [
+              ['confirmed', 'person'],
+              ['confirmed', 'person'],
+            ],
+            true,
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
 })

@@ -37,8 +37,11 @@ export interface MatchableEntry {
   readonly institution?: string
   /** Who owns the account: a name both sides share is evidence only when it is theirs. */
   readonly ownerName?: string
-  /** The provider's operation type (Pluggy's `operationType`), when known. */
-  readonly operationType?: string | null
+  /**
+   * The operation types (Pluggy's `operationType`) the current version of
+   * each of its observations reports; sources may disagree.
+   */
+  readonly operationTypes?: ReadonlyArray<string>
 }
 
 export type Decision = 'confirmed' | 'rejected'
@@ -1205,28 +1208,32 @@ export const matchRelations = (
     })
   }
   // Refunds and suggested pairs compete for the same entries: a refund that
-  // is confirmed, or scores higher, replaces the suggestions it collides with.
+  // is confirmed, or scores higher, replaces the suggestions it collides
+  // with. One that loses takes nothing, not even part of its purchase.
   const dropped = new Set<number>()
-  for (const refund of matchRefunds(
+  const refunds = matchRefunds(
     entries,
     decisions,
     used,
     refundedCents,
     rejectedEntries,
-  )) {
-    const rivals = [refund.outflowId, refund.inflowId]
-      .map((id) => suggested.get(id))
-      .filter(
-        (index): index is number => index !== undefined && !dropped.has(index),
+    (refund) => {
+      const rivals = [refund.outflowId, refund.inflowId]
+        .map((id) => suggested.get(id))
+        .filter(
+          (index): index is number =>
+            index !== undefined && !dropped.has(index),
+        )
+      const wins = rivals.every(
+        (index) =>
+          refund.status === 'confirmed' ||
+          refund.score > relations[index]!.score,
       )
-    const wins = rivals.every(
-      (index) =>
-        refund.status === 'confirmed' || refund.score > relations[index]!.score,
-    )
-    if (!wins) continue
-    for (const index of rivals) dropped.add(index)
-    relations.push(refund)
-  }
+      if (wins) for (const index of rivals) dropped.add(index)
+      return wins
+    },
+  )
+  relations.push(...refunds)
   return {
     relations: relations
       .filter((_, index) => !dropped.has(index))

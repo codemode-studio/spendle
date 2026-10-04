@@ -1,6 +1,7 @@
 import * as Context from 'effect/Context'
 import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
+import * as Option from 'effect/Option'
 import * as Schema from 'effect/Schema'
 import * as SqlClient from 'effect/sql/SqlClient'
 import * as SqlSchema from 'effect/sql/SqlSchema'
@@ -42,45 +43,51 @@ const DebitRow = Schema.Struct({
   pairedInflowId: Schema.NullOr(Schema.String),
 })
 
-// Observations keep the provider payload; only the instalment fields are read.
+// Observations keep the provider payload, which may be any JSON.
 const LineRow = Schema.Struct({
   entryId: Schema.String,
   bookedOn: Schema.String,
   amountCents: Schema.Int,
   description: Schema.String,
-  raw: Schema.fromJsonString(
+  raw: Schema.String,
+})
+
+// Only the instalment fields are read; a payload without a valid
+// `installment` object carries no metadata.
+const decodeInstallment = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
     Schema.Struct({
-      installment: Schema.optional(
-        Schema.NullOr(
-          Schema.Struct({
-            number: Schema.optional(Schema.NullOr(Schema.Int)),
-            total: Schema.optional(Schema.NullOr(Schema.Int)),
-            totalAmount: Schema.optional(Schema.NullOr(Schema.Number)),
-            purchaseDate: Schema.optional(Schema.NullOr(Schema.String)),
-          }),
-        ),
-      ),
+      installment: Schema.Struct({
+        number: Schema.optional(Schema.NullOr(Schema.Int)),
+        total: Schema.optional(Schema.NullOr(Schema.Int)),
+        totalAmount: Schema.optional(Schema.NullOr(Schema.Number)),
+        purchaseDate: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
     }),
   ),
-})
+)
 
 type Installment = NonNullable<InstallmentLine['installment']>
 
 // Observations of one entry may each carry part of the metadata. Fields
-// combine; a field two sources disagree on is unknown.
-const mergeInstallment = (
-  a: Installment | null,
-  b: Installment | null,
+// combine; a field with two different values across all of them is
+// unknown, whatever order they come in. Disagreeing on which instalment it
+// is leaves no metadata at all.
+const mergeInstallments = (
+  reports: ReadonlyArray<Installment>,
 ): Installment | null => {
-  if (a === null || b === null) return a ?? b
-  if (a.number !== b.number || a.total !== b.total) return null
-  const field = <T>(x: T | null, y: T | null) =>
-    x === null ? y : y === null || x === y ? x : null
+  const only = <T>(values: ReadonlyArray<T | null>) => {
+    const distinct = new Set(values.filter((value) => value !== null))
+    return distinct.size === 1 ? ([...distinct][0] as T) : null
+  }
+  const number = only(reports.map((report) => report.number))
+  const total = only(reports.map((report) => report.total))
+  if (number === null || total === null) return null
   return {
-    number: a.number,
-    total: a.total,
-    purchaseDate: field(a.purchaseDate, b.purchaseDate),
-    totalAmountCents: field(a.totalAmountCents, b.totalAmountCents),
+    number,
+    total,
+    purchaseDate: only(reports.map((report) => report.purchaseDate)),
+    totalAmountCents: only(reports.map((report) => report.totalAmountCents)),
   }
 }
 
@@ -527,31 +534,44 @@ const make = Effect.gen(function* () {
     const card = yield* accounts.get(accountId)
     if (card.card === null)
       return yield* new CardsError({ reason: 'not_a_card', accountId })
-    const byEntry = new Map<string, InstallmentLine>()
+    const byEntry = new Map<
+      string,
+      {
+        line: Omit<InstallmentLine, 'installment'>
+        reports: Array<Installment>
+      }
+    >()
     for (const row of yield* findLines(accountId)) {
-      const metadata = row.raw.installment
-      const installment =
-        metadata?.number && metadata.total
-          ? {
-              number: metadata.number,
-              total: metadata.total,
-              purchaseDate: metadata.purchaseDate?.slice(0, 10) ?? null,
-              totalAmountCents:
-                typeof metadata.totalAmount === 'number'
-                  ? Math.abs(toMinorUnits(metadata.totalAmount, card.currency))
-                  : null,
-            }
-          : null
-      const known = byEntry.get(row.entryId)
-      byEntry.set(row.entryId, {
-        entryId: row.entryId,
-        bookedOn: row.bookedOn,
-        amountCents: row.amountCents,
-        description: row.description,
-        installment: mergeInstallment(known?.installment ?? null, installment),
-      })
+      const metadata = Option.getOrUndefined(
+        decodeInstallment(row.raw),
+      )?.installment
+      const known = byEntry.get(row.entryId) ?? {
+        line: {
+          entryId: row.entryId,
+          bookedOn: row.bookedOn,
+          amountCents: row.amountCents,
+          description: row.description,
+        },
+        reports: [],
+      }
+      if (metadata?.number && metadata.total)
+        known.reports.push({
+          number: metadata.number,
+          total: metadata.total,
+          purchaseDate: metadata.purchaseDate?.slice(0, 10) ?? null,
+          totalAmountCents:
+            typeof metadata.totalAmount === 'number'
+              ? Math.abs(toMinorUnits(metadata.totalAmount, card.currency))
+              : null,
+        })
+      byEntry.set(row.entryId, known)
     }
-    return installmentPlans([...byEntry.values()])
+    return installmentPlans(
+      [...byEntry.values()].map(({ line, reports }) => ({
+        ...line,
+        installment: mergeInstallments(reports),
+      })),
+    )
   })
 
   return { cycles, installments }

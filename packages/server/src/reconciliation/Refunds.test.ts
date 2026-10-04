@@ -10,9 +10,9 @@ const entry = (
   bookedOn: string,
   description: string,
   accountId = 'card',
-  operationType: string | null = null,
+  operationTypes: ReadonlyArray<string> = [],
 ): MatchableEntry => ({
-  operationType,
+  operationTypes,
   id,
   accountId,
   accountKind: accountId === 'card' ? 'credit_card' : 'checking',
@@ -158,18 +158,32 @@ describe('refund matching', () => {
     )
   })
 
+  it('does not take a kind of business, or a partly shared name, for the same merchant', () => {
+    assert.deepStrictEqual(
+      summary([
+        entry('market', -5000, '2026-09-02', 'Mercado Bom Preco'),
+        entry('market-back', 5000, '2026-09-10', 'Estorno Mercado Extra'),
+        entry('pharmacy', -7000, '2026-09-02', 'Farmacia Pague Menos'),
+        entry('pharmacy-back', 7000, '2026-09-10', 'Estorno Farmacia Sao Joao'),
+        entry('order', -9000, '2026-09-02', 'Amazon Prime'),
+        entry('order-back', 9000, '2026-09-10', 'Estorno Amazon Marketplace'),
+      ]),
+      [
+        ['refund', 'market', 'market-back', 'suggested'],
+        ['refund', 'order', 'order-back', 'suggested'],
+        ['refund', 'pharmacy', 'pharmacy-back', 'suggested'],
+      ],
+    )
+  })
+
   it('never takes a credit the provider calls cashback for a refund', () => {
     assert.deepStrictEqual(
       summary([
         entry('order', -1000, '2026-09-01', 'Amazon Marketplace'),
-        entry(
-          'credit',
-          1000,
-          '2026-09-10',
-          'Amazon Marketplace',
-          'card',
+        entry('credit', 1000, '2026-09-10', 'Amazon Marketplace', 'card', [
+          'ESTORNO',
           'CASHBACK',
-        ),
+        ]),
       ]),
       [],
     )
@@ -206,6 +220,24 @@ describe('refund matching', () => {
           },
         ],
       ],
+    )
+  })
+
+  it('leaves a purchase whole for later refunds when a candidate loses to a payment', () => {
+    const relations = summary([
+      entry('order', -10000, '2026-09-01', 'Amazon Marketplace'),
+      entry('pay', 10000, '2026-09-05', 'Pagamento Amazon Marketplace'),
+      entry('debit', -10000, '2026-09-05', 'Pagamento fatura', 'bank'),
+      entry('other-debit', -10000, '2026-09-05', 'Pagamento fatura', 'other'),
+      entry('back', 5000, '2026-09-10', 'Estorno Amazon Marketplace'),
+    ])
+    assert.deepStrictEqual(
+      relations.filter(([kind]) => kind === 'refund'),
+      [['refund', 'order', 'back', 'suggested']],
+    )
+    assert.deepStrictEqual(
+      relations.filter(([kind]) => kind === 'card_payment').length,
+      1,
     )
   })
 
