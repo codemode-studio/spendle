@@ -150,6 +150,12 @@ describe('matchRelations', () => {
           'Joao Carlos da Silva',
           true,
         ),
+        pair(
+          'Pix enviado Silva Comercio Ltda',
+          'Pix recebido Joao Silva',
+          'Joao Silva',
+        ),
+        pair('Pix enviado Silva ME', 'Pix recebido Silva', 'Joao Silva'),
       ],
       [
         ['suggested', 'same_third_party'],
@@ -161,6 +167,8 @@ describe('matchRelations', () => {
         ['suggested', 'same_third_party'],
         ['confirmed', 'same_counterparty'],
         ['suggested', 'names_other_account'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
       ],
     )
   })

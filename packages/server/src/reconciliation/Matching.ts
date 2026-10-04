@@ -190,6 +190,20 @@ const genericNameWords = new Set([
   'solucoes',
 ])
 
+// Words that mark a business: a description carrying one names a company,
+// never the person, even when its remaining words fit the owner's name
+// (`Silva Comercio Ltda` is not `Joao Silva`).
+const businessWords = new Set([
+  ...genericNameWords,
+  'ltda',
+  'eireli',
+  'epp',
+  'me',
+  'mei',
+  'industria',
+  'distribuidora',
+])
+
 // Wording that says both sides belong to the same person.
 const ownAccountWording =
   /\b(mesma titularidade|mesmo titular|entre contas|conta propria|contas proprias)\b/
@@ -287,7 +301,13 @@ const counterpartEvidence = (
   // someone else than `Joao Silva`.
   const isOwner = (name: ReadonlySet<string>) =>
     owners.every((owner) => owner.size > 0 && within(name, owner))
-  const thirdParty = [out, into].some((name) => name.size > 0 && !isOwner(name))
+  const namesBusiness = (entry: MatchableEntry) =>
+    [...descriptionWords(entry.description)].some(
+      (word) => businessWords.has(word) && !institutions.has(word),
+    )
+  const thirdParty =
+    [out, into].some((name) => name.size > 0 && !isOwner(name)) ||
+    [outflow, inflow].some(namesBusiness)
   const reasons: Array<string> = []
   if (names === 'same')
     reasons.push(thirdParty ? 'same_third_party' : 'same_counterparty')
