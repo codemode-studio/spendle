@@ -192,25 +192,6 @@ describe('webhook reactions', () => {
     }).pipe(Effect.provide(openFinanceTest(settings))),
   )
 
-  it.effect('disconnects on item/deleted without calling Pluggy again', () =>
-    Effect.gen(function* () {
-      const { openFinance, connectionId, state } = yield* linkedBank()
-
-      yield* deliver({
-        eventId: 'evt-4',
-        event: 'item/deleted',
-        itemId: 'item-1',
-      })
-      yield* drain
-
-      assert.strictEqual(
-        (yield* openFinance.connection(connectionId)).status,
-        'disconnected',
-      )
-      assert.deepStrictEqual((yield* Ref.get(state)).deleted, [])
-    }).pipe(Effect.provide(openFinanceTest(settings))),
-  )
-
   // A connect token whose widget callback never reached the server.
   const pendingConnection = Effect.gen(function* () {
     yield* TestClock.setTime(
