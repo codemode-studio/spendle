@@ -653,6 +653,14 @@ export async function recordManualBalanceCheckpoint(input: {
   const checkpointId = randomUUID()
 
   db.transaction((transaction) => {
+    // An inferred opening reached by the replacement is a projection of its
+    // booked observation, not a balance the person replaced: captured before
+    // invalidation and derived again, as `invalidateCheckpointChain` does.
+    const replacedOpening =
+      input.targetType === 'account'
+        ? activeInferredOpening(transaction, input.targetId)
+        : undefined
+    const replacementReason = `Substituído explicitamente pelo checkpoint manual ${checkpointId}.`
     if (replacedCheckpointIds.length) {
       transaction
         .update(schema.balanceCheckpoints)
@@ -660,10 +668,16 @@ export async function recordManualBalanceCheckpoint(input: {
           reviewState: 'invalidated',
           verified: false,
           invalidatedAt: new Date(),
-          invalidatedReason: `Substituído explicitamente pelo checkpoint manual ${checkpointId}.`,
+          invalidatedReason: replacementReason,
         })
         .where(inArray(schema.balanceCheckpoints.id, replacedCheckpointIds))
         .run()
+      if (
+        replacedOpening &&
+        replacedCheckpointIds.includes(replacedOpening.id)
+      ) {
+        deriveInferredOpening(transaction, replacedOpening, replacementReason)
+      }
       for (const affectedImport of replacedImports) {
         transaction
           .update(schema.imports)

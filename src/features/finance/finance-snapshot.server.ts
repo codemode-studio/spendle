@@ -7,6 +7,7 @@ import {
 } from '#/domain/monthly-cash-flow'
 import { shiftDays } from '#/domain/period'
 import {
+  currentPositionMovement,
   hasOwnValuation,
   positionCurrentAmountMinor,
   reserveProgressCents,
@@ -248,6 +249,13 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
   }))
 
   const transactionById = new Map(transactions.map((row) => [row.id, row]))
+  // Positions are valued from the current transaction facts behind them.
+  const investmentMovements = investmentMovementRows.map((movement) =>
+    currentPositionMovement(
+      movement,
+      transactionById.get(movement.transactionId) ?? null,
+    ),
+  )
   const investmentPositionById = new Map(
     investmentPositionRows.map((position) => [position.id, position]),
   )
@@ -371,7 +379,7 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
     }
   })
 
-  const cards = cardRows.map((card) => {
+  const cardStatementSummaries = cardRows.map((card) => {
     const effectiveDueDay =
       card.dueDay ?? Math.min(28, Math.max(1, card.closingDay + 7))
     const latestImport = importRows
@@ -509,223 +517,255 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       dueDay: effectiveDueDay,
       referenceDate,
     })
-    const budgetStatements = statementSummary.statements.map((statement) => {
-      const cycle = cardStatementCycleRows.find(
-        (c) => c.creditCardId === card.id && c.dueDate === statement.dueDate,
-      )
-      const sourceImportId = statement.sourceImportId ?? cycle?.importId ?? null
-      const sourceDue = cardStatementCycleRows.find(
-        (c) => c.importId === sourceImportId,
-      )?.dueDate
-      const monthIndex = (date: string) =>
-        Number(date.slice(0, 4)) * 12 + Number(date.slice(5, 7))
-      const futureOffset =
-        statement.certainty === 'installment_schedule' && sourceDue
-          ? monthIndex(statement.dueDate) - monthIndex(sourceDue)
-          : 0
-      const plans = installmentRows.filter(
-        (p) =>
-          p.creditCardId === card.id &&
-          p.sourceTransactionId &&
-          transactionById.get(p.sourceTransactionId)?.importId ===
-            sourceImportId,
-      )
-      const purchases = transactions
-        .filter((t) => t.creditCardId === card.id && t.status !== 'excluded')
-        .map((t) => ({ ...t, bucket: t.category?.bucket ?? null }))
-      const details = sourceImportId
-        ? cardBudgetLines({
-            id: card.id + ':' + statement.dueDate,
-            dueDate: statement.dueDate,
-            totalCents: statement.amountCents,
-            importId: sourceImportId,
-            futureOffset,
-            purchases,
-            includedTransactionIds:
-              statement.certainty === 'open'
-                ? observedStatements.get(statement.dueDate)?.transactionIds
-                : undefined,
-            plans,
-            explicitInstallments:
-              futureControl && 'installments' in futureControl
-                ? futureControl.installments
-                : undefined,
-          })
-        : []
-      const lines = details.flatMap((line) => {
-        const splits = line.transactionId
-          ? transactionSplitRows.filter(
-              (split) => split.transactionId === line.transactionId,
-            )
-          : []
-        return splits.length
-          ? splits.map((split) => ({
-              ...line,
-              id: line.id + ':' + split.id,
-              cents: -split.amountCents,
-              categoryId: split.categoryId,
-              bucket: commitmentBucket(
-                categoriesById.get(split.categoryId)?.bucket ?? null,
-              ),
-            }))
-          : [line]
-      })
-      const paymentIds = reconciliationRows
-        .filter((g) => g.status === 'confirmed' && g.type === 'card_payment')
-        .flatMap((g) => {
-          const links = linksByGroup.get(g.id) ?? []
-          return links.some((l) =>
-            purchases.some(
-              (t) => t.id === l.transactionId && t.importId === sourceImportId,
-            ),
-          )
-            ? links.map((l) => l.transactionId)
-            : []
-        })
-      return {
-        id: card.id + ':' + statement.dueDate,
-        cardId: card.id,
-        name: card.name,
-        dueDate: statement.dueDate,
-        cents: statement.amountCents,
-        closed: statement.certainty === 'closed',
-        lines,
-        paymentIds,
-      }
-    })
-    const ledger = buildCardStatementLedger({
-      statements: statementSummary.statements,
-      transactions: transactionRows.filter(
-        (t) => t.creditCardId === card.id && t.status !== 'excluded',
-      ),
-      accountPayments: transactionRows.filter(
-        (t) =>
-          t.accountId &&
-          t.status !== 'excluded' &&
-          t.currency === card.currency,
-      ),
-      reconciliations: reconciliationRows.map((group) => ({
-        id: group.id,
-        type: group.type,
-        status: group.status,
-        transactionIds: (linksByGroup.get(group.id) ?? []).map(
-          (link) => link.transactionId,
-        ),
-      })),
-      manualLinks: cardStatementPaymentRows.filter(
-        (link) => link.creditCardId === card.id,
-      ),
-      today: referenceDate,
-    })
-    const statements = ledger.map((entry) => ({
-      dueDate: entry.dueDate,
-      closingDate: entry.closingDate,
-      amountCents: entry.amountCents,
-      certainty: entry.certainty ?? null,
-      status: entry.status,
-      paidCents: entry.paidCents,
-      transactions: entry.transactionIds.flatMap((id) => {
-        const transaction = transactionById.get(id)
-        if (!transaction) return []
-        const plan = installmentByTransaction.get(id)
-        return [
-          {
-            id: transaction.id,
-            postedAt: transaction.postedAt,
-            description: transaction.description,
-            amountCents: transaction.amountCents,
-            categoryId: transaction.categoryId,
-            categoryName: transaction.category?.name ?? null,
-            installment: plan
-              ? `${plan.currentInstallment}/${plan.totalInstallments}`
-              : null,
-            temporaryFixed: plan?.commitmentType === 'temporary_fixed',
-          },
-        ]
-      }),
-      payments: entry.payments.flatMap((payment) => {
-        const transaction = transactionById.get(payment.transactionId)
-        if (!transaction) return []
-        return [
-          {
-            ...payment,
-            postedAt: transaction.postedAt,
-            description: transaction.description,
-            accountName: transaction.account
-              ? formatInstrumentName(transaction.account.name)
-              : null,
-          },
-        ]
-      }),
-    }))
-    const latestCheckpoint =
-      checkpointRows.find(
-        (checkpoint) =>
-          checkpoint.creditCardId === card.id &&
-          checkpoint.reviewState !== 'invalidated',
-      ) ?? null
-    const latestVerifiedCheckpoint =
-      checkpointRows.find(
-        (checkpoint) =>
-          checkpoint.creditCardId === card.id &&
-          checkpoint.reviewState === 'verified',
-      ) ?? null
-    const coverage = buildCoverage(card.id, 'card')
-    return {
-      ...card,
-      budgetStatements,
-      dueDayEstimated: card.dueDay === null,
-      instruments: cardInstrumentRows.filter(
-        (instrument) => instrument.creditCardId === card.id,
-      ),
-      unexplainedNextStatementCents:
-        futureControl && 'unexplainedNextCents' in futureControl
-          ? Math.max(0, futureControl.unexplainedNextCents)
-          : 0,
-      statementCents: statementSummary.current.amountCents,
-      statements,
-      currentStatement: statementSummary.current,
-      nextStatement: statementSummary.next,
-      upcomingStatements: statementSummary.statements
-        .filter((statement) => statement.dueDate >= referenceDate)
-        .map((statement) => {
-          const entry = ledger.find(
-            (item) => item.dueDate === statement.dueDate,
-          )
-          // Only payments already posted settle the projected cash: the bank
-          // debit or the card's own received payment for it, counted once.
-          // With neither posted, the debit stays scheduled.
-          const settlement = entry
-            ? statementCashSettlement(entry, (transactionId) => {
-                const row = transactionById.get(transactionId)
-                return (
-                  row?.status === 'confirmed' && row.postedAt <= referenceDate
-                )
-              })
-            : { paidCents: 0, paid: false }
-          return { ...statement, ...settlement }
-        }),
-      outstandingCents: statementSummary.outstandingCents,
-      availableLimitCents: Math.max(
-        0,
-        card.limitCents - statementSummary.outstandingCents,
-      ),
-      latestCheckpoint,
-      latestVerifiedCheckpoint,
-      coverage,
-      unverifiedDays: countUnverifiedDays(
-        coverage,
-        latestVerifiedCheckpoint?.asOf ?? null,
-      ),
-      statementCycles: cardStatementCycleRows.filter(
-        (cycle) => cycle.creditCardId === card.id,
-      ),
-      scope: scopeById.get(card.ownershipScopeId) ?? null,
-      institution: card.institutionId
-        ? (institutionById.get(card.institutionId) ?? null)
-        : null,
-    }
+    return { card, futureControl, observedStatements, statementSummary }
   })
+  // A bank debit the person linked to one card's statement is that card's
+  // payment: no other card infers it or lists it as a candidate.
+  const manualPaymentCard = new Map(
+    cardStatementPaymentRows.map((link) => [
+      link.transactionId,
+      link.creditCardId,
+    ]),
+  )
+  const cards = cardStatementSummaries.map(
+    ({ card, futureControl, observedStatements, statementSummary }) => {
+      const budgetStatements = statementSummary.statements.map((statement) => {
+        const cycle = cardStatementCycleRows.find(
+          (c) => c.creditCardId === card.id && c.dueDate === statement.dueDate,
+        )
+        const sourceImportId =
+          statement.sourceImportId ?? cycle?.importId ?? null
+        const sourceDue = cardStatementCycleRows.find(
+          (c) => c.importId === sourceImportId,
+        )?.dueDate
+        const monthIndex = (date: string) =>
+          Number(date.slice(0, 4)) * 12 + Number(date.slice(5, 7))
+        const futureOffset =
+          statement.certainty === 'installment_schedule' && sourceDue
+            ? monthIndex(statement.dueDate) - monthIndex(sourceDue)
+            : 0
+        const plans = installmentRows.filter(
+          (p) =>
+            p.creditCardId === card.id &&
+            p.sourceTransactionId &&
+            transactionById.get(p.sourceTransactionId)?.importId ===
+              sourceImportId,
+        )
+        const purchases = transactions
+          .filter((t) => t.creditCardId === card.id && t.status !== 'excluded')
+          .map((t) => ({ ...t, bucket: t.category?.bucket ?? null }))
+        const details = sourceImportId
+          ? cardBudgetLines({
+              id: card.id + ':' + statement.dueDate,
+              dueDate: statement.dueDate,
+              totalCents: statement.amountCents,
+              importId: sourceImportId,
+              futureOffset,
+              purchases,
+              includedTransactionIds:
+                statement.certainty === 'open'
+                  ? observedStatements.get(statement.dueDate)?.transactionIds
+                  : undefined,
+              plans,
+              explicitInstallments:
+                futureControl && 'installments' in futureControl
+                  ? futureControl.installments
+                  : undefined,
+            })
+          : []
+        const lines = details.flatMap((line) => {
+          const splits = line.transactionId
+            ? transactionSplitRows.filter(
+                (split) => split.transactionId === line.transactionId,
+              )
+            : []
+          return splits.length
+            ? splits.map((split) => ({
+                ...line,
+                id: line.id + ':' + split.id,
+                cents: -split.amountCents,
+                categoryId: split.categoryId,
+                bucket: commitmentBucket(
+                  categoriesById.get(split.categoryId)?.bucket ?? null,
+                ),
+              }))
+            : [line]
+        })
+        const paymentIds = reconciliationRows
+          .filter((g) => g.status === 'confirmed' && g.type === 'card_payment')
+          .flatMap((g) => {
+            const links = linksByGroup.get(g.id) ?? []
+            return links.some((l) =>
+              purchases.some(
+                (t) =>
+                  t.id === l.transactionId && t.importId === sourceImportId,
+              ),
+            )
+              ? links.map((l) => l.transactionId)
+              : []
+          })
+        return {
+          id: card.id + ':' + statement.dueDate,
+          cardId: card.id,
+          name: card.name,
+          dueDate: statement.dueDate,
+          cents: statement.amountCents,
+          closed: statement.certainty === 'closed',
+          lines,
+          paymentIds,
+        }
+      })
+      const ledger = buildCardStatementLedger({
+        statements: statementSummary.statements,
+        transactions: transactionRows.filter(
+          (t) => t.creditCardId === card.id && t.status !== 'excluded',
+        ),
+        accountPayments: transactionRows.filter(
+          (t) =>
+            t.accountId &&
+            t.status !== 'excluded' &&
+            t.currency === card.currency &&
+            (manualPaymentCard.get(t.id) ?? card.id) === card.id,
+        ),
+        reconciliations: reconciliationRows.map((group) => ({
+          id: group.id,
+          type: group.type,
+          status: group.status,
+          transactionIds: (linksByGroup.get(group.id) ?? []).map(
+            (link) => link.transactionId,
+          ),
+        })),
+        manualLinks: cardStatementPaymentRows.filter(
+          (link) => link.creditCardId === card.id,
+        ),
+        // An exact debit that could pay another card stays a candidate.
+        otherCardStatements: cardStatementSummaries.flatMap((other) =>
+          other.card.id !== card.id && other.card.currency === card.currency
+            ? other.statementSummary.statements.filter(
+                // Settled in full by the person's own link, it is not open
+                // for this debit.
+                (statement) =>
+                  !cardStatementPaymentRows.some(
+                    (link) =>
+                      link.creditCardId === other.card.id &&
+                      link.dueDate === statement.dueDate &&
+                      !link.partial,
+                  ),
+              )
+            : [],
+        ),
+        today: referenceDate,
+      })
+      const statements = ledger.map((entry) => ({
+        dueDate: entry.dueDate,
+        closingDate: entry.closingDate,
+        amountCents: entry.amountCents,
+        certainty: entry.certainty ?? null,
+        status: entry.status,
+        paidCents: entry.paidCents,
+        transactions: entry.transactionIds.flatMap((id) => {
+          const transaction = transactionById.get(id)
+          if (!transaction) return []
+          const plan = installmentByTransaction.get(id)
+          return [
+            {
+              id: transaction.id,
+              postedAt: transaction.postedAt,
+              description: transaction.description,
+              amountCents: transaction.amountCents,
+              categoryId: transaction.categoryId,
+              categoryName: transaction.category?.name ?? null,
+              installment: plan
+                ? `${plan.currentInstallment}/${plan.totalInstallments}`
+                : null,
+              temporaryFixed: plan?.commitmentType === 'temporary_fixed',
+            },
+          ]
+        }),
+        payments: entry.payments.flatMap((payment) => {
+          const transaction = transactionById.get(payment.transactionId)
+          if (!transaction) return []
+          return [
+            {
+              ...payment,
+              postedAt: transaction.postedAt,
+              description: transaction.description,
+              accountName: transaction.account
+                ? formatInstrumentName(transaction.account.name)
+                : null,
+            },
+          ]
+        }),
+      }))
+      const latestCheckpoint =
+        checkpointRows.find(
+          (checkpoint) =>
+            checkpoint.creditCardId === card.id &&
+            checkpoint.reviewState !== 'invalidated',
+        ) ?? null
+      const latestVerifiedCheckpoint =
+        checkpointRows.find(
+          (checkpoint) =>
+            checkpoint.creditCardId === card.id &&
+            checkpoint.reviewState === 'verified',
+        ) ?? null
+      const coverage = buildCoverage(card.id, 'card')
+      return {
+        ...card,
+        budgetStatements,
+        dueDayEstimated: card.dueDay === null,
+        instruments: cardInstrumentRows.filter(
+          (instrument) => instrument.creditCardId === card.id,
+        ),
+        unexplainedNextStatementCents:
+          futureControl && 'unexplainedNextCents' in futureControl
+            ? Math.max(0, futureControl.unexplainedNextCents)
+            : 0,
+        statementCents: statementSummary.current.amountCents,
+        statements,
+        currentStatement: statementSummary.current,
+        nextStatement: statementSummary.next,
+        upcomingStatements: statementSummary.statements
+          .filter((statement) => statement.dueDate >= referenceDate)
+          .map((statement) => {
+            const entry = ledger.find(
+              (item) => item.dueDate === statement.dueDate,
+            )
+            // Only payments already posted settle the projected cash: the bank
+            // debit or the card's own received payment for it, counted once.
+            // With neither posted, the debit stays scheduled.
+            const settlement = entry
+              ? statementCashSettlement(entry, (transactionId) => {
+                  const row = transactionById.get(transactionId)
+                  return (
+                    row?.status === 'confirmed' && row.postedAt <= referenceDate
+                  )
+                })
+              : { paidCents: 0, paid: false }
+            return { ...statement, ...settlement }
+          }),
+        outstandingCents: statementSummary.outstandingCents,
+        availableLimitCents: Math.max(
+          0,
+          card.limitCents - statementSummary.outstandingCents,
+        ),
+        latestCheckpoint,
+        latestVerifiedCheckpoint,
+        coverage,
+        unverifiedDays: countUnverifiedDays(
+          coverage,
+          latestVerifiedCheckpoint?.asOf ?? null,
+        ),
+        statementCycles: cardStatementCycleRows.filter(
+          (cycle) => cycle.creditCardId === card.id,
+        ),
+        scope: scopeById.get(card.ownershipScopeId) ?? null,
+        institution: card.institutionId
+          ? (institutionById.get(card.institutionId) ?? null)
+          : null,
+      }
+    },
+  )
 
   // A bank debit settled on one card is never a candidate for another card.
   const settledPaymentIds = new Set(
@@ -880,7 +920,7 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
                 convertToBaseCurrency(
                   positionCurrentAmountMinor(
                     position,
-                    investmentMovementRows
+                    investmentMovements
                       .filter((movement) => movement.positionId === position.id)
                       .map((movement) => ({
                         ...movement,
@@ -1076,7 +1116,7 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       }),
       reconciliations: reconciliationsForSummary,
       recurrenceActuals,
-      investmentMovements: investmentMovementRows.flatMap((movement) => {
+      investmentMovements: investmentMovements.flatMap((movement) => {
         const position = investmentPositionById.get(movement.positionId)
         if (!position) return []
         const goal = position.goalId

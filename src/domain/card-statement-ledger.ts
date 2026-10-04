@@ -113,6 +113,11 @@ export function buildCardStatementLedger(input: {
   accountPayments: LedgerAccountPayment[]
   reconciliations: LedgerReconciliation[]
   manualLinks?: LedgerManualLink[]
+  /**
+   * Statements of the person's other cards in the same currency. A bank debit
+   * that could pay one of them is not inferred for this card.
+   */
+  otherCardStatements?: Array<Pick<LedgerStatement, 'dueDate' | 'amountCents'>>
   today: string
 }): StatementLedgerEntry[] {
   const statements = [...input.statements].sort((a, b) =>
@@ -281,9 +286,11 @@ export function buildCardStatementLedger(input: {
     )
     if (exact.length === 1) {
       const payment = exact[0]
-      const ambiguous = entries.some(
+      const ambiguous = [
+        ...entries.filter((other) => other !== entry),
+        ...(input.otherCardStatements ?? []),
+      ].some(
         (other) =>
-          other !== entry &&
           other.amountCents === entry.amountCents &&
           distance(payment.postedAt, other.dueDate) <= INFERRED_WINDOW_DAYS,
       )

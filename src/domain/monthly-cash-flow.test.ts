@@ -749,6 +749,43 @@ describe('cash projection from financial facts', () => {
     ).toEqual([])
   })
 
+  it('keeps a fixed expense paid from a reserve account out of the operating forecast', () => {
+    const scenario = projectionFacts(today)
+    scenario.accounts = [
+      account({
+        id: 'operating-account',
+        statementBalanceAt: today,
+        statementBalanceCents: 100000,
+      }),
+      account({
+        id: 'reserve-account',
+        purpose: 'reserve',
+        statementBalanceAt: today,
+        statementBalanceCents: 500000,
+      }),
+    ]
+    scenario.recurrences = scenario.recurrences.map((row) => ({
+      ...row,
+      accountId: 'reserve-account',
+    }))
+    const projection = projectCash(scenario, {
+      today,
+      daysBack: 0,
+      daysAhead: 30,
+    })
+    expect(projection.in30Cents).toBe(100000)
+    expect(projection.scheduled).toEqual([])
+
+    // A mesma despesa paga pela conta operacional continua reduzindo o caixa.
+    scenario.recurrences = scenario.recurrences.map((row) => ({
+      ...row,
+      accountId: 'operating-account',
+    }))
+    expect(
+      projectCash(scenario, { today, daysBack: 0, daysAhead: 30 }).in30Cents,
+    ).toBe(90000)
+  })
+
   it('trims a projection to a shorter horizon without touching the scenario', () => {
     const scenario = projectionFacts(today)
     scenario.transactions = [spend('expense', today, -60000)]

@@ -74,3 +74,30 @@ export function reserveProgressCents(input: {
     ? positionsCents
     : input.recordedCents + positionsCents
 }
+
+/**
+ * A movement records the person's choice of position; its amount, base value
+ * and direction follow the transaction it points to, so an accepted
+ * correction of that transaction revalues the position.
+ */
+export function currentPositionMovement<
+  TMovement extends {
+    kind: 'contribution' | 'withdrawal'
+    amountMinor: number
+    baseAmountCents: number | null
+  },
+>(
+  movement: TMovement,
+  transaction: { amountCents: number; baseAmountCents: number | null } | null,
+): TMovement {
+  if (!transaction || transaction.amountCents === 0) return movement
+  return {
+    ...movement,
+    kind: transaction.amountCents > 0 ? 'contribution' : 'withdrawal',
+    amountMinor: Math.abs(transaction.amountCents),
+    baseAmountCents:
+      transaction.baseAmountCents === null
+        ? null
+        : Math.abs(transaction.baseAmountCents),
+  }
+}

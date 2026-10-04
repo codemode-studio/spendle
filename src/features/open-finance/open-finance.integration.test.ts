@@ -7,7 +7,14 @@ import {
   createManualBalanceCheckpoint,
   createManualTransaction,
 } from '#/features/finance/finance.server'
-import { getFinanceSnapshot } from '#/features/finance/finance-snapshot.server'
+import {
+  getFinanceSnapshot,
+  getPlanningSnapshot,
+} from '#/features/finance/finance-snapshot.server'
+import {
+  classifyInvestmentTransaction,
+  getInvestmentsSnapshot,
+} from '#/features/investments/investments.server'
 import { clearTransactionData } from '#/features/finance/import.server'
 import { transactionFingerprint } from '#/features/finance/canonicalization.server'
 import { openTestDatabase } from '#/test/database'
@@ -1024,6 +1031,94 @@ describe('Open Finance history window', () => {
     expect(await balance()).toBe(90_000)
   })
 
+  it('values an investment position from the accepted correction', async () => {
+    const { db, schema, ids } = database
+    await db.insert(schema.accounts).values({
+      id: 'pluggy-broker',
+      ownershipScopeId: ids.personScope,
+      institutionId: ids.institution,
+      name: 'Corretora Pluggy',
+      kind: 'investment',
+      purpose: 'investment',
+      currency: 'BRL',
+    })
+    await db.insert(schema.investmentGoals).values({
+      id: 'pluggy-reserve-goal',
+      name: 'Reserva de emergência',
+      type: 'emergency_reserve',
+      targetCents: 1_000_000,
+      currentCents: 0,
+      priority: 1,
+    })
+    const gateway = new FakePluggyGateway()
+    const contribution = providerTransaction({
+      id: 'provider-contribution',
+      description: 'Aporte CDB',
+      type: 'CREDIT',
+      amount: 300,
+    })
+    gateway.transactions.set('provider-bank', [contribution])
+    const connectionId = await registeredConnection(database, gateway)
+    await mapPluggyAccount(
+      {
+        providerAccountId: 'provider-bank',
+        existingTarget: { type: 'account', id: 'pluggy-broker' },
+      },
+      gateway,
+      mappedAt,
+    )
+    const [copied] = await db
+      .select()
+      .from(schema.transactions)
+      .where(eq(schema.transactions.accountId, 'pluggy-broker'))
+    expect(copied.amountCents).toBe(30_000)
+    const { positionId } = await classifyInvestmentTransaction({
+      transactionId: copied.id,
+      newPosition: {
+        name: 'CDB',
+        assetClassId: 'fixed-income',
+        goalId: 'pluggy-reserve-goal',
+      },
+    })
+
+    gateway.transactions.set('provider-bank', [
+      { ...contribution, amount: 500 },
+    ])
+    await syncPluggyConnection({ connectionId }, gateway)
+    const [pending] = await db
+      .select()
+      .from(schema.openFinanceTransactionObservations)
+      .where(
+        eq(
+          schema.openFinanceTransactionObservations.resolution,
+          'correction_pending',
+        ),
+      )
+    await resolvePluggyCorrection({
+      observationId: pending.id,
+      action: 'accept',
+    })
+
+    const investments = await getInvestmentsSnapshot({})
+    const position = investments.positions.find(
+      (item) => item.id === positionId,
+    )
+    expect(position).toMatchObject({
+      currentAmountMinor: 50_000,
+      currentBaseCents: 50_000,
+    })
+    expect(position?.movements[0]).toMatchObject({
+      transactionId: copied.id,
+      amountMinor: 50_000,
+    })
+    expect(investments.summary).toMatchObject({
+      totalCents: 50_000,
+      reserveCurrentCents: 50_000,
+    })
+    const planning = await getPlanningSnapshot()
+    expect(planning.dashboard.reserve.currentCents).toBe(50_000)
+  })
+
   it('derives the opening again when Pluggy deletes a copied fact', async () => {
     const gateway = new FakePluggyGateway()
     await connectedAccount(database, gateway)
@@ -1330,6 +1425,77 @@ describe('Open Finance history window', () => {
       expect(await balance()).toBe(afterReplacement)
       // The booked observation of Sept 15 is newer than the replaced checkpoint.
       expect(afterReplacement).toBe(90_000)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the booked anchor after replacing a checkpoint dated before the opening', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-09-15T15:00:00Z'))
+      const gateway = new FakePluggyGateway()
+      const connectionId = await registeredConnection(database, gateway)
+      const mapped = await mapPluggyAccount(
+        {
+          providerAccountId: 'provider-bank',
+          newTarget: {
+            type: 'account',
+            name: 'Conta Pluggy',
+            kind: 'checking',
+            purpose: 'operating',
+          },
+        },
+        gateway,
+        mappedAt,
+      )
+      expect(mapped.historyStart).toBe('2026-06-01')
+      const accountId = mapped.accountId!
+      const balance = async () =>
+        (await getFinanceSnapshot()).accounts.find(
+          (item) => item.id === accountId,
+        )?.balanceCents
+      await createManualBalanceCheckpoint({
+        targetType: 'account',
+        targetId: accountId,
+        balanceCents: 80_000,
+        asOf: '2026-05-30',
+        balanceType: 'posted',
+      })
+      expect(await balance()).toBe(90_000)
+
+      // Replacing May 30 also reaches the May 31 inferred opening; the booked
+      // 900.00 of Sept 15 still anchors the account.
+      await createManualBalanceCheckpoint({
+        targetType: 'account',
+        targetId: accountId,
+        balanceCents: 70_000,
+        asOf: '2026-05-30',
+        balanceType: 'posted',
+        replaceExisting: true,
+      })
+      expect(await balance()).toBe(90_000)
+      await syncPluggyConnection({ connectionId }, gateway)
+      expect(await balance()).toBe(90_000)
+      const active = (
+        await database.db
+          .select()
+          .from(database.schema.balanceCheckpoints)
+          .where(eq(database.schema.balanceCheckpoints.accountId, accountId))
+      ).filter((checkpoint) => checkpoint.reviewState !== 'invalidated')
+      expect(
+        active.map(({ kind, asOf, balanceCents }) => ({
+          kind,
+          asOf,
+          balanceCents,
+        })),
+      ).toEqual(
+        expect.arrayContaining([
+          { kind: 'manual', asOf: '2026-05-30', balanceCents: 70_000 },
+          { kind: 'opening', asOf: '2026-05-31', balanceCents: 91_000 },
+        ]),
+      )
+      expect(active).toHaveLength(2)
     } finally {
       vi.useRealTimers()
     }

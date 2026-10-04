@@ -7,6 +7,7 @@ import * as schema from '#/db/schema'
 import { convertMinorUnitsAtRate } from '#/domain/currency'
 import { allocationAmount, calculateConservativeBase } from '#/domain/finance'
 import {
+  currentPositionMovement,
   hasOwnValuation,
   positionCurrentAmountMinor,
   reserveProgressCents,
@@ -64,7 +65,7 @@ export async function getInvestmentsSnapshot(
     accounts,
     institutions,
     goals,
-    movements,
+    movementRows,
     transactions,
     exchangeRates,
     strategies,
@@ -131,6 +132,13 @@ export async function getInvestmentsSnapshot(
   const goalById = new Map(goals.map((goal) => [goal.id, goal]))
   const transactionById = new Map(
     transactions.map((transaction) => [transaction.id, transaction]),
+  )
+  // The position choice is the person's; amounts follow the current facts.
+  const movements = movementRows.map((movement) =>
+    currentPositionMovement(
+      movement,
+      transactionById.get(movement.transactionId) ?? null,
+    ),
   )
 
   const items = positions

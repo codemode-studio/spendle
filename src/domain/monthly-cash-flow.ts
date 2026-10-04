@@ -901,12 +901,15 @@ export function projectCash(
   // Compromissos datados dentro do horizonte.
   const scheduled: Array<CashEvent> = []
   for (const { recurrence, occurrences } of calendar) {
+    // Receitas e despesas de contas fora do caixa operacional (reserva,
+    // investimento, inativas) não movem o saldo projetado.
+    if (recurrence.accountId && !cashAccountIds.has(recurrence.accountId))
+      continue
     if (
       recurrence.direction === 'income' &&
-      (['transfer', 'profit_distribution_income'].includes(
+      ['transfer', 'profit_distribution_income'].includes(
         recurrence.categoryId ?? '',
-      ) ||
-        (recurrence.accountId && !cashAccountIds.has(recurrence.accountId)))
+      )
     )
       continue
     for (const occurrence of occurrences) {

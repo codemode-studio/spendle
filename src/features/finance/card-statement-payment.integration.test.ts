@@ -564,3 +564,101 @@ describe('pagamento pendente na projeção de caixa', () => {
     ).toBe(-30_000)
   })
 })
+
+describe('débito de pagamento entre dois cartões', () => {
+  let database: TestDatabase | undefined
+
+  afterEach(() => {
+    database?.close()
+    vi.useRealTimers()
+  })
+
+  /** Dois cartões com faturas de R$ 300,00 vencendo em 15/09. */
+  async function twoCardsDueSept15() {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-08T12:00:00Z'))
+    database = await openTestDatabase()
+    const { db, ids } = database
+    await db
+      .update(schema.creditCards)
+      .set({ dueDay: 15 })
+      .where(eq(schema.creditCards.id, ids.card))
+    await db.insert(schema.creditCards).values({
+      id: 'second-card',
+      ownershipScopeId: ids.personScope,
+      institutionId: ids.institution,
+      name: 'Segundo cartão',
+      currency: 'BRL',
+      lastFour: '4242',
+      closingDay: 2,
+      dueDay: 15,
+    })
+    for (const cardId of [ids.card, 'second-card'])
+      await createManualTransaction({
+        targetType: 'card',
+        targetId: cardId,
+        postedAt: '2026-08-20',
+        description: 'Compra no cartão',
+        direction: 'outflow',
+        amountCents: 30_000,
+        categoryId: 'groceries',
+      })
+    const debit = await createManualTransaction({
+      targetType: 'account',
+      targetId: ids.brlAccount,
+      postedAt: '2026-09-07',
+      description: 'Pagamento de fatura',
+      direction: 'outflow',
+      amountCents: 30_000,
+      categoryId: 'card_payment',
+    })
+    return { cardA: ids.card, cardB: 'second-card', debitId: debit.id }
+  }
+
+  function cardView(
+    snapshot: Awaited<ReturnType<typeof getFinanceSnapshot>>,
+    cardId: string,
+  ) {
+    return {
+      statement: snapshot.cards
+        .find((card) => card.id === cardId)
+        ?.statements.find((row) => row.dueDate === '2026-09-15'),
+      scheduledCents: snapshot.cashProjection.scheduled.find(
+        (event) => event.id === `${cardId}-2026-09-15`,
+      )?.amountCents,
+    }
+  }
+
+  it('o débito vinculado a um cartão não quita a fatura do outro', async () => {
+    const { cardA, cardB, debitId } = await twoCardsDueSept15()
+    await linkCardStatementPayment({
+      creditCardId: cardA,
+      dueDate: '2026-09-15',
+      transactionId: debitId,
+    })
+    const snapshot = await getFinanceSnapshot()
+    const a = cardView(snapshot, cardA)
+    const b = cardView(snapshot, cardB)
+    expect(a.statement?.status).toBe('paid')
+    expect(a.scheduledCents).toBeUndefined()
+    expect(b.statement?.status).not.toBe('paid')
+    expect(
+      b.statement?.payments.some((p) => p.transactionId === debitId),
+    ).toBe(false)
+    expect(b.scheduledCents).toBe(-30_000)
+  })
+
+  it('não deduz que um débito sem vínculo quitou um dos dois cartões', async () => {
+    const { cardA, cardB, debitId } = await twoCardsDueSept15()
+    const snapshot = await getFinanceSnapshot()
+    for (const cardId of [cardA, cardB]) {
+      const view = cardView(snapshot, cardId)
+      expect(view.statement?.status).not.toBe('paid')
+      expect(
+        view.statement?.payments.find((p) => p.transactionId === debitId)
+          ?.kind,
+      ).toBe('candidate')
+      expect(view.scheduledCents).toBe(-30_000)
+    }
+  })
+})
