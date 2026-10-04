@@ -1,0 +1,131 @@
+import * as Result from 'effect/Result'
+
+import type { StatementProblem } from '../Statement.ts'
+import {
+  cents,
+  isoDate,
+  mostFrequent,
+  monthNumber,
+  readingOrder,
+} from './Layout.ts'
+import type {
+  LayoutInput,
+  LayoutLine,
+  LayoutStatement,
+  PdfLayout,
+} from './Layout.ts'
+
+const months = 'JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ'
+
+/**
+ * Reads a Nubank card bill. Rows print day and month only; the year comes
+ * from the due date and the cycle, which can span a new year. Payments of
+ * earlier bills are left out: the bank account records them as transfers.
+ * The purchases must add up to `Total a pagar`.
+ */
+export const parseNubankCard = ({
+  lines,
+}: LayoutInput): Result.Result<LayoutStatement, StatementProblem> => {
+  const due = lines
+    .find((line) => /data de vencimento\s*:/i.test(line.text))
+    ?.text.match(
+      new RegExp(
+        `data de vencimento\\s*:\\s*(\\d{2})\\s+(${months})\\s+(\\d{4})`,
+        'i',
+      ),
+    )
+  const cycle = lines
+    .find((line) => /per[ií]odo vigente\s*:/i.test(line.text))
+    ?.text.match(
+      new RegExp(
+        `per[ií]odo vigente\\s*:\\s*(\\d{2})\\s+(${months})\\s+a\\s+(\\d{2})\\s+(${months})`,
+        'i',
+      ),
+    )
+  if (!due || !cycle) return Result.fail('no_statement')
+
+  const dueYear = Number(due[3])
+  const dueMonth = monthNumber(due[2]!)
+  const startMonth = monthNumber(cycle[2]!)
+  const endMonth = monthNumber(cycle[4]!)
+  const endYear = endMonth > dueMonth ? dueYear - 1 : dueYear
+  const startYear = startMonth > endMonth ? endYear - 1 : endYear
+  const periodStart = isoDate(startYear, startMonth, Number(cycle[1]))
+  const periodEnd = isoDate(endYear, endMonth, Number(cycle[3]))
+
+  const total = lines
+    .find((line) =>
+      /^total a pagar\s+R\$\s*(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2}$/i.test(
+        line.text,
+      ),
+    )
+    ?.text.match(/R\$\s*((?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})$/)?.[1]
+  const totalCents = total ? cents(total) : null
+  if (totalCents === null) return Result.fail('no_statement')
+
+  const transactionPages = new Set(
+    lines
+      .filter((line) => /^transa[cç][oõ]es\b/i.test(line.text))
+      .map((line) => line.bounds.page),
+  )
+  const rowPattern = new RegExp(
+    `^(\\d{2})\\s+(${months})\\s+(?:(?:[•*]{4})\\s*(\\d{4})\\s+)?(.+?)\\s+([−-]?\\s*R\\$)\\s*((?:\\d{1,3}(?:\\.\\d{3})*|\\d+),\\d{2})$`,
+    'i',
+  )
+  const rows: Array<LayoutLine> = []
+  for (const line of readingOrder(lines)) {
+    if (!transactionPages.has(line.bounds.page)) continue
+    const match = line.text.match(rowPattern)
+    if (!match) continue
+    const [, day, rawMonth, , rawDescription, marker, rawAmount] = match
+    const description = rawDescription!.replace(/\s+/g, ' ').trim()
+    if (/^pagamento\s+em\b/i.test(description)) continue
+    const amount = cents(rawAmount!)
+    if (amount === null) return Result.fail('summary_balance_mismatch')
+    const month = monthNumber(rawMonth!)
+    const year =
+      startYear !== endYear && month >= startMonth ? startYear : endYear
+    const bookedOn = isoDate(year, month, Number(day))
+    if (bookedOn < periodStart || bookedOn > periodEnd)
+      return Result.fail('summary_balance_mismatch')
+    rows.push({
+      bookedOn,
+      description,
+      // A purchase is printed positive; a refund or credit with a minus.
+      amountCents: /^[−-]/.test(marker!) ? Math.abs(amount) : -Math.abs(amount),
+      source: line,
+    })
+  }
+
+  const charged = -rows.reduce((sum, row) => sum + row.amountCents, 0)
+  if (rows.length === 0 || charged !== totalCents)
+    return Result.fail('summary_balance_mismatch')
+
+  return Result.succeed({
+    lines: rows,
+    period: { start: periodStart, end: periodEnd },
+    // The bill's total is what the holder owes at the cycle's close. The
+    // ledger records money owed on a card as a negative balance.
+    closingBalance: { asOf: periodEnd, cents: -totalCents },
+    accountHint:
+      mostFrequent(
+        lines.flatMap((line) => [
+          ...line.text.matchAll(/[•*]{4}\s*(\d{4})\b/g),
+        ]),
+      ) ?? null,
+    rejectedRows: 0,
+  })
+}
+
+export const nubankCard: PdfLayout = {
+  id: 'nubank/card-statement/v1',
+  kind: 'card',
+  currency: 'BRL',
+  matches: (text) =>
+    /nu pagamentos s\.?a\.?/i.test(text) &&
+    /resumo da fatura atual/i.test(text) &&
+    /per[ií]odo vigente/i.test(text) &&
+    /total de compras de todos os cart[oõ]es/i.test(text) &&
+    /transa[cç][oõ]es/i.test(text),
+  parse: parseNubankCard,
+}

@@ -347,6 +347,9 @@ importers:
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
         version: 4.0.0(effect@4.0.0)
+      '@firecrawl/pdf-inspector':
+        specifier: 1.17.0
+        version: 1.17.0
       effect:
         specifier: 'catalog:'
         version: 4.0.0

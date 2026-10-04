@@ -11,7 +11,7 @@ export interface StatementLine {
 
 /** What a statement file declares about itself, beside its lines. */
 export interface ParsedStatement {
-  readonly format: 'ofx' | 'csv'
+  readonly format: 'ofx' | 'csv' | 'pdf'
   readonly currency: string | null
   /** Whether the file says it is a bank or a card statement, when it does. */
   readonly accountKind: 'account' | 'card' | null
@@ -38,6 +38,8 @@ export type StatementProblem =
   | 'malformed_csv'
   | 'malformed_ofx'
   | 'unsupported_encoding'
+  /** The file is a statement of another kind of account, such as a card bill for a bank account. */
+  | 'account_mismatch'
 
 /**
  * Decodes text that declares no encoding: UTF-8 when the bytes are valid

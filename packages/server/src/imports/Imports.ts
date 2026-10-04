@@ -15,8 +15,9 @@ import type { Account } from '../ledger/Accounts.ts'
 import { Observations } from '../ledger/Observations.ts'
 import { parseCsv } from './Csv.ts'
 import { decodeOfx, looksLikeOfx, parseOfx } from './Ofx.ts'
+import { extractPdfText, looksLikePdf, parsePdf } from './Pdf.ts'
 import { decodeUndeclared } from './Statement.ts'
-import type { ParsedStatement, StatementProblem } from './Statement.ts'
+import type { ParsedStatement } from './Statement.ts'
 
 export const fileImported = 'FileImported'
 
@@ -70,25 +71,37 @@ export interface ImportResult extends ImportPreview {
 const hex = (bytes: Uint8Array) =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
 
-const looksLikePdf = (bytes: Uint8Array) =>
-  bytes[0] === 0x25 &&
-  bytes[1] === 0x50 &&
-  bytes[2] === 0x44 &&
-  bytes[3] === 0x46
-
-const parse = (
-  bytes: Uint8Array,
-  account: Account,
-): Result.Result<ParsedStatement, StatementProblem> => {
-  if (looksLikePdf(bytes)) return Result.fail('unsupported_format')
+const parseText = (bytes: Uint8Array, kind: 'account' | 'card') => {
   const ofx = decodeOfx(bytes)
   if (Result.isFailure(ofx)) return Result.fail(ofx.failure)
   if (looksLikeOfx(ofx.success)) return parseOfx(ofx.success)
-  return parseCsv(
-    decodeUndeclared(bytes),
-    account.kind === 'credit_card' ? 'card' : 'account',
-  )
+  return parseCsv(decodeUndeclared(bytes), kind)
 }
+
+// Reads the bytes for the kind of account they are imported into.
+const parse = Effect.fnUntraced(function* (
+  bytes: Uint8Array,
+  account: Account,
+) {
+  const kind = account.kind === 'credit_card' ? 'card' : 'account'
+  const parsed = looksLikePdf(bytes)
+    ? parsePdf(
+        yield* extractPdfText(bytes).pipe(
+          Effect.mapError(
+            () =>
+              new ImportRejected({
+                reason: 'unsupported_format',
+                detail: 'unreadable PDF',
+              }),
+          ),
+        ),
+        kind,
+      )
+    : parseText(bytes, kind)
+  if (Result.isFailure(parsed))
+    return yield* new ImportRejected({ reason: parsed.failure })
+  return parsed.success
+})
 
 // Checks the file can belong to the account before anything is stored.
 const check = (statement: ParsedStatement, account: Account) => {
@@ -175,11 +188,9 @@ const make = Effect.gen(function* () {
     readonly bytes: Uint8Array
   }) {
     const account = yield* accounts.get(input.accountId)
-    const parsed = parse(input.bytes, account)
-    if (Result.isFailure(parsed))
-      return yield* new ImportRejected({ reason: parsed.failure })
-    yield* check(parsed.success, account)
-    return { account, statement: parsed.success }
+    const statement = yield* parse(input.bytes, account)
+    yield* check(statement, account)
+    return { account, statement }
   })
 
   /** Parses a file for review without storing anything. */
