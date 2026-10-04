@@ -51,15 +51,16 @@ const storeWords = new Set([
 // the same shop, and a pharmacy is not a restaurant. Only true synonyms
 // share a kind (`farmacia` and `drogaria`); different trades under one
 // name (`Acougue Bom Preco` and `Supermercado Bom Preco`) stay different
-// kinds, so the shops are never taken for one.
+// kinds, so the shops are never taken for one. Words are singular; plurals
+// are read through `kindOf`.
 const kindGroups: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
-  ['market', ['mercado', 'supermercado', 'supermercados', 'hipermercado']],
+  ['market', ['mercado', 'supermercado', 'hipermercado']],
   ['grocery', ['mercearia']],
   ['wholesale', ['atacado', 'atacadao']],
   ['produce', ['hortifruti']],
   ['butcher', ['acougue']],
-  ['pharmacy', ['farmacia', 'farmacias', 'drogaria', 'drogarias']],
-  ['fuel', ['posto', 'combustivel', 'combustiveis']],
+  ['pharmacy', ['farmacia', 'drogaria']],
+  ['fuel', ['posto', 'combustivel']],
   ['bakery', ['padaria', 'panificadora']],
   ['confectionery', ['confeitaria']],
   ['restaurant', ['restaurante']],
@@ -91,6 +92,22 @@ const businessKinds = new Map(
   ),
 )
 
+// The singulars a folded Portuguese word may be the plural of, itself
+// first: `acougues`, `bares`, `hoteis`, `combustiveis`, `pousadas`.
+const singulars = (word: string) => [
+  word,
+  ...(/(oe|ae)s$/.test(word) ? [`${word.slice(0, -3)}ao`] : []),
+  ...(/[aeiou]is$/.test(word) ? [`${word.slice(0, -2)}l`] : []),
+  ...(word.endsWith('es') ? [word.slice(0, -2)] : []),
+  ...(word.endsWith('s') ? [word.slice(0, -1)] : []),
+]
+
+/** The kind of business a word names, in the singular or the plural. */
+const kindOf = (word: string) =>
+  singulars(word)
+    .map((singular) => businessKinds.get(singular))
+    .find((kind) => kind !== undefined)
+
 // Wording a credit uses to say it gives money back, not who gives it.
 const refundWords = new Set([
   'estorno',
@@ -115,7 +132,7 @@ const merchantWords = (description: string) =>
     [...meaningfulWords(description)].filter(
       (word) =>
         !storeWords.has(word) &&
-        !businessKinds.has(word) &&
+        kindOf(word) === undefined &&
         !refundWords.has(word) &&
         !/^\d+$/.test(word),
     ),
@@ -125,7 +142,7 @@ const merchantWords = (description: string) =>
 const kindsOf = (description: string) =>
   new Set(
     [...meaningfulWords(description)].flatMap((word) => {
-      const kind = businessKinds.get(word)
+      const kind = kindOf(word)
       return kind === undefined ? [] : [kind]
     }),
   )
@@ -139,7 +156,10 @@ type Merchant = 'same' | 'uncertain' | 'different'
  * word with others that disagree (`Amazon Prime` and `Amazon
  * Marketplace`), only short shared words, or kinds of business that differ
  * (`Farmacia Santa Maria` and `Restaurante Santa Maria`), `uncertain`;
- * nothing distinctive in common, `different`.
+ * nothing distinctive in common, `different`. When only one names a kind
+ * of business, a word only the other has may name a kind no list knows
+ * (`Quitanda Primavera` and `Mercado Primavera`), so that is `uncertain`
+ * too.
  */
 const compareMerchants = (
   a: string,
@@ -157,8 +177,16 @@ const compareMerchants = (
   if (shared.length === 0) return { merchant: 'different', differentBusiness }
   const whole = shared.length === left.size || shared.length === right.size
   const distinctive = shared.some((word) => word.length >= 4)
+  const unknownKind =
+    (leftKinds.size === 0 &&
+      rightKinds.size > 0 &&
+      shared.length < left.size) ||
+    (rightKinds.size === 0 && leftKinds.size > 0 && shared.length < right.size)
   return {
-    merchant: whole && distinctive && !differentBusiness ? 'same' : 'uncertain',
+    merchant:
+      whole && distinctive && !differentBusiness && !unknownKind
+        ? 'same'
+        : 'uncertain',
     differentBusiness,
   }
 }

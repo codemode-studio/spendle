@@ -36,7 +36,7 @@ describe('installmentPlans', () => {
         number: 4,
         total: 12,
         purchaseDate: null,
-        totalAmountCents: null,
+        totalAmountsCents: [],
       }),
     ])
     assert.deepStrictEqual(
@@ -50,7 +50,7 @@ describe('installmentPlans', () => {
       number,
       total: 3,
       purchaseDate: null,
-      totalAmountCents: null,
+      totalAmountsCents: [],
     })
     const plans = installmentPlans([
       line('a', '2026-07-04', 'Apple Store', -10000, metadata(1)),
@@ -129,7 +129,7 @@ describe('installmentPlans', () => {
       number,
       total: 3,
       purchaseDate: '2026-07-01',
-      totalAmountCents: 10000,
+      totalAmountsCents: [10000],
     })
     const [plan] = installmentPlans([
       line('a', '2026-07-15', 'Loja', -3333, metadata(1)),
@@ -144,7 +144,7 @@ describe('installmentPlans', () => {
         number: 1,
         total: 3,
         purchaseDate: '2026-07-10',
-        totalAmountCents: null,
+        totalAmountsCents: [],
       }),
       line('b', '2026-08-15', 'Loja PARC 02/03'),
       line('c', '2026-09-15', 'Loja PARC 03/03'),
@@ -160,7 +160,7 @@ describe('installmentPlans', () => {
       number,
       total: 6,
       purchaseDate: null,
-      totalAmountCents: null,
+      totalAmountsCents: [],
     })
     const plans = installmentPlans([
       line('a', '2025-01-15', 'Loja', -10000, metadata(1)),

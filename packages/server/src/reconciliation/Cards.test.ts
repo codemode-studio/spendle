@@ -609,6 +609,98 @@ describe('Cards', () => {
   )
 
   it.effect(
+    'keeps a purchase total unknown when sources disagree on one instalment and another reports one of them',
+    () =>
+      Effect.gen(function* () {
+        const { cards, card } = yield* setup
+        const observations = yield* Observations
+        const record = (
+          ref: string,
+          reports: ReadonlyArray<readonly [number, number]>,
+        ) =>
+          Effect.gen(function* () {
+            const source = yield* observations.registerSource({
+              kind: 'open_finance',
+              externalRef: ref,
+              label: ref,
+            })
+            yield* observations.recordTransactions({
+              sourceId: source.id,
+              accountId: card.id,
+              transactions: reports.map(([number, totalAmount]) => ({
+                externalId: `${ref}-${number}`,
+                bookedOn: `2026-0${6 + number}-20`,
+                amountCents: -3333,
+                currency: 'BRL',
+                description: 'Apple Store',
+                status: 'posted' as const,
+                raw: { installment: { number, total: 3, totalAmount } },
+              })),
+            })
+            yield* drain
+          })
+        yield* record('first', [[1, 100]])
+        yield* record('second', [
+          [1, 120],
+          [2, 120],
+        ])
+        const plans = yield* cards.installments(card.id)
+        assert.deepStrictEqual(
+          plans.map((plan) => [plan.seen, plan.remainingCents]),
+          [[[1, 2], -3333]],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'projects a pending instalment purchase, and counts it once after it posts',
+    () =>
+      Effect.gen(function* () {
+        const { cards, card } = yield* setup
+        const observations = yield* Observations
+        const source = yield* observations.registerSource({
+          kind: 'open_finance',
+          externalRef: 'card-feed',
+          label: 'card-feed',
+        })
+        const report = (status: 'pending' | 'posted') =>
+          Effect.andThen(
+            observations.recordTransactions({
+              sourceId: source.id,
+              accountId: card.id,
+              transactions: [
+                {
+                  externalId: 'tv',
+                  bookedOn: '2026-08-15',
+                  amountCents: -10000,
+                  currency: 'BRL',
+                  description: 'Fast Shop',
+                  status,
+                  raw: { installment: { number: 1, total: 12 } },
+                },
+              ],
+            }),
+            drain,
+          )
+        const projection = Effect.map(cards.installments(card.id), (plans) =>
+          plans.map((plan) => [
+            plan.seen,
+            plan.pending,
+            plan.entryIds.length,
+            plan.remainingCents,
+          ]),
+        )
+        yield* report('pending')
+        const pending = yield* projection
+        yield* report('posted')
+        assert.deepStrictEqual(
+          [pending, yield* projection],
+          [[[[1], [1], 1, -110000]], [[[1], [], 1, -110000]]],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
     'takes a purchase total from a source that reports nothing else, and doubts it when another disagrees',
     () =>
       Effect.gen(function* () {

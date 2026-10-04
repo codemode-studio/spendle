@@ -1047,6 +1047,62 @@ describe('Reconciliation', () => {
   )
 
   it.effect(
+    'does not confirm a refund from another trade named in the plural or in words it does not know',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, card, entryId } = yield* setup
+        yield* (yield* Imports).importFile({
+          accountId: card.id,
+          fileName: 'cartao-trades.ofx',
+          bytes: ofx(
+            line('t1', '20260910', '-50.00', 'Acougues Bom Preco') +
+              line(
+                't2',
+                '20260915',
+                '50.00',
+                'Estorno Supermercado Bom Preco',
+              ) +
+              line('t3', '20260910', '-160.00', 'Postos Avenida') +
+              line('t4', '20260915', '160.00', 'Estorno Restaurante Avenida') +
+              line('t5', '20260910', '-270.00', 'Hoteis Atlantico') +
+              line('t6', '20260915', '270.00', 'Estorno Pousada Atlantico') +
+              line('t7', '20260910', '-380.00', 'Quitanda Primavera') +
+              line('t8', '20260915', '380.00', 'Estorno Mercado Primavera') +
+              line('t9', '20260910', '-490.00', 'Drogarias Raia') +
+              line('t10', '20260915', '490.00', 'Estorno Drogaria Raia'),
+            'CCSTMTRS',
+          ),
+        })
+        yield* drain
+        const refunds = (yield* reconciliation.relations).filter(
+          (relation) => relation.kind === 'refund',
+        )
+        const statusOf = (purchaseCents: number) =>
+          Effect.map(entryId(card.id, purchaseCents), (id) =>
+            refunds
+              .filter((relation) => relation.outflowEntryId === id)
+              .map((relation) => relation.status),
+          )
+        assert.deepStrictEqual(
+          [
+            yield* statusOf(-5000),
+            yield* statusOf(-16000),
+            yield* statusOf(-27000),
+            yield* statusOf(-38000),
+            yield* statusOf(-49000),
+          ],
+          [
+            ['suggested'],
+            ['suggested'],
+            ['suggested'],
+            ['suggested'],
+            ['confirmed'],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
     'links several refunds of one purchase, refuses one beyond it, and keeps them against later debits',
     () =>
       Effect.gen(function* () {

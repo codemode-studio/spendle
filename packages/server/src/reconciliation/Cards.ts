@@ -49,6 +49,7 @@ const LineRow = Schema.Struct({
   bookedOn: Schema.String,
   amountCents: Schema.Int,
   description: Schema.String,
+  status: Schema.Literals(['pending', 'posted']),
   raw: Schema.String,
 })
 
@@ -68,15 +69,19 @@ const decodeInstallment = Schema.decodeUnknownOption(
 )
 
 type Installment = NonNullable<InstallmentLine['installment']>
-type InstallmentReport = {
-  readonly [K in keyof Installment]: Installment[K] | null
+interface InstallmentReport {
+  readonly number: number | null
+  readonly total: number | null
+  readonly purchaseDate: string | null
+  readonly totalAmountCents: number | null
 }
 
 // Observations of one entry may each carry part of the metadata, even a
 // single field. Each field combines on its own across all of them; one with
-// two different values is unknown, whatever order they come in. Without an
-// agreed instalment number and count the purchase date and total still
-// count, for the description to number the instalment.
+// two different values is unknown, whatever order they come in. Purchase
+// totals are all kept, so a plan sees a disagreement on any instalment.
+// Without an agreed instalment number and count the purchase date and
+// totals still count, for the description to number the instalment.
 const mergeInstallments = (
   reports: ReadonlyArray<InstallmentReport>,
 ): Installment | null => {
@@ -90,9 +95,14 @@ const mergeInstallments = (
     number: number !== null && total !== null ? number : null,
     total: number !== null && total !== null ? total : null,
     purchaseDate: only(reports.map((report) => report.purchaseDate)),
-    totalAmountCents: only(reports.map((report) => report.totalAmountCents)),
   }
-  return Object.values(merged).every((value) => value === null) ? null : merged
+  const totalAmountsCents = [
+    ...new Set(reports.flatMap((report) => report.totalAmountCents ?? [])),
+  ]
+  return Object.values(merged).every((value) => value === null) &&
+    totalAmountsCents.length === 0
+    ? null
+    : { ...merged, totalAmountsCents }
 }
 
 const PaymentRelationRow = Schema.Struct({
@@ -513,7 +523,7 @@ const make = Effect.gen(function* () {
     Result: LineRow,
     execute: (accountId) => sql`
       SELECT e.id AS entryId, e.booked_on AS bookedOn, e.amount_cents AS amountCents,
-        e.description, o.raw
+        e.description, e.status, o.raw
       FROM ledger_entries e
       JOIN entry_evidence v ON v.entry_id = e.id
       JOIN transaction_observations o ON o.source_id = v.source_id
@@ -523,14 +533,15 @@ const make = Effect.gen(function* () {
           WHERE l.source_id = o.source_id AND l.account_id = o.account_id
             AND l.external_id = o.external_id
         )
-      WHERE e.account_id = ${accountId} AND e.status = 'posted'
+      WHERE e.account_id = ${accountId}
     `,
   })
 
   /**
    * Purchases charged in instalments on the card, with what remains to be
    * billed. Pluggy's instalment metadata is used when any observation of the
-   * entry carries it; otherwise the description is read.
+   * entry carries it; otherwise the description is read. Pending purchases
+   * count when the metadata numbers them, as they sit on the open bill.
    */
   const installments = Effect.fn('Cards.installments')(function* (
     accountId: string,
@@ -555,6 +566,7 @@ const make = Effect.gen(function* () {
           bookedOn: row.bookedOn,
           amountCents: row.amountCents,
           description: row.description,
+          pending: row.status === 'pending',
         },
         reports: [],
       }

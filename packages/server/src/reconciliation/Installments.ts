@@ -6,6 +6,8 @@ export interface InstallmentLine {
   readonly bookedOn: string
   readonly amountCents: number
   readonly description: string
+  /** Still pending on the open bill: it will be billed, but is not yet posted. */
+  readonly pending?: boolean
   /**
    * From the provider (Pluggy's card metadata), when it says so. Any field
    * may be missing; without a number and count the description numbers the
@@ -16,8 +18,12 @@ export interface InstallmentLine {
     readonly total: number | null
     /** When the purchase was made; the same for each of its instalments. */
     readonly purchaseDate: string | null
-    /** The purchase's total in centavos, positive: the sum of its instalments. */
-    readonly totalAmountCents: number | null
+    /**
+     * Every purchase total sources reported for the instalment, in
+     * centavos, positive: the sum of its instalments. Several mean the
+     * sources disagree, so the total is unknown.
+     */
+    readonly totalAmountsCents: ReadonlyArray<number>
   } | null
 }
 
@@ -27,11 +33,16 @@ export interface InstallmentPlan {
   readonly description: string
   readonly amountCents: number
   readonly total: number
-  /** Instalment numbers already on statements, ascending. */
+  /** Instalment numbers already charged, pending or posted, ascending. */
   readonly seen: ReadonlyArray<number>
+  /** Of `seen`, those still pending on the open bill. */
+  readonly pending: ReadonlyArray<number>
   readonly entryIds: ReadonlyArray<string>
   readonly remaining: number
-  /** What the remaining instalments will add to future bills; negative. */
+  /**
+   * What the remaining instalments will add to future bills, beyond those
+   * seen (pending ones included); negative.
+   */
   readonly remainingCents: number
   readonly lastBookedOn: string
 }
@@ -45,7 +56,7 @@ const fromDescription = (description: string) => {
   const number = Number(match[1])
   const total = Number(match[2])
   return number >= 1 && total >= 2 && total <= 48 && number <= total
-    ? { number, total, purchaseDate: null, totalAmountCents: null }
+    ? { number, total, purchaseDate: null, totalAmountsCents: [] }
     : null
 }
 
@@ -64,7 +75,7 @@ interface Item {
   readonly number: number
   readonly total: number
   readonly purchaseDate: string | null
-  readonly totalAmountCents: number | null
+  readonly totalAmountsCents: ReadonlyArray<number>
   readonly trusted: boolean
 }
 
@@ -135,6 +146,10 @@ const joins = (chain: ReadonlyArray<Item>, later: ReadonlyArray<Item>) => {
  * remains comes from the provider's purchase total when every instalment so
  * far was seen and none reports a different total, and from the latest
  * instalment's amount otherwise.
+ *
+ * Pending lines the provider numbers count as charged: they are on the open
+ * bill and only what comes after them is future. Once posted they are the
+ * same entry, so nothing counts twice.
  */
 export const installmentPlans = (
   lines: ReadonlyArray<InstallmentLine>,
@@ -147,6 +162,8 @@ export const installmentPlans = (
       metadata?.number != null && metadata.total != null
         ? { number: metadata.number, total: metadata.total }
         : null
+    // A pending line may still change; only the provider's numbers count.
+    if (line.pending === true && numbered === null) continue
     const parsed = numbered ?? fromDescription(line.description)
     if (!parsed) continue
     const key = [baseOf(line.description), parsed.total].join('|')
@@ -156,7 +173,7 @@ export const installmentPlans = (
       number: parsed.number,
       total: parsed.total,
       purchaseDate: metadata?.purchaseDate ?? null,
-      totalAmountCents: metadata?.totalAmountCents ?? null,
+      totalAmountsCents: metadata?.totalAmountsCents ?? [],
       trusted: numbered !== null,
     })
     groups.set(key, group)
@@ -200,12 +217,9 @@ export const installmentPlans = (
       const numbers = chain.map((item) => item.number)
       const total = latest.total
       const remaining = Math.max(0, total - latest.number)
-      // Instalments that disagree on the purchase total leave it unknown.
-      const totals = new Set(
-        chain.flatMap((item) =>
-          item.totalAmountCents === null ? [] : [item.totalAmountCents],
-        ),
-      )
+      // Any two totals reported for the purchase, on one instalment or
+      // across them, leave it unknown.
+      const totals = new Set(chain.flatMap((item) => item.totalAmountsCents))
       const knownTotal = totals.size === 1 ? [...totals][0]! : null
       const everyInstallment = numbers.every(
         (number, index) => number === index + 1,
@@ -226,6 +240,9 @@ export const installmentPlans = (
         amountCents: latest.line.amountCents,
         total,
         seen: numbers,
+        pending: chain.flatMap((item) =>
+          item.line.pending === true ? [item.number] : [],
+        ),
         entryIds: chain.map((item) => item.line.entryId),
         remaining,
         remainingCents,
