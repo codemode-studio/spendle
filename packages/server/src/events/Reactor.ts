@@ -174,8 +174,12 @@ export const layer = <E, R>(spec: ReactorSpec<E, R>) =>
         return events.length
       })
 
+      // Once the layer closes, a drain that had already listed this reactor
+      // finds it closed instead of running it with released dependencies.
+      const open = yield* Ref.make(true)
       const catchUp = lock.withPermits(1)(
         Effect.gen(function* () {
+          if (!(yield* Ref.get(open))) return
           while ((yield* step) > 0) {
             // keep going until the log is exhausted
           }
@@ -183,6 +187,12 @@ export const layer = <E, R>(spec: ReactorSpec<E, R>) =>
       )
 
       yield* reactors.register(catchUp)
+      // Closing waits for a catch-up already running to finish.
+      yield* Effect.addFinalizer(() =>
+        Ref.set(open, false).pipe(
+          Effect.andThen(lock.withPermits(1)(Effect.void)),
+        ),
+      )
 
       // The background loop must outlive any failure but shutdown: defects
       // (a thrown handler, a failed COMMIT) are retried like typed errors.

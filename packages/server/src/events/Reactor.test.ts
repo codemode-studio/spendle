@@ -3,9 +3,12 @@ import { assert, describe, it } from '@effect/vitest'
 import * as Context from 'effect/Context'
 import * as Deferred from 'effect/Deferred'
 import * as Effect from 'effect/Effect'
+import * as Exit from 'effect/Exit'
+import * as Fiber from 'effect/Fiber'
 import * as Layer from 'effect/Layer'
 import * as Ref from 'effect/Ref'
 import * as Schema from 'effect/Schema'
+import * as Scope from 'effect/Scope'
 import * as SqlClient from 'effect/sql/SqlClient'
 import * as TestClock from 'effect/testing/TestClock'
 
@@ -232,6 +235,61 @@ describe('Reactor', () => {
           }),
         )
       }).pipe(
+        Effect.provide(
+          Reactor.Reactors.layer.pipe(Layer.provideMerge(EventLog.layer)),
+        ),
+      )
+      assert.deepStrictEqual(yield* Ref.get(handled), ['new1'])
+    }).pipe(Effect.provide(Database)),
+  )
+
+  it.effect('never runs a reactor that closed during a drain', () =>
+    Effect.gen(function* () {
+      const handled = yield* Ref.make<ReadonlyArray<string>>([])
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const blocking = Reactor.layer({
+        name: 'blocking',
+        types: ['A'],
+        handle: () =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+          ),
+      })
+      const projection = (label: string) =>
+        Reactor.layer({
+          name: 'projection',
+          types: ['A'],
+          handle: (event: StoredEvent) =>
+            Ref.update(handled, (all) => [...all, `${label}${event.sequence}`]),
+        })
+      yield* Effect.gen(function* () {
+        const context = Context.pick(
+          Reactor.Reactors,
+          EventLog,
+          SqlClient.SqlClient,
+        )(
+          yield* Effect.context<
+            Reactor.Reactors | EventLog | SqlClient.SqlClient
+          >(),
+        )
+        const reactors = yield* Reactor.Reactors
+        yield* Layer.build(blocking).pipe(Effect.provide(context))
+        const old = yield* Scope.make()
+        yield* Layer.buildWithScope(projection('old'), old).pipe(
+          Effect.provide(context),
+        )
+        yield* append('A')
+        // The drain has listed both reactors and waits inside the first.
+        const draining = yield* Effect.forkChild(reactors.drain)
+        yield* Deferred.await(entered)
+        yield* Scope.close(old, Exit.void)
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(draining)
+        yield* Layer.build(projection('new')).pipe(Effect.provide(context))
+        yield* reactors.drain
+      }).pipe(
+        Effect.scoped,
         Effect.provide(
           Reactor.Reactors.layer.pipe(Layer.provideMerge(EventLog.layer)),
         ),
