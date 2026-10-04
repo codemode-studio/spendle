@@ -289,20 +289,35 @@ describe('PDF amounts the positioned text lost', () => {
     }),
   )
 
-  it.effect('counts a plain line drawn twice in place once', () =>
-    Effect.gen(function* () {
-      const pdf = yield* extractPdfText(interAccount)
-      const repeated = pdf.text
-        .split('\n')
-        .flatMap((line) =>
-          /^-?R\$ [25]0,00$/.test(line) ? [line, line] : [line],
+  // Inter repeats a balance across columns: a first deposit from zero
+  // prints R$ 130,00 as total, available, amount and balance of the day.
+  it.effect(
+    'refuses an Inter statement missing a first movement whose amount repeats',
+    () =>
+      Effect.gen(function* () {
+        const pdf = yield* extractPdfText(
+          tablePdf([
+            ['Instituição: Banco Inter'],
+            ['Período: 01/06/2026 a 30/06/2026'],
+            ['Saldo total Saldo disponível: Saldo bloqueado:'],
+            ['R$ 130,00', 'R$ 130,00', 'R$ 0,00'],
+            [
+              '1 de Junho de 2026 Saldo do dia: R$ 130,00 Valor Saldo por transação',
+            ],
+            ['Pix recebido: EMPRESA', 'R$ 130,00', 'R$ 130,00'],
+            ['2 de Junho de 2026 Saldo do dia: R$ 130,00'],
+            ['Pix recebido: AMIGO', 'R$ 20,00', 'R$ 150,00'],
+            ['Pix enviado: LOJA', '-R$ 20,00', 'R$ 130,00'],
+          ]),
         )
-        .join('\n')
-      assert.notStrictEqual(repeated, pdf.text)
-      assert.deepStrictEqual(
-        amounts(parsePdf({ ...pdf, text: repeated }, 'account')),
-        [5_000, -2_000],
-      )
-    }),
+        assert.deepStrictEqual(
+          amounts(parsePdf(pdf, 'account')),
+          [13_000, 2_000, -2_000],
+        )
+        assert.deepStrictEqual(
+          parsePdf(losingRow(pdf, 'Pix recebido: EMPRESA'), 'account'),
+          Result.fail('unsupported_format'),
+        )
+      }),
   )
 })

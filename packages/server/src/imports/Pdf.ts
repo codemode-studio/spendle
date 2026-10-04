@@ -106,7 +106,6 @@ const seesEveryAmount = (
     .split('\n')
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter((line) => line !== '')
-    .filter((line, index, all) => line !== all[index - 1])
   const positioned = amountCounts(lines.map((line) => line.text))
   return [...amountCounts(plain)].every(
     ([amount, count]) => (positioned.get(amount) ?? 0) >= count,
