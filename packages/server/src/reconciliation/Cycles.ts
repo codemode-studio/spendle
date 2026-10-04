@@ -65,6 +65,12 @@ export interface CycleEntry {
   readonly amountCents: number
   /** The provider's bill this movement was charged on, when it says. */
   readonly billId: string | null
+  /**
+   * The closing of the imported statement that prints this movement, when
+   * one does. The statement decides its cycle over the purchase date, which
+   * may fall before the cut when the purchase was captured after it.
+   */
+  readonly statementClosing?: string | null
 }
 
 export interface CyclePayment {
@@ -224,8 +230,46 @@ const schedule = (input: {
   readonly statements: ReadonlyArray<IssuedStatement>
   readonly today: string
 }): Schedule | null => {
+  // The latest report of a statement speaks for it.
+  const statementOf = new Map<string, IssuedStatement>()
+  for (const statement of input.statements)
+    statementOf.set(statement.closingOn, statement)
+
+  // Where each entry belongs, most authoritative first: the issued statement
+  // that prints it, or that prints another movement of its provider bill;
+  // else the latest date of its provider bill; else its own date.
+  const printedOn = (entry: CycleEntry) =>
+    entry.statementClosing != null && statementOf.has(entry.statementClosing)
+      ? entry.statementClosing
+      : undefined
+  const billStatement = new Map<string, string>()
+  const latestOfBill = new Map<string, string>()
+  for (const entry of input.entries) {
+    if (entry.billId === null) continue
+    const printed = printedOn(entry)
+    const statement = billStatement.get(entry.billId)
+    if (
+      printed !== undefined &&
+      (statement === undefined || printed > statement)
+    )
+      billStatement.set(entry.billId, printed)
+    const latest = latestOfBill.get(entry.billId)
+    if (latest === undefined || entry.bookedOn > latest)
+      latestOfBill.set(entry.billId, entry.bookedOn)
+  }
+  // The date that places each entry: a statement's closing, which ends its
+  // cycle, or the date its cycle contains. A purchase date before the
+  // statement that bills it opens no cycle of its own.
+  const placements = input.entries.map((entry) =>
+    entry.billId === null
+      ? (printedOn(entry) ?? entry.bookedOn)
+      : (printedOn(entry) ??
+        billStatement.get(entry.billId) ??
+        latestOfBill.get(entry.billId)!),
+  )
+
   const dates = [
-    ...input.entries.map((entry) => entry.bookedOn),
+    ...placements,
     ...input.payments.map((payment) => payment.paidOn),
     ...input.statements.map((statement) => statement.startsOn),
   ]
@@ -235,10 +279,6 @@ const schedule = (input: {
     .map((statement) => statement.closingOn)
     .reduce((a, b) => (a > b ? a : b), input.today)
 
-  // The latest report of a statement speaks for it.
-  const statementOf = new Map<string, IssuedStatement>()
-  for (const statement of input.statements)
-    statementOf.set(statement.closingOn, statement)
   const ends = closings(
     first,
     lastStatement,
@@ -274,20 +314,10 @@ const schedule = (input: {
     return index === -1 ? bounds.length - 1 : index
   }
 
-  // Entries of one provider bill go where the latest of them falls.
-  const latestOfBill = new Map<string, string>()
-  for (const entry of input.entries) {
-    if (entry.billId === null) continue
-    const latest = latestOfBill.get(entry.billId)
-    if (latest === undefined || entry.bookedOn > latest)
-      latestOfBill.set(entry.billId, entry.bookedOn)
-  }
   const entries = bounds.map((): Array<CycleEntry> => [])
-  for (const entry of input.entries) {
-    const date =
-      entry.billId === null ? entry.bookedOn : latestOfBill.get(entry.billId)!
-    entries[cycleOf(date)]!.push(entry)
-  }
+  input.entries.forEach((entry, index) =>
+    entries[cycleOf(placements[index]!)]!.push(entry),
+  )
 
   const statements = bounds.map((cycle) => statementOf.get(cycle.closingOn))
   const totals = entries.map((items) =>
@@ -442,8 +472,11 @@ const allocate = (
  *
  * Cycle bounds come from issued statements when there are any; configured
  * closing and due days are a forecast for the rest. An entry belongs to the
- * cycle containing its date, except that entries the provider assigns to one
- * bill stay together, in the cycle of the latest of them.
+ * cycle of the imported statement that prints it; else, when the provider
+ * assigns it to a bill, to the statement that prints any movement of that
+ * bill, or the cycle of the latest of them; else to the cycle containing its
+ * date. Its date is kept as reported: a purchase captured after the cut is
+ * dated before the statement that bills it.
  *
  * What a cycle owes is its issued statement's total when there is one, since
  * imported entries may be incomplete; the difference from the entries is

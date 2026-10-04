@@ -267,11 +267,92 @@ describe('cardCycles', () => {
     )
     assert.deepStrictEqual(
       result.cycles.map((cycle) => [cycle.closingOn, cycle.entryIds]),
+      // The purchase date opens no cycle of its own.
       [
-        ['2026-07-03', []],
         ['2026-08-03', ['purchase', 'fee']],
         ['2026-09-03', []],
       ],
+    )
+  })
+
+  it('places a movement in the issued statement that prints it, whatever its purchase date', () => {
+    // Inter: bought on 2 July, captured after the 3 July cut and printed on
+    // the statement of 4 July to 3 August, due on the 10th.
+    const result = cardCycles({
+      terms,
+      entries: [
+        {
+          ...entry('late', '2026-07-02', -10000, 'bill-aug'),
+          statementClosing: '2026-08-03',
+        },
+      ],
+      payments: [],
+      statements: [
+        issued('2026-07-04', '2026-08-03', -10000, {
+          dueOn: '2026-08-10',
+          floorsAtZero: true,
+        }),
+      ],
+      today: '2026-08-05',
+    })
+    assert.deepStrictEqual(
+      result.cycles.map((cycle) => [
+        cycle.closingOn,
+        cycle.totalCents,
+        cycle.entryIds,
+        cycle.status,
+        cycle.statement?.differenceCents ?? null,
+      ]),
+      [
+        ['2026-08-03', -10000, ['late'], 'due', 0],
+        ['2026-09-03', 0, [], 'open', null],
+      ],
+    )
+  })
+
+  it('places a provider bill in the issued statement that prints any of its movements', () => {
+    // Only the fee is on the imported statement; the purchase, on the same
+    // provider bill, was seen only by Open Finance.
+    const result = build(
+      [],
+      '2026-08-15',
+      [issued('2026-07-04', '2026-08-03', -10500)],
+      [
+        entry('purchase', '2026-07-01', -10000, 'bill-aug'),
+        {
+          ...entry('fee', '2026-07-03', -500, 'bill-aug'),
+          statementClosing: '2026-08-03',
+        },
+      ],
+    )
+    assert.deepStrictEqual(
+      result.cycles.map((cycle) => [
+        cycle.closingOn,
+        cycle.entryIds,
+        cycle.statement?.differenceCents ?? null,
+      ]),
+      [
+        ['2026-08-03', ['purchase', 'fee'], 0],
+        ['2026-09-03', [], null],
+      ],
+    )
+  })
+
+  it('is not overdue before the first business day after the year-end bank closure', () => {
+    // Thursday 31 December 2026 has no public banking; 1 January and the
+    // weekend follow.
+    const result = cardCycles({
+      terms: { closingDay: 24, dueDay: 31 },
+      entries: [entry('market', '2026-12-10', -10000)],
+      payments: [],
+      statements: [
+        issued('2026-11-25', '2026-12-24', -10000, { dueOn: '2026-12-31' }),
+      ],
+      today: '2027-01-04',
+    })
+    assert.deepStrictEqual(
+      [result.cycles[0]?.payableUntil, result.cycles[0]?.status],
+      ['2027-01-04', 'due'],
     )
   })
 

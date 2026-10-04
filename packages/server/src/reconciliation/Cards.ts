@@ -26,6 +26,7 @@ const CardEntryRow = Schema.Struct({
   amountCents: Schema.Int,
   description: Schema.String,
   billId: Schema.NullOr(Schema.String),
+  statementClosing: Schema.NullOr(Schema.String),
 })
 
 const DebitRow = Schema.Struct({
@@ -228,7 +229,18 @@ const make = Effect.gen(function* () {
             SELECT 1 FROM transaction_observations n
             WHERE n.source_id = o.source_id AND n.account_id = o.account_id
               AND n.external_id = o.external_id AND n.version > o.version
-          )) AS billId
+          )) AS billId,
+        -- The issued statement that prints the entry: a file stating its
+        -- period whose closing balance is a statement (see findStatements).
+        (SELECT CASE WHEN COUNT(DISTINCT f.period_end) = 1 THEN MAX(f.period_end) END
+          FROM entry_evidence v JOIN import_files f
+            ON f.source_id = v.source_id AND f.account_id = v.account_id
+          WHERE v.entry_id = e.id AND f.period_start IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM balance_observations b
+              WHERE b.source_id = f.source_id AND b.account_id = f.account_id
+                AND b.kind = 'statement' AND b.as_of = f.period_end
+            )) AS statementClosing
       FROM ledger_entries e
       WHERE e.account_id = ${accountId} AND e.status = 'posted'
     `,

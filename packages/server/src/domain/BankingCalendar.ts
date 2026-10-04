@@ -1,7 +1,8 @@
 import { addDays, weekday } from './LocalDate.ts'
 
 // The Brazilian national banking calendar: days on which banks do not open
-// nationwide, so a deadline falling on them moves to the next business day.
+// to the public nationwide, so a deadline falling on them moves to the next
+// business day.
 // Regional and municipal holidays are not included.
 
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -46,7 +47,18 @@ const movable = [
   60, // Corpus Christi
 ]
 
-/** National bank holidays of `year`, sorted. */
+/**
+ * The last weekday of `year`: 31 December, or the Friday before when it falls
+ * on a weekend. Banks hold their year-end closing then and do not open to
+ * the public nationwide (Febraban).
+ */
+const yearEndClosure = (year: number) => {
+  let date = `${year}-12-31`
+  while (weekday(date) === 0 || weekday(date) === 6) date = addDays(date, -1)
+  return date
+}
+
+/** National bank holidays of `year`, the year-end closure included, sorted. */
 export const bankHolidays = (year: number): ReadonlyArray<string> => {
   const easter = easterSunday(year)
   return [
@@ -54,6 +66,7 @@ export const bankHolidays = (year: number): ReadonlyArray<string> => {
       .filter(([, since]) => year >= since)
       .map(([monthDay]) => `${year}-${monthDay}`),
     ...movable.map((offset) => addDays(easter, offset)),
+    yearEndClosure(year),
   ].sort()
 }
 

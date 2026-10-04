@@ -714,13 +714,98 @@ describe('Cards', () => {
           [placed(before.cycles), placed(after.cycles)],
           [
             [
-              ['2026-07-03', 0],
               ['2026-08-03', -10500],
+              ['2026-09-03', 0],
             ],
             [
               ['2026-07-03', -10000],
               ['2026-08-03', -500],
             ],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'bills a purchase captured after the cut on the statement that prints it',
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(
+          DateTime.toEpochMillis(DateTime.makeUnsafe('2026-08-05T15:00:00Z')),
+        )
+        const accounts = yield* Accounts
+        const imports = yield* Imports
+        const observations = yield* Observations
+        const owner = yield* accounts.createOwner({
+          name: 'Eu',
+          kind: 'person',
+        })
+        const card = yield* accounts.open({
+          ownerId: owner.id,
+          institutionName: 'Banco Inter',
+          purpose: 'operating',
+          currency: 'BRL',
+          name: 'Cartão Inter',
+          kind: 'credit_card',
+          card: new CardTerms({
+            closingDay: 3,
+            dueDay: 10,
+            limitCents: null,
+            lastFour: null,
+          }),
+        })
+        // Bought on 2 July, before the 3 July cut, but captured after it:
+        // Open Finance reports the purchase date and the August bill.
+        const source = yield* observations.registerSource({
+          kind: 'open_finance',
+          externalRef: 'provider-card',
+          label: 'Cartão Inter',
+        })
+        yield* observations.recordTransactions({
+          sourceId: source.id,
+          accountId: card.id,
+          transactions: [
+            {
+              externalId: 'purchase',
+              bookedOn: '2026-07-02',
+              amountCents: -10000,
+              currency: 'BRL',
+              description: 'Loja',
+              status: 'posted' as const,
+              raw: { installment: { billId: 'bill-aug' } },
+            },
+          ],
+        })
+        yield* drain
+        // The statement of 4 July to 3 August prints it, due on the 10th.
+        yield* imports.importFile({
+          accountId: card.id,
+          fileName: 'fatura-inter.pdf',
+          bytes: syntheticPdf([
+            'Banco Inter S/A',
+            'Resumo da fatura',
+            'Este e o valor que voce precisa pagar nesse mes 10/08/2026',
+            'Fatura atual R$ 100,00',
+            'Despesas do mes R$ 100,00',
+            'Despesas da fatura',
+            'CARTAO 1234****5678',
+            '02 de jul. 2026 Loja - R$ 100,00',
+            'Data de corte: 03/09/2026',
+          ]),
+        })
+        yield* drain
+        const result = yield* (yield* Cards).cycles(card.id)
+        assert.deepStrictEqual(
+          result.cycles.map((cycle) => [
+            cycle.closingOn,
+            cycle.totalCents,
+            cycle.entryIds.length,
+            cycle.status,
+            cycle.statement?.differenceCents ?? null,
+          ]),
+          [
+            ['2026-08-03', -10000, 1, 'due', 0],
+            ['2026-09-03', 0, 0, 'open', null],
           ],
         )
       }).pipe(Effect.provide(openFinanceTest())),

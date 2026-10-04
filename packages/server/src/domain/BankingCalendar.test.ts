@@ -92,4 +92,18 @@ describe('BankingCalendar', () => {
       [true, true, true],
     )
   })
+
+  it('closes banks to the public on the last weekday of the year', () => {
+    // Thursday 31 December 2026, then 1 January and the weekend.
+    // 31 December 2022 is a Saturday, so Friday the 30th closes; 31 December
+    // 2023 is a Sunday, so Friday the 29th closes.
+    assert.deepStrictEqual(
+      ['2026-12-31', '2022-12-30', '2023-12-29'].map(nextBusinessDay),
+      ['2027-01-04', '2023-01-02', '2024-01-02'],
+    )
+    assert.deepStrictEqual(
+      ['2026-12-30', '2022-12-29', '2023-12-28'].map(isBusinessDay),
+      [true, true, true],
+    )
+  })
 })
