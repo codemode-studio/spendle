@@ -567,7 +567,8 @@ export const openFinanceTransactionObservations = sqliteTable(
       .default(sql`(unixepoch())`),
   },
   (table) => [
-    uniqueIndex('open_finance_observation_version_idx').on(
+    // A version may be observed again after another replaced it.
+    index('open_finance_observation_version_idx').on(
       table.openFinanceAccountId,
       table.providerTransactionId,
       table.contentHash,

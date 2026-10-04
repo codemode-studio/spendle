@@ -95,6 +95,44 @@ describe('vínculo manual de pagamento de fatura', () => {
     expect(restored.categoryId).toBe('groceries')
   })
 
+  it('mantém a categoria original ao mover e desfazer o vínculo', async () => {
+    const dueDate = (await getConfigurationSnapshot()).cards.find(
+      (row) => row.id === database.ids.card,
+    )!.currentStatement.dueDate
+    const nextDueDate = shiftDays(dueDate, 31)
+    const debit = await createManualTransaction({
+      targetType: 'account',
+      targetId: database.ids.brlAccount,
+      postedAt: shiftDays(dueDate, -1),
+      description: 'Débito movido',
+      direction: 'outflow',
+      amountCents: 100_000,
+      categoryId: 'groceries',
+    })
+    await linkCardStatementPayment({
+      creditCardId: database.ids.card,
+      dueDate,
+      transactionId: debit.id,
+    })
+    const moved = await linkCardStatementPayment({
+      creditCardId: database.ids.card,
+      dueDate: nextDueDate,
+      transactionId: debit.id,
+    })
+    const links = await database.db
+      .select()
+      .from(schema.cardStatementPayments)
+      .where(eq(schema.cardStatementPayments.transactionId, debit.id))
+    expect(links.map((link) => link.id)).toEqual([moved.id])
+
+    await unlinkCardStatementPayment({ id: moved.id })
+    const [restored] = await database.db
+      .select()
+      .from(schema.transactions)
+      .where(eq(schema.transactions.id, debit.id))
+    expect(restored.categoryId).toBe('groceries')
+  })
+
   it('recusa entradas e lançamentos de cartão', async () => {
     const income = await createManualTransaction({
       targetType: 'account',
@@ -642,9 +680,9 @@ describe('débito de pagamento entre dois cartões', () => {
     expect(a.statement?.status).toBe('paid')
     expect(a.scheduledCents).toBeUndefined()
     expect(b.statement?.status).not.toBe('paid')
-    expect(
-      b.statement?.payments.some((p) => p.transactionId === debitId),
-    ).toBe(false)
+    expect(b.statement?.payments.some((p) => p.transactionId === debitId)).toBe(
+      false,
+    )
     expect(b.scheduledCents).toBe(-30_000)
   })
 
@@ -655,8 +693,7 @@ describe('débito de pagamento entre dois cartões', () => {
       const view = cardView(snapshot, cardId)
       expect(view.statement?.status).not.toBe('paid')
       expect(
-        view.statement?.payments.find((p) => p.transactionId === debitId)
-          ?.kind,
+        view.statement?.payments.find((p) => p.transactionId === debitId)?.kind,
       ).toBe('candidate')
       expect(view.scheduledCents).toBe(-30_000)
     }

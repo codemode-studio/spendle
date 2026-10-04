@@ -614,6 +614,58 @@ async function isKnownProviderTransaction(
   return bySource.length > 0
 }
 
+// Observations record the database clock in seconds; the insertion order
+// breaks ties between versions observed in the same second.
+const latestObservationFirst = [
+  desc(schema.openFinanceTransactionObservations.observedAt),
+  desc(sql`${schema.openFinanceTransactionObservations}.rowid`),
+]
+
+const SUPERSEDABLE_RESOLUTIONS = new Set(['evidence', 'created', 'accepted'])
+
+/**
+ * Whether `version`, a payload already stored for this provider transaction,
+ * once described the fact and was replaced since by another current version.
+ */
+async function isReturningVersion(
+  account: OpenFinanceAccount,
+  normalized: NormalizedPluggyTransaction,
+  version: typeof schema.openFinanceTransactionObservations.$inferSelect,
+) {
+  if (!SUPERSEDABLE_RESOLUTIONS.has(version.resolution)) return false
+  const current = (
+    await db
+      .select({
+        contentHash: schema.openFinanceTransactionObservations.contentHash,
+        resolution: schema.openFinanceTransactionObservations.resolution,
+      })
+      .from(schema.openFinanceTransactionObservations)
+      .where(
+        and(
+          eq(
+            schema.openFinanceTransactionObservations.openFinanceAccountId,
+            account.id,
+          ),
+          eq(
+            schema.openFinanceTransactionObservations.providerTransactionId,
+            normalized.providerTransactionId,
+          ),
+          notInArray(schema.openFinanceTransactionObservations.resolution, [
+            'correction_pending',
+            'rejected',
+          ]),
+        ),
+      )
+      .orderBy(...latestObservationFirst)
+      .limit(1)
+  ).at(0)
+  return Boolean(
+    current &&
+    current.contentHash !== normalized.contentHash &&
+    SUPERSEDABLE_RESOLUTIONS.has(current.resolution),
+  )
+}
+
 async function storeTransactionObservation(
   account: OpenFinanceAccount,
   providerTransaction: Transaction,
@@ -645,9 +697,18 @@ async function storeTransactionObservation(
           ),
         ),
       )
+      .orderBy(...latestObservationFirst)
       .limit(1)
   ).at(0)
-  if (existingVersion) return { kind: 'evidence' as const }
+  // A payload seen before is only news when an earlier version, once current,
+  // comes back after another one replaced it (a category that changes and
+  // returns). It is recorded again as the current version; the older rows
+  // stay as they were. A pending or rejected correction, or a deletion,
+  // keeps the person's and the provider's last word.
+  const reobserved =
+    existingVersion !== undefined &&
+    (await isReturningVersion(account, normalized, existingVersion))
+  if (existingVersion && !reobserved) return { kind: 'evidence' as const }
 
   // Pluggy may resend facts older than the copied window on refreshes. The
   // window only filters facts never seen before: an update to a known
@@ -661,6 +722,8 @@ async function storeTransactionObservation(
   }
 
   const canonical = await exactCanonicalCandidate(account, normalized)
+  // A returning version never creates a ledger row of its own.
+  if (reobserved && !canonical) return { kind: 'evidence' as const }
   if (canonical && !sameCanonicalContent(canonical, normalized)) {
     await db.insert(schema.openFinanceTransactionObservations).values({
       id: randomUUID(),
@@ -712,7 +775,7 @@ async function storeTransactionObservation(
             ]),
           ),
         )
-        .orderBy(desc(schema.openFinanceTransactionObservations.observedAt))
+        .orderBy(...latestObservationFirst)
         .limit(1)
     ).at(0)
     const matchingChanged =

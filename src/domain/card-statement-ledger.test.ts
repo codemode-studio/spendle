@@ -388,3 +388,125 @@ describe('recebimento identificado pela categoria do provedor', () => {
     expect(august.transactionIds).toEqual(['card-credit'])
   })
 })
+
+describe('pagamento antecipado de fatura', () => {
+  const receipt = (id: string, postedAt: string, amountCents: number) => ({
+    id,
+    postedAt,
+    amountCents,
+    description: 'Pagamento recebido',
+    categoryId: 'card_payment',
+  })
+  const byDue = (ledger: ReturnType<typeof buildCardStatementLedger>) =>
+    Object.fromEntries(ledger.map((entry) => [entry.dueDate, entry.paidCents]))
+
+  it('quita a fatura do ciclo em que caiu quando não há fatura anterior', () => {
+    const ledger = buildCardStatementLedger({
+      statements: [
+        {
+          closingDate: '2026-08-20',
+          dueDate: '2026-08-27',
+          amountCents: 100_000,
+        },
+        {
+          closingDate: '2026-09-20',
+          dueDate: '2026-09-27',
+          amountCents: 40_000,
+        },
+      ],
+      transactions: [
+        purchase('august', '2026-08-05', -100_000),
+        receipt('advance', '2026-08-19', 20_000),
+      ],
+      accountPayments: [],
+      reconciliations: [],
+      today: '2026-08-26',
+    })
+    expect(ledger[0]).toMatchObject({
+      paidCents: 20_000,
+      status: 'partial',
+      payments: [{ transactionId: 'advance', kind: 'received' }],
+    })
+  })
+
+  it('não leva à fatura anterior já quitada', () => {
+    const ledger = buildCardStatementLedger({
+      statements,
+      transactions: [
+        receipt('july', '2026-07-14', 100_000),
+        receipt('august-advance', '2026-08-01', 20_000),
+      ],
+      accountPayments: [],
+      reconciliations: [],
+      today: '2026-09-10',
+    })
+    expect(byDue(ledger)).toMatchObject({
+      '2026-07-15': 100_000,
+      '2026-08-15': 20_000,
+    })
+    expect(ledger[1].payments).toEqual([
+      expect.objectContaining({ transactionId: 'august-advance' }),
+    ])
+  })
+
+  it('quita primeiro a fatura anterior em aberto e leva o excedente adiante', () => {
+    const late = buildCardStatementLedger({
+      statements,
+      transactions: [receipt('late', '2026-07-30', 50_000)],
+      accountPayments: [],
+      reconciliations: [],
+      today: '2026-09-10',
+    })
+    expect(byDue(late)).toMatchObject({ '2026-07-15': 50_000, '2026-08-15': 0 })
+
+    const over = buildCardStatementLedger({
+      statements,
+      transactions: [receipt('over', '2026-07-14', 120_000)],
+      accountPayments: [],
+      reconciliations: [],
+      today: '2026-09-10',
+    })
+    expect(byDue(over)).toMatchObject({
+      '2026-07-15': 100_000,
+      '2026-08-15': 20_000,
+    })
+  })
+
+  it('conta o débito vinculado à mão antes de antecipar', () => {
+    const ledger = buildCardStatementLedger({
+      statements,
+      transactions: [receipt('advance', '2026-07-25', 20_000)],
+      accountPayments: [
+        {
+          id: 'bank',
+          postedAt: '2026-07-14',
+          amountCents: -100_000,
+          description: 'Débito genérico',
+          categoryId: 'groceries',
+        },
+      ],
+      reconciliations: [],
+      manualLinks: [
+        { id: 'link', dueDate: '2026-07-15', transactionId: 'bank' },
+      ],
+      today: '2026-09-10',
+    })
+    expect(byDue(ledger)).toMatchObject({
+      '2026-07-15': 100_000,
+      '2026-08-15': 20_000,
+    })
+  })
+
+  it('não credita ao primeiro ciclo o pagamento da fatura anterior ao histórico', () => {
+    // History starts at a cycle; the bill that closed before it is paid
+    // inside that cycle, before its own due date.
+    const ledger = buildCardStatementLedger({
+      statements: statements.slice(0, 2),
+      transactions: [receipt('previous-bill', '2026-06-14', 90_000)],
+      accountPayments: [],
+      reconciliations: [],
+      today: '2026-09-10',
+    })
+    expect(byDue(ledger)).toEqual({ '2026-07-15': 0, '2026-08-15': 0 })
+  })
+})

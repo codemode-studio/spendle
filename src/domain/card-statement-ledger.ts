@@ -97,6 +97,17 @@ export interface StatementLedgerEntry extends LedgerStatement {
 const INFERRED_WINDOW_DAYS = 15
 const CANDIDATE_WINDOW_DAYS = 10
 
+/** The same day one or more months away, clamped to the month's length. */
+function shiftMonths(iso: string, months: number) {
+  const [year, month, day] = iso.split('-').map(Number)
+  const target = new Date(Date.UTC(year, month - 1 + months, 1))
+  const lastDay = new Date(
+    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0),
+  ).getUTCDate()
+  target.setUTCDate(Math.min(day, lastDay))
+  return target.toISOString().slice(0, 10)
+}
+
 function distance(a: string, b: string) {
   return daysBetween(a, b, { inclusive: false, absolute: true })
 }
@@ -190,6 +201,22 @@ export function buildCardStatementLedger(input: {
     return true
   }
 
+  // Settled so far by the person's links, before any receipt is placed.
+  const manualCents = new Map<StatementLedgerEntry, number>()
+  const settledByHand = new Set<StatementLedgerEntry>()
+  for (const { link, entry, payment } of manualLinks) {
+    manualCents.set(entry, (manualCents.get(entry) ?? 0) - payment.amountCents)
+    if (!link.partial) settledByHand.add(entry)
+  }
+  const remainingCents = (entry: StatementLedgerEntry) =>
+    settledByHand.has(entry)
+      ? 0
+      : Math.max(
+          0,
+          entry.amountCents - entry.paidCents - (manualCents.get(entry) ?? 0),
+        )
+
+  const receipts: LedgerCardTransaction[] = []
   for (const transaction of input.transactions) {
     // The card statement reports the payment by its wording or the provider
     // category, with or without a bank debit matched to it, or a confirmed
@@ -199,10 +226,71 @@ export function buildCardStatementLedger(input: {
       (transaction.amountCents > 0 &&
         groupByTransaction.get(transaction.id)?.status === 'confirmed')
     if (received) {
-      // A payment lands in the cycle after the one it settles.
-      const target = cycleIndex(transaction.postedAt) - 1
-      if (target < 0) continue
-      const entry = entries[target]
+      receipts.push(transaction)
+      continue
+    }
+    if (isSettlementCategory(transaction.categoryId)) continue
+    entries[cycleIndex(transaction.postedAt)].transactionIds.push(
+      transaction.id,
+    )
+  }
+
+  // A receipt posts in the cycle after the bill it usually settles, but it
+  // may also pay that cycle's own bill in advance, before it closes. With no
+  // bill id on the receipt, the person's link decides; otherwise the oldest
+  // bill still open takes it, and whatever it leaves pays the current cycle.
+  // A receipt before the due date of a bill outside the ledger (the one
+  // closed before the copied history starts) paid that bill.
+  const placements = (
+    transaction: LedgerCardTransaction,
+  ): Array<{ entry: StatementLedgerEntry; amountCents: number }> => {
+    const home = statements.findIndex(
+      (s) => transaction.postedAt <= s.closingDate,
+    )
+    const current = home === -1 ? undefined : entries[home]
+    const previousIndex = (home === -1 ? entries.length : home) - 1
+    const previous = previousIndex >= 0 ? entries[previousIndex] : undefined
+    const linked = unpairedManual.find(
+      ({ entry, payment }) =>
+        (entry === previous || entry === current) &&
+        -payment.amountCents === transaction.amountCents &&
+        distance(payment.postedAt, transaction.postedAt) <=
+          INFERRED_WINDOW_DAYS,
+    )
+    const group = groupByTransaction.get(transaction.id)
+    const handLinked = group?.transactionIds
+      .map((id) => manualLinks.find(({ payment }) => payment.id === id))
+      .find(Boolean)
+    const decided = handLinked?.entry ?? linked?.entry
+    if (decided)
+      return [{ entry: decided, amountCents: transaction.amountCents }]
+    if (!previous) {
+      if (!current) return []
+      const previousDue = shiftMonths(current.dueDate, -1)
+      return transaction.postedAt <= previousDue
+        ? []
+        : [{ entry: current, amountCents: transaction.amountCents }]
+    }
+    const owed = remainingCents(previous)
+    if (!current || owed >= transaction.amountCents)
+      return [{ entry: previous, amountCents: transaction.amountCents }]
+    // A group is one payment; it settles a single statement.
+    if (group)
+      return [
+        {
+          entry: owed > 0 ? previous : current,
+          amountCents: transaction.amountCents,
+        },
+      ]
+    return [
+      ...(owed > 0 ? [{ entry: previous, amountCents: owed }] : []),
+      { entry: current, amountCents: transaction.amountCents - owed },
+    ]
+  }
+
+  receipts.sort((a, b) => a.postedAt.localeCompare(b.postedAt))
+  for (const transaction of receipts) {
+    for (const { entry, amountCents: placedCents } of placements(transaction)) {
       const group = groupByTransaction.get(transaction.id)
       const groupBankIds =
         group?.transactionIds.filter((id) => id !== transaction.id) ?? []
@@ -212,14 +300,14 @@ export function buildCardStatementLedger(input: {
       for (const id of groupBankIds)
         if (manuallyLinked.has(id)) addManualEvidence(id, transaction.id)
       if (groupBankIds.length && !bankIds.length) continue
-      const manualCents = groupBankIds
+      const handCents = groupBankIds
         .filter((id) => manuallyLinked.has(id))
         .reduce(
           (sum, id) => sum - (accountPaymentById.get(id)?.amountCents ?? 0),
           0,
         )
       if (group && group.status === 'confirmed' && bankIds.length) {
-        const amountCents = Math.max(0, transaction.amountCents - manualCents)
+        const amountCents = Math.max(0, transaction.amountCents - handCents)
         for (const id of bankIds)
           entry.payments.push({
             transactionId: id,
@@ -247,16 +335,11 @@ export function buildCardStatementLedger(input: {
           kind: 'received',
           groupId: null,
           linkId: null,
-          amountCents: transaction.amountCents,
+          amountCents: placedCents,
         })
-        entry.paidCents += transaction.amountCents
+        entry.paidCents += placedCents
       }
-      continue
     }
-    if (isSettlementCategory(transaction.categoryId)) continue
-    entries[cycleIndex(transaction.postedAt)].transactionIds.push(
-      transaction.id,
-    )
   }
 
   for (const { link, entry, payment } of manualLinks) {

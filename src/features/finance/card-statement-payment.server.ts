@@ -157,6 +157,24 @@ export async function linkCardStatementPayment(input: {
       `Escolha um débito em ${card.currency}, a moeda da fatura deste cartão.`,
     )
 
+  const existing = (
+    await db
+      .select()
+      .from(schema.cardStatementPayments)
+      .where(
+        eq(schema.cardStatementPayments.transactionId, input.transactionId),
+      )
+      .limit(1)
+  ).at(0)
+  // Moving a link keeps the category the person had before the first link,
+  // while the debit still carries the one that link assigned.
+  const previousCategoryId =
+    existing?.previousCategoryId && transaction.categoryId === 'card_payment'
+      ? existing.previousCategoryId
+      : isSettlementCategory(transaction.categoryId)
+        ? null
+        : transaction.categoryId
+
   const id = randomUUID()
   db.transaction((tx) => {
     // One debit settles one statement; relinking moves it.
@@ -171,9 +189,7 @@ export async function linkCardStatementPayment(input: {
         creditCardId: input.creditCardId,
         dueDate: input.dueDate,
         transactionId: input.transactionId,
-        previousCategoryId: isSettlementCategory(transaction.categoryId)
-          ? null
-          : transaction.categoryId,
+        previousCategoryId,
         partial: input.partial ?? false,
       })
       .run()

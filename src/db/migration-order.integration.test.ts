@@ -106,5 +106,12 @@ describe('migration order', () => {
     )
     expect(upgradedShape.card_statement_payments).toBeDefined()
     expect(upgradedShape.investment_positions).toBeDefined()
+    // A returning Pluggy payload is observed again as a new version.
+    const versionIndex = (
+      upgraded.sqlite.pragma(
+        'index_list(open_finance_transaction_observations)',
+      ) as Array<{ name: string; unique: number }>
+    ).find((index) => index.name === 'open_finance_observation_version_idx')
+    expect(versionIndex?.unique).toBe(0)
   })
 })

@@ -2043,3 +2043,145 @@ describe('Open Finance history window', () => {
     })
   })
 })
+
+describe('Open Finance card statement settlement', () => {
+  let database: TestDatabase
+  beforeEach(async () => {
+    database = await openTestDatabase()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-08-26T15:00:00Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    database.close()
+  })
+
+  // R$ 1.000 in the cycle closing Aug 20 (due Aug 27), R$ 400 in the next,
+  // and one card credit from Pluggy.
+  async function cardWithReceipt(paymentDate: string, amount: number) {
+    const gateway = new FakePluggyGateway()
+    gateway.accounts = [account('CREDIT')]
+    gateway.transactions.set('provider-card', [
+      providerTransaction({
+        id: 'august',
+        accountId: 'provider-card',
+        date: new Date('2026-08-05T15:00:00Z'),
+        description: 'Loja agosto',
+        amount: 1000,
+        category: 'Shopping',
+      }),
+      providerTransaction({
+        id: 'september',
+        accountId: 'provider-card',
+        date: new Date('2026-08-24T15:00:00Z'),
+        description: 'Loja setembro',
+        amount: 400,
+        category: 'Shopping',
+      }),
+      providerTransaction({
+        id: 'card-credit',
+        accountId: 'provider-card',
+        date: new Date(`${paymentDate}T15:00:00Z`),
+        description: 'Pagamento efetuado',
+        type: 'CREDIT',
+        amount,
+        category: 'Credit card payment',
+      }),
+    ])
+    const connectionId = await registeredConnection(database, gateway)
+    const mapped = await mapPluggyAccount(
+      {
+        providerAccountId: 'provider-card',
+        newTarget: {
+          type: 'card',
+          name: 'Cartão revisão',
+          limitCents: 500_000,
+          closingDay: 20,
+          dueDay: 27,
+        },
+      },
+      gateway,
+      new Date('2026-08-26T15:00:00Z'),
+    )
+    const snapshot = async () => {
+      const finance = await getFinanceSnapshot()
+      const card = finance.cards.find((row) => row.id === mapped.creditCardId)!
+      return {
+        august: card.statements.find((row) => row.dueDate === '2026-08-27'),
+        scheduled: finance.cashProjection.scheduled
+          .filter((event) => event.id.startsWith(`${card.id}-`))
+          .map(({ date, amountCents }) => ({ date, amountCents })),
+      }
+    }
+    return { gateway, connectionId, snapshot }
+  }
+
+  it('applies an early partial payment to the open statement it pays', async () => {
+    const { snapshot } = await cardWithReceipt('2026-08-19', -200)
+    const { august, scheduled } = await snapshot()
+    expect(august).toMatchObject({ paidCents: 20_000, status: 'partial' })
+    expect(scheduled).toContainEqual({
+      date: '2026-08-27',
+      amountCents: -80_000,
+    })
+  })
+
+  it('restores settlement when a provider category returns to a previously observed value', async () => {
+    const { gateway, connectionId, snapshot } = await cardWithReceipt(
+      '2026-08-25',
+      -1000,
+    )
+    expect((await snapshot()).august?.paidCents).toBe(100_000)
+    const original = gateway.transactions.get('provider-card')!
+    gateway.transactions.set(
+      'provider-card',
+      original.map((transaction) =>
+        transaction.id === 'card-credit'
+          ? { ...transaction, category: 'Shopping' }
+          : transaction,
+      ),
+    )
+    await syncPluggyConnection({ connectionId }, gateway)
+    expect((await snapshot()).august?.paidCents).toBe(0)
+
+    gateway.transactions.set('provider-card', original)
+    await syncPluggyConnection({ connectionId }, gateway)
+    expect((await snapshot()).august).toMatchObject({
+      paidCents: 100_000,
+      status: 'paid',
+    })
+    // The returning version is a new observation; earlier ones are kept.
+    const { db, schema } = database
+    const observations = await db
+      .select({
+        providerCategory:
+          schema.openFinanceTransactionObservations.providerCategory,
+        resolution: schema.openFinanceTransactionObservations.resolution,
+      })
+      .from(schema.openFinanceTransactionObservations)
+      .where(
+        eq(
+          schema.openFinanceTransactionObservations.providerTransactionId,
+          'card-credit',
+        ),
+      )
+    expect(observations).toEqual([
+      { providerCategory: 'Credit card payment', resolution: 'created' },
+      { providerCategory: 'Shopping', resolution: 'evidence' },
+      { providerCategory: 'Credit card payment', resolution: 'evidence' },
+    ])
+    // Syncing the same payload again records nothing new.
+    await syncPluggyConnection({ connectionId }, gateway)
+    expect(
+      await db
+        .select()
+        .from(schema.openFinanceTransactionObservations)
+        .where(
+          eq(
+            schema.openFinanceTransactionObservations.providerTransactionId,
+            'card-credit',
+          ),
+        ),
+    ).toHaveLength(3)
+  })
+})

@@ -337,6 +337,13 @@
       "when": 1789450000000,
       "tag": "0047_reconciliation_confirmation_source",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1789460000000,
+      "tag": "0048_open_finance_observation_returning_version",
+      "breakpoints": true
     }
   ]
 }
