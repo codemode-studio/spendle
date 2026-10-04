@@ -85,6 +85,20 @@ export const toReportedTransaction = (
   })
 }
 
+/**
+ * The running balance after a bank transaction, in minor units, when the
+ * provider reports one in the account's currency. Card statements have none.
+ */
+export const runningBalanceCents = (
+  account: Pick<PluggyAccount, 'type' | 'currencyCode'>,
+  transaction: PluggyTransaction,
+) =>
+  account.type === 'BANK' &&
+  transaction.currencyCode === account.currencyCode &&
+  typeof transaction.balance === 'number'
+    ? toMinorUnits(transaction.balance, account.currencyCode)
+    : null
+
 /** The name a person recognizes: the product name when the bank provides one. */
 export const providerAccountName = (account: PluggyAccount) =>
   account.marketingName?.trim() || account.name.trim()

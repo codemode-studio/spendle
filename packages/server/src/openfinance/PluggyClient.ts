@@ -74,6 +74,24 @@ const ConnectTokenResponse = Schema.Struct({ accessToken: Schema.String })
 
 const transient = (status: number) => status === 429 || status >= 500
 
+const maxRateLimitWait = Duration.minutes(2)
+
+/** How long Pluggy asks a rate-limited client to wait, from its reset headers. */
+export const rateLimitWait = (
+  headers: Readonly<Record<string, string | undefined>>,
+) => {
+  const seconds = [
+    headers['retry-after'],
+    headers['ratelimit-reset'],
+    headers['x-ratelimit-reset'],
+  ]
+    .map((value) => Number(value))
+    .find((value) => Number.isFinite(value) && value >= 0)
+  const wait =
+    seconds === undefined ? Duration.seconds(1) : Duration.seconds(seconds)
+  return Duration.min(wait, maxRateLimitWait)
+}
+
 export class PluggyClient extends Context.Service<
   PluggyClient,
   PluggyClientShape
@@ -149,6 +167,11 @@ export class PluggyClient extends Context.Service<
           }
           if (response.status === 404)
             return yield* fail(operation, 'not_found', 404)()
+          if (response.status === 429) {
+            // Retrying before the window resets only burns attempts.
+            yield* Effect.sleep(rateLimitWait(response.headers))
+            return yield* fail(operation, 'unavailable', 429)()
+          }
           if (response.status < 200 || response.status >= 300) {
             return yield* fail(
               operation,

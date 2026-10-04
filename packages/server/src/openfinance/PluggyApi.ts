@@ -9,6 +9,17 @@ export const PluggyItem = Schema.Struct({
   executionStatus: Schema.optional(Schema.NullOr(Schema.String)),
   clientUserId: Schema.optional(Schema.NullOr(Schema.String)),
   connector: Schema.Struct({ id: Schema.Number, name: Schema.String }),
+  // Per-product collection state; `transactions.isUpdated: false` means this
+  // execution did not refresh transactions.
+  statusDetail: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        transactions: Schema.optional(
+          Schema.NullOr(Schema.Struct({ isUpdated: Schema.Boolean })),
+        ),
+      }),
+    ),
+  ),
   error: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
@@ -50,6 +61,8 @@ export const PluggyTransaction = Schema.Struct({
   type: Schema.Literals(['CREDIT', 'DEBIT']),
   amount: Schema.Number,
   amountInAccountCurrency: Schema.optional(Schema.NullOr(Schema.Number)),
+  /** The account's running balance after this transaction, when the bank reports it. */
+  balance: Schema.optional(Schema.NullOr(Schema.Number)),
   currencyCode: Schema.String,
   status: Schema.optional(Schema.Literals(['PENDING', 'POSTED'])),
   category: Schema.optional(Schema.NullOr(Schema.String)),

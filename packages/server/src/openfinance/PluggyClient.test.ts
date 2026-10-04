@@ -1,11 +1,13 @@
 import { assert, describe, it } from '@effect/vitest'
 import * as Effect from 'effect/Effect'
+import * as Fiber from 'effect/Fiber'
 import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
 import * as Redacted from 'effect/Redacted'
 import * as Ref from 'effect/Ref'
 import * as HttpClient from 'effect/http/HttpClient'
 import * as HttpClientResponse from 'effect/http/HttpClientResponse'
+import * as TestClock from 'effect/testing/TestClock'
 
 import { PluggyClient } from './PluggyClient.ts'
 
@@ -117,6 +119,33 @@ describe('PluggyClient', () => {
         all.map((transaction) => transaction.id),
         ['a', 'b'],
       )
+    }),
+  )
+
+  it.effect('waits for the rate-limit window before retrying', () =>
+    Effect.gen(function* () {
+      let calls = 0
+      const { pluggy } = yield* fakePluggy((url) => {
+        if (url.pathname === '/auth') return json({ apiKey: 'key' })
+        calls++
+        if (calls === 1)
+          return new Response('{}', {
+            status: 429,
+            headers: { 'Retry-After': '30' },
+          })
+        return json({
+          id: 'item-1',
+          status: 'UPDATED',
+          connector: { id: 1, name: 'Nubank' },
+        })
+      })
+
+      const fiber = yield* Effect.forkChild(pluggy.getItem('item-1'))
+      yield* TestClock.adjust('29 seconds')
+      assert.strictEqual(calls, 1)
+      yield* TestClock.adjust('2 seconds')
+      const item = yield* Fiber.join(fiber)
+      assert.deepStrictEqual([item.id, calls], ['item-1', 2])
     }),
   )
 
