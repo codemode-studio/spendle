@@ -193,6 +193,50 @@ describe('webhook reactions', () => {
     }).pipe(Effect.provide(openFinanceTest(settings))),
   )
 
+  it.effect(
+    'keeps syncing today and keeps a future instalment a webhook copied',
+    () =>
+      Effect.gen(function* () {
+        const { account, openFinance, state } = yield* linkedBank([
+          ['market', '2026-09-28'],
+        ])
+        const instalment = tx('instalment', '2026-11-05', { status: 'PENDING' })
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: {
+            'provider-bank': [tx('market', '2026-09-28'), instalment],
+          },
+        }))
+        yield* deliver({
+          eventId: 'evt-future',
+          event: 'transactions/updated',
+          itemId: 'item-1',
+          accountId: 'provider-bank',
+          transactionIds: ['instalment'],
+        })
+        yield* drain
+
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: {
+            'provider-bank': [
+              tx('market', '2026-09-28'),
+              tx('bakery', '2026-10-04'),
+              instalment,
+            ],
+          },
+        }))
+        yield* openFinance.syncAccount('provider-bank')
+        yield* drain
+
+        assert.deepStrictEqual(yield* currentIds(account.id), [
+          'market',
+          'bakery',
+          'instalment',
+        ])
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
   // A connect token whose widget callback never reached the server.
   const pendingConnection = Effect.gen(function* () {
     yield* TestClock.setTime(

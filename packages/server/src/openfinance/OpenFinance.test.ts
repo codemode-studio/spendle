@@ -387,7 +387,7 @@ describe('OpenFinance', () => {
             ['recent', 'posted', -1000],
           ],
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -435,7 +435,7 @@ describe('OpenFinance', () => {
           current.map((observation) => observation.externalId),
           ['recent'],
         )
-      }).pipe(Effect.provide(ManualLayer)),
+      }).pipe(Effect.provide(openFinanceManualTest())),
   )
 
   it.effect('does not take a skipped foreign purchase for a removed one', () =>

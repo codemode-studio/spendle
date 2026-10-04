@@ -757,13 +757,18 @@ const make = Effect.gen(function* () {
     const stored = (yield* observations.current(accountId)).filter(
       (observation) => observation.sourceId === sourceId,
     )
-    const latest = stored.reduce<string | null>(
-      (found, observation) =>
-        found === null || observation.bookedOn > found
-          ? observation.bookedOn
-          : found,
-      null,
-    )
+    const dateTo = yield* today
+    // A future-dated line (an instalment a webhook copied) must not carry the
+    // continuation past today, where no read could reach current days.
+    const latest = stored
+      .filter((observation) => observation.bookedOn <= dateTo)
+      .reduce<string | null>(
+        (found, observation) =>
+          found === null || observation.bookedOn > found
+            ? observation.bookedOn
+            : found,
+        null,
+      )
     // Re-read from the overlap before the latest fact, or further back to the
     // oldest transaction still pending, so it is seen to settle or vanish.
     const oldestPending = stored
@@ -781,7 +786,6 @@ const make = Effect.gen(function* () {
       yield* findOldestUnresolved(providerAccountId),
       { onNone: () => null, onSome: (row) => row.bookedOn },
     )
-    const dateTo = yield* today
     // A pending transaction removed for being absent from an earlier response
     // is re-read until it returns or its retention passes: once removed it is
     // no longer among the current observations above.
@@ -864,8 +868,8 @@ const make = Effect.gen(function* () {
       }
     }
 
-    // A pending transaction Pluggy stops reporting was replaced or dropped
-    // by the bank. Presence is judged by the ids Pluggy returned, not by what
+    // A pending transaction Pluggy stops reporting within the range read was
+    // replaced or dropped by the bank. Presence is judged by the ids Pluggy returned, not by what
     // could be normalized. Posted ones are never inferred removed from
     // absence: a partial response must not erase facts.
     const seen = new Set(fetched.map((transaction) => transaction.id))
@@ -873,6 +877,7 @@ const make = Effect.gen(function* () {
       (observation) =>
         observation.status === 'pending' &&
         observation.bookedOn >= dateFrom &&
+        observation.bookedOn <= dateTo &&
         !seen.has(observation.externalId),
     )
     for (const observation of vanished) {
