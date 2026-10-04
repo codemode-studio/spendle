@@ -8,6 +8,7 @@ import * as Option from 'effect/Option'
 import * as Redacted from 'effect/Redacted'
 import * as Ref from 'effect/Ref'
 import * as Schema from 'effect/Schema'
+import * as SqlClient from 'effect/sql/SqlClient'
 import * as Stream from 'effect/Stream'
 import * as Layer from 'effect/Layer'
 import * as TestClock from 'effect/testing/TestClock'
@@ -268,6 +269,53 @@ describe('webhook reactions', () => {
       }).pipe(Effect.provide(openFinanceTest(settings))),
   )
 
+  it.effect(
+    'does not attach an item deleted while its registration waited on Pluggy',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, connectionId, state } = yield* pendingConnection
+        // Pluggy has produced the item, but it reaches the registration only
+        // after item/deleted was processed.
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          clientUserId: connectionId,
+          accounts: [bank],
+          afterGetItem: Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+          ),
+        }))
+        const registration = yield* Effect.forkChild(
+          openFinance.registerItem({ connectionId, itemId: 'item-1' }),
+        )
+        yield* Deferred.await(entered)
+        yield* deliver({
+          eventId: 'evt-gone',
+          event: 'item/deleted',
+          itemId: 'item-1',
+        })
+        yield* drain
+        yield* Deferred.succeed(release, undefined)
+        const failure = yield* Effect.flip(Fiber.join(registration))
+        const connection = yield* openFinance.connection(connectionId)
+        assert.deepStrictEqual(
+          {
+            failure: reasonOf(failure),
+            itemId: connection.itemId,
+            status: connection.status,
+            accounts: yield* openFinance.providerAccounts(connectionId),
+          },
+          {
+            failure: 'item_deleted',
+            itemId: null,
+            status: 'pending',
+            accounts: [],
+          },
+        )
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
   it.effect('ignores events for items it does not know', () =>
     Effect.gen(function* () {
       yield* deliver({
@@ -324,6 +372,127 @@ describe('webhook reactions', () => {
             ['late-arrival', -1000],
             ['recent', -1000],
           ],
+        )
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect(
+    'judges again the checkpoints of the days an old changed transaction touched',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, account, state } = yield* linkedBank([
+          [
+            'salary',
+            '2026-08-14',
+            { type: 'CREDIT', amount: 1000, balance: 1000 },
+          ],
+          ['market', '2026-08-15', { amount: 100, balance: 900 }],
+          ['fee', '2026-08-20', { amount: 50, balance: 850 }],
+        ])
+        // The market purchase was R$150; the fee was booked a day later.
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: {
+            'provider-bank': [
+              tx('salary', '2026-08-14', {
+                type: 'CREDIT',
+                amount: 1000,
+                balance: 1000,
+              }),
+              tx('market', '2026-08-15', { amount: 150, balance: 850 }),
+              tx('fee', '2026-08-21', { amount: 50, balance: 800 }),
+            ],
+          },
+        }))
+        yield* deliver({
+          eventId: 'evt-upd',
+          event: 'transactions/updated',
+          itemId: 'item-1',
+          accountId: 'provider-bank',
+          transactionIds: ['market', 'fee'],
+        })
+        yield* drain
+        const sql = yield* SqlClient.SqlClient
+        const booked = yield* sql<{ asOf: string; balanceCents: number }>`
+          SELECT as_of AS asOf, balance_cents AS balanceCents FROM balance_observations
+          WHERE account_id = ${account.id} AND kind = 'booked' ORDER BY as_of, rowid
+        `
+        assert.deepStrictEqual(
+          {
+            booked: booked.map((row) => [row.asOf, row.balanceCents]),
+            invalidated: (yield* openFinance.invalidatedCheckpoints(
+              account.id,
+            )).map((checkpoint) => checkpoint.asOf),
+          },
+          {
+            booked: [
+              ['2026-08-14', 100000],
+              ['2026-08-15', 90000],
+              ['2026-08-15', 85000],
+              ['2026-08-20', 85000],
+              ['2026-08-21', 80000],
+            ],
+            invalidated: ['2026-08-20'],
+          },
+        )
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect(
+    'infers no checkpoint for a changed day holding a line it never copied',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, account, state } = yield* linkedBank([
+          [
+            'salary',
+            '2026-08-14',
+            { type: 'CREDIT', amount: 1000, balance: 1000 },
+          ],
+          ['market', '2026-08-15', { amount: 100, balance: 900 }],
+        ])
+        // Pluggy also has a fee on that day that was never copied: the day
+        // closed at R$830, not at the R$850 the market line alone suggests.
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: {
+            'provider-bank': [
+              tx('salary', '2026-08-14', {
+                type: 'CREDIT',
+                amount: 1000,
+                balance: 1000,
+              }),
+              tx('market', '2026-08-15', { amount: 150, balance: 850 }),
+              tx('fee', '2026-08-15', { amount: 20, balance: 830 }),
+            ],
+          },
+        }))
+        yield* deliver({
+          eventId: 'evt-upd',
+          event: 'transactions/updated',
+          itemId: 'item-1',
+          accountId: 'provider-bank',
+          transactionIds: ['market'],
+        })
+        yield* drain
+        const sql = yield* SqlClient.SqlClient
+        const booked = yield* sql<{ asOf: string; balanceCents: number }>`
+          SELECT as_of AS asOf, balance_cents AS balanceCents FROM balance_observations
+          WHERE account_id = ${account.id} AND kind = 'booked' ORDER BY as_of, rowid
+        `
+        assert.deepStrictEqual(
+          {
+            booked: booked.map((row) => [row.asOf, row.balanceCents]),
+            invalidated: (yield* openFinance.invalidatedCheckpoints(
+              account.id,
+            )).map((checkpoint) => checkpoint.asOf),
+          },
+          {
+            booked: [
+              ['2026-08-14', 100000],
+              ['2026-08-15', 90000],
+            ],
+            invalidated: ['2026-08-15'],
+          },
         )
       }).pipe(Effect.provide(openFinanceTest(settings))),
   )

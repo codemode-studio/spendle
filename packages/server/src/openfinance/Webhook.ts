@@ -243,7 +243,8 @@ export const routes = HttpRouter.use(
  * - item created or updated: refresh the item and sync every linked account;
  *   an unknown item attaches to the pending connection that created it
  * - item errors and waiting states: refresh so the connection shows attention
- * - item deleted: mark the connection disconnected
+ * - item deleted: remember the deletion, even of an item no connection holds
+ *   yet, and mark the connection holding it disconnected
  * - transactions created or updated: read exactly those transactions (by id,
  *   or created since the given time), whatever their dates; without those
  *   details, sync the account or the whole item
@@ -297,6 +298,12 @@ export const reactor = Reactor.layer({
         return
       }
       const itemId = webhook.itemId
+      // Kept even for an item no connection holds yet: a registration that
+      // fetched it before the deletion must not attach it afterwards.
+      if (webhook.event === 'item/deleted') {
+        yield* openFinance.itemDeleted(itemId)
+        return
+      }
       const connection = yield* openFinance.connectionByItem(itemId)
       if (Option.isNone(connection)) {
         // The widget callback may never have arrived: Pluggy's item events
@@ -327,9 +334,6 @@ export const reactor = Reactor.layer({
           case 'item/waiting_user_action':
           case 'item/login_succeeded':
             yield* openFinance.refreshConnection(connectionId)
-            return
-          case 'item/deleted':
-            yield* openFinance.markItemDeleted(connectionId)
             return
           case 'transactions/updated':
             if (webhook.accountId && webhook.transactionIds) {

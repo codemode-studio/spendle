@@ -109,6 +109,7 @@ export class OpenFinanceError extends Schema.TaggedError<OpenFinanceError>()(
       'not_linked',
       'incompatible_account',
       'item_already_registered',
+      'item_deleted',
     ]),
     detail: Schema.optional(Schema.String),
   },
@@ -409,14 +410,28 @@ const make = Effect.gen(function* () {
     if (item.clientUserId !== current.id)
       return yield* fail('item_belongs_elsewhere')
     // Another registration may have pinned an item while Pluggy answered:
-    // the first to pin wins, and the loser stores nothing.
+    // the first to pin wins, and the loser stores nothing. Pluggy may also
+    // have deleted the item meanwhile; the deletion and the pin are each one
+    // statement, so either the pin sees the deletion or the deletion sees
+    // the pinned item and disconnects the connection.
     const pinned = yield* sql`
       UPDATE open_finance_connections SET item_id = ${item.id}, updated_at = ${yield* now}
       WHERE id = ${current.id} AND status != 'disconnected'
         AND (item_id IS NULL OR item_id = ${item.id})
+        AND NOT EXISTS (SELECT 1 FROM open_finance_deleted_items WHERE item_id = ${item.id})
       RETURNING id
     `
-    if (pinned.length === 0) return yield* fail('item_already_registered')
+    if (pinned.length === 0) {
+      const deleted = yield* sql`
+        SELECT 1 FROM open_finance_deleted_items WHERE item_id = ${item.id}
+      `
+      // The connection never held the deleted item, so it stays pending:
+      // another item from the same connect token can still attach to it.
+      return yield* fail(
+        deleted.length > 0 ? 'item_deleted' : 'item_already_registered',
+        deleted.length > 0 ? item.id : undefined,
+      )
+    }
     yield* applyItem(current, item)
     return yield* providerAccounts(current.id)
   })
@@ -549,7 +564,9 @@ const make = Effect.gen(function* () {
    * not. A judged day that yields none withdraws the checkpoint an earlier
    * read inferred for it, even when no posted line remains on it; a later
    * complete read that infers the withdrawn balance again reinstates it. A
-   * missing checkpoint is safe, a stale one is not.
+   * missing checkpoint is safe, a stale one is not. `only`
+   * restricts the judged days to those a read covered completely;
+   * `incompleteDays` yield no checkpoint, as unresolved ones.
    */
   const reconcileCheckpoints = Effect.fnUntraced(function* (input: {
     readonly accountId: string
@@ -568,9 +585,12 @@ const make = Effect.gen(function* () {
       string,
       { readonly bookedOn: string; readonly balanceAfterCents: number | null }
     >
+    readonly only?: ReadonlySet<string>
+    readonly incompleteDays?: ReadonlySet<string>
   }) {
     const { accountId, sourceId, dateFrom, dateTo } = input
     const inWindow = (day: string) => day >= dateFrom && day < dateTo
+    const allowed = (day: string) => input.only?.has(day) ?? true
     const posted = (yield* observations.current(accountId)).filter(
       (observation) =>
         observation.sourceId === sourceId && observation.status === 'posted',
@@ -592,6 +612,7 @@ const make = Effect.gen(function* () {
     }
     for (const observation of posted)
       if (inWindow(observation.bookedOn)) judged.add(observation.bookedOn)
+    for (const day of judged) if (!allowed(day)) judged.delete(day)
     const earliest = [...judged].reduce(
       (found, day) => (day < found ? day : found),
       dateFrom,
@@ -602,14 +623,17 @@ const make = Effect.gen(function* () {
       from: earliest,
       to: addDays(dateTo, 1),
     })).filter(
-      (checkpoint) => inWindow(checkpoint.asOf) || judged.has(checkpoint.asOf),
+      (checkpoint) =>
+        allowed(checkpoint.asOf) &&
+        (inWindow(checkpoint.asOf) || judged.has(checkpoint.asOf)),
     )
     for (const checkpoint of previousCheckpoints) judged.add(checkpoint.asOf)
-    const unresolvedDays = new Set(
-      (yield* findUnresolvedDays(input.providerAccountId)).map(
+    const unresolvedDays = new Set([
+      ...(yield* findUnresolvedDays(input.providerAccountId)).map(
         (row) => row.bookedOn,
       ),
-    )
+      ...(input.incompleteDays ?? []),
+    ])
 
     const closings = new Map<string, number>()
     for (const day of judged) {
@@ -958,7 +982,10 @@ const make = Effect.gen(function* () {
    * Reads specific transactions Pluggy says were created or updated,
    * wherever they fall in time: a change to an old transaction is outside
    * the regular sync's overlap. The account's history start still applies to
-   * transactions never seen before; known ones are always updated.
+   * transactions never seen before; known ones are always updated. A bank
+   * account's checkpoints on the days those transactions left or joined are
+   * judged again from a read of those whole days: the changed transactions
+   * alone cannot establish a day's closing balance.
    */
   const refreshTransactions = Effect.fn('OpenFinance.refreshTransactions')(
     (
@@ -995,10 +1022,14 @@ const make = Effect.gen(function* () {
             accountId: providerAccountId,
             ...query,
           })
-          const known = new Set(
-            (yield* observations.current(accountId))
-              .filter((observation) => observation.sourceId === sourceId)
-              .map((observation) => observation.externalId),
+          const stored = (yield* observations.current(accountId)).filter(
+            (observation) => observation.sourceId === sourceId,
+          )
+          const storedDay = new Map(
+            stored.map((observation) => [
+              observation.externalId,
+              observation.bookedOn,
+            ]),
           )
           const reported: Array<ReportedTransaction> = []
           for (const transaction of fetched) {
@@ -1006,17 +1037,103 @@ const make = Effect.gen(function* () {
             if (Option.isNone(normalized)) continue
             if (
               normalized.value.bookedOn < historyFrom &&
-              !known.has(normalized.value.externalId)
+              !storedDay.has(normalized.value.externalId)
             )
               continue
             reported.push(normalized.value)
           }
+
+          // The days these transactions are on or were on, before today;
+          // only bank accounts carry checkpoints.
+          const dateTo = yield* today
+          const affected = new Set<string>()
+          if (item.type === 'BANK')
+            for (const transaction of reported) {
+              affected.add(transaction.bookedOn)
+              const previous = storedDay.get(transaction.externalId)
+              if (previous !== undefined) affected.add(previous)
+            }
+          const days = [...affected].filter((day) => day < dateTo).sort()
+          const first = days[0]
+          const last = days[days.length - 1]
+          const wholeDays =
+            first !== undefined && last !== undefined
+              ? yield* pluggy.listTransactions({
+                  accountId: providerAccountId,
+                  dateFrom: first,
+                  dateTo: last,
+                })
+              : []
+          const judged = new Set(days)
+          const runningBalances = new Map<
+            string,
+            {
+              readonly bookedOn: string
+              readonly balanceAfterCents: number | null
+            }
+          >()
+          // A judged day with a line that cannot be compared with the stored
+          // facts yields no checkpoint.
+          const incompleteDays = new Set<string>()
+          const postedLines: Array<{ id: string; bookedOn: string }> = []
+          for (const transaction of wholeDays) {
+            const normalized = toReportedTransaction(item, transaction)
+            if (Option.isNone(normalized)) {
+              incompleteDays.add(bookedOn(transaction.date))
+              continue
+            }
+            if (normalized.value.status !== 'posted') continue
+            postedLines.push({
+              id: normalized.value.externalId,
+              bookedOn: normalized.value.bookedOn,
+            })
+            runningBalances.set(normalized.value.externalId, {
+              bookedOn: normalized.value.bookedOn,
+              balanceAfterCents: runningBalanceCents(item, transaction),
+            })
+          }
+
           const result = yield* whileConnected(
             owner.id,
-            observations.recordTransactions({
-              sourceId,
-              accountId,
-              transactions: reported,
+            Effect.gen(function* () {
+              const recorded = yield* observations.recordTransactions({
+                sourceId,
+                accountId,
+                transactions: reported,
+              })
+              if (first === undefined || last === undefined) return recorded
+              // A posted line this account does not hold on that day (one
+              // never copied, or one settled since) leaves the day's stored
+              // facts incomplete.
+              const held = new Set(
+                (yield* observations.current(accountId))
+                  .filter(
+                    (observation) =>
+                      observation.sourceId === sourceId &&
+                      observation.status === 'posted',
+                  )
+                  .map(
+                    (observation) =>
+                      `${observation.bookedOn}|${observation.externalId}`,
+                  ),
+              )
+              for (const line of postedLines)
+                if (!held.has(`${line.bookedOn}|${line.id}`))
+                  incompleteDays.add(line.bookedOn)
+              yield* reconcileCheckpoints({
+                accountId,
+                sourceId,
+                providerAccountId,
+                currency: item.currencyCode,
+                dateFrom: first,
+                dateTo: addDays(last, 1),
+                stored,
+                reported: recorded.recorded,
+                runningBalances,
+                only: judged,
+                incompleteDays,
+              })
+              return recorded
             }),
           )
           return result.recorded.length
@@ -1112,6 +1229,30 @@ const make = Effect.gen(function* () {
   })
 
   /**
+   * Pluggy deleted the item (item/deleted). The deletion is kept even when no
+   * connection holds the item yet, so a registration still waiting on Pluggy
+   * cannot attach it afterwards; a connection that holds it is disconnected.
+   */
+  const itemDeleted = Effect.fn('OpenFinance.itemDeleted')(function* (
+    itemId: string,
+  ) {
+    const deletedAt = yield* now
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        yield* sql`
+          INSERT INTO open_finance_deleted_items (item_id, deleted_at)
+          VALUES (${itemId}, ${deletedAt})
+          ON CONFLICT (item_id) DO NOTHING
+        `
+        yield* sql`
+          UPDATE open_finance_connections SET status = 'disconnected', updated_at = ${deletedAt}
+          WHERE item_id = ${itemId} AND status != 'disconnected'
+        `
+      }),
+    )
+  })
+
+  /**
    * Records Pluggy's deletion of transactions as removed versions. Unknown ids
    * are ignored: Pluggy may delete transactions outside the copied window.
    */
@@ -1169,6 +1310,7 @@ const make = Effect.gen(function* () {
     connectionByItem,
     adoptItem,
     markItemDeleted,
+    itemDeleted,
     removeTransactions,
     createConnectToken,
     reconnectToken,
