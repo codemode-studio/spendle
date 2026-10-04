@@ -66,38 +66,64 @@ const supportedEncoding = (label: string) => {
 }
 
 export const looksLikeOfx = (text: string) =>
-  /OFXHEADER|<OFX>/i.test(text.slice(0, 2048))
+  /OFXHEADER|<OFX[\s>]/i.test(text.slice(0, 2048))
 
 const escapeText = (value: string) =>
   value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
+// An XML start, end or empty-element tag, which may carry attributes and
+// whitespace before its `>`: `<CURDEF >`, `<STMTTRN id="1">`, `</CURDEF >`.
+const xmlTag =
+  /<(\/?)([A-Za-z_][\w.:-]*)((?:\s(?:[^<>"'/]|\/(?!>)|"[^"]*"|'[^']*')*)?)(\/?)>/g
+
 /**
- * Removes XML comments and turns CDATA sections into escaped text, so values
- * read the same however they were written. Returns null when either is left
- * open: the rest of the file would be swallowed.
+ * Removes XML comments and processing instructions, turns CDATA sections
+ * into escaped text and writes every tag as a bare `<NAME>` or `</NAME>`, so
+ * values and aggregates read the same however they were written. Returns
+ * null when a comment, instruction or CDATA section is left open: the rest of
+ * the file would be swallowed.
  */
 const unwrapMarkup = (text: string) => {
+  const opening = /<[!?]/g
   let output = ''
   let index = 0
   for (;;) {
-    const next = text.indexOf('<!', index)
-    if (next === -1) return output + text.slice(index)
-    output += text.slice(index, next)
-    if (text.startsWith('<!--', next)) {
-      const end = text.indexOf('-->', next + 4)
+    opening.lastIndex = index
+    const at = opening.exec(text)?.index
+    if (at === undefined) return normalizeTags(output + text.slice(index))
+    output += text.slice(index, at)
+    if (text.startsWith('<?', at)) {
+      const end = text.indexOf('?>', at + 2)
+      if (end === -1) return null
+      index = end + 2
+    } else if (text.startsWith('<!--', at)) {
+      const end = text.indexOf('-->', at + 4)
       if (end === -1) return null
       index = end + 3
-    } else if (text.startsWith('<![CDATA[', next)) {
-      const end = text.indexOf(']]>', next + 9)
+    } else if (text.startsWith('<![CDATA[', at)) {
+      const end = text.indexOf(']]>', at + 9)
       if (end === -1) return null
-      output += escapeText(text.slice(next + 9, end))
+      output += escapeText(text.slice(at + 9, end))
       index = end + 3
     } else {
       output += '<!'
-      index = next + 2
+      index = at + 2
     }
   }
 }
+
+// SGML OFX tags are already bare; only XML spells them other ways.
+const normalizeTags = (text: string) =>
+  text.replace(
+    xmlTag,
+    (
+      _whole,
+      close: string,
+      name: string,
+      _attributes: string,
+      empty: string,
+    ) => (empty && !close ? `<${name}></${name}>` : `<${close}${name}>`),
+  )
 
 const entities: Record<string, string> = {
   amp: '&',
@@ -179,12 +205,18 @@ export const parseOfx = (
   if (statements.length > 1) return Result.fail('multiple_statements')
   const { block: statement, kind } = statements[0]!
   const currency = tag(statement, 'CURDEF')?.toUpperCase() ?? null
+  // Markup the tag reader cannot follow must not pass for an absent value.
+  if (currency === null && /<CURDEF\b/i.test(statement))
+    return Result.fail('malformed_ofx')
+  const transactions = blocks(statement, 'STMTTRN')
+  if (transactions.length !== (statement.match(/<STMTTRN\b/gi)?.length ?? 0))
+    return Result.fail('malformed_ofx')
 
   let rejectedRows = 0
   const lines: Array<
     Omit<StatementLine, 'externalId'> & { externalId?: string }
   > = []
-  for (const transaction of blocks(statement, 'STMTTRN')) {
+  for (const transaction of transactions) {
     const bookedOn = parseDate(tag(transaction, 'DTPOSTED') ?? '')
     const amountCents = parseOfxAmount(tag(transaction, 'TRNAMT') ?? '')
     const memo = tag(transaction, 'MEMO')
@@ -233,6 +265,10 @@ export const parseOfx = (
     ? parseOfxAmount(tag(ledger, 'BALAMT') ?? '')
     : null
   const balanceAsOf = ledger ? parseDate(tag(ledger, 'DTASOF') ?? '') : null
+  // Nothing readable would store an empty import that claims to be a
+  // statement.
+  if (lines.length === 0 && (balanceCents === null || balanceAsOf === null))
+    return Result.fail('no_statement')
   const accountId = tag(statement, 'ACCTID')?.replace(/\D/g, '') ?? ''
 
   return Result.succeed({

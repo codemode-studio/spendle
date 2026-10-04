@@ -183,4 +183,71 @@ describe('parseOfx', () => {
       ],
     )
   })
+
+  it('reads XML tags written with whitespace, attributes or instructions', () => {
+    const file = (currency: string, transaction: string) =>
+      `<?xml version="1.0"?><?OFX OFXHEADER="200"?><OFX><STMTRS>${currency}<BANKTRANLIST>
+        ${transaction}</BANKTRANLIST></STMTRS></OFX>`
+    const line = `<DTPOSTED >20260905</DTPOSTED ><TRNAMT>-1.00</TRNAMT><NAME/><MEMO a="1>2">Loja</MEMO>`
+    for (const currency of [
+      '<CURDEF >USD</CURDEF >',
+      '<CURDEF\n>USD</CURDEF>',
+      '<CURDEF><?note?>USD</CURDEF>',
+    ]) {
+      const statement = Result.getOrThrow(
+        parseOfx(
+          file(
+            currency,
+            `<STMTTRN >${line}</STMTTRN><STMTTRN id="2">${line}</STMTTRN >`,
+          ),
+        ),
+      )
+      assert.deepStrictEqual(
+        [
+          statement.currency,
+          statement.lines.map((entry) => [
+            entry.amountCents,
+            entry.description,
+          ]),
+        ],
+        [
+          'USD',
+          [
+            [-100, 'Loja'],
+            [-100, 'Loja'],
+          ],
+        ],
+      )
+    }
+    assert.deepStrictEqual(
+      parseOfx(
+        file(
+          '<CURDEF>BRL</CURDEF>',
+          `<STMTTRN>${line}<CURRENCY ><CURSYM>USD</CURSYM></CURRENCY ></STMTTRN>`,
+        ),
+      ),
+      Result.fail('mixed_currencies'),
+    )
+  })
+
+  it('refuses statement markup it cannot read instead of storing it empty', () => {
+    const file = (body: string) =>
+      `<OFX><STMTRS><CURDEF>BRL</CURDEF><BANKTRANLIST>${body}</BANKTRANLIST></STMTRS></OFX>`
+    assert.deepStrictEqual(parseOfx(file('')), Result.fail('no_statement'))
+    assert.deepStrictEqual(
+      parseOfx(
+        file(
+          '<STMTTRN\n<DTPOSTED>20260905</DTPOSTED><TRNAMT>-1.00</TRNAMT><MEMO>A</MEMO></STMTTRN>',
+        ),
+      ),
+      Result.fail('malformed_ofx'),
+    )
+    assert.deepStrictEqual(
+      parseOfx(
+        `<OFX><STMTRS><CURDEF =USD></CURDEF><BANKTRANLIST><STMTTRN><DTPOSTED>20260905</DTPOSTED>
+          <TRNAMT>-1.00</TRNAMT><MEMO>A</MEMO></STMTTRN></BANKTRANLIST></STMTRS></OFX>`,
+      ),
+      Result.fail('malformed_ofx'),
+    )
+  })
 })

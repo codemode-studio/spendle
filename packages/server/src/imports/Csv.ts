@@ -185,42 +185,60 @@ interface BalanceReading {
 /**
  * Lists the readings under which known running balances chain with the
  * amounts between them: file order (oldest first) or reversed (newest
- * first). Rows without a balance are crossed using their amounts, so a blank
- * cell cannot hide a mismatch. Only card exports may keep balances in the
- * statement's sign; a bank balance moves with the signed amounts.
+ * first). An order the dates contradict is not a reading; lines on the same
+ * date keep their file order. Rows without a balance are crossed using their
+ * amounts, so a blank cell cannot hide a mismatch. Only card exports may keep
+ * balances in the statement's sign; a bank balance moves with the signed
+ * amounts.
  */
 const balanceReadings = (
-  amounts: ReadonlyArray<number>,
+  lines: ReadonlyArray<{
+    readonly bookedOn: string
+    readonly amountCents: number
+  }>,
   points: ReadonlyArray<BalancePoint>,
   kind: 'account' | 'card',
 ): ReadonlyArray<BalanceReading> => {
   const between = (from: number, to: number, sign: number) => {
     let sum = 0
-    for (let index = from; index < to; index++) sum += amounts[index]! * sign
+    for (let index = from; index < to; index++)
+      sum += lines[index]!.amountCents * sign
     return sum
   }
-  const signs: ReadonlyArray<1 | -1> = kind === 'card' ? [1, -1] : [1]
-  return (['ascending', 'descending'] as const).flatMap((order) =>
-    signs
-      .filter((sign) =>
-        points.slice(1).every((point, position) => {
-          const previous = points[position]!
-          return order === 'ascending'
-            ? previous.balanceCents +
-                between(previous.index + 1, point.index + 1, sign) ===
-                point.balanceCents
-            : point.balanceCents +
-                between(previous.index, point.index, sign) ===
-                previous.balanceCents
-        }),
+  const follows = (order: BalanceReading['order']) =>
+    lines
+      .slice(1)
+      .every((line, position) =>
+        order === 'ascending'
+          ? lines[position]!.bookedOn <= line.bookedOn
+          : lines[position]!.bookedOn >= line.bookedOn,
       )
-      .map((sign) => ({ order, sign })),
-  )
+  const signs: ReadonlyArray<1 | -1> = kind === 'card' ? [1, -1] : [1]
+  return (['ascending', 'descending'] as const)
+    .filter(follows)
+    .flatMap((order) =>
+      signs
+        .filter((sign) =>
+          points.slice(1).every((point, position) => {
+            const previous = points[position]!
+            return order === 'ascending'
+              ? previous.balanceCents +
+                  between(previous.index + 1, point.index + 1, sign) ===
+                  point.balanceCents
+              : point.balanceCents +
+                  between(previous.index, point.index, sign) ===
+                  previous.balanceCents
+          }),
+        )
+        .map((sign) => ({ order, sign })),
+    )
 }
 
 /**
  * The balance after the newest line: the newest known balance carried
- * through the lines after it in chain order, one value per fitting sign.
+ * through the lines after it in chain order, one value per fitting sign. A
+ * rejected row past that balance moved it by an amount that was not read, so
+ * the balance is then kept at its own date and cannot verify a summary.
  */
 const closingPosition = (
   lines: ReadonlyArray<{
@@ -229,15 +247,25 @@ const closingPosition = (
   }>,
   points: ReadonlyArray<BalancePoint>,
   readings: ReadonlyArray<BalanceReading>,
+  rejectedBefore: ReadonlyArray<number>,
 ) => {
-  const ascending = readings.some((reading) => reading.order === 'ascending')
-  const descending = readings.some((reading) => reading.order === 'descending')
-  // When both readings fit, the dates decide which end is the newest.
-  const order =
-    descending && (!ascending || lines[0]!.bookedOn > lines.at(-1)!.bookedOn)
-      ? 'descending'
-      : 'ascending'
+  // Both orders fit only when every line shares a date; file order wins.
+  const order = readings.some((reading) => reading.order === 'ascending')
+    ? 'ascending'
+    : 'descending'
   const latest = order === 'ascending' ? points.at(-1)! : points[0]!
+  const crossesRejected = rejectedBefore.some((position) =>
+    order === 'ascending' ? position > latest.index : position <= latest.index,
+  )
+  const newest =
+    order === 'ascending' ? lines.at(-1)!.bookedOn : lines[0]!.bookedOn
+  if (crossesRejected)
+    return {
+      newest,
+      asOf: latest.bookedOn,
+      candidates: [latest.balanceCents],
+      verified: false,
+    }
   const after =
     order === 'ascending'
       ? lines.slice(latest.index + 1)
@@ -250,16 +278,21 @@ const closingPosition = (
         after.reduce((sum, line) => sum + line.amountCents * reading.sign, 0),
     )
   return {
-    asOf: order === 'ascending' ? lines.at(-1)!.bookedOn : lines[0]!.bookedOn,
+    newest,
+    asOf: newest,
     candidates,
+    verified: true,
   }
 }
+
+const at = (asOf: string | null, cents: number) =>
+  asOf === null ? null : { asOf, cents }
 
 /**
  * Parses a bank or card CSV export by recognizing its column names. A
  * running balance column must chain with the amounts, read top to bottom or
- * bottom to top; when it does, its newest value carried through any later
- * lines is the closing balance.
+ * bottom to top, in an order the dates allow; when it does, its newest value
+ * carried through any later lines is the closing balance.
  */
 export const parseCsv = (
   text: string,
@@ -273,7 +306,8 @@ export const parseCsv = (
   const headers = headerRow.map(key)
   const preamble = readPreamble(table.preamble, table.delimiter)
 
-  let rejectedRows = 0
+  // Where each rejected row sat: before the line at that position.
+  const rejectedBefore: Array<number> = []
   const lines: Array<
     Omit<StatementLine, 'externalId'> & { externalId?: string }
   > = []
@@ -287,7 +321,7 @@ export const parseCsv = (
     const description = pick(row, columns.description)
     const amountCents = amountOf(row, kind)
     if (bookedOn === null || !description || amountCents === null) {
-      rejectedRows++
+      rejectedBefore.push(lines.length)
       continue
     }
     const id = pick(row, columns.id)
@@ -308,38 +342,42 @@ export const parseCsv = (
 
   let closing: ReturnType<typeof closingPosition> | null = null
   if (balances.length > 0) {
-    const readings = balanceReadings(
-      lines.map((line) => line.amountCents),
-      balances,
-      kind,
-    )
+    const readings = balanceReadings(lines, balances, kind)
     if (readings.length === 0) return Result.fail('running_balance_mismatch')
-    closing = closingPosition(lines, balances, readings)
+    closing = closingPosition(lines, balances, readings, rejectedBefore)
   }
+  // A summary is the bank's own figure: it is checked against the running
+  // balance when that reaches the newest line, and taken as written otherwise.
+  const summary = preamble.balance
   if (
-    preamble.balance !== null &&
-    closing !== null &&
-    !closing.candidates.includes(preamble.balance)
+    summary !== null &&
+    closing?.verified === true &&
+    !closing.candidates.includes(summary)
   ) {
     return Result.fail('summary_balance_mismatch')
   }
 
-  const closingCents =
-    kind === 'account'
-      ? (preamble.balance ?? closing?.candidates[0] ?? null)
-      : null
-  const closingAsOf = preamble.period?.end ?? closing?.asOf ?? null
+  const closingBalance =
+    kind !== 'account'
+      ? null
+      : summary !== null
+        ? at(preamble.period?.end ?? closing?.newest ?? null, summary)
+        : closing === null
+          ? null
+          : at(
+              closing.verified
+                ? (preamble.period?.end ?? closing.asOf)
+                : closing.asOf,
+              closing.candidates[0]!,
+            )
   return Result.succeed({
     format: 'csv',
     currency: currencies.size === 1 ? [...currencies][0]! : null,
     accountKind: null,
     accountHint: kind === 'account' ? preamble.accountHint : null,
     period: preamble.period,
-    closingBalance:
-      closingCents !== null && closingAsOf !== null
-        ? { asOf: closingAsOf, cents: closingCents }
-        : null,
+    closingBalance,
     lines: fingerprintIds(lines),
-    rejectedRows,
+    rejectedRows: rejectedBefore.length,
   })
 }

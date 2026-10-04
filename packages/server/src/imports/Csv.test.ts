@@ -72,6 +72,53 @@ describe('parseCsv', () => {
       2,
     )
   })
+
+  it('keeps the newest balance at its own date when a rejected row follows it', () => {
+    const rows = [
+      '05/09/2026;Salário;100,00;100,00',
+      '10/09/2026;;-10,00;',
+      '30/09/2026;Padaria;-5,00;',
+    ]
+    const text = (summary: string, order: ReadonlyArray<string>) =>
+      [
+        ...(summary
+          ? ['Período ;01/09/2026 a 30/09/2026', `Saldo ;${summary}`]
+          : []),
+        'Data;Descrição;Valor;Saldo',
+        ...order,
+      ].join('\n')
+    for (const order of [rows, [...rows].reverse()]) {
+      const statement = Result.getOrThrow(parseCsv(text('', order), 'account'))
+      assert.deepStrictEqual(
+        [statement.closingBalance, statement.rejectedRows],
+        [{ asOf: '2026-09-05', cents: 10000 }, 1],
+      )
+      assert.deepStrictEqual(
+        Result.getOrThrow(parseCsv(text('85,00', order), 'account'))
+          .closingBalance,
+        { asOf: '2026-09-30', cents: 8500 },
+      )
+    }
+  })
+
+  it('reads balances only in an order the dates allow', () => {
+    assert.deepStrictEqual(
+      parseCsv(
+        'Data;Descrição;Valor;Saldo\n05/09/2026;A;-10,00;100,00\n06/09/2026;B;-10,00;110,00\n',
+        'account',
+      ),
+      Result.fail('running_balance_mismatch'),
+    )
+    assert.deepStrictEqual(
+      Result.getOrThrow(
+        parseCsv(
+          'Data;Descrição;Valor;Saldo\n05/09/2026;A;100,00;100,00\n05/09/2026;B;-10,00;90,00\n',
+          'account',
+        ),
+      ).closingBalance,
+      { asOf: '2026-09-05', cents: 9000 },
+    )
+  })
 })
 
 describe('splitCsv', () => {

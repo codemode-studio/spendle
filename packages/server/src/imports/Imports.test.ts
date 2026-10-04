@@ -158,7 +158,7 @@ describe('Imports', () => {
               accountId: card.id,
               bytes:
                 utf8(`<OFX><CREDITCARDMSGSRSV1><CCSTMTTRNRS><CCSTMTRS><CURDEF>BRL
-              <CCACCTFROM><ACCTID>5555********4242</CCACCTFROM><BANKTRANLIST></BANKTRANLIST>
+              <CCACCTFROM><ACCTID>5555********4242</CCACCTFROM><BANKTRANLIST><STMTTRN><DTPOSTED>20260912<TRNAMT>-10.00<FITID>c1<MEMO>Mercado</STMTTRN></BANKTRANLIST>
               </CCSTMTRS></CCSTMTTRNRS></CREDITCARDMSGSRSV1></OFX>`),
             },
           ],
@@ -229,7 +229,7 @@ describe('Imports', () => {
           accountId: account.id,
           fileName: 'cartao.ofx',
           bytes: utf8(
-            '<OFX><CCSTMTRS><CURDEF>BRL<BANKTRANLIST></BANKTRANLIST></CCSTMTRS></OFX>',
+            '<OFX><CCSTMTRS><CURDEF>BRL<BANKTRANLIST><STMTTRN><DTPOSTED>20260912<TRNAMT>-10.00<FITID>c1<MEMO>Mercado</STMTTRN></BANKTRANLIST></CCSTMTRS></OFX>',
           ),
         })
         .pipe(Effect.flip)
@@ -303,7 +303,10 @@ describe('Imports', () => {
               '\n<STMTTRN><DTPOSTED>20260911<TRNAMT>-10.00<FITID>a3<MEMO>Hotel<CURRENCY><CURRATE>5.00<CURSYM>USD</CURRENCY></STMTTRN>',
             ),
             utf8(
-              '<?xml version="1.0"?><OFX><STMTRS><CURDEF><![CDATA[USD]]></CURDEF><BANKTRANLIST></BANKTRANLIST></STMTRS></OFX>',
+              '<?xml version="1.0"?><OFX><STMTRS><CURDEF><![CDATA[USD]]></CURDEF><BANKTRANLIST><STMTTRN><DTPOSTED>20260912</DTPOSTED><TRNAMT>-10.00</TRNAMT><MEMO>Mercado</MEMO></STMTTRN></BANKTRANLIST></STMTRS></OFX>',
+            ),
+            utf8(
+              '<?xml version="1.0"?><OFX><STMTRS><CURDEF >USD</CURDEF ><BANKTRANLIST><STMTTRN ><DTPOSTED>20260912</DTPOSTED><TRNAMT>-10.00</TRNAMT><MEMO>Mercado</MEMO></STMTTRN></BANKTRANLIST></STMTRS></OFX>',
             ),
             utf8(
               '<?xml version="1.0" encoding="EBCDIC-CP-US"?><OFX><STMTRS><CURDEF>BRL</CURDEF></STMTRS></OFX>',
@@ -321,6 +324,7 @@ describe('Imports', () => {
         )
         assert.deepStrictEqual(reasons, [
           'mixed_currencies',
+          'currency_mismatch',
           'currency_mismatch',
           'unsupported_encoding',
         ])
