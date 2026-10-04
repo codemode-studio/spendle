@@ -1047,6 +1047,69 @@ describe('Reconciliation', () => {
   )
 
   it.effect(
+    'does not confirm a refund from another trade under a shared umbrella word, but does from the same trade',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, card, entryId } = yield* setup
+        yield* (yield* Imports).importFile({
+          accountId: card.id,
+          fileName: 'cartao-umbrella.ofx',
+          bytes: ofx(
+            line('u1', '20260910', '-50.00', 'Auto Pecas Avenida') +
+              line('u2', '20260911', '-250.00', 'Auto Oficina Avenida') +
+              line('u3', '20260915', '50.00', 'Estorno Auto Oficina Avenida') +
+              line('u4', '20260910', '-60.00', 'Petshop Bicho Feliz') +
+              line('u5', '20260911', '-300.00', 'Pet Clinica Bicho Feliz') +
+              line(
+                'u6',
+                '20260915',
+                '60.00',
+                'Estorno Pet Clinica Bicho Feliz',
+              ) +
+              line('u7', '20260910', '-70.00', 'Pet Shop Primavera') +
+              line('u8', '20260915', '70.00', 'Estorno Pet Clinica Primavera') +
+              line('u9', '20260910', '-80.00', 'Auto Pecas Horizonte Azul') +
+              line(
+                'u10',
+                '20260915',
+                '80.00',
+                'Estorno Autopecas Horizonte Azul',
+              ) +
+              line('u11', '20260910', '-90.00', 'Auto Posto Ipiranga') +
+              line('u12', '20260915', '90.00', 'Estorno Posto Ipiranga'),
+            'CCSTMTRS',
+          ),
+        })
+        yield* drain
+        const refunds = (yield* reconciliation.relations).filter(
+          (relation) => relation.kind === 'refund',
+        )
+        const statusOf = (purchaseCents: number) =>
+          Effect.map(entryId(card.id, purchaseCents), (id) =>
+            refunds
+              .filter(
+                (relation) =>
+                  relation.outflowEntryId === id &&
+                  relation.status === 'confirmed',
+              )
+              .map((relation) => relation.status),
+          )
+        assert.deepStrictEqual(
+          [
+            yield* statusOf(-5000),
+            yield* statusOf(-25000),
+            yield* statusOf(-6000),
+            yield* statusOf(-30000),
+            yield* statusOf(-7000),
+            yield* statusOf(-8000),
+            yield* statusOf(-9000),
+          ],
+          [[], [], [], [], [], ['confirmed'], ['confirmed']],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
     'does not confirm a refund from another trade named in the plural or in words it does not know',
     () =>
       Effect.gen(function* () {

@@ -37,17 +37,27 @@ export interface InstallmentPlan {
   readonly description: string
   readonly amountCents: number
   readonly total: number
-  /** Instalment numbers already charged, pending or posted, ascending. */
+  /**
+   * Instalment numbers charged on the open or earlier bills, pending or
+   * posted, ascending.
+   */
   readonly seen: ReadonlyArray<number>
   /** Of `seen`, those still pending on the open bill. */
   readonly pending: ReadonlyArray<number>
+  /**
+   * Instalment numbers the provider already reports, dated on later bills
+   * than the open one; they still remain, ascending.
+   */
+  readonly scheduled: ReadonlyArray<number>
   readonly entryIds: ReadonlyArray<string>
+  /** Instalments not yet charged on the open or earlier bills. */
   readonly remaining: number
   /**
-   * What the remaining instalments will add to future bills, beyond those
-   * seen (pending ones included); negative.
+   * What the remaining instalments will add to later bills than the open
+   * one: scheduled ones at their amounts, the others estimated; negative.
    */
   readonly remainingCents: number
+  /** The date of the latest instalment charged, or else the first scheduled. */
   readonly lastBookedOn: string
 }
 
@@ -151,12 +161,16 @@ const joins = (chain: ReadonlyArray<Item>, later: ReadonlyArray<Item>) => {
  * far was seen and none reports a different total, and from the latest
  * instalment's amount otherwise.
  *
- * Pending lines the provider numbers count as charged: they are on the open
- * bill and only what comes after them is future. Once posted they are the
+ * Lines dated up to `billedThrough`, the open bill's closing, count as
+ * charged, pending ones included: they are on the open bill or an earlier
+ * one. Some institutions report every instalment at once, later ones dated
+ * on their own future bills; those stay in what remains, at their reported
+ * amounts, until the clock reaches their bill. Once posted, a line is the
  * same entry, so nothing counts twice.
  */
 export const installmentPlans = (
   lines: ReadonlyArray<InstallmentLine>,
+  billedThrough: string,
 ): ReadonlyArray<InstallmentPlan> => {
   const groups = new Map<string, Array<Item>>()
   for (const line of lines) {
@@ -220,7 +234,16 @@ export const installmentPlans = (
       const latest = chain.at(-1)!
       const numbers = chain.map((item) => item.number)
       const total = latest.total
-      const remaining = Math.max(0, total - latest.number)
+      const charged = chain.filter(
+        (item) => item.line.bookedOn <= billedThrough,
+      )
+      const scheduled = chain.filter(
+        (item) => item.line.bookedOn > billedThrough,
+      )
+      // Without a charged instalment, those before the first scheduled one
+      // were billed unseen.
+      const billedNumber = charged.at(-1)?.number ?? chain[0]!.number - 1
+      const remaining = Math.max(0, total - billedNumber)
       // Any two totals reported for the purchase, on one instalment or
       // across them, leave it unknown.
       const totals = new Set(chain.flatMap((item) => item.totalAmountsCents))
@@ -228,7 +251,11 @@ export const installmentPlans = (
       const everyInstallment = numbers.every(
         (number, index) => number === index + 1,
       )
-      const billedCents = chain.reduce(
+      const billedCents = charged.reduce(
+        (sum, item) => sum + item.line.amountCents,
+        0,
+      )
+      const scheduledCents = scheduled.reduce(
         (sum, item) => sum + item.line.amountCents,
         0,
       )
@@ -237,20 +264,24 @@ export const installmentPlans = (
           ? Math.min(0, -knownTotal - billedCents)
           : remaining === 0
             ? 0
-            : remaining * latest.line.amountCents
+            : scheduledCents +
+              Math.max(0, remaining - scheduled.length) *
+                latest.line.amountCents
+      const lastBilled = charged.at(-1) ?? scheduled[0]!
       plans.push({
         key: `${groupKey}|${chain[0]!.number}@${chain[0]!.line.bookedOn}|${chain[0]!.line.entryId}`,
         description: latest.line.description,
         amountCents: latest.line.amountCents,
         total,
-        seen: numbers,
-        pending: chain.flatMap((item) =>
+        seen: charged.map((item) => item.number),
+        pending: charged.flatMap((item) =>
           item.line.pending === true ? [item.number] : [],
         ),
+        scheduled: scheduled.map((item) => item.number),
         entryIds: chain.map((item) => item.line.entryId),
         remaining,
         remainingCents,
-        lastBookedOn: latest.line.bookedOn,
+        lastBookedOn: lastBilled.line.bookedOn,
       })
     }
   }

@@ -21,6 +21,7 @@ const entry = (
   currency: 'BRL',
   status: 'posted',
   description,
+  descriptions: [description],
 })
 
 const summary = (

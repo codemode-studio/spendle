@@ -10,7 +10,12 @@ import { addDays, daysBetween, today } from '../domain/LocalDate.ts'
 import { foldDescription } from '../imports/Statement.ts'
 import { Accounts } from '../ledger/Accounts.ts'
 import { toMinorUnits } from '../openfinance/Normalize.ts'
-import { billPaymentWindowDays, billPayments, cardCycles } from './Cycles.ts'
+import {
+  billPaymentWindowDays,
+  billPayments,
+  cardCycles,
+  cycleContaining,
+} from './Cycles.ts'
 import { installmentPlans } from './Installments.ts'
 import type { InstallmentLine } from './Installments.ts'
 import { cardPaymentWindowDays } from './Matching.ts'
@@ -542,6 +547,8 @@ const make = Effect.gen(function* () {
    * billed. Pluggy's instalment metadata is used when any observation of the
    * entry carries it; otherwise the description is read. Pending purchases
    * count when the metadata numbers them, as they sit on the open bill.
+   * Instalments dated after the open bill's closing (from `cycles`, or the
+   * card's configured closing day) belong to later bills: they remain.
    */
   const installments = Effect.fn('Cards.installments')(function* (
     accountId: string,
@@ -582,11 +589,19 @@ const make = Effect.gen(function* () {
         })
       byEntry.set(row.entryId, known)
     }
+    const [{ cycles: known }, date] = yield* Effect.all([
+      cycles(accountId),
+      today,
+    ])
+    const billedThrough =
+      known.find((cycle) => date <= cycle.closingOn)?.closingOn ??
+      cycleContaining(date, card.card).closingOn
     return installmentPlans(
       [...byEntry.values()].map(({ line, reports }) => ({
         ...line,
         installment: mergeInstallments(reports),
       })),
+      billedThrough,
     )
   })
 

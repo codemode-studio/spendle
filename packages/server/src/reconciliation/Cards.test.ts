@@ -734,6 +734,148 @@ describe('Cards', () => {
       }).pipe(Effect.provide(openFinanceTest())),
   )
 
+  // Two R$ 300,00 purchases in three instalments on 4 October, one with the
+  // purchase total and one without, on a card closing on the 3rd: each
+  // report gives the instalments' numbers, dates and statuses. What
+  // `Cards.installments` projects on `now` after each report.
+  const instalmentsReported = (
+    now: string,
+    reports: ReadonlyArray<
+      ReadonlyArray<readonly [number, string, 'pending' | 'posted']>
+    >,
+  ) =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(
+        DateTime.toEpochMillis(DateTime.makeUnsafe(`${now}T15:00:00Z`)),
+      )
+      const accounts = yield* Accounts
+      const owner = yield* accounts.createOwner({ name: 'Eu', kind: 'person' })
+      const card = yield* accounts.open({
+        ownerId: owner.id,
+        institutionName: 'Nubank',
+        purpose: 'operating',
+        currency: 'BRL',
+        name: 'Cartão',
+        kind: 'credit_card',
+        card: new CardTerms({
+          closingDay: 3,
+          dueDay: 10,
+          limitCents: null,
+          lastFour: null,
+        }),
+      })
+      const observations = yield* Observations
+      const source = yield* observations.registerSource({
+        kind: 'open_finance',
+        externalRef: 'card-feed',
+        label: 'card-feed',
+      })
+      const purchases = [
+        ['apple', 'Apple Store', { totalAmount: 300 }],
+        ['fast', 'Fast Shop', {}],
+      ] as const
+      const projections = []
+      for (const lines of reports) {
+        yield* observations.recordTransactions({
+          sourceId: source.id,
+          accountId: card.id,
+          transactions: purchases.flatMap(([id, description, extra]) =>
+            lines.map(([number, bookedOn, status]) => ({
+              externalId: `${id}-${number}`,
+              bookedOn,
+              amountCents: -10000,
+              currency: 'BRL',
+              description,
+              status,
+              raw: {
+                installment: {
+                  number,
+                  total: 3,
+                  purchaseDate: '2026-10-04',
+                  ...extra,
+                },
+              },
+            })),
+          ),
+        })
+        yield* drain
+        const plans = yield* (yield* Cards).installments(card.id)
+        projections.push(
+          plans.map((plan) => [
+            plan.description,
+            plan.seen,
+            plan.pending,
+            plan.scheduled,
+            plan.entryIds.length,
+            plan.remaining,
+            plan.remainingCents,
+          ]),
+        )
+      }
+      return projections
+    })
+
+  it.effect(
+    'keeps future-dated instalments in what remains, not in what was billed',
+    () =>
+      Effect.gen(function* () {
+        // On 4 October the open bill closes on 3 November; a refresh brings
+        // the later instalments, dated on their own bills.
+        assert.deepStrictEqual(
+          yield* instalmentsReported('2026-10-04', [
+            [[1, '2026-10-04', 'pending']],
+            [
+              [1, '2026-10-04', 'pending'],
+              [2, '2026-11-04', 'pending'],
+              [3, '2026-12-04', 'pending'],
+            ],
+          ]),
+          [
+            [
+              ['Apple Store', [1], [1], [], 1, 2, -20000],
+              ['Fast Shop', [1], [1], [], 1, 2, -20000],
+            ],
+            [
+              ['Apple Store', [1], [1], [2, 3], 3, 2, -20000],
+              ['Fast Shop', [1], [1], [2, 3], 3, 2, -20000],
+            ],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'bills a future-dated instalment once its own bill is open, counting it once',
+    () =>
+      Effect.gen(function* () {
+        // On 10 November the open bill closes on 3 December and holds the
+        // second instalment.
+        const pending = [
+          [1, '2026-10-04', 'posted'],
+          [2, '2026-11-04', 'pending'],
+          [3, '2026-12-04', 'pending'],
+        ] as const
+        const posted = [
+          [1, '2026-10-04', 'posted'],
+          [2, '2026-11-04', 'posted'],
+          [3, '2026-12-04', 'pending'],
+        ] as const
+        assert.deepStrictEqual(
+          yield* instalmentsReported('2026-11-10', [pending, posted]),
+          [
+            [
+              ['Apple Store', [1, 2], [2], [3], 3, 1, -10000],
+              ['Fast Shop', [1, 2], [2], [3], 3, 1, -10000],
+            ],
+            [
+              ['Apple Store', [1, 2], [], [3], 3, 1, -10000],
+              ['Fast Shop', [1, 2], [], [3], 3, 1, -10000],
+            ],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
   it.effect(
     'takes a purchase total from a source that reports nothing else, and doubts it when another disagrees',
     () =>
@@ -891,7 +1033,7 @@ describe('Cards', () => {
             [3, { installment: { number: 'two' } }],
           ].map(([number, raw]) => ({
             externalId: `bare-${number}`,
-            bookedOn: `2026-0${6 + (number as number)}-15`,
+            bookedOn: `2026-0${5 + (number as number)}-15`,
             amountCents: -30000,
             currency: 'BRL',
             description: `Magazine Luiza PARC 0${number}/04`,

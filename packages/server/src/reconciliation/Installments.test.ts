@@ -17,9 +17,13 @@ const line = (
   installment,
 })
 
+// Every line here is on the open bill or an earlier one.
+const plansOf = (lines: ReadonlyArray<InstallmentLine>) =>
+  installmentPlans(lines, '2026-11-03')
+
 describe('installmentPlans', () => {
   it('groups successive instalments and projects what is left', () => {
-    const [plan] = installmentPlans([
+    const [plan] = plansOf([
       line('a', '2026-07-15', 'Magazine Luiza PARC 01/10'),
       line('b', '2026-08-15', 'Magazine Luiza PARC 02/10'),
       line('c', '2026-09-15', 'Magazine Luiza Parcela 3 de 10', -10002),
@@ -31,7 +35,7 @@ describe('installmentPlans', () => {
   })
 
   it('trusts provider metadata for a single instalment', () => {
-    const plans = installmentPlans([
+    const plans = plansOf([
       line('a', '2026-09-15', 'Apple Store', -50000, {
         number: 4,
         total: 12,
@@ -52,7 +56,7 @@ describe('installmentPlans', () => {
       purchaseDate: null,
       totalAmountsCents: [],
     })
-    const plans = installmentPlans([
+    const plans = plansOf([
       line('a', '2026-07-04', 'Apple Store', -10000, metadata(1)),
       line('b', '2026-09-10', 'Apple Store', -10000, metadata(2)),
     ])
@@ -64,13 +68,13 @@ describe('installmentPlans', () => {
 
   it('does not take a lone trailing date for an instalment', () => {
     assert.deepStrictEqual(
-      installmentPlans([line('a', '2026-09-15', 'Padaria 03/10')]),
+      plansOf([line('a', '2026-09-15', 'Padaria 03/10')]),
       [],
     )
   })
 
   it('keeps different purchases of the same store apart', () => {
-    const plans = installmentPlans([
+    const plans = plansOf([
       line('a', '2026-08-15', 'Loja PARC 01/03', -3000),
       line('b', '2026-09-15', 'Loja PARC 02/03', -3000),
       line('c', '2026-08-15', 'Loja PARC 01/06', -9000),
@@ -86,7 +90,7 @@ describe('installmentPlans', () => {
   })
 
   it('keeps a new purchase apart from a finished one at the same store', () => {
-    const plans = installmentPlans([
+    const plans = plansOf([
       line('old-1', '2026-03-15', 'Loja PARC 01/03'),
       line('old-2', '2026-04-15', 'Loja PARC 02/03'),
       line('old-3', '2026-05-15', 'Loja PARC 03/03'),
@@ -104,7 +108,7 @@ describe('installmentPlans', () => {
 
   it('does not take date-like suffixes on nearby days for instalments', () => {
     assert.deepStrictEqual(
-      installmentPlans([
+      plansOf([
         line('a', '2026-10-03', 'Padaria 03/10'),
         line('b', '2026-10-04', 'Padaria 04/10'),
       ]),
@@ -113,7 +117,7 @@ describe('installmentPlans', () => {
   })
 
   it('keeps instalments that differ by rounding centavos in one plan', () => {
-    const [plan] = installmentPlans([
+    const [plan] = plansOf([
       line('a', '2026-07-15', 'Loja PARC 01/03', -10004),
       line('b', '2026-08-15', 'Loja PARC 02/03', -10004),
       line('c', '2026-09-15', 'Loja PARC 03/03', -10006),
@@ -131,7 +135,7 @@ describe('installmentPlans', () => {
       purchaseDate: '2026-07-01',
       totalAmountsCents: [10000],
     })
-    const [plan] = installmentPlans([
+    const [plan] = plansOf([
       line('a', '2026-07-15', 'Loja', -3333, metadata(1)),
       line('b', '2026-08-15', 'Loja', -3333, metadata(2)),
     ])
@@ -139,7 +143,7 @@ describe('installmentPlans', () => {
   })
 
   it('joins undated instalments to the purchase the provider dated', () => {
-    const plans = installmentPlans([
+    const plans = plansOf([
       line('a', '2026-07-15', 'Loja PARC 01/03', -10000, {
         number: 1,
         total: 3,
@@ -162,7 +166,7 @@ describe('installmentPlans', () => {
       purchaseDate: null,
       totalAmountsCents: [],
     })
-    const plans = installmentPlans([
+    const plans = plansOf([
       line('a', '2025-01-15', 'Loja', -10000, metadata(1)),
       line('b', '2025-02-15', 'Loja', -10000, metadata(2)),
       line('c', '2026-08-15', 'Loja', -10000, metadata(3)),

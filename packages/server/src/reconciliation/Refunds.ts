@@ -58,7 +58,8 @@ const storeWords = new Set([
 // share a kind (`farmacia` and `drogaria`); different trades under one
 // name (`Acougue Bom Preco` and `Supermercado Bom Preco`) stay different
 // kinds, so the shops are never taken for one. Words are singular; plurals
-// are read through `kindOf`.
+// are read through `kindOf`. Some kinds are umbrellas over several trades
+// (`broadKinds`).
 const kindGroups: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ['market', ['mercado', 'supermercado', 'hipermercado']],
   ['grocery', ['mercearia']],
@@ -82,7 +83,8 @@ const kindGroups: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ['auto_parts', ['autopecas', 'pecas']],
   ['garage', ['oficina']],
   ['parking', ['estacionamento']],
-  ['pet', ['pet', 'petshop']],
+  ['pet', ['pet']],
+  ['pet_shop', ['petshop']],
   ['clinic', ['clinica']],
   ['hospital', ['hospital']],
   ['laboratory', ['laboratorio']],
@@ -92,6 +94,11 @@ const kindGroups: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ['gym', ['academia']],
   ['retail', ['magazine']],
 ]
+// Kinds that cover several trades: `Auto Pecas` and `Auto Oficina`, `Auto
+// Posto`; `Pet Shop` and `Pet Clinica`; a `Magazine` of any goods. Sharing
+// one says nothing about the trade; the specific kinds beside it decide.
+const broadKinds = new Set(['auto', 'pet', 'retail'])
+
 const businessKinds = new Map(
   kindGroups.flatMap(([kind, words]) =>
     words.map((word) => [word, kind] as const),
@@ -167,7 +174,10 @@ type Merchant = 'same' | 'uncertain' | 'different'
  * nothing distinctive in common, `different`. When only one names a kind
  * of business, a word only the other has may name a kind no list knows
  * (`Quitanda Primavera` and `Mercado Primavera`), so that is `uncertain`
- * too.
+ * too. Umbrella kinds (`broadKinds`) are compared through the specific
+ * trades beside them: different ones (`Auto Pecas Avenida` and `Auto
+ * Oficina Avenida`) are different businesses, and a trade against only an
+ * umbrella (`Pet Shop` and `Pet Clinica`) is `uncertain`.
  */
 const compareMerchants = (
   a: string,
@@ -178,10 +188,26 @@ const compareMerchants = (
   const shared = [...left].filter((word) => right.has(word))
   const leftKinds = kindsOf(a)
   const rightKinds = kindsOf(b)
+  const specific = (kinds: ReadonlySet<string>) =>
+    new Set([...kinds].filter((kind) => !broadKinds.has(kind)))
+  const leftSpecific = specific(leftKinds)
+  const rightSpecific = specific(rightKinds)
+  const disjoint = (left: ReadonlySet<string>, right: ReadonlySet<string>) =>
+    left.size > 0 &&
+    right.size > 0 &&
+    ![...left].some((kind) => right.has(kind))
+  // Specific trades decide when both name one; a shared umbrella alone
+  // (`Auto Pecas` and `Auto Oficina`) does not make them one business.
   const differentBusiness =
+    leftSpecific.size > 0 && rightSpecific.size > 0
+      ? disjoint(leftSpecific, rightSpecific)
+      : disjoint(leftKinds, rightKinds)
+  // Only an umbrella on one side and a trade on the other (`Pet Shop` and
+  // `Pet Clinica`): the umbrella may cover another trade.
+  const vagueBusiness =
     leftKinds.size > 0 &&
     rightKinds.size > 0 &&
-    ![...leftKinds].some((kind) => rightKinds.has(kind))
+    (leftSpecific.size === 0) !== (rightSpecific.size === 0)
   if (shared.length === 0) return { merchant: 'different', differentBusiness }
   const whole = shared.length === left.size || shared.length === right.size
   const distinctive = shared.some((word) => word.length >= 4)
@@ -192,7 +218,11 @@ const compareMerchants = (
     (rightKinds.size === 0 && leftKinds.size > 0 && shared.length < right.size)
   return {
     merchant:
-      whole && distinctive && !differentBusiness && !unknownKind
+      whole &&
+      distinctive &&
+      !differentBusiness &&
+      !vagueBusiness &&
+      !unknownKind
         ? 'same'
         : 'uncertain',
     differentBusiness,

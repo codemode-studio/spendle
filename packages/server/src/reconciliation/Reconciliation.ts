@@ -455,8 +455,8 @@ const make = Effect.gen(function* () {
         reason: 'entry_not_found',
         detail: input.inflowEntryId,
       })
-    const out = outflow.value
-    const into = inflow.value
+    const out = { ...outflow.value, descriptions: [outflow.value.description] }
+    const into = { ...inflow.value, descriptions: [inflow.value.description] }
     const refund = out.accountId === into.accountId && validRefund(out, into)
     const pair =
       out.amountCents < 0 &&
