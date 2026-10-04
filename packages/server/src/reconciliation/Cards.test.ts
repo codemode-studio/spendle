@@ -498,6 +498,64 @@ describe('Cards', () => {
       }),
   )
 
+  it.effect(
+    'does not count a bank debit as a second payment when suggestions cross the cards',
+    () =>
+      Effect.gen(function* () {
+        // Card 1234's payment leaves the bank on 5 August and lands on the 7th;
+        // card 5678's leaves on the 6th and lands the same day, so
+        // reconciliation suggests the crossed pairs.
+        yield* TestClock.setTime(
+          DateTime.toEpochMillis(DateTime.makeUnsafe('2026-09-20T15:00:00Z')),
+        )
+        const accounts = yield* Accounts
+        const owner = yield* accounts.createOwner({
+          name: 'Eu',
+          kind: 'person',
+        })
+        const bank = yield* accounts.open({
+          ownerId: owner.id,
+          institutionName: 'Nubank',
+          purpose: 'operating',
+          currency: 'BRL',
+          name: 'Conta',
+          kind: 'checking',
+        })
+        const card = yield* addCard(
+          owner.id,
+          '1234',
+          line('n1', '20260715', '-100.00', 'Livraria') +
+            line('n2', '20260807', '100.00', 'Pagamento recebido') +
+            line('n3', '20260815', '-100.00', 'Mercado'),
+        )
+        yield* addCard(
+          owner.id,
+          '5678',
+          line('m1', '20260705', '-100.00', 'Posto') +
+            line('m2', '20260806', '100.00', 'Pagamento recebido'),
+        )
+        yield* payFromBank(
+          bank.id,
+          'b1',
+          '-100.00',
+          'PAGAMENTO FATURA NUBANK FINAL 1234',
+          '20260805',
+        )
+        yield* payFromBank(
+          bank.id,
+          'b2',
+          '-100.00',
+          'PAGAMENTO FATURA NUBANK FINAL 5678',
+          '20260806',
+        )
+        const result = yield* (yield* Cards).cycles(card.id)
+        assert.deepStrictEqual(summary(result.cycles).slice(0, 2), [
+          ['2026-08-03', -10000, 10000, 'paid', ['card']],
+          ['2026-09-03', -10000, 0, 'overdue', []],
+        ])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
   it.effect('pays the bill a bank debit matched, not the oldest one', () =>
     Effect.gen(function* () {
       const { cards, card } = yield* history(

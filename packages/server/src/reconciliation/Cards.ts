@@ -414,14 +414,10 @@ const make = Effect.gen(function* () {
       from: firstCycle.closingOn,
       through: addDays(lastCycle.closingOn, billPaymentWindowDays),
     })
-    // Card credits another debit already accounts for: one confirmed or
-    // suggested as its card side. A credit is the card side of one debit.
-    const claimedIds = new Set([
-      ...relatedIds,
-      ...debits.flatMap((debit) =>
-        debit.pairedInflowId === null ? [] : [debit.pairedInflowId],
-      ),
-    ])
+    // Card credits another debit is proven to account for: only a confirmed
+    // relation says which debit funded a credit. A suggestion, crossed or
+    // not, leaves the credit a possible counterpart of this debit.
+    const claimedIds = relatedIds
     const billDebits = debits.flatMap((debit) => {
       // Paired with a payment already counted on the card: the same money.
       if (debit.pairedInflowId !== null && paymentIds.has(debit.pairedInflowId))
