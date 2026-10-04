@@ -156,13 +156,18 @@ export function pluggyAccountObservation(account: Account) {
     name: account.marketingName?.trim() || account.name.trim(),
     currency: account.currencyCode,
     lastFour,
-    observedBalanceCents: toMinorUnits(account.balance, account.currencyCode),
+    // For BANK accounts Pluggy's `balance` is the available amount (it may
+    // include overdraft or blocked funds); only `bankData.closingBalance` is
+    // the booked balance that posted transactions reconcile against.
+    observedBalanceCents:
+      account.type === 'BANK'
+        ? typeof account.bankData?.closingBalance === 'number'
+          ? toMinorUnits(account.bankData.closingBalance, account.currencyCode)
+          : null
+        : toMinorUnits(account.balance, account.currencyCode),
     observedAvailableBalanceCents:
-      account.type === 'BANK' && account.bankData?.closingBalance !== null
-        ? toMinorUnits(
-            account.bankData?.closingBalance ?? account.balance,
-            account.currencyCode,
-          )
+      account.type === 'BANK'
+        ? toMinorUnits(account.balance, account.currencyCode)
         : null,
     observedCreditLimitCents:
       account.type === 'CREDIT' && account.creditData?.creditLimit !== null

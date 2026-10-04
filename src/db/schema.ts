@@ -500,6 +500,10 @@ export const openFinanceAccounts = sqliteTable(
     observedDueDate: text('observed_due_date'),
     observedAt: integer('observed_at', { mode: 'timestamp' }),
     historyStart: text('history_start'),
+    /** 'pending' until the opening balance of a copied window is recorded. */
+    historyBootstrap: text('history_bootstrap', {
+      enum: ['pending', 'complete'],
+    }),
     accountId: text('account_id').references(() => accounts.id, {
       onDelete: 'set null',
     }),

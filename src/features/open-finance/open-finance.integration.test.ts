@@ -228,8 +228,9 @@ describe('Open Finance persistence', () => {
       .from(database.schema.openFinanceAccounts)
     expect(stored[0]).toMatchObject({
       providerAccountId: 'provider-bank',
-      observedBalanceCents: 100_000,
-      observedAvailableBalanceCents: 90_000,
+      // Pluggy's BANK `balance` is available; closingBalance is booked.
+      observedBalanceCents: 90_000,
+      observedAvailableBalanceCents: 100_000,
       accountId: null,
     })
     expect(JSON.stringify(stored[0])).not.toContain('00000000000')
@@ -542,7 +543,7 @@ describe('Open Finance history window', () => {
 
   afterEach(() => database.close())
 
-  it('copies three months to a new account and opens it at the bank balance', async () => {
+  it('copies three months to a new account and opens it at the booked bank balance', async () => {
     const gateway = new FakePluggyGateway()
     gateway.transactions.set('provider-bank', [
       providerTransaction({
@@ -581,8 +582,8 @@ describe('Open Finance history window', () => {
     expect(result).toMatchObject({
       historyStart: '2026-06-01',
       created: 3,
-      // 1000.00 reported by Pluggy minus +300.25 and -10.10 confirmed.
-      openingBalanceCents: 70_985,
+      // Booked 900.00 (not the 1000.00 available) minus +300.25 and -10.10.
+      openingBalanceCents: 60_985,
     })
     expect(gateway.transactionFilters.at(-1)).toEqual({
       dateFrom: '2026-06-01',
@@ -608,13 +609,13 @@ describe('Open Finance history window', () => {
       reviewState: 'observed',
       balanceType: 'posted',
       asOf: '2026-05-31',
-      balanceCents: 70_985,
+      balanceCents: 60_985,
     })
     const snapshot = await getFinanceSnapshot()
     expect(
       snapshot.accounts.find((item) => item.id === result.accountId)
         ?.balanceCents,
-    ).toBe(100_000)
+    ).toBe(90_000)
   })
 
   it('copies six months when chosen', async () => {
@@ -713,6 +714,212 @@ describe('Open Finance history window', () => {
         ),
       )
     expect(checkpoints).toHaveLength(0)
+  })
+
+  it('continues only from settled history up to today', async () => {
+    const gateway = new FakePluggyGateway()
+    const local = {
+      accountId: database.ids.brlAccount,
+      description: 'Local',
+      normalizedDescription: 'local',
+      amountCents: -1_000,
+      currency: 'BRL',
+    }
+    await database.db.insert(database.schema.transactions).values([
+      {
+        ...local,
+        id: 'settled',
+        fingerprint: 'settled',
+        postedAt: '2026-09-03',
+        status: 'confirmed',
+      },
+      {
+        ...local,
+        id: 'future-pending',
+        fingerprint: 'future-pending',
+        postedAt: '2026-12-31',
+        status: 'pending',
+      },
+      {
+        ...local,
+        id: 'future-confirmed',
+        fingerprint: 'future-confirmed',
+        postedAt: '2026-11-30',
+        status: 'confirmed',
+      },
+      {
+        ...local,
+        id: 'excluded',
+        fingerprint: 'excluded',
+        postedAt: '2026-09-14',
+        status: 'excluded',
+      },
+    ])
+    await registeredConnection(database, gateway)
+    const result = await mapPluggyAccount(
+      {
+        providerAccountId: 'provider-bank',
+        existingTarget: { type: 'account', id: database.ids.brlAccount },
+      },
+      gateway,
+      mappedAt,
+    )
+    expect(result).toMatchObject({ historyStart: '2026-08-27', created: 1 })
+    const imported = await database.db
+      .select()
+      .from(database.schema.transactions)
+      .where(
+        eq(database.schema.transactions.externalId, 'provider-transaction-1'),
+      )
+    expect(imported).toHaveLength(1)
+  })
+
+  it('treats an account with only pending or future rows as new', async () => {
+    const gateway = new FakePluggyGateway()
+    await database.db.insert(database.schema.transactions).values({
+      id: 'future-pending',
+      accountId: database.ids.brlAccount,
+      fingerprint: 'future-pending',
+      postedAt: '2026-12-31',
+      description: 'Agendado',
+      normalizedDescription: 'agendado',
+      amountCents: -5_000,
+      currency: 'BRL',
+      status: 'pending',
+    })
+    await registeredConnection(database, gateway)
+    const result = await mapPluggyAccount(
+      {
+        providerAccountId: 'provider-bank',
+        existingTarget: { type: 'account', id: database.ids.brlAccount },
+      },
+      gateway,
+      mappedAt,
+    )
+    // Booked 900.00 minus the copied -10.00 on Sep 10.
+    expect(result).toMatchObject({
+      historyStart: '2026-06-01',
+      created: 1,
+      openingBalanceCents: 91_000,
+    })
+  })
+
+  it('records the opening balance on the next sync when the bootstrap fetch fails', async () => {
+    const gateway = new FakePluggyGateway()
+    const connectionId = await registeredConnection(database, gateway)
+    const fetchAll = gateway.fetchAllTransactions.bind(gateway)
+    gateway.fetchAllTransactions = async () => {
+      throw new Error('Pluggy indisponível')
+    }
+    await expect(
+      mapPluggyAccount(
+        {
+          providerAccountId: 'provider-bank',
+          existingTarget: { type: 'account', id: database.ids.brlAccount },
+        },
+        gateway,
+        mappedAt,
+      ),
+    ).rejects.toThrow('Pluggy indisponível')
+    gateway.fetchAllTransactions = fetchAll
+
+    const first = await syncPluggyConnection({ connectionId }, gateway)
+    expect(first).toMatchObject({ created: 1, openings: 1 })
+    await syncPluggyConnection({ connectionId }, gateway)
+
+    const checkpoints = await database.db
+      .select()
+      .from(database.schema.balanceCheckpoints)
+      .where(
+        eq(
+          database.schema.balanceCheckpoints.accountId,
+          database.ids.brlAccount,
+        ),
+      )
+    expect(checkpoints).toHaveLength(1)
+    expect(checkpoints[0]).toMatchObject({
+      kind: 'opening',
+      balanceType: 'posted',
+      asOf: '2026-05-31',
+      balanceCents: 91_000,
+    })
+    const [providerAccount] = await database.db
+      .select()
+      .from(database.schema.openFinanceAccounts)
+      .where(
+        eq(
+          database.schema.openFinanceAccounts.providerAccountId,
+          'provider-bank',
+        ),
+      )
+    expect(providerAccount.historyBootstrap).toBe('complete')
+  })
+
+  it('never records the available balance as a posted opening', async () => {
+    const gateway = new FakePluggyGateway()
+    gateway.accounts = [
+      {
+        ...account(),
+        bankData: { ...account().bankData!, closingBalance: null },
+      },
+    ]
+    const connectionId = await registeredConnection(database, gateway)
+    const result = await mapPluggyAccount(
+      {
+        providerAccountId: 'provider-bank',
+        existingTarget: { type: 'account', id: database.ids.brlAccount },
+      },
+      gateway,
+      mappedAt,
+    )
+    expect(result).toMatchObject({ created: 1, openingBalanceCents: null })
+    const checkpointsFor = () =>
+      database.db
+        .select()
+        .from(database.schema.balanceCheckpoints)
+        .where(
+          eq(
+            database.schema.balanceCheckpoints.accountId,
+            database.ids.brlAccount,
+          ),
+        )
+    expect(await checkpointsFor()).toHaveLength(0)
+
+    // Once the booked balance is reported, the pending bootstrap completes.
+    gateway.accounts = [account()]
+    await syncPluggyConnection({ connectionId }, gateway)
+    expect(await checkpointsFor()).toMatchObject([
+      { kind: 'opening', balanceType: 'posted', balanceCents: 91_000 },
+    ])
+  })
+
+  it('applies corrections that move a known transaction before the window', async () => {
+    const gateway = new FakePluggyGateway()
+    await connectedAccount(database, gateway)
+    gateway.transactions.set('provider-bank', [
+      providerTransaction({ date: new Date('2026-05-20T15:00:00Z') }),
+    ])
+    await enqueuePluggyWebhook({
+      eventId: 'moved-before-window',
+      event: 'transactions/updated',
+      itemId: 'item-1',
+      accountId: 'provider-bank',
+      transactionIds: ['provider-transaction-1'],
+      triggeredBy: 'SYNC',
+    })
+    await processNextPluggyWebhook(gateway)
+
+    const pending = await database.db
+      .select()
+      .from(database.schema.openFinanceTransactionObservations)
+      .where(
+        eq(
+          database.schema.openFinanceTransactionObservations.resolution,
+          'correction_pending',
+        ),
+      )
+    expect(pending).toHaveLength(1)
+    expect(pending[0].postedAt).toBe('2026-05-20')
   })
 
   it('starts a new card at the statement cycle containing the window start', async () => {

@@ -285,36 +285,50 @@
     {
       "idx": 40,
       "version": "6",
-      "when": 1789139000002,
-      "tag": "0040_card_statement_payments",
+      "when": 1789394400000,
+      "tag": "0040_open_finance_pluggy",
       "breakpoints": true
     },
     {
       "idx": 41,
       "version": "6",
-      "when": 1789139000003,
-      "tag": "0041_card_statement_payment_partial",
+      "when": 1789394400001,
+      "tag": "0041_card_statement_payments",
       "breakpoints": true
     },
     {
       "idx": 42,
       "version": "6",
-      "when": 1789421358626,
-      "tag": "0042_investment_positions",
+      "when": 1789394400002,
+      "tag": "0042_card_statement_payment_partial",
       "breakpoints": true
     },
     {
       "idx": 43,
       "version": "6",
-      "when": 1789425000000,
-      "tag": "0043_remove_legacy_investment_positions",
+      "when": 1789421358626,
+      "tag": "0043_investment_positions",
       "breakpoints": true
     },
     {
       "idx": 44,
       "version": "6",
+      "when": 1789425000000,
+      "tag": "0044_remove_legacy_investment_positions",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
       "when": 1789430000000,
-      "tag": "0044_open_finance_pluggy",
+      "tag": "0045_open_finance_history_start",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "6",
+      "when": 1789440000000,
+      "tag": "0046_open_finance_history_bootstrap",
       "breakpoints": true
     }
   ]

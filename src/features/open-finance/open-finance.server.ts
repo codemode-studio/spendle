@@ -333,55 +333,88 @@ export async function mapPluggyAccount(
     closingDay = input.newTarget.closingDay
   }
 
+  // Only settled facts up to today prove where local history ends; pending,
+  // excluded or future-dated rows would skip real transactions before them.
+  const today = dateInSaoPaulo(now)
   const latestLocal = (
     await db
       .select({ postedAt: max(schema.transactions.postedAt) })
       .from(schema.transactions)
       .where(
-        accountId
-          ? eq(schema.transactions.accountId, accountId)
-          : eq(schema.transactions.creditCardId, creditCardId!),
+        and(
+          accountId
+            ? eq(schema.transactions.accountId, accountId)
+            : eq(schema.transactions.creditCardId, creditCardId!),
+          eq(schema.transactions.status, 'confirmed'),
+          lte(schema.transactions.postedAt, today),
+        ),
       )
   ).at(0)?.postedAt
-  const historyStart = latestLocal
-    ? pluggyContinuationStart(latestLocal)
-    : pluggyHistoryStart({
-        today: dateInSaoPaulo(now),
-        months: input.historyMonths ?? 3,
-        closingDay,
-      })
+  // Mapping the same account again while its bootstrap is unfinished keeps
+  // the original window: facts it already copied are not local history.
+  const resumesBootstrap =
+    providerAccount.historyBootstrap === 'pending' &&
+    providerAccount.historyStart !== null &&
+    accountId !== null &&
+    providerAccount.accountId === accountId
+  const historyStart = resumesBootstrap
+    ? providerAccount.historyStart!
+    : latestLocal
+      ? pluggyContinuationStart(latestLocal)
+      : pluggyHistoryStart({
+          today,
+          months: input.historyMonths ?? 3,
+          closingDay,
+        })
+  // A bank account copied from scratch is only initialized once its opening
+  // balance is recorded; until then every full sync retries it.
+  const historyBootstrap =
+    accountId && (resumesBootstrap || !latestLocal)
+      ? ('pending' as const)
+      : ('complete' as const)
 
   await db
     .update(schema.openFinanceAccounts)
-    .set({ accountId, creditCardId, historyStart })
+    .set({ accountId, creditCardId, historyStart, historyBootstrap })
     .where(eq(schema.openFinanceAccounts.id, providerAccount.id))
-  const mapped = { ...providerAccount, accountId, creditCardId, historyStart }
-  const result = await syncProviderAccount(mapped, gateway)
-  const openingBalanceCents =
-    accountId && !latestLocal
-      ? await recordOpeningBalance(mapped, accountId, historyStart, now)
-      : null
+  const mapped = {
+    ...providerAccount,
+    accountId,
+    creditCardId,
+    historyStart,
+    historyBootstrap,
+  }
+  const result = await syncProviderAccount(mapped, gateway, undefined, now)
   await refreshReconciliationAfterCommit()
   return {
     accountId,
     creditCardId,
     historyStart,
-    openingBalanceCents,
     ...result,
   }
 }
 
 /**
  * A bank account copied from `historyStart` has no earlier facts, so its
- * opening balance is the balance Pluggy reports minus the copied movement.
+ * opening balance is the booked balance Pluggy reports minus the copied
+ * movement. The available balance is never used: it may include overdraft
+ * or blocked funds that posted transactions do not explain.
  */
-async function recordOpeningBalance(
+async function completeHistoryBootstrap(
   account: OpenFinanceAccount,
-  accountId: string,
-  historyStart: string,
   now: Date,
 ) {
-  if (account.observedBalanceCents === null) return null
+  if (
+    account.historyBootstrap !== 'pending' ||
+    !account.accountId ||
+    !account.historyStart ||
+    account.observedBalanceCents === null
+  ) {
+    return null
+  }
+  const accountId = account.accountId
+  const historyStart = account.historyStart
+  const bookedBalanceCents = account.observedBalanceCents
   const balanceAsOf = dateInSaoPaulo(account.observedAt ?? now)
   const movement = (
     await db
@@ -397,8 +430,19 @@ async function recordOpeningBalance(
       )
   ).at(0)
   const openingBalanceCents =
-    account.observedBalanceCents - Number(movement?.totalCents ?? 0)
-  db.transaction((transaction) => {
+    bookedBalanceCents - Number(movement?.totalCents ?? 0)
+  return db.transaction((transaction) => {
+    const claimed = transaction
+      .update(schema.openFinanceAccounts)
+      .set({ historyBootstrap: 'complete' })
+      .where(
+        and(
+          eq(schema.openFinanceAccounts.id, account.id),
+          eq(schema.openFinanceAccounts.historyBootstrap, 'pending'),
+        ),
+      )
+      .run()
+    if (claimed.changes === 0) return null
     addBalanceCheckpoint(transaction, {
       accountId,
       kind: 'opening',
@@ -409,8 +453,8 @@ async function recordOpeningBalance(
       balanceCents: openingBalanceCents,
       asOf: shiftDays(historyStart, -1),
       evidenceJson: JSON.stringify({
-        method: 'pluggy_balance_minus_copied_movement',
-        providerBalanceCents: account.observedBalanceCents,
+        method: 'pluggy_booked_balance_minus_copied_movement',
+        providerBookedBalanceCents: bookedBalanceCents,
         providerBalanceAsOf: balanceAsOf,
       }),
     })
@@ -419,8 +463,8 @@ async function recordOpeningBalance(
       targetId: accountId,
       balanceType: 'posted',
     })
+    return openingBalanceCents
   })
-  return openingBalanceCents
 }
 
 async function exactCanonicalCandidate(
@@ -525,6 +569,40 @@ function sameCanonicalContent(
   )
 }
 
+async function isKnownProviderTransaction(
+  account: OpenFinanceAccount,
+  normalized: NormalizedPluggyTransaction,
+) {
+  const observation = await db
+    .select({ id: schema.openFinanceTransactionObservations.id })
+    .from(schema.openFinanceTransactionObservations)
+    .where(
+      and(
+        eq(
+          schema.openFinanceTransactionObservations.openFinanceAccountId,
+          account.id,
+        ),
+        eq(
+          schema.openFinanceTransactionObservations.providerTransactionId,
+          normalized.providerTransactionId,
+        ),
+      ),
+    )
+    .limit(1)
+  if (observation.length) return true
+  const bySource = await db
+    .select({ id: schema.transactions.id })
+    .from(schema.transactions)
+    .where(
+      eq(
+        schema.transactions.sourceKey,
+        `pluggy:${account.providerAccountId}:${normalized.providerTransactionId}`,
+      ),
+    )
+    .limit(1)
+  return bySource.length > 0
+}
+
 async function storeTransactionObservation(
   account: OpenFinanceAccount,
   providerTransaction: Transaction,
@@ -536,10 +614,6 @@ async function storeTransactionObservation(
     },
     providerTransaction,
   )
-  // Pluggy may resend facts older than the copied window on refreshes.
-  if (account.historyStart && normalized.postedAt < account.historyStart) {
-    return { kind: 'skipped' as const }
-  }
   const existingVersion = (
     await db
       .select()
@@ -563,6 +637,17 @@ async function storeTransactionObservation(
       .limit(1)
   ).at(0)
   if (existingVersion) return { kind: 'evidence' as const }
+
+  // Pluggy may resend facts older than the copied window on refreshes. The
+  // window only filters facts never seen before: an update to a known
+  // transaction that moves it before the window is still a correction.
+  if (
+    account.historyStart &&
+    normalized.postedAt < account.historyStart &&
+    !(await isKnownProviderTransaction(account, normalized))
+  ) {
+    return { kind: 'skipped' as const }
+  }
 
   const canonical = await exactCanonicalCandidate(account, normalized)
   if (canonical && !sameCanonicalContent(canonical, normalized)) {
@@ -688,9 +773,16 @@ async function syncProviderAccount(
   account: OpenFinanceAccount,
   gateway: PluggyGateway,
   filters?: { createdAtFrom?: string; ids?: string[] },
+  now = new Date(),
 ) {
   if (!account.accountId && !account.creditCardId) {
-    return { fetched: 0, created: 0, evidence: 0, corrections: 0 }
+    return {
+      fetched: 0,
+      created: 0,
+      evidence: 0,
+      corrections: 0,
+      openingBalanceCents: null,
+    }
   }
   const providerTransactions = filters?.ids
     ? await gateway.fetchTransactionsByIds(
@@ -719,7 +811,12 @@ async function syncProviderAccount(
     if (result.kind === 'skipped') continue
     counts[result.kind === 'correction' ? 'corrections' : result.kind] += 1
   }
-  return counts
+  // Only a full read of the window explains the balance; filtered webhook
+  // reads leave a pending bootstrap for the next full sync.
+  const openingBalanceCents = filters
+    ? null
+    : await completeHistoryBootstrap(account, now)
+  return { ...counts, openingBalanceCents }
 }
 
 export async function syncPluggyConnection(
@@ -782,6 +879,7 @@ export async function syncPluggyConnection(
       created: 0,
       evidence: 0,
       corrections: 0,
+      openings: 0,
     }
     if (canReadTransactions) {
       for (const account of accounts) {
@@ -790,6 +888,7 @@ export async function syncPluggyConnection(
         totals.created += result.created
         totals.evidence += result.evidence
         totals.corrections += result.corrections
+        if (result.openingBalanceCents !== null) totals.openings += 1
       }
     }
     await db
@@ -805,7 +904,9 @@ export async function syncPluggyConnection(
         finishedAt: new Date(),
       })
       .where(eq(schema.openFinanceSyncRuns.id, runId))
-    if (totals.created) await refreshReconciliationAfterCommit()
+    if (totals.created || totals.openings) {
+      await refreshReconciliationAfterCommit()
+    }
     return {
       status:
         item.executionStatus === 'PARTIAL_SUCCESS'
