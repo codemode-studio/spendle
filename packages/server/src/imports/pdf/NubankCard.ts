@@ -67,11 +67,8 @@ export const parseNubankCard = ({
   const startYear = startMonth > endMonth ? endYear - 1 : endYear
   const periodStart = calendarDate(startYear, startMonth, Number(cycle[1]))
   const periodEnd = calendarDate(endYear, endMonth, Number(cycle[3]))
-  if (
-    calendarDate(dueYear, dueMonth, Number(due[1])) === null ||
-    periodStart === null ||
-    periodEnd === null
-  )
+  const dueOn = calendarDate(dueYear, dueMonth, Number(due[1]))
+  if (dueOn === null || periodStart === null || periodEnd === null)
     return Result.fail('invalid_date')
 
   const total = lines
@@ -147,9 +144,11 @@ export const parseNubankCard = ({
   return Result.succeed({
     lines: rows,
     period: { start: periodStart, end: periodEnd },
-    // The bill's total is what the holder owes at the cycle's close. The
+    // The bill's total is what the holder owes at the cycle's close: its
+    // charges only, since the payments it prints settled earlier bills. The
     // ledger records money owed on a card as a negative balance.
     closingBalance: { asOf: periodEnd, cents: -totalCents },
+    chargesOnly: true,
     accountHint:
       mostFrequent(
         lines.flatMap((line) => [
@@ -157,6 +156,7 @@ export const parseNubankCard = ({
         ]),
       ) ?? null,
     rejectedRows,
+    dueOn,
   })
 }
 

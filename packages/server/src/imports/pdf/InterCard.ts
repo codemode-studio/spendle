@@ -194,6 +194,7 @@ export const parseInterCard = ({
         ]),
       ) ?? null,
     rejectedRows,
+    dueOn: dueDate,
   })
 }
 

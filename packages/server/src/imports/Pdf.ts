@@ -175,6 +175,7 @@ export const parsePdf = (
     ...statement.lines.map((line) => line.bookedOn),
     ...(statement.period ? [statement.period.start, statement.period.end] : []),
     ...(statement.closingBalance ? [statement.closingBalance.asOf] : []),
+    ...(statement.dueOn ? [statement.dueOn] : []),
   ]
   if (dates.some((date) => parseDate(date) !== date))
     return Result.fail('invalid_date')
@@ -185,6 +186,8 @@ export const parsePdf = (
     accountHint: statement.accountHint,
     period: statement.period,
     closingBalance: statement.closingBalance,
+    ...(statement.dueOn ? { dueOn: statement.dueOn } : {}),
+    ...(statement.chargesOnly ? { chargesOnly: true } : {}),
     lines: fingerprintIds(
       statement.lines.map(({ source, ...line }) => ({
         ...line,

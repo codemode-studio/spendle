@@ -8,7 +8,7 @@ import * as SqlSchema from 'effect/sql/SqlSchema'
 import { addDays, today } from '../domain/LocalDate.ts'
 import { foldDescription } from '../imports/Statement.ts'
 import { Accounts } from '../ledger/Accounts.ts'
-import { cardCycles } from './Cycles.ts'
+import { billPaymentWindowDays, billPayments, cardCycles } from './Cycles.ts'
 import type { CardCycle, CardCycles, CyclePayment } from './Cycles.ts'
 
 export class CardsError extends Schema.TaggedError<CardsError>()('CardsError', {
@@ -33,6 +33,8 @@ const DebitRow = Schema.Struct({
   bookedOn: Schema.String,
   amountCents: Schema.Int,
   description: Schema.String,
+  /** The card credit an unconfirmed relation pairs the debit with. */
+  pairedInflowId: Schema.NullOr(Schema.String),
 })
 
 const PaymentRelationRow = Schema.Struct({
@@ -60,8 +62,22 @@ const bankWords = (institutionName: string) =>
   foldDescription(institutionName)
     .split(/[^a-z0-9]+/)
     .filter((word) => word.length >= 2 && !genericBankWords.has(word))
-// A bill is paid within this many days of its closing.
-const paymentWindowDays = 45
+// A four-digit number said to be a card's ending: "final 1234", "cartao 1234",
+// "****1234", "xxxx1234", "*1234".
+const cardEnding = /(?:\bfinal|\bcartao|\bcard|[*•]|\bx+)\s*(\d{4})(?!\d)/g
+/**
+ * The card endings a description states. A four-digit number counts only
+ * when it is marked as one, or is the only number said: a reference or
+ * document number is not a card.
+ */
+const statedEndings = (text: string) => {
+  const marked = [...text.matchAll(cardEnding)].map((match) => match[1]!)
+  if (marked.length > 0) return new Set(marked)
+  const numbers = text.match(/\d+/g) ?? []
+  return new Set(
+    numbers.length === 1 && numbers[0]!.length === 4 ? numbers : [],
+  )
+}
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -72,10 +88,15 @@ const make = Effect.gen(function* () {
     Result: CardEntryRow,
     execute: (accountId) => sql`
       SELECT e.id, e.booked_on AS bookedOn, e.amount_cents AS amountCents, e.description,
-        (SELECT MAX(json_extract(o.raw, '$.installment.billId'))
+        (SELECT CASE WHEN COUNT(DISTINCT json_extract(o.raw, '$.installment.billId')) = 1
+            THEN MAX(json_extract(o.raw, '$.installment.billId')) END
           FROM entry_evidence v JOIN transaction_observations o
             ON o.source_id = v.source_id AND o.account_id = v.account_id AND o.external_id = v.external_id
-          WHERE v.entry_id = e.id) AS billId
+          WHERE v.entry_id = e.id AND NOT EXISTS (
+            SELECT 1 FROM transaction_observations n
+            WHERE n.source_id = o.source_id AND n.account_id = o.account_id
+              AND n.external_id = o.external_id AND n.version > o.version
+          )) AS billId
       FROM ledger_entries e
       WHERE e.account_id = ${accountId} AND e.status = 'posted'
     `,
@@ -92,22 +113,33 @@ const make = Effect.gen(function* () {
       WHERE r.kind = 'card_payment' AND r.status = 'confirmed' AND i.account_id = ${accountId}
     `,
   })
-  // Bank debits that could pay a bill: posted, in the card's currency, worded
-  // like a bill, and not already one side of a relation.
+  // Bank debits that could pay a bill: posted, in the card's currency, dated
+  // after a closing and within the payment window, worded like a bill, and
+  // not one side of a confirmed relation. CROSS JOIN keeps accounts outside,
+  // so each bank account's dates are a range of its (account, date) index
+  // rather than a scan of the whole ledger.
   const findBillDebits = SqlSchema.findAll({
-    Request: Schema.Struct({ currency: Schema.String, from: Schema.String }),
+    Request: Schema.Struct({
+      currency: Schema.String,
+      from: Schema.String,
+      through: Schema.String,
+    }),
     Result: DebitRow,
-    execute: ({ currency, from }) => sql`
-      SELECT e.id, e.booked_on AS bookedOn, e.amount_cents AS amountCents, e.description
-      FROM ledger_entries e JOIN accounts a ON a.id = e.account_id
-      WHERE a.kind <> 'credit_card' AND a.archived_at IS NULL
-        AND e.status = 'posted' AND e.amount_cents < 0
-        AND e.currency = ${currency} AND e.booked_on > ${from}
+    execute: ({ currency, from, through }) => sql`
+      SELECT e.id, e.booked_on AS bookedOn, e.amount_cents AS amountCents, e.description,
+        p.inflow_entry_id AS pairedInflowId
+      FROM accounts a
+      CROSS JOIN ledger_entries e ON e.account_id = a.id
+        AND e.booked_on > ${from} AND e.booked_on <= ${through}
+      LEFT JOIN relations p ON p.outflow_entry_id = e.id AND p.status <> 'confirmed'
+      WHERE a.kind <> 'credit_card' AND a.archived_at IS NULL AND a.currency = ${currency}
+        AND e.status = 'posted' AND e.amount_cents < 0 AND e.currency = ${currency}
         AND (e.description LIKE '%fatura%' OR e.description LIKE '%cart%'
           OR e.description LIKE '%cr_dito%')
         AND NOT EXISTS (
           SELECT 1 FROM relations r
-          WHERE r.outflow_entry_id = e.id OR r.inflow_entry_id = e.id
+          WHERE r.status = 'confirmed'
+            AND (r.outflow_entry_id = e.id OR r.inflow_entry_id = e.id)
         )
       ORDER BY e.booked_on, e.id
     `,
@@ -120,9 +152,12 @@ const make = Effect.gen(function* () {
       startsOn: Schema.String,
       closingOn: Schema.String,
       cents: Schema.Int,
+      dueOn: Schema.NullOr(Schema.String),
+      netOfPayments: Schema.BooleanFromBit,
     }),
     execute: (accountId) => sql`
-      SELECT f.period_start AS startsOn, b.as_of AS closingOn, b.balance_cents AS cents
+      SELECT f.period_start AS startsOn, b.as_of AS closingOn, b.balance_cents AS cents,
+        f.due_on AS dueOn, f.charges_only = 0 AS netOfPayments
       FROM balance_observations b
       JOIN import_files f ON f.source_id = b.source_id AND f.account_id = b.account_id
       WHERE b.account_id = ${accountId} AND b.kind = 'statement'
@@ -140,9 +175,10 @@ const make = Effect.gen(function* () {
    * 2. a credit on the card that says it is a payment;
    * 3. only a bank debit, when the card side is missing (card PDFs may omit
    *    payments). The debit must be in the card's currency and identify
-   *    this card and no other one: it names the card's bank or last four
-   *    digits, or says "cartão"/"crédito" when there is a single card. Its
-   *    amount must be exactly what one closed cycle still owes.
+   *    this card and no other one: it states the card's ending or names the
+   *    card's bank, without contradicting itself, or says "cartão"/"crédito"
+   *    when there is a single card. Its amount must be exactly what one closed
+   *    cycle still owed on the debit's date, and it pays that cycle.
    */
   const cycles = Effect.fn('Cards.cycles')(function* (accountId: string) {
     const card = yield* accounts.get(accountId)
@@ -189,19 +225,16 @@ const make = Effect.gen(function* () {
         paymentIds.add(entry.id)
       }
     }
-    const purchases = entries.filter((entry) => !paymentIds.has(entry.id))
-    const build = () =>
-      cardCycles({
-        terms,
-        entries: purchases,
-        payments,
-        statements,
-        today: date,
-      })
-
-    let current = build()
-    const firstCycle = current.cycles[0]
-    if (firstCycle === undefined) return current
+    const history = {
+      terms,
+      entries: entries.filter((entry) => !paymentIds.has(entry.id)),
+      statements,
+      today: date,
+    }
+    const known = cardCycles({ ...history, payments })
+    const firstCycle = known.cycles[0]
+    const lastCycle = known.cycles.at(-1)
+    if (firstCycle === undefined || lastCycle === undefined) return known
 
     const cards = all.filter(
       (account) =>
@@ -209,26 +242,35 @@ const make = Effect.gen(function* () {
         !account.archived &&
         account.currency === card.currency,
     )
-    // The last four digits name one card; the bank's name, every card of that bank.
+    // A stated ending names one card; the bank's name, every card of that
+    // bank. When both are said they must agree.
     const named = (text: string) => {
       const said = new Set(text.split(/[^a-z0-9]+/))
-      const byDigits = cards.filter(
+      const endings = statedEndings(text)
+      const byEnding = cards.filter(
         (account) =>
-          account.card?.lastFour != null && said.has(account.card.lastFour),
+          account.card?.lastFour != null && endings.has(account.card.lastFour),
       )
-      return byDigits.length > 0
-        ? byDigits
-        : cards.filter((account) =>
-            bankWords(account.institutionName).some((word) => said.has(word)),
-          )
+      const byBank = cards.filter((account) =>
+        bankWords(account.institutionName).some((word) => said.has(word)),
+      )
+      if (byEnding.length === 0) return byBank
+      return byBank.length === 0 ||
+        byEnding.every((account) => byBank.includes(account))
+        ? byEnding
+        : []
     }
     const debits = yield* findBillDebits({
       currency: card.currency,
       from: firstCycle.closingOn,
+      through: addDays(lastCycle.closingOn, billPaymentWindowDays),
     })
-    for (const debit of debits) {
+    const billDebits = debits.flatMap((debit) => {
+      // Paired with a payment already counted on the card: the same money.
+      if (debit.pairedInflowId !== null && paymentIds.has(debit.pairedInflowId))
+        return []
       const text = foldDescription(debit.description)
-      if (!billHint.test(text)) continue
+      if (!billHint.test(text)) return []
       const candidates = named(text)
       const target =
         candidates.length === 1
@@ -236,23 +278,21 @@ const make = Effect.gen(function* () {
           : candidates.length === 0 && cards.length === 1 && cardHint.test(text)
             ? cards[0]
             : undefined
-      if (target?.id !== accountId) continue
-      const settles = current.cycles.filter(
-        (cycle) =>
-          cycle.closingOn < debit.bookedOn &&
-          debit.bookedOn <= addDays(cycle.closingOn, paymentWindowDays) &&
-          cycle.billedCents - cycle.paidCents === -debit.amountCents,
-      )
-      if (settles.length !== 1) continue
-      payments.push({
-        entryId: debit.id,
-        paidOn: debit.bookedOn,
-        amountCents: -debit.amountCents,
-        via: 'bank',
-      })
-      current = build()
-    }
-    return current
+      return target?.id === accountId
+        ? [
+            {
+              entryId: debit.id,
+              paidOn: debit.bookedOn,
+              amountCents: -debit.amountCents,
+            },
+          ]
+        : []
+    })
+    if (billDebits.length === 0) return known
+    const inferred = billPayments({ ...history, payments, debits: billDebits })
+    return inferred.length === 0
+      ? known
+      : cardCycles({ ...history, payments: [...payments, ...inferred] })
   })
 
   return { cycles }

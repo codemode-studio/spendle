@@ -276,6 +276,14 @@ describe('Inter card bill', () => {
     )
   })
 
+  it('keeps the printed due date of a bill net of payments before the cut', () => {
+    const statement = Result.getOrThrow(read(parseInterCard, gross))
+    assert.deepStrictEqual(
+      [statement.dueOn, statement.chargesOnly ?? false],
+      ['2026-09-15', false],
+    )
+  })
+
   it('refuses a bill without its due date or cut date', () => {
     assert.deepStrictEqual(
       read(parseInterCard, [positionedText('Fatura atual R$ 0,00', 2, 20, 1)]),
@@ -311,6 +319,14 @@ describe('Nubank card bill', () => {
         ['2026-07-08', 'Pagamento em 08 JUL', 50_000],
       ],
     })
+  })
+
+  it('keeps the printed due date and a total of charges only', () => {
+    const statement = Result.getOrThrow(read(parseNubankCard, items))
+    assert.deepStrictEqual(
+      [statement.dueOn, statement.chargesOnly],
+      ['2026-08-10', true],
+    )
   })
 
   it('places a cycle spanning the new year in both years', () => {
