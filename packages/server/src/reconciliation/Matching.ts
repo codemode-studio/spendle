@@ -321,8 +321,12 @@ const counterpartEvidence = (
   ]
   return {
     different,
+    // Names that only partly agree (`Joao Silva` and `Carlos Silva`) may be
+    // two people even when both fit the owner's name: no wording outweighs it.
     evidenced:
-      !thirdParty && reasons.some((reason) => evidence.includes(reason)),
+      !thirdParty &&
+      names !== 'uncertain' &&
+      reasons.some((reason) => evidence.includes(reason)),
     reasons,
   }
 }
