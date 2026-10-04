@@ -207,6 +207,16 @@ describe('Observations', () => {
           SELECT id, source_id, account_id, external_id, version, booked_on, 0, currency,
             description, status, raw, observed_at
           FROM transaction_observations`,
+        // Fresh keys on an existing rowid: SQLite deletes the old row implicitly.
+        sql`INSERT OR REPLACE INTO transaction_observations (rowid, id, source_id, account_id,
+            external_id, version, booked_on, amount_cents, currency, description, status, raw, observed_at)
+          SELECT rowid, 'other', source_id, account_id, 'other', 1, booked_on, 0, currency,
+            description, status, raw, observed_at
+          FROM transaction_observations`,
+        sql`INSERT OR REPLACE INTO balance_observations (rowid, id, source_id, account_id, kind,
+            as_of, balance_cents, currency, observed_at)
+          SELECT rowid, 'other', source_id, account_id, kind, as_of, 0, currency, observed_at
+          FROM balance_observations`,
       ]
       for (const attempt of attempts) {
         const error = yield* attempt.pipe(Effect.flip)
@@ -217,6 +227,27 @@ describe('Observations', () => {
           (observation) => observation.amountCents,
         ),
         [-1250],
+      )
+    }).pipe(Effect.provide(LedgerTest)),
+  )
+
+  it.effect('does not take reordered JSON keys for a new report', () =>
+    Effect.gen(function* () {
+      const { observations, account, source } = yield* setup
+      const record = (raw: ReportedTransaction['raw']) =>
+        observations.recordTransactions({
+          sourceId: source.id,
+          accountId: account.id,
+          transactions: [{ ...coffee, raw }],
+        })
+      yield* record({ id: 'tx-1', merchant: { name: 'Café', cnpj: '1' } })
+      const reordered = yield* record({
+        merchant: { cnpj: '1', name: 'Café' },
+        id: 'tx-1',
+      })
+      assert.deepStrictEqual(
+        [reordered.recorded.length, reordered.unchanged],
+        [0, 1],
       )
     }).pipe(Effect.provide(LedgerTest)),
   )

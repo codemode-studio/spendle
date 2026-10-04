@@ -30,7 +30,7 @@ export default Effect.gen(function* () {
       name TEXT NOT NULL CHECK (length(trim(name)) > 0),
       kind TEXT NOT NULL CHECK (kind IN ('checking', 'savings', 'cash', 'investment', 'credit_card')),
       purpose TEXT NOT NULL CHECK (purpose IN ('operating', 'reserve', 'investment')),
-      currency TEXT NOT NULL,
+      currency TEXT NOT NULL CHECK (currency GLOB '[A-Z][A-Z][A-Z]'),
       created_at TEXT NOT NULL,
       archived_at TEXT
     )

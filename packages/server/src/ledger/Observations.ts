@@ -176,7 +176,25 @@ const sameReport = (
   stored.status === reported.status &&
   stored.raw === raw
 
-const encodeRaw = Schema.encodeEffect(Schema.fromJsonString(Schema.Json))
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Json))
+
+// Object keys in a stable order, so a provider reordering its JSON is not a
+// new report. Array order is meaningful and kept.
+const canonical = (value: Schema.Json): Schema.Json =>
+  Array.isArray(value)
+    ? value.map(canonical)
+    : value !== null && typeof value === 'object'
+      ? Object.fromEntries(
+          Object.keys(value)
+            .sort()
+            .map((key) => [
+              key,
+              canonical((value as Record<string, Schema.Json>)[key]!),
+            ]),
+        )
+      : value
+
+const encodeRaw = (raw: Schema.Json) => encodeJson(canonical(raw))
 const decodeTransactions = Schema.decodeUnknownEffect(
   Schema.Array(ReportedTransaction),
 )

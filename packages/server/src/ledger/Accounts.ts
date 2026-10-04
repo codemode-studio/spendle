@@ -105,7 +105,9 @@ export class InvalidAccount extends Schema.TaggedError<InvalidAccount>()(
       'card_terms_forbidden',
       'investment_purpose',
       'blank_name',
+      'invalid_input',
     ]),
+    issue: Schema.optional(Schema.String),
   },
 ) {
   override get message(): string {
@@ -118,6 +120,8 @@ export class InvalidAccount extends Schema.TaggedError<InvalidAccount>()(
         return 'An investment account must have the investment purpose'
       case 'blank_name':
         return 'Account and institution names cannot be blank'
+      case 'invalid_input':
+        return `Invalid account: ${this.issue ?? 'unknown issue'}`
     }
   }
 }
@@ -230,6 +234,11 @@ export interface AccountsShape {
   readonly list: Effect.Effect<ReadonlyArray<Account>, LedgerStoreError>
 }
 
+const decodeOpen = Schema.decodeUnknownEffect(OpenAccount)
+const decodeChanges = Schema.decodeUnknownEffect(AccountChanges)
+const invalidInput = (cause: Schema.SchemaError) =>
+  new InvalidAccount({ reason: 'invalid_input', issue: cause.message })
+
 export class Accounts extends Context.Service<Accounts, AccountsShape>()(
   '@spendle/server/ledger/Accounts',
 ) {
@@ -329,7 +338,14 @@ export class Accounts extends Context.Service<Accounts, AccountsShape>()(
         return owner
       })
 
-      const open = Effect.fn('Accounts.open')(function* (input: OpenAccount) {
+      const open = Effect.fn('Accounts.open')(function* (
+        unchecked: OpenAccount,
+      ) {
+        // Callers outside TypeScript (and loose literals inside it) reach
+        // here too; nothing is written that `get` could not read back.
+        const input = yield* decodeOpen(unchecked).pipe(
+          Effect.mapError(invalidInput),
+        )
         yield* validate(input)
         const name = (yield* trimmedName(input.name))!
         const institutionName = (yield* trimmedName(input.institutionName))!
@@ -368,8 +384,11 @@ export class Accounts extends Context.Service<Accounts, AccountsShape>()(
 
       const update = Effect.fn('Accounts.update')(function* (
         accountId: string,
-        changes: AccountChanges,
+        unchecked: AccountChanges,
       ) {
+        const changes = yield* decodeChanges(unchecked).pipe(
+          Effect.mapError(invalidInput),
+        )
         const name = yield* trimmedName(changes.name)
         const institutionName = yield* trimmedName(changes.institutionName)
         const changed = Object.keys(changes).filter(

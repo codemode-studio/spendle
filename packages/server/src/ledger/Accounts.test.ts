@@ -155,6 +155,31 @@ describe('Accounts', () => {
     }).pipe(Effect.provide(LedgerTest)),
   )
 
+  it.effect(
+    'rejects input it could not read back, without writing anything',
+    () =>
+      Effect.gen(function* () {
+        const { accounts, owner } = yield* setup
+        const error = yield* accounts
+          .open({
+            ownerId: owner.id,
+            institutionName: 'Nubank',
+            name: 'Conta',
+            kind: 'checking',
+            purpose: 'operating',
+            currency: 'brl',
+          })
+          .pipe(Effect.flip)
+        assert.deepStrictEqual(
+          [
+            error._tag === 'InvalidAccount' && error.reason,
+            (yield* accounts.list).length,
+          ],
+          ['invalid_input', 0],
+        )
+      }).pipe(Effect.provide(LedgerTest)),
+  )
+
   it.effect('rejects a blank name without writing anything', () =>
     Effect.gen(function* () {
       const { accounts, owner } = yield* setup
