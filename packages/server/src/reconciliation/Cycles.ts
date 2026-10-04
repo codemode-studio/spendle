@@ -96,6 +96,12 @@ export interface CyclePayment {
   readonly via: 'card' | 'bank' | 'credit'
   /** The closing of the bill it was identified as paying; others pay the oldest bill first. */
   readonly settles?: string
+  /**
+   * The closing of the imported statement that prints this payment, when
+   * one does. A statement that counts only its period's charges prints the
+   * payments of earlier bills, so the payment pays those first.
+   */
+  readonly statementClosing?: string | null
 }
 
 /** An issued statement: the period it covers and what it says is owed. */
@@ -157,6 +163,12 @@ export interface CardCycles {
   readonly cycles: ReadonlyArray<CardCycle>
   /** Payments and closed cycles' net credit beyond everything billed so far: credit on the card. */
   readonly unappliedCents: number
+  /**
+   * Payments a charges-only statement prints for earlier bills when no
+   * earlier bill is imported: they paid debt from before the history, so
+   * they are neither applied to a cycle nor credit on the card.
+   */
+  readonly beforeHistoryCents: number
 }
 
 // An issued closing replaces the forecast it is near; beyond this it is a different cycle.
@@ -349,10 +361,20 @@ const schedule = (input: {
  * deducts do not explain is surplus; a later balance statement that shows
  * the credit deducts it. An amount due printed as zero hides how much favour
  * is left, so the entries, net of the carried debt, tell it.
+ *
+ * A payment printed on a statement that counts only its period's charges
+ * paid an earlier bill: it pays the cycles before that statement, and only
+ * what exceeds what they billed is credit. When no earlier cycle bills
+ * anything, the bill it paid is from before the history, so it is kept
+ * apart rather than paying the statement that prints it in advance.
+ *
+ * With `asOf`, allocation stops at that date: only cycles closed before it
+ * are settled, so credit that reached the card later is not spent.
  */
 const allocate = (
   { bounds, statements, entries, totals, billed: scheduled }: Schedule,
   payments: ReadonlyArray<CyclePayment>,
+  asOf?: string,
 ) => {
   const applied = bounds.map((): Array<CyclePayment> => [])
   const paid = bounds.map(() => 0)
@@ -429,9 +451,29 @@ const allocate = (
   }
   let closed = 0
   const closeBefore = (date: string) => {
-    while (closed < bounds.length && bounds[closed]!.closingOn < date)
+    const until = asOf !== undefined && asOf < date ? asOf : date
+    while (closed < bounds.length && bounds[closed]!.closingOn < until)
       settle(closed++)
   }
+  // The cycle of the charges-only statement that prints a payment.
+  const printedBy = (payment: CyclePayment) => {
+    if (payment.statementClosing == null) return undefined
+    const index = bounds.findIndex(
+      (cycle) => cycle.closingOn === payment.statementClosing,
+    )
+    return index !== -1 && statements[index]?.netOfPayments === false
+      ? index
+      : undefined
+  }
+  // Whether any cycle before `index` bills something: a debt the history shows.
+  const billsBefore = (index: number) =>
+    bounds
+      .slice(0, index)
+      .some(
+        (_, older) =>
+          statements[older] !== undefined || entries[older]!.length > 0,
+      )
+  let beforeHistory = 0
 
   const creditedOn = (payment: CyclePayment) =>
     payment.creditedOn ?? payment.paidOn
@@ -450,11 +492,17 @@ const allocate = (
       )
       if (index !== -1) remaining -= pay(index, payment, remaining)
     }
-    for (let index = 0; index < closed && remaining > 0; index++)
+    const printed = printedBy(payment)
+    const earlier = Math.min(closed, printed ?? closed)
+    for (let index = 0; index < earlier && remaining > 0; index++)
       remaining -= pay(index, payment, remaining)
-    if (remaining > 0) credit.push({ payment, cents: remaining })
+    if (remaining <= 0) continue
+    if (printed !== undefined && !billsBefore(printed))
+      beforeHistory += remaining
+    else credit.push({ payment, cents: remaining })
   }
-  while (closed < bounds.length) settle(closed++)
+  if (asOf === undefined) while (closed < bounds.length) settle(closed++)
+  else closeBefore(asOf)
   return {
     applied,
     paid,
@@ -463,6 +511,7 @@ const allocate = (
     carried,
     owes: bounds.map((_, index) => owes(index)),
     unappliedCents: creditCents(),
+    beforeHistoryCents: beforeHistory,
   }
 }
 
@@ -486,7 +535,9 @@ const allocate = (
  * identified as paying, else to the oldest cycle that still owes. What a
  * payment leaves is credit that pays the following cycles as they close
  * (and the open one in advance), so a payment can settle several bills.
- * What exceeds everything billed is unapplied credit.
+ * What exceeds everything billed is unapplied credit. A payment a
+ * charges-only statement prints pays the bills before it; with none
+ * imported, it paid debt from before the history and is kept apart.
  *
  * A cycle is overdue only after `payableUntil`: a due date on a weekend or
  * national bank holiday, printed or forecast, moves to the next business day.
@@ -499,9 +550,18 @@ export const cardCycles = (input: {
   readonly today: string
 }): CardCycles => {
   const plan = schedule(input)
-  if (plan === null) return { cycles: [], unappliedCents: 0 }
-  const { applied, paid, deducted, billed, carried, owes, unappliedCents } =
-    allocate(plan, input.payments)
+  if (plan === null)
+    return { cycles: [], unappliedCents: 0, beforeHistoryCents: 0 }
+  const {
+    applied,
+    paid,
+    deducted,
+    billed,
+    carried,
+    owes,
+    unappliedCents,
+    beforeHistoryCents,
+  } = allocate(plan, input.payments)
 
   const cycles = plan.bounds.map((cycle, index): CardCycle => {
     const statement = plan.statements[index]
@@ -540,7 +600,7 @@ export const cardCycles = (input: {
         : null,
     }
   })
-  return { cycles, unappliedCents }
+  return { cycles, unappliedCents, beforeHistoryCents }
 }
 
 /** A bank debit that names this card's bill but has no card-side payment. */
@@ -557,7 +617,8 @@ export const billPaymentWindowDays = 45
 /**
  * The bank debits that pay a bill, when the card side of the payment is
  * missing. Each debit is judged in date order against what was owed on its
- * own date, counting only the payments made before it: its amount must be
+ * own date, counting only the payments made before it and the credit of
+ * cycles closed before it, not a later refund: its amount must be
  * exactly what one cycle closed within the payment window still owed, or
  * what its balance statement still asks, the debt it carries included. The
  * payment carries that bill, so it pays it (and then the debt it carries,
@@ -579,10 +640,14 @@ export const billPayments = (input: {
       a.paidOn.localeCompare(b.paidOn) || a.entryId.localeCompare(b.entryId),
   )
   for (const debit of debits) {
-    const { paid, owes, carried } = allocate(plan, [
-      ...input.payments.filter((payment) => payment.paidOn < debit.paidOn),
-      ...inferred,
-    ])
+    const { paid, owes, carried } = allocate(
+      plan,
+      [
+        ...input.payments.filter((payment) => payment.paidOn < debit.paidOn),
+        ...inferred,
+      ],
+      debit.paidOn,
+    )
     const outstanding = owes.map((owed, index) =>
       Math.max(0, owed - paid[index]!),
     )

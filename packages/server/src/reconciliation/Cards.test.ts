@@ -149,10 +149,10 @@ const payFromBank = (
   })
 
 // A Nubank card closing on the 3rd and a bank account, with the given card
-// and bank OFX lines, on 20 August 2026.
-const history = (cardLines: string, bankLines: string) =>
+// and bank OFX lines, on 20 August 2026 unless another day is set.
+const history = (cardLines: string, bankLines: string, day = august20) =>
   Effect.gen(function* () {
-    yield* august20
+    yield* day
     const accounts = yield* Accounts
     const imports = yield* Imports
     const owner = yield* accounts.createOwner({ name: 'Eu', kind: 'person' })
@@ -956,6 +956,132 @@ describe('Cards', () => {
               ['2026-09-03', 10000, 'paid', ['credit'], null],
             ],
             0,
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'does not let the first imported Nubank statement spend the payment of an earlier bill',
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(
+          DateTime.toEpochMillis(DateTime.makeUnsafe('2026-08-05T15:00:00Z')),
+        )
+        const accounts = yield* Accounts
+        const imports = yield* Imports
+        const owner = yield* accounts.createOwner({
+          name: 'Eu',
+          kind: 'person',
+        })
+        const card = yield* accounts.open({
+          ownerId: owner.id,
+          institutionName: 'Nubank',
+          purpose: 'operating',
+          currency: 'BRL',
+          name: 'Cartão',
+          kind: 'credit_card',
+          card: new CardTerms({
+            closingDay: 3,
+            dueDay: 10,
+            limitCents: null,
+            lastFour: null,
+          }),
+        })
+        const bill = (
+          fileName: string,
+          period: string,
+          due: string,
+          total: string,
+          rows: ReadonlyArray<string>,
+        ) =>
+          imports.importFile({
+            accountId: card.id,
+            fileName,
+            bytes: syntheticPdf([
+              'Nu Pagamentos S.A.',
+              'RESUMO DA FATURA ATUAL',
+              `Data de vencimento: ${due}`,
+              `Periodo vigente: ${period}`,
+              `Total de compras de todos os cartoes R$ ${total}`,
+              `Total a pagar R$ ${total}`,
+              `TRANSACOES DE ${period.toUpperCase()}`,
+              ...rows,
+            ]),
+          })
+        const outcome = Effect.gen(function* () {
+          const result = yield* (yield* Cards).cycles(card.id)
+          return [
+            result.cycles.map((cycle) => [
+              cycle.closingOn,
+              cycle.paidCents,
+              cycle.status,
+              cycle.statement?.differenceCents ?? null,
+            ]),
+            result.unappliedCents,
+            result.beforeHistoryCents,
+          ]
+        })
+        // August's bill prints the 8 July payment of July's bill.
+        yield* bill('agosto.pdf', '04 JUL a 03 AGO', '10 AGO 2026', '200,00', [
+          '15 JUL Hotel R$ 200,00',
+          '08 JUL Pagamento em 08 JUL -R$ 200,00',
+        ])
+        yield* drain
+        const alone = yield* outcome
+        yield* bill('julho.pdf', '04 JUN a 03 JUL', '10 JUL 2026', '200,00', [
+          '10 JUN Mercado R$ 200,00',
+        ])
+        yield* drain
+        assert.deepStrictEqual(
+          [alone, yield* outcome],
+          [
+            [
+              [
+                ['2026-08-03', 0, 'due', 0],
+                ['2026-09-03', 0, 'open', null],
+              ],
+              0,
+              20000,
+            ],
+            [
+              [
+                ['2026-07-03', 20000, 'paid', 0],
+                ['2026-08-03', 0, 'due', 0],
+                ['2026-09-03', 0, 'open', null],
+              ],
+              0,
+              0,
+            ],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'keeps a bank payment of a bill that a later refund could also have paid',
+    () =>
+      Effect.gen(function* () {
+        const { cards, card } = yield* history(
+          line('c1', '20260610', '-100.00', 'Mercado') +
+            line('c2', '20260720', '150.00', 'Estorno loja') +
+            line('c3', '20260810', '-100.00', 'Hotel'),
+          line('b1', '20260708', '-100.00', 'PAGAMENTO FATURA NUBANK'),
+          TestClock.setTime(
+            DateTime.toEpochMillis(DateTime.makeUnsafe('2026-09-20T15:00:00Z')),
+          ),
+        )
+        const result = yield* cards.cycles(card.id)
+        assert.deepStrictEqual(
+          [summary(result.cycles), result.unappliedCents],
+          [
+            [
+              ['2026-07-03', -10000, 10000, 'paid', ['bank']],
+              ['2026-08-03', 15000, 0, 'paid', []],
+              ['2026-09-03', -10000, 10000, 'paid', ['credit']],
+              ['2026-10-03', 0, 0, 'open', []],
+            ],
+            5000,
           ],
         )
       }).pipe(Effect.provide(openFinanceTest())),

@@ -352,6 +352,7 @@ const make = Effect.gen(function* () {
         creditedOn: inflow.bookedOn,
         amountCents: inflow.amountCents,
         via: 'card',
+        statementClosing: inflow.statementClosing,
       })
       paymentIds.add(inflow.id)
     }
@@ -369,6 +370,7 @@ const make = Effect.gen(function* () {
           creditedOn: entry.bookedOn,
           amountCents: entry.amountCents,
           via: 'card',
+          statementClosing: entry.statementClosing,
         })
         paymentIds.add(entry.id)
       }

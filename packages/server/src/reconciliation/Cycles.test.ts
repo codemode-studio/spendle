@@ -825,6 +825,80 @@ describe('cardCycles', () => {
       ],
     )
   })
+
+  it('leaves a printed payment of a bill before the history out of the first statement', () => {
+    // Nubank prints the 8 July payment of the previous bill on August's
+    // statement, whose total counts only August's purchases.
+    const august = issued('2026-07-04', '2026-08-03', -20000, {
+      netOfPayments: false,
+    })
+    const july = issued('2026-06-04', '2026-07-03', -20000, {
+      netOfPayments: false,
+    })
+    const hotel = {
+      ...entry('hotel', '2026-07-15', -20000),
+      statementClosing: '2026-08-03',
+    }
+    const market = {
+      ...entry('market', '2026-06-10', -20000),
+      statementClosing: '2026-07-03',
+    }
+    const printed = (amountCents: number): CyclePayment => ({
+      ...payment('pay', '2026-07-08', amountCents),
+      statementClosing: '2026-08-03',
+    })
+    const outcome = (
+      amountCents: number,
+      statements: ReadonlyArray<IssuedStatement>,
+      items: ReadonlyArray<CycleEntry>,
+    ) => {
+      const result = build(
+        [printed(amountCents)],
+        '2026-08-05',
+        statements,
+        items,
+      )
+      return [
+        result.cycles.map((cycle) => [
+          cycle.closingOn,
+          cycle.paidCents,
+          cycle.status,
+          cycle.statement?.differenceCents ?? null,
+        ]),
+        result.unappliedCents,
+        result.beforeHistoryCents,
+      ]
+    }
+    // Only August's statement: the payment paid a bill no import shows.
+    assert.deepStrictEqual(outcome(20000, [august], [hotel]), [
+      [
+        ['2026-08-03', 0, 'due', 0],
+        ['2026-09-03', 0, 'open', null],
+      ],
+      0,
+      20000,
+    ])
+    // With July's statement, it pays July.
+    assert.deepStrictEqual(outcome(20000, [july, august], [market, hotel]), [
+      [
+        ['2026-07-03', 20000, 'paid', 0],
+        ['2026-08-03', 0, 'due', 0],
+        ['2026-09-03', 0, 'open', null],
+      ],
+      0,
+      0,
+    ])
+    // What exceeds an imported July is credit for August.
+    assert.deepStrictEqual(outcome(25000, [july, august], [market, hotel]), [
+      [
+        ['2026-07-03', 20000, 'paid', 0],
+        ['2026-08-03', 5000, 'partially_paid', 0],
+        ['2026-09-03', 0, 'open', null],
+      ],
+      0,
+      0,
+    ])
+  })
 })
 
 describe('billPayments', () => {
@@ -858,6 +932,48 @@ describe('billPayments', () => {
         [debit('july', '2026-07-08', 10000)],
       ),
       [['july', '2026-07-03']],
+    )
+  })
+
+  it('judges a debit without the refund credit that reached the card after it', () => {
+    // July's R$ 100,00 is paid on 8 July; a R$ 150,00 refund on 20 July
+    // then pays September's R$ 100,00 and leaves R$ 50,00.
+    const input = {
+      terms,
+      entries: [
+        entry('market', '2026-06-10', -10000),
+        entry('refund', '2026-07-20', 15000),
+        entry('hotel', '2026-08-10', -10000),
+      ],
+      statements: [],
+      today: '2026-09-20',
+    }
+    const inferred = billPayments({
+      ...input,
+      payments: [],
+      debits: [debit('july', '2026-07-08', 10000)],
+    })
+    const result = cardCycles({ ...input, payments: inferred })
+    assert.deepStrictEqual(
+      [
+        inferred.map((found) => found.settles),
+        result.cycles.map((cycle) => [
+          cycle.closingOn,
+          cycle.paidCents,
+          cycle.status,
+        ]),
+        result.unappliedCents,
+      ],
+      [
+        ['2026-07-03'],
+        [
+          ['2026-07-03', 10000, 'paid'],
+          ['2026-08-03', 0, 'paid'],
+          ['2026-09-03', 10000, 'paid'],
+          ['2026-10-03', 0, 'open'],
+        ],
+        5000,
+      ],
     )
   })
 
