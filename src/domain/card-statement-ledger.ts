@@ -189,11 +189,17 @@ export function buildCardStatementLedger(input: {
   }
 
   for (const transaction of input.transactions) {
-    const received = isReceivedCardPayment({
-      creditCardId: 'card',
-      amountCents: transaction.amountCents,
-      description: transaction.description,
-    })
+    // The card statement reports the payment by its wording, or a confirmed
+    // bill payment group already says this credit is the receipt (such as one
+    // identified by the provider category).
+    const received =
+      isReceivedCardPayment({
+        creditCardId: 'card',
+        amountCents: transaction.amountCents,
+        description: transaction.description,
+      }) ||
+      (transaction.amountCents > 0 &&
+        groupByTransaction.get(transaction.id)?.status === 'confirmed')
     if (received) {
       // A payment lands in the cycle after the one it settles.
       const target = cycleIndex(transaction.postedAt) - 1

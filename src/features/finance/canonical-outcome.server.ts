@@ -675,6 +675,7 @@ function restoreExcludedTransactions(
       .update(schema.reconciliationGroups)
       .set({
         status: 'suggested',
+        confirmationSource: null,
         aiValidation: null,
         aiConfidence: null,
         aiReason: null,

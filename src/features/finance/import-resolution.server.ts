@@ -725,6 +725,7 @@ async function resolveTransactionCorrectionInternal(
           .update(schema.reconciliationGroups)
           .set({
             status: 'suggested',
+            confirmationSource: null,
             aiValidation: null,
             aiConfidence: null,
             aiReason: null,
@@ -830,4 +831,3 @@ export async function resolveTransactionCorrection(input: {
 }) {
   return resolveTransactionCorrectionInternal(input)
 }
-

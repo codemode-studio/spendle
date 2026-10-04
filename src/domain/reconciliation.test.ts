@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildReconciliationSuggestions,
   detectOwnedTransferCategory,
+  isAutomaticMatchStillValid,
   matchLearnedTransferRule,
 } from './reconciliation'
 import type { ReconciliationTransaction } from './reconciliation'
@@ -413,4 +414,49 @@ it('preserva a remessa correta quando outro crédito aparece antes no extrato', 
   expect(suggestions.map((item) => item.transactionIds)).toEqual([
     ['usd-out', 'brl-in'],
   ])
+})
+
+describe('revalidação de correspondências automáticas', () => {
+  const bank = {
+    ...base,
+    id: 'bank',
+    postedAt: '2026-09-10',
+    description: 'Pagamento fatura cartão',
+  }
+  const receipt = {
+    ...base,
+    id: 'card',
+    amountCents: 100_000,
+    accountId: null,
+    creditCardId: 'card',
+    postedAt: '2026-09-10',
+    description: 'Pagamento recebido',
+  }
+
+  it('mantém o pagamento enquanto o crédito do cartão é um recebimento', () => {
+    expect(isAutomaticMatchStillValid('card_payment', bank, receipt)).toBe(true)
+    expect(
+      isAutomaticMatchStillValid('card_payment', bank, {
+        ...receipt,
+        description: 'Pagamento efetuado',
+        providerCategory: 'Credit card payment',
+      }),
+    ).toBe(true)
+  })
+
+  it('desfaz o pagamento quando o crédito vira estorno ou muda de valor', () => {
+    expect(
+      isAutomaticMatchStillValid('card_payment', bank, {
+        ...receipt,
+        description: 'Estorno loja',
+        providerCategory: 'Shopping',
+      }),
+    ).toBe(false)
+    expect(
+      isAutomaticMatchStillValid('card_payment', bank, {
+        ...receipt,
+        amountCents: 90_000,
+      }),
+    ).toBe(false)
+  })
 })

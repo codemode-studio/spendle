@@ -114,6 +114,113 @@ function merchantDescription(value: string) {
     .trim()
 }
 
+function sameAmount(
+  left: ReconciliationTransaction,
+  right: ReconciliationTransaction,
+) {
+  return (
+    left.currency === right.currency &&
+    Math.abs(left.amountCents) === Math.abs(right.amountCents)
+  )
+}
+
+function differentTargets(
+  left: ReconciliationTransaction,
+  right: ReconciliationTransaction,
+) {
+  return (
+    left.accountId !== right.accountId ||
+    left.creditCardId !== right.creditCardId
+  )
+}
+
+// Equal amounts between accounts a person already linked by a confirmed
+// transfer.
+function isLearnedAccountPair(
+  left: ReconciliationTransaction,
+  right: ReconciliationTransaction,
+  days: number,
+) {
+  const source = left.amountCents < 0 ? left : right
+  const destination = left.amountCents < 0 ? right : left
+  return (
+    sameAmount(left, right) &&
+    days <= 3 &&
+    differentTargets(left, right) &&
+    Boolean(source.accountId && destination.accountId) &&
+    (source.counterpartyAccountId === destination.accountId ||
+      destination.counterpartyAccountId === source.accountId)
+  )
+}
+
+function crossesBrazilianCompanyBoundary(
+  left: ReconciliationTransaction,
+  right: ReconciliationTransaction,
+) {
+  return (
+    (left.scopeType === 'company_br') !== (right.scopeType === 'company_br')
+  )
+}
+
+function isCardPaymentPair(
+  left: ReconciliationTransaction,
+  right: ReconciliationTransaction,
+  days: number,
+) {
+  return (
+    sameAmount(left, right) &&
+    days <= 5 &&
+    differentTargets(left, right) &&
+    Boolean(left.creditCardId || right.creditCardId) &&
+    (isCardPaymentDescription(left.description) ||
+      isCardPaymentDescription(right.description))
+  )
+}
+
+function cardPaymentReceipt(
+  left: ReconciliationTransaction,
+  right: ReconciliationTransaction,
+) {
+  return [left, right].find(
+    (transaction) => transaction.creditCardId && transaction.amountCents > 0,
+  )
+}
+
+/**
+ * Whether an automatically confirmed match still holds for the current facts
+ * of its two rows: the same pair evidence that allowed the automatic
+ * confirmation. Competition from rows that arrived later does not undo a
+ * settlement that is still valid; a correction that changes the facts does.
+ */
+export function isAutomaticMatchStillValid(
+  type: ReconciliationSuggestion['type'],
+  left: ReconciliationTransaction,
+  right: ReconciliationTransaction,
+) {
+  const leftSign = Math.sign(left.amountCents)
+  const rightSign = Math.sign(right.amountCents)
+  if (!leftSign || !rightSign || leftSign === rightSign) return false
+  const days = daysBetween(left.postedAt, right.postedAt, {
+    inclusive: false,
+    absolute: true,
+  })
+  if (type === 'card_payment') {
+    const receipt = cardPaymentReceipt(left, right)
+    return Boolean(
+      isCardPaymentPair(left, right, days) &&
+      receipt &&
+      isIdentifiedCardPaymentReceipt(receipt),
+    )
+  }
+  if (type === 'transfer') {
+    return (
+      isLearnedAccountPair(left, right, days) &&
+      !crossesBrazilianCompanyBoundary(left, right)
+    )
+  }
+  return false
+}
+
 export function buildReconciliationSuggestions(
   transactions: ReconciliationTransaction[],
 ) {
@@ -157,50 +264,30 @@ export function buildReconciliationSuggestions(
       const right = transactions[rightIndex]
       const days = Math.abs(entry.day - dated[rightIndex].day)
 
-      const sameAmount =
-        left.currency === right.currency &&
-        Math.abs(left.amountCents) === Math.abs(right.amountCents)
-      const differentTargets =
-        left.accountId !== right.accountId ||
-        left.creditCardId !== right.creditCardId
+      const pairSameAmount = sameAmount(left, right)
+      const pairDifferentTargets = differentTargets(left, right)
 
       const transferSource = left.amountCents < 0 ? left : right
       const transferDestination = left.amountCents < 0 ? right : left
-      const matchesLearnedAccount =
-        sameAmount &&
-        days <= 3 &&
-        Boolean(transferSource.accountId && transferDestination.accountId) &&
-        (transferSource.counterpartyAccountId ===
-          transferDestination.accountId ||
-          transferDestination.counterpartyAccountId ===
-            transferSource.accountId)
+      const crossesCompanyBoundary = crossesBrazilianCompanyBoundary(
+        left,
+        right,
+      )
 
-      const crossesBrazilianCompanyBoundary =
-        (left.scopeType === 'company_br') !== (right.scopeType === 'company_br')
-
-      if (differentTargets && matchesLearnedAccount) {
+      if (isLearnedAccountPair(left, right, days)) {
         suggestions.push({
-          type: crossesBrazilianCompanyBoundary
-            ? 'profit_distribution'
-            : 'transfer',
+          type: crossesCompanyBoundary ? 'profit_distribution' : 'transfer',
           transactionIds: [left.id, right.id],
-          confidence: crossesBrazilianCompanyBoundary ? 97 : 100,
-          reason: crossesBrazilianCompanyBoundary
+          confidence: crossesCompanyBoundary ? 97 : 100,
+          reason: crossesCompanyBoundary
             ? 'Contas PJ e PF já relacionadas; a natureza da distribuição ainda precisa ser confirmada.'
             : 'Contas vinculadas por uma confirmação manual anterior.',
-          autoConfirm: !crossesBrazilianCompanyBoundary,
+          autoConfirm: !crossesCompanyBoundary,
         })
         continue
       }
 
-      if (
-        sameAmount &&
-        days <= 5 &&
-        differentTargets &&
-        (left.creditCardId || right.creditCardId) &&
-        (isCardPaymentDescription(left.description) ||
-          isCardPaymentDescription(right.description))
-      ) {
+      if (isCardPaymentPair(left, right, days)) {
         suggestions.push({
           type: 'card_payment',
           transactionIds: [left.id, right.id],
@@ -211,24 +298,22 @@ export function buildReconciliationSuggestions(
       }
 
       if (
-        sameAmount &&
+        pairSameAmount &&
         days <= 3 &&
-        differentTargets &&
+        pairDifferentTargets &&
         left.currency === right.currency
       ) {
         suggestions.push({
-          type: crossesBrazilianCompanyBoundary
-            ? 'profit_distribution'
-            : 'transfer',
+          type: crossesCompanyBoundary ? 'profit_distribution' : 'transfer',
           transactionIds: [left.id, right.id],
-          confidence: crossesBrazilianCompanyBoundary
+          confidence: crossesCompanyBoundary
             ? days === 0
               ? 97
               : 94
             : days === 0
               ? 98
               : 92,
-          reason: crossesBrazilianCompanyBoundary
+          reason: crossesCompanyBoundary
             ? 'Saída PJ e entrada PF de mesmo valor, sugerida como distribuição de lucros.'
             : 'Entradas e saídas de mesmo valor em contas diferentes.',
         })
@@ -252,7 +337,7 @@ export function buildReconciliationSuggestions(
         (fxDescription(left.description) && fxDescription(right.description))
       if (
         days <= 3 &&
-        differentTargets &&
+        pairDifferentTargets &&
         left.currency !== right.currency &&
         left.accountId &&
         right.accountId &&
@@ -284,7 +369,7 @@ export function buildReconciliationSuggestions(
       const sameMerchant =
         merchantDescription(left.description) ===
         merchantDescription(right.description)
-      if (sameAmount && sameMerchant && days <= 120) {
+      if (pairSameAmount && sameMerchant && days <= 120) {
         suggestions.push({
           type: 'refund',
           transactionIds: [left.id, right.id],
@@ -321,12 +406,10 @@ export function buildReconciliationSuggestions(
   }
   for (const suggestion of suggestions) {
     if (suggestion.type !== 'card_payment') continue
-    const cardReceipt = suggestion.transactionIds
-      .map((transactionId) => byId.get(transactionId))
-      .find(
-        (transaction) =>
-          transaction?.creditCardId && transaction.amountCents > 0,
-      )
+    const [left, right] = suggestion.transactionIds.map((transactionId) =>
+      byId.get(transactionId),
+    )
+    const cardReceipt = left && right && cardPaymentReceipt(left, right)
     if (
       cardReceipt &&
       isIdentifiedCardPaymentReceipt(cardReceipt) &&

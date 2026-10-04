@@ -302,3 +302,49 @@ describe('livro-razão de faturas', () => {
     expect(ledger[1].payments).toEqual([])
   })
 })
+
+describe('pagamento confirmado sem descrição de recebimento', () => {
+  it('quita a fatura uma vez com o crédito do grupo confirmado', () => {
+    const ledger = buildCardStatementLedger({
+      statements,
+      transactions: [
+        purchase('a', '2026-07-01', -100_000),
+        {
+          id: 'card-credit',
+          postedAt: '2026-07-15',
+          amountCents: 100_000,
+          description: 'Pagamento efetuado',
+          categoryId: 'card_payment',
+        },
+      ],
+      accountPayments: [
+        {
+          id: 'bank-debit',
+          postedAt: '2026-07-15',
+          amountCents: -100_000,
+          description: 'Pagamento fatura cartão',
+          categoryId: 'card_payment',
+        },
+      ],
+      reconciliations: [
+        {
+          id: 'group',
+          type: 'card_payment',
+          status: 'confirmed',
+          transactionIds: ['bank-debit', 'card-credit'],
+        },
+      ],
+      today: '2026-09-10',
+    })
+    const july = ledger.find((entry) => entry.dueDate === '2026-07-15')!
+    expect(july).toMatchObject({ paidCents: 100_000, status: 'paid' })
+    expect(july.payments).toEqual([
+      expect.objectContaining({
+        transactionId: 'bank-debit',
+        kind: 'confirmed',
+        evidenceIds: ['card-credit'],
+      }),
+    ])
+    expect(ledger.flatMap((entry) => entry.transactionIds)).toEqual(['a'])
+  })
+})

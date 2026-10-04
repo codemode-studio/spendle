@@ -662,7 +662,10 @@ export async function setReconciliationStatus(input: {
     }
     transaction
       .update(schema.reconciliationGroups)
-      .set({ status: input.status })
+      .set({
+        status: input.status,
+        confirmationSource: input.status === 'confirmed' ? 'person' : null,
+      })
       .where(eq(schema.reconciliationGroups.id, input.groupId))
       .run()
   })

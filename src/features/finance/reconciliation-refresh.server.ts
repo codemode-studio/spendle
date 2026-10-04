@@ -4,8 +4,13 @@ import { eq, isNotNull } from 'drizzle-orm'
 
 import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
-import { buildReconciliationSuggestions } from '#/domain/reconciliation'
+import { isSettlementCategory } from '#/domain/card-payment'
+import {
+  buildReconciliationSuggestions,
+  isAutomaticMatchStillValid,
+} from '#/domain/reconciliation'
 import { validateReconciliationsWithAi } from './ai.server'
+import { suggestCategory } from './categories.server'
 import { refreshRecurrences } from './recurrence.server'
 
 export async function refreshReconciliationSuggestions() {
@@ -73,6 +78,7 @@ export async function refreshReconciliationSuggestions() {
           .set({
             status: 'rejected',
             pairKey: null,
+            confirmationSource: null,
             reason:
               'Invalidada porque uma movimentação vinculada ainda não está confirmada.',
           })
@@ -84,15 +90,6 @@ export async function refreshReconciliationSuggestions() {
     })
   }
 
-  const groupsById = new Map(groups.map((group) => [group.id, group]))
-  const linkedTransactionIds = new Set(
-    existingLinks
-      .filter((link) => {
-        const status = groupsById.get(link.groupId)?.status
-        return status === 'suggested' || status === 'confirmed'
-      })
-      .map((link) => link.transactionId),
-  )
   const accountScope = new Map(
     accountRows.map((account) => [account.id, account.ownershipScopeId]),
   )
@@ -136,6 +133,96 @@ export async function refreshReconciliationSuggestions() {
         : null,
     }
   })
+
+  // Automatic confirmations are a projection of the current facts: when a
+  // correction or a later fact means the pair no longer passes the automatic
+  // rule, the match is dissolved and its rows go back to the candidate pool.
+  // Confirmations made by a person are never revisited here.
+  const contextualById = new Map(
+    contextualTransactions.map((transaction) => [transaction.id, transaction]),
+  )
+  const dissolved = groups.flatMap((group) => {
+    if (group.status !== 'confirmed') return []
+    if (group.confirmationSource !== 'automatic') return []
+    const links = existingLinks.filter((link) => link.groupId === group.id)
+    const [left, right] = links.map((link) =>
+      contextualById.get(link.transactionId),
+    )
+    if (links.length !== 2 || !left || !right) return []
+    if (isAutomaticMatchStillValid(group.type, left, right)) return []
+    return [{ group, links }]
+  })
+  if (dissolved.length) {
+    const restoredCategory = new Map<string, string | null>()
+    for (const { links } of dissolved) {
+      for (const link of links) {
+        const transaction = contextualById.get(link.transactionId)!
+        // A settlement category was the rule's own classification of the old
+        // facts; classify the current facts again instead of restoring it.
+        restoredCategory.set(
+          link.transactionId,
+          isSettlementCategory(link.previousCategoryId)
+            ? (
+                await suggestCategory({
+                  description: transaction.description,
+                  amountCents: transaction.amountCents,
+                  accountId: transaction.accountId,
+                  creditCardId: transaction.creditCardId,
+                })
+              ).categoryId
+            : link.previousCategoryId,
+        )
+      }
+    }
+    db.transaction((transaction) => {
+      for (const [transactionId, categoryId] of restoredCategory) {
+        transaction
+          .update(schema.transactions)
+          .set({ categoryId })
+          .where(eq(schema.transactions.id, transactionId))
+          .run()
+      }
+      for (const { group } of dissolved) {
+        transaction
+          .delete(schema.reconciliationLinks)
+          .where(eq(schema.reconciliationLinks.groupId, group.id))
+          .run()
+        transaction
+          .delete(schema.reconciliationGroups)
+          .where(eq(schema.reconciliationGroups.id, group.id))
+          .run()
+      }
+    })
+    const dissolvedIds = new Set(dissolved.map(({ group }) => group.id))
+    for (const [transactionId, categoryId] of restoredCategory) {
+      for (const row of [
+        transactionRows.find((item) => item.id === transactionId),
+        contextualById.get(transactionId),
+      ]) {
+        if (row) row.categoryId = categoryId
+      }
+    }
+    groups.splice(
+      0,
+      groups.length,
+      ...groups.filter((group) => !dissolvedIds.has(group.id)),
+    )
+    existingLinks.splice(
+      0,
+      existingLinks.length,
+      ...existingLinks.filter((link) => !dissolvedIds.has(link.groupId)),
+    )
+  }
+
+  const groupsById = new Map(groups.map((group) => [group.id, group]))
+  const linkedTransactionIds = new Set(
+    existingLinks
+      .filter((link) => {
+        const status = groupsById.get(link.groupId)?.status
+        return status === 'suggested' || status === 'confirmed'
+      })
+      .map((link) => link.transactionId),
+  )
   const candidates = contextualTransactions.filter(
     (transaction) =>
       transaction.status === 'confirmed' &&
@@ -285,6 +372,7 @@ export async function refreshReconciliationSuggestions() {
           id: groupId,
           type: suggestion.type,
           status: suggestion.autoConfirm ? 'confirmed' : 'suggested',
+          confirmationSource: suggestion.autoConfirm ? 'automatic' : null,
           confidence: suggestion.confidence,
           reason: suggestion.reason,
           exchangeRateMicros: suggestion.exchangeRateMicros,

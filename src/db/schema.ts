@@ -865,6 +865,11 @@ export const reconciliationGroups = sqliteTable('reconciliation_groups', {
   aiConfidence: integer('ai_confidence'),
   aiReason: text('ai_reason'),
   aiValidatedAt: integer('ai_validated_at', { mode: 'timestamp' }),
+  // Who confirmed the group: 'automatic' matches are a projection the refresh
+  // revalidates against current facts; 'person' confirmations are durable.
+  confirmationSource: text('confirmation_source', {
+    enum: ['automatic', 'person'],
+  }),
   createdAt,
 })
 
