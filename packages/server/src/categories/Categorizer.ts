@@ -14,15 +14,24 @@ import * as Reactor from '../events/Reactor.ts'
 import { entriesResolved } from '../ledger/Entries.ts'
 import { relationsChanged } from '../reconciliation/Reconciliation.ts'
 import { categoryChanged, uncategorized } from './Categories.ts'
+import { Classifier } from './Classifier.ts'
+import type { ClassifyItem } from './Classifier.ts'
 import { followCategoryDecisions } from './FollowDecisions.ts'
 import { categoryStoreChanged, KnowledgeStore } from './KnowledgeStore.ts'
-import { categorize, POLICY_VERSION } from './Policy.ts'
+import { knowledgeKey } from './Patterns.ts'
+import {
+  categorize,
+  MODEL_APPLY_THRESHOLD,
+  MODEL_SUGGEST_FLOOR,
+  POLICY_VERSION,
+} from './Policy.ts'
 import type { Inference, PolicyInput } from './Policy.ts'
 import type { PatternRow, StoreEdit } from './Store.ts'
 
 export const categoriesChanged = 'CategoriesChanged'
 export const categoryDecided = 'CategoryDecided'
 export const categoryDecisionUndone = 'CategoryDecisionUndone'
+export const modelClassified = 'ModelClassified'
 
 export type DecisionOrigin = 'transaction_list' | 'review' | 'v1_import'
 
@@ -183,6 +192,7 @@ const make = Effect.gen(function* () {
   const log = yield* EventLog
   const store = yield* KnowledgeStore
   const crypto = yield* Crypto.Crypto
+  const classifier = yield* Classifier
   // Rebuilds and decisions run one at a time, each from reading state to
   // replacing inferences: a rebuild never writes inferences computed before
   // a decision that committed meanwhile.
@@ -272,6 +282,30 @@ const make = Effect.gen(function* () {
       FROM relations ORDER BY key
     `,
   })
+  const findModelAnswers = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: Schema.Struct({
+      pattern: Schema.String,
+      direction: Schema.String,
+      categoryId: Schema.NullOr(Schema.String),
+      probability: Schema.Number,
+    }),
+    execute: (version) => sql`
+      SELECT pattern, direction, category_id AS categoryId, probability
+      FROM model_classifications WHERE model_version = ${version}
+    `,
+  })
+  const modelAnswers = (version: string) =>
+    Effect.map(
+      findModelAnswers(version),
+      (rows) =>
+        new Map(
+          rows.map((row) => [
+            `${row.pattern}|${row.direction}`,
+            { categoryId: row.categoryId, probability: row.probability },
+          ]),
+        ),
+    )
   const selectInferences = sql`
     SELECT entry_id AS entryId, category_id AS categoryId, origin, origin_ref AS originRef,
       policy_version AS policyVersion, confidence, status,
@@ -322,6 +356,14 @@ const make = Effect.gen(function* () {
       decisions,
       store: yield* store.rows,
       categories: yield* findCategories(undefined),
+      model: Option.isSome(classifier.modelVersion)
+        ? {
+            version: classifier.modelVersion.value,
+            answers: yield* modelAnswers(classifier.modelVersion.value),
+            applyThreshold: MODEL_APPLY_THRESHOLD,
+            suggestFloor: MODEL_SUGGEST_FLOOR,
+          }
+        : undefined,
     }
     return input
   })
@@ -627,9 +669,106 @@ const make = Effect.gen(function* () {
     )
   })
 
+  // Merchants no rule covers and the model has not answered yet, one
+  // example each. Decided, reconciled and refunded entries never ask it.
+  const unclassified = (version: string) =>
+    Effect.gen(function* () {
+      const cached = yield* modelAnswers(version)
+      const open = new Set(
+        (yield* findInferences(undefined))
+          .filter(
+            (inference) =>
+              inference.status !== 'applied' &&
+              (inference.origin === 'none' ||
+                inference.origin === 'pattern' ||
+                inference.origin === 'provider'),
+          )
+          .map((inference) => inference.entryId),
+      )
+      const items = new Map<string, ClassifyItem>()
+      for (const entry of yield* findEntries(undefined)) {
+        if (!open.has(entry.id)) continue
+        const key = knowledgeKey(entry)
+        if (key === null) continue
+        const id = `${key.pattern}|${key.direction}`
+        if (cached.has(id) || items.has(id)) continue
+        items.set(id, {
+          pattern: key.pattern,
+          direction: key.direction,
+          description: entry.description,
+          amountCents: entry.amountCents,
+        })
+      }
+      return [...items.values()]
+    })
+
+  /**
+   * Asks the model about merchants nothing else categorizes and caches its
+   * answers, outside any transaction; the rebuild that follows sends them
+   * to review. A disabled or failing model leaves entries as they are.
+   */
+  const classifyPending = Effect.fn('Categorizer.classifyPending')(
+    function* () {
+      if (Option.isNone(classifier.modelVersion)) return 0
+      const version = classifier.modelVersion.value
+      const items = yield* unclassified(version)
+      if (items.length === 0) return 0
+      const options = (yield* findCategories(undefined)).filter(
+        (category) =>
+          category.active && !category.system && category.id !== uncategorized,
+      )
+      const names = new Map(
+        (yield* sql<{
+          id: string
+          name: string
+        }>`SELECT id, name FROM categories`).map((row) => [row.id, row.name]),
+      )
+      const answers = yield* classifier
+        .classify(
+          items,
+          options.map((category) => ({
+            id: category.id,
+            name: names.get(category.id) ?? category.id,
+            bucket: category.bucket,
+          })),
+        )
+        .pipe(
+          Effect.tapError((error) => Effect.logWarning(error.message)),
+          Effect.option,
+        )
+      if (Option.isNone(answers)) return 0
+      const classifiedAt = DateTime.formatIso(yield* DateTime.now)
+      yield* sql.withTransaction(
+        Effect.gen(function* () {
+          for (const [index, item] of items.entries()) {
+            const answer = answers.value[index]!
+            yield* sql`
+            INSERT INTO model_classifications (pattern, direction, model_version, category_id,
+              probability, classified_at)
+            VALUES (${item.pattern}, ${item.direction}, ${version}, ${answer.categoryId},
+              ${answer.probability}, ${classifiedAt})
+            ON CONFLICT (pattern, direction, model_version) DO UPDATE SET
+              category_id = excluded.category_id, probability = excluded.probability,
+              classified_at = excluded.classified_at
+          `
+          }
+          yield* log.append([
+            {
+              type: modelClassified,
+              streamId: 'model_classifications',
+              payload: { modelVersion: version, items: items.length },
+            },
+          ])
+        }),
+      )
+      return items.length
+    },
+  )
+
   return {
     rebuild,
     rebuiltThrough,
+    classifyPending,
     storedPolicyVersion: findState(undefined).pipe(
       Effect.map(Option.map((state) => state.policyVersion)),
     ),
@@ -693,11 +832,26 @@ export const reactor = Reactor.layer({
     relationsChanged,
     categoryStoreChanged,
     categoryChanged,
+    modelClassified,
   ],
   handle: (event) =>
     Effect.gen(function* () {
       const categorizer = yield* Categorizer
       if (yield* categorizer.rebuiltThrough(event.sequence)) return
       yield* categorizer.rebuild()
+    }),
+})
+
+/**
+ * Asks the model about what is left uncategorised after each change of
+ * inferences. Its answers come back as `ModelClassified`, which the
+ * categorizer turns into suggestions for review.
+ */
+export const modelReactor = Reactor.layer({
+  name: 'category-model',
+  types: [categoriesChanged],
+  handle: () =>
+    Effect.gen(function* () {
+      yield* (yield* Categorizer).classifyPending()
     }),
 })

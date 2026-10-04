@@ -148,7 +148,8 @@ export default Effect.gen(function* () {
       pattern TEXT NOT NULL,
       direction TEXT NOT NULL CHECK (direction IN ('income', 'expense')),
       model_version TEXT NOT NULL,
-      category_id TEXT NOT NULL,
+      -- Null when the model found no category that fits.
+      category_id TEXT,
       probability REAL NOT NULL,
       classified_at TEXT NOT NULL,
       PRIMARY KEY (pattern, direction, model_version)

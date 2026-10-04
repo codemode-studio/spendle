@@ -27,6 +27,21 @@ export const confidence = {
   providerBuiltIn: 60,
 } as const
 
+/**
+ * A model answer is applied at this probability or above. Infinite until
+ * the model is evaluated against the person's own decisions: until then
+ * every answer goes to review.
+ */
+export const MODEL_APPLY_THRESHOLD = Number.POSITIVE_INFINITY
+/** Model answers below this probability are dropped. */
+export const MODEL_SUGGEST_FLOOR = 0.5
+
+/** Income categories for money received, the rest for money spent. */
+export const fitsDirection = (
+  bucket: string | undefined,
+  direction: Direction,
+) => (bucket === 'income') === (direction === 'income')
+
 export type InferenceOrigin =
   | 'decision'
   | 'reconciliation'
@@ -92,12 +107,25 @@ export interface PolicyRelation {
   readonly score: number
 }
 
+/** Cached model answers by `pattern|direction`, under one model version. */
+export interface PolicyModel {
+  readonly version: string
+  readonly answers: ReadonlyMap<
+    string,
+    { readonly categoryId: string | null; readonly probability: number }
+  >
+  readonly applyThreshold: number
+  readonly suggestFloor: number
+}
+
 export interface PolicyInput {
   readonly entries: ReadonlyArray<PolicyEntry>
   readonly relations: ReadonlyArray<PolicyRelation>
   readonly decisions: FollowedCategoryDecisions
   readonly store: ReadonlyArray<PatternRow>
   readonly categories: ReadonlyArray<PolicyCategory>
+  /** Absent when the model is disabled. */
+  readonly model?: PolicyModel | undefined
 }
 
 const none = (
@@ -141,7 +169,9 @@ const infer = (
  * 7. The longest prefix covering the merchant, applied.
  * 8. The person's mapping of the provider category, applied; otherwise a
  *    built-in mapping, to review.
- * 9. Nothing.
+ * 9. The model's cached answer: applied from `applyThreshold`, to review
+ *    from `suggestFloor`, dropped below. Never written to the store.
+ * 10. Nothing.
  *
  * Instalments match through `knowledgePattern`, which drops their suffix.
  */
@@ -376,6 +406,33 @@ export const categorize = (input: PolicyInput): ReadonlyArray<Inference> => {
     })
   }
 
+  const modelled = (entry: PolicyEntry): ReadonlyArray<Proposal> => {
+    const model = input.model
+    const key = knowledgeKey(entry)
+    if (model === undefined || key === null) return []
+    const answer = model.answers.get(`${key.pattern}|${key.direction}`)
+    if (
+      answer === undefined ||
+      answer.categoryId === null ||
+      answer.probability < model.suggestFloor ||
+      !usable(answer.categoryId) ||
+      !fits(answer.categoryId, key.direction)
+    )
+      return []
+    return [
+      {
+        categoryId: answer.categoryId,
+        origin: 'model',
+        originRef: model.version,
+        confidence: Math.round(answer.probability * 100),
+        status:
+          answer.probability >= model.applyThreshold ? 'applied' : 'review',
+        excludedFromSpending: false,
+        reasons: ['model'],
+      },
+    ]
+  }
+
   const entries = new Map(input.entries.map((entry) => [entry.id, entry]))
   const done = new Map<string, Inference>()
   const visiting = new Set<string>()
@@ -393,6 +450,7 @@ export const categorize = (input: PolicyInput): ReadonlyArray<Inference> => {
       ...reconciled(entry, false),
       ...learned(entry),
       ...provided(entry),
+      ...modelled(entry),
     ])
     visiting.delete(entryId)
     done.set(entryId, inference)
