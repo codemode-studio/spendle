@@ -2,7 +2,12 @@ import { assert, describe, it } from '@effect/vitest'
 
 import { assignment, problemShapes } from '../domain/Assignment.ts'
 import { addDays } from '../domain/LocalDate.ts'
-import { pairings, proveBalances, resolveEntries } from './Resolution.ts'
+import {
+  balanceProof,
+  pairings,
+  proveBalances,
+  resolveEntries,
+} from './Resolution.ts'
 import type { ObservedTransaction } from './Resolution.ts'
 
 let sequence = 0
@@ -20,6 +25,7 @@ const observed = (
     status: 'posted',
     previousEntryId: null,
     coverage: null,
+    fileTransactionId: null,
     ...fields,
   }
 }
@@ -276,6 +282,28 @@ describe('resolveEntries', () => {
     )
   })
 
+  it('pairs reports the files identify as one transaction before similar descriptions', () => {
+    const renamed = observed({
+      sourceId: 'export-a',
+      description: 'Amazon Marketplace',
+      fileTransactionId: 'id:T-77',
+    })
+    const lookalike = observed({
+      sourceId: 'export-a',
+      description: 'AMZN Prime',
+      fileTransactionId: 'id:T-78',
+    })
+    const later = observed({
+      sourceId: 'export-b',
+      description: 'AMZN Mktp',
+      fileTransactionId: 'id:T-77',
+    })
+    assert.deepStrictEqual(groups([renamed, lookalike, later]), [
+      [renamed.anchorId, later.anchorId],
+      [lookalike.anchorId],
+    ])
+  })
+
   it('depends only on what was observed, not on input order', () => {
     const observations = [
       observed({ sourceId: 'file' }),
@@ -451,6 +479,49 @@ describe('proveBalances', () => {
       intervals.map((interval) => interval.differenceCents),
       [0, 0],
     )
+  })
+
+  it('proves long daily histories without work growing with entries times checkpoints', () => {
+    // Ten movements a day, each reported by the bank and a statement (the
+    // statement a day later), and an end-of-day balance from each daily.
+    const history = (days: number) => {
+      const entries = []
+      const checkpoints = []
+      let balance = 0
+      for (let day = 0; day < days; day++) {
+        const date = addDays('2020-01-01', day)
+        for (let n = 0; n < 10; n++) {
+          const amountCents = n % 2 === 0 ? 10_00 : -7_00
+          entries.push({
+            bookedOn: date,
+            amountCents,
+            status: 'posted' as const,
+            evidence: [
+              { sourceId: 'bank', bookedOn: date, status: 'posted' as const },
+              {
+                sourceId: 'file',
+                bookedOn: addDays(date, 1),
+                status: 'posted' as const,
+              },
+            ],
+          })
+          balance += amountCents
+        }
+        checkpoints.push(
+          { asOf: date, balanceCents: balance, sourceId: 'bank' },
+          { asOf: addDays(date, 1), balanceCents: balance, sourceId: 'file' },
+        )
+      }
+      return balanceProof(entries, checkpoints)
+    }
+    const year = history(365)
+    const decade = history(3650)
+    assert.isTrue(
+      decade.intervals.every((interval) => interval.differenceCents === 0),
+    )
+    // Ten times the history: about ten times the work (plus a log factor),
+    // not a hundred.
+    assert.isBelow(decade.steps / year.steps, 15)
   })
 
   it('reports the amount a gap leaves unexplained', () => {

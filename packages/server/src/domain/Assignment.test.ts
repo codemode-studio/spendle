@@ -82,6 +82,21 @@ describe('assign', () => {
     assert.isAtMost(steps, 4 * edges.length)
   })
 
+  it('hands each edge to its own group once, however many groups there are', () => {
+    // 3,000 unrelated movements, each with two candidates of its own.
+    const size = 3000
+    const edges: Array<Edge> = []
+    for (let row = 0; row < size; row++)
+      edges.push(
+        { row, column: row * 2, cost: 1 },
+        { row, column: row * 2 + 1, cost: 2 },
+      )
+    const { chosen, steps } = assignment(edges)
+    assert.strictEqual(chosen.size, size)
+    assert.isTrue([...chosen].every(([row, column]) => column === row * 2))
+    assert.isAtMost(steps, 8 * edges.length)
+  })
+
   it('solves unconnected groups separately', () => {
     const edges: Array<Edge> = [
       { row: 0, column: 0, cost: 1 },

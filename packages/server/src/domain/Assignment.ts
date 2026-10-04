@@ -242,7 +242,21 @@ export const assignment = (
   }
   const chosen = new Map<number, number>()
   let steps = 0
-  for (const { rows, columns } of components(edges)) {
+  const parts = components(edges)
+  // Each edge goes to its component's problem once, by its row.
+  const partOf = new Map<number, number>()
+  parts.forEach(({ rows }, part) => {
+    for (const row of rows) partOf.set(row, part)
+  })
+  const edgesOf = parts.map(
+    (): Array<{ row: number; column: number; cost: number }> => [],
+  )
+  for (const [key, cost] of costOf) {
+    steps++
+    const [row, column] = key.split(':').map(Number) as [number, number]
+    edgesOf[partOf.get(row)!]!.push({ row, column, cost })
+  }
+  parts.forEach(({ rows, columns }, part) => {
     const transposed = rows.length > columns.length
     const [short, long] = transposed ? [columns, rows] : [rows, columns]
     const position = new Map(long.map((id, index) => [id, index]))
@@ -250,13 +264,9 @@ export const assignment = (
       (): Array<{ column: number; cost: number }> => [],
     )
     const index = new Map(short.map((id, at) => [id, at]))
-    for (const [key, cost] of costOf) {
-      const [row, column] = key.split(':').map(Number) as [number, number]
+    for (const { row, column, cost } of edgesOf[part]!) {
       const [a, b] = transposed ? [column, row] : [row, column]
-      const at = index.get(a)
-      const to = position.get(b)
-      if (at !== undefined && to !== undefined)
-        adjacency[at]!.push({ column: to, cost })
+      adjacency[index.get(a)!]!.push({ column: position.get(b)!, cost })
     }
     for (const list of adjacency) list.sort((x, y) => x.column - y.column)
     const solved = solve(short.length, long.length, adjacency)
@@ -268,7 +278,7 @@ export const assignment = (
         : [short[at]!, long[to]!]
       chosen.set(row, column)
     })
-  }
+  })
   return { chosen, steps }
 }
 

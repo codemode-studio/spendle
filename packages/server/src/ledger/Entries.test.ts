@@ -379,6 +379,78 @@ CHARSET:UTF-8
       }).pipe(Effect.provide(openFinanceTest())),
   )
 
+  it.effect(
+    'merges the same file transaction id across overlapping exports whatever the description',
+    () =>
+      Effect.gen(function* () {
+        const imports = yield* Imports
+        const observations = yield* Observations
+        const entries = yield* Entries
+        const exported = (
+          start: string,
+          end: string,
+          memo: string,
+          fitid: string,
+        ) =>
+          new TextEncoder().encode(`<OFX><STMTRS><CURDEF>BRL<BANKTRANLIST>
+            <DTSTART>${start}<DTEND>${end}
+            <STMTTRN><DTPOSTED>20260910<TRNAMT>-10.00${fitid}<MEMO>${memo}</STMTTRN>
+            </BANKTRANLIST><LEDGERBAL><BALAMT>90.00<DTASOF>${end}</LEDGERBAL></STMTRS></OFX>`)
+        // Two overlapping exports of an account opened at R$ 100,00; the
+        // bank renamed the merchant between them.
+        const importBoth = (fitid: string) =>
+          Effect.gen(function* () {
+            const account = yield* openChecking
+            const opening = yield* observations.registerSource({
+              kind: 'manual',
+              externalRef: `opening-${account.id}`,
+              label: 'opening',
+            })
+            yield* observations.recordBalance({
+              sourceId: opening.id,
+              accountId: account.id,
+              balance: {
+                kind: 'booked',
+                asOf: '2026-09-01',
+                balanceCents: 100_00,
+                currency: 'BRL',
+              },
+            })
+            yield* imports.importFile({
+              accountId: account.id,
+              fileName: 'a.ofx',
+              bytes: exported(
+                '20260901',
+                '20260912',
+                'Amazon Marketplace',
+                fitid,
+              ),
+            })
+            yield* imports.importFile({
+              accountId: account.id,
+              fileName: 'b.ofx',
+              bytes: exported('20260905', '20260920', 'AMZN Mktp', fitid),
+            })
+            yield* drain
+            const proof = yield* entries.balanceProof(account.id)
+            return {
+              sources: (yield* entries.entries(account.id)).map(
+                (entry) => entry.sources,
+              ),
+              gaps: proof.supported
+                ? proof.intervals.map((interval) => interval.differenceCents)
+                : [],
+            }
+          })
+        assert.deepStrictEqual(yield* importBoth('<FITID>T-77'), {
+          sources: [2],
+          gaps: [0, 0],
+        })
+        // Without the files' ids, nothing says the two lines are one.
+        assert.deepStrictEqual((yield* importBoth('')).sources, [1, 1])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
   it.effect('reports a change when secondary evidence is corrected', () =>
     Effect.gen(function* () {
       const account = yield* openChecking

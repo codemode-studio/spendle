@@ -28,6 +28,14 @@ export interface ObservedTransaction {
   readonly status: 'pending' | 'posted'
   readonly previousEntryId: string | null
   readonly coverage: Coverage | null
+  /**
+   * The transaction id the file itself gave this line (an OFX FITID),
+   * without the occurrence suffix; null for other sources and for lines
+   * identified by fingerprint. Ids are unique within the account at its
+   * institution, so two files of the account that give a line the same id
+   * and amount report the same movement, whatever its description says.
+   */
+  readonly fileTransactionId: string | null
 }
 
 /** A canonical transaction: one real movement of money, with every observation of it. */
@@ -144,11 +152,26 @@ const covers = (coverage: Coverage | null, date: string) =>
  * and, when both sources state their coverage, each dated inside the
  * other's.
  */
-const compatible = (a: ObservedTransaction, b: ObservedTransaction) =>
+const compatible = (
+  a: Pick<ObservedTransaction, 'bookedOn' | 'coverage'>,
+  b: Pick<ObservedTransaction, 'bookedOn' | 'coverage'>,
+) =>
   daysBetween(a.bookedOn, b.bookedOn) <= matchWindowDays &&
   (a.coverage === null ||
     b.coverage === null ||
     (covers(a.coverage, b.bookedOn) && covers(b.coverage, a.bookedOn)))
+
+/**
+ * Whether two reports from different files carry the same transaction id
+ * the files gave them. Amounts are compared by the caller.
+ */
+const sameFileTransaction = (
+  a: Pick<ObservedTransaction, 'sourceId' | 'fileTransactionId'>,
+  b: Pick<ObservedTransaction, 'sourceId' | 'fileTransactionId'>,
+) =>
+  a.fileTransactionId !== null &&
+  a.fileTransactionId === b.fileTransactionId &&
+  a.sourceId !== b.sourceId
 
 interface Building {
   readonly evidence: Array<ObservedTransaction>
@@ -158,6 +181,10 @@ interface Building {
 const representative = (evidence: ReadonlyArray<ObservedTransaction>) =>
   evidence.find((observation) => observation.status === 'posted') ??
   evidence[0]!
+
+// More than any date distance and description difference can add, so a pair
+// the files identify always costs less than one they do not.
+const identifiedPremium = (matchWindowDays + 1) * 1000
 
 /**
  * The allowed pairs between one source's reports of an amount and the
@@ -204,9 +231,15 @@ export const pairings = (
   return incoming.flatMap((observation, row) =>
     reachable[row]!.flatMap((column) => {
       const entry = entries[column]!
-      const described = entry.evidence.some((evidence) =>
-        shares(evidence.description, observation.description),
+      // The files' own transaction id settles it, whatever the descriptions.
+      const identified = entry.evidence.some((evidence) =>
+        sameFileTransaction(evidence, observation),
       )
+      const described =
+        identified ||
+        entry.evidence.some((evidence) =>
+          shares(evidence.description, observation.description),
+        )
       if (!described) {
         const sameDay = entry.evidence.some(
           (evidence) => evidence.bookedOn === observation.bookedOn,
@@ -231,13 +264,17 @@ export const pairings = (
           similar(evidence.description, observation.description),
         ),
       )
-      // Close dates first, then similar descriptions, then older entries.
+      // The same file transaction id first, then close dates, then similar
+      // descriptions, then older entries.
       return [
         {
           row,
           column,
           cost:
-            distance * 1000 + Math.round((1 - similarity) * 100) + column / 1e6,
+            (identified ? 0 : identifiedPremium) +
+            distance * 1000 +
+            Math.round((1 - similarity) * 100) +
+            column / 1e6,
         },
       ]
     }),
@@ -281,6 +318,16 @@ const fewestGroups = (
     Math.round(
       (1 - similarity(sorted[a]!.description, sorted[b]!.description)) * 100,
     )
+  // Earlier items the files identify as the same transaction; each one left
+  // in another group costs more than any dates and descriptions can.
+  const identifiedWith = sorted.map((item, index) =>
+    sorted
+      .slice(0, index)
+      .flatMap((other, at) => (sameFileTransaction(other, item) ? [at] : [])),
+  )
+  const separated = (index: number, group: ReadonlyArray<number>) =>
+    identifiedWith[index]!.filter((other) => !group.includes(other)).length *
+    1e9
   let best = null as { groups: Array<Array<number>>; cost: number } | null
   const groups: Array<Array<number>> = []
   const place = (index: number, cost: number) => {
@@ -298,13 +345,15 @@ const fewestGroups = (
           sorted[other]!.sourceId !== item.sourceId &&
           compatible(sorted[other]!, item),
       )
-      const described = group.some((other) =>
-        shares(sorted[other]!.description, item.description),
+      const described = group.some(
+        (other) =>
+          sameFileTransaction(sorted[other]!, item) ||
+          shares(sorted[other]!.description, item.description),
       )
       if (!fits || !described) continue
       const added = group.reduce(
         (sum, other) => sum + pairCost(other, index),
-        0,
+        separated(index, group),
       )
       group.push(index)
       place(index + 1, cost + added)
@@ -312,7 +361,7 @@ const fewestGroups = (
     }
     if (groups.length < most) {
       groups.push([index])
-      place(index + 1, cost)
+      place(index + 1, cost + separated(index, []))
       groups.pop()
     }
   }
@@ -402,7 +451,9 @@ const regroup = (built: ReadonlyArray<Building>): Array<Building> => {
  * A pair needs positive evidence, not just an equal amount nearby: the
  * descriptions share a meaningful word (not "pix", "compra"…), or both are
  * on the same day with no other candidate on either side and no conflicting
- * counterparty. An entry's evidence never spans more than `matchWindowDays`,
+ * counterparty. Reports from two files of the account that carry the same
+ * transaction id the files gave them are the same movement whatever their
+ * descriptions, and such pairs come first. An entry's evidence never spans more than `matchWindowDays`,
  * and a source that states its coverage rules out movements it covers but
  * listed on another date. Uncertain pairs stay separate.
  *
@@ -535,6 +586,142 @@ export interface BalanceInterval {
   readonly differenceCents: number
 }
 
+type ProofEntry = Pick<ResolvedEntry, 'bookedOn' | 'amountCents' | 'status'> & {
+  readonly evidence: ReadonlyArray<{
+    readonly sourceId: string
+    readonly bookedOn: string
+    readonly status: 'pending' | 'posted'
+  }>
+}
+
+// Sums of amounts included by each date: amounts sorted by the date they
+// become included, with running totals, read by binary search.
+class IncludedSums {
+  private readonly dates: Array<string> = []
+  private readonly totals: Array<number> = []
+  private readonly count: () => void
+  constructor(
+    items: Array<{ readonly date: string; readonly amountCents: number }>,
+    count: () => void,
+  ) {
+    this.count = count
+    items.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+    let total = 0
+    for (const item of items) {
+      count()
+      total += item.amountCents
+      this.dates.push(item.date)
+      this.totals.push(total)
+    }
+  }
+  /** The total of amounts included on or before `date`. */
+  through(date: string) {
+    let low = 0
+    let high = this.dates.length
+    while (low < high) {
+      this.count()
+      const middle = (low + high) >> 1
+      if (this.dates[middle]! <= date) low = middle + 1
+      else high = middle
+    }
+    return low === 0 ? 0 : this.totals[low - 1]!
+  }
+}
+
+/**
+ * `proveBalances`, with the number of steps it took. Each entry is placed
+ * once per checkpoint source on the date that source's balances start to
+ * hold it, and each checkpoint reads running totals by binary search, so the
+ * work grows with (entries + checkpoints) × log, never with their product.
+ */
+export const balanceProof = (
+  entries: ReadonlyArray<ProofEntry>,
+  checkpoints: ReadonlyArray<Checkpoint>,
+): {
+  readonly intervals: ReadonlyArray<BalanceInterval>
+  readonly steps: number
+} => {
+  let steps = 0
+  const count = () => {
+    steps++
+  }
+  const ordered = [...checkpoints].sort((a, b) => a.asOf.localeCompare(b.asOf))
+  const sources = new Set(ordered.map((checkpoint) => checkpoint.sourceId))
+  const posted = entries.filter((entry) => entry.status === 'posted')
+
+  // Without its own report, a source holds an entry from its posted date.
+  // Entries a source reported are taken back out of that default and placed
+  // by its own report instead: on the date it posted them, or never while it
+  // still shows them pending.
+  const byDefault = new IncludedSums(
+    posted.map((entry) => ({
+      date: entry.bookedOn,
+      amountCents: entry.amountCents,
+    })),
+    count,
+  )
+  const reported = new Map<
+    string,
+    {
+      readonly instead: Array<{ date: string; amountCents: number }>
+      readonly own: Array<{ date: string; amountCents: number }>
+    }
+  >()
+  for (const entry of posted) {
+    const seen = new Set<string>()
+    for (const evidence of entry.evidence) {
+      count()
+      if (!sources.has(evidence.sourceId) || seen.has(evidence.sourceId))
+        continue
+      seen.add(evidence.sourceId)
+      const booked = entry.evidence.find(
+        (other) =>
+          other.sourceId === evidence.sourceId && other.status === 'posted',
+      )
+      const list = reported.get(evidence.sourceId) ?? { instead: [], own: [] }
+      list.instead.push({
+        date: entry.bookedOn,
+        amountCents: entry.amountCents,
+      })
+      if (booked !== undefined)
+        list.own.push({ date: booked.bookedOn, amountCents: entry.amountCents })
+      reported.set(evidence.sourceId, list)
+    }
+  }
+  const bySource = new Map(
+    [...reported].map(([sourceId, { instead, own }]) => [
+      sourceId,
+      {
+        instead: new IncludedSums(instead, count),
+        own: new IncludedSums(own, count),
+      },
+    ]),
+  )
+  const included = (checkpoint: Checkpoint) => {
+    const sums = bySource.get(checkpoint.sourceId)
+    const base = byDefault.through(checkpoint.asOf)
+    return sums === undefined
+      ? base
+      : base -
+          sums.instead.through(checkpoint.asOf) +
+          sums.own.through(checkpoint.asOf)
+  }
+
+  const intervals = ordered.slice(1).map((end, index) => {
+    const start = ordered[index]!
+    const postedChangeCents = included(end) - included(start)
+    const expectedChangeCents = end.balanceCents - start.balanceCents
+    return {
+      from: start.asOf,
+      to: end.asOf,
+      expectedChangeCents,
+      postedChangeCents,
+      differenceCents: expectedChangeCents - postedChangeCents,
+    }
+  })
+  return { intervals, steps }
+}
+
 /**
  * Checks `balance(t1) = balance(t0) + posted entries in (t0, t1]` for each
  * pair of consecutive checkpoints. A checkpoint is the balance at the end of
@@ -549,43 +736,7 @@ export interface BalanceInterval {
  * entries never count.
  */
 export const proveBalances = (
-  entries: ReadonlyArray<
-    Pick<ResolvedEntry, 'bookedOn' | 'amountCents' | 'status'> & {
-      readonly evidence: ReadonlyArray<{
-        readonly sourceId: string
-        readonly bookedOn: string
-        readonly status: 'pending' | 'posted'
-      }>
-    }
-  >,
+  entries: ReadonlyArray<ProofEntry>,
   checkpoints: ReadonlyArray<Checkpoint>,
-): ReadonlyArray<BalanceInterval> => {
-  const ordered = [...checkpoints].sort((a, b) => a.asOf.localeCompare(b.asOf))
-  const posted = entries.filter((entry) => entry.status === 'posted')
-  const included = (entry: (typeof posted)[number], checkpoint: Checkpoint) => {
-    const own = entry.evidence.filter(
-      (evidence) => evidence.sourceId === checkpoint.sourceId,
-    )
-    const booked = own.find((evidence) => evidence.status === 'posted')
-    // The source still shows it pending: its balances do not hold it yet.
-    if (booked === undefined && own.length > 0) return 0
-    return (booked?.bookedOn ?? entry.bookedOn) <= checkpoint.asOf ? 1 : 0
-  }
-  return ordered.slice(1).map((end, index) => {
-    const start = ordered[index]!
-    const postedChangeCents = posted.reduce(
-      (sum, entry) =>
-        sum +
-        entry.amountCents * (included(entry, end) - included(entry, start)),
-      0,
-    )
-    const expectedChangeCents = end.balanceCents - start.balanceCents
-    return {
-      from: start.asOf,
-      to: end.asOf,
-      expectedChangeCents,
-      postedChangeCents,
-      differenceCents: expectedChangeCents - postedChangeCents,
-    }
-  })
-}
+): ReadonlyArray<BalanceInterval> =>
+  balanceProof(entries, checkpoints).intervals

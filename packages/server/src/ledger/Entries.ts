@@ -53,6 +53,7 @@ const ObservedRow = Schema.Struct({
   sequence: Schema.Int,
   previousEntryId: Schema.NullOr(Schema.String),
   sourceId: Schema.String,
+  sourceKind: Schema.String,
   externalId: Schema.String,
   bookedOn: Schema.String,
   amountCents: Schema.Int,
@@ -77,6 +78,15 @@ const EvidenceRow = Schema.Struct({
   bookedOn: Schema.String,
   status: Schema.Literals(['pending', 'posted']),
 })
+
+// The transaction id an imported file gave the line (`id:<id>@<occurrence>`),
+// without the occurrence. Fingerprinted lines (`fp:`) and other sources'
+// ids are no file's identity.
+const fileTransactionId = (sourceKind: string, externalId: string) => {
+  if (sourceKind !== 'file' || !externalId.startsWith('id:')) return null
+  const at = externalId.lastIndexOf('@')
+  return at === -1 ? externalId : externalId.slice(0, at)
+}
 
 const evidenceKey = (sourceId: string, externalId: string) =>
   `${sourceId}\u0000${externalId}`
@@ -135,12 +145,13 @@ const make = Effect.gen(function* () {
     Result: ObservedRow,
     execute: (accountId) => sql`
       SELECT f.id AS anchorId, f.rowid AS sequence, i.entry_id AS previousEntryId,
-        l.source_id AS sourceId, l.external_id AS externalId, l.booked_on AS bookedOn,
+        l.source_id AS sourceId, s.kind AS sourceKind, l.external_id AS externalId, l.booked_on AS bookedOn,
         l.amount_cents AS amountCents, l.description, l.status,
         fi.period_start AS coverageStart, fi.period_end AS coverageEnd
       FROM transaction_observations l
       JOIN transaction_observations f ON f.source_id = l.source_id AND f.account_id = l.account_id
         AND f.external_id = l.external_id AND f.version = 1
+      JOIN sources s ON s.id = l.source_id
       LEFT JOIN entry_identity i ON i.source_id = l.source_id AND i.account_id = l.account_id
         AND i.external_id = l.external_id
       LEFT JOIN import_files fi ON fi.source_id = l.source_id
@@ -213,8 +224,9 @@ const make = Effect.gen(function* () {
     const sequence = yield* log.latestSequence
     const resolved = resolveEntries(
       (yield* findObserved(accountId)).map(
-        ({ coverageStart, coverageEnd, ...observed }) => ({
+        ({ coverageStart, coverageEnd, sourceKind, ...observed }) => ({
           ...observed,
+          fileTransactionId: fileTransactionId(sourceKind, observed.externalId),
           coverage:
             coverageStart !== null && coverageEnd !== null
               ? { start: coverageStart, end: coverageEnd }
