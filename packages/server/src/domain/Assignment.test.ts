@@ -1,6 +1,6 @@
 import { assert, describe, it } from '@effect/vitest'
 
-import { assign, problemShapes } from './Assignment.ts'
+import { assign, assignment, problemShapes } from './Assignment.ts'
 import type { Edge } from './Assignment.ts'
 
 const pairs = (chosen: Map<number, number>) =>
@@ -51,6 +51,35 @@ describe('assign', () => {
     }))
     assert.deepStrictEqual(problemShapes(transposed), [[1, 2000]])
     assert.deepStrictEqual(pairs(assign(transposed)), [[1234, 0]])
+  })
+
+  it('leaves out the row whose pairing costs most when not every row can pair', () => {
+    // Rows 0 and 1 both want only column 0; row 1 pairs more cheaply.
+    const edges: Array<Edge> = [
+      { row: 0, column: 0, cost: 10 },
+      { row: 1, column: 0, cost: 1 },
+      { row: 2, column: 1, cost: 1 },
+      { row: 2, column: 2, cost: 2 },
+    ]
+    assert.deepStrictEqual(pairs(assign(edges)), [
+      [1, 0],
+      [2, 1],
+    ])
+  })
+
+  it('solves a long chain of overlapping candidates with sparse work', () => {
+    // 4,000 rows, each allowed the columns within three of it: one component.
+    const size = 4000
+    const edges: Array<Edge> = []
+    for (let row = 0; row < size; row++)
+      for (let column = row - 3; column <= row + 3; column++)
+        if (column >= 0 && column < size)
+          edges.push({ row, column, cost: Math.abs(row - column) })
+    assert.deepStrictEqual(problemShapes(edges), [[size, size]])
+    const { chosen, steps } = assignment(edges)
+    assert.strictEqual(chosen.size, size)
+    assert.isTrue([...chosen].every(([row, column]) => row === column))
+    assert.isAtMost(steps, 4 * edges.length)
   })
 
   it('solves unconnected groups separately', () => {

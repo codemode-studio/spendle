@@ -1,6 +1,6 @@
 import { assert, describe, it } from '@effect/vitest'
 
-import { problemShapes } from '../domain/Assignment.ts'
+import { assignment, problemShapes } from '../domain/Assignment.ts'
 import { addDays } from '../domain/LocalDate.ts'
 import { pairings, proveBalances, resolveEntries } from './Resolution.ts'
 import type { ObservedTransaction } from './Resolution.ts'
@@ -234,6 +234,48 @@ describe('resolveEntries', () => {
     )
   })
 
+  it('regroups earlier pairs when a later source can complete more movements', () => {
+    // Two R$10 debits in three overlapping statements: {A2, B3, C1} and {A3, B5, C6}.
+    const debit = { amountCents: -1000 }
+    const a2 = observed({ sourceId: 'a', bookedOn: '2026-09-02', ...debit })
+    const a3 = observed({ sourceId: 'a', bookedOn: '2026-09-03', ...debit })
+    const b3 = observed({ sourceId: 'b', bookedOn: '2026-09-03', ...debit })
+    const b5 = observed({ sourceId: 'b', bookedOn: '2026-09-05', ...debit })
+    const c1 = observed({ sourceId: 'c', bookedOn: '2026-09-01', ...debit })
+    const c6 = observed({ sourceId: 'c', bookedOn: '2026-09-06', ...debit })
+    assert.deepStrictEqual(groups([a2, a3, b3, b5, c1, c6]), [
+      [a2.anchorId, b3.anchorId, c1.anchorId],
+      [a3.anchorId, b5.anchorId, c6.anchorId],
+    ])
+  })
+
+  it('pairs two continuous daily histories without a history-sized problem', () => {
+    const days = 4000
+    const daily = (sourceId: string) =>
+      Array.from({ length: days }, (_, day) =>
+        observed({ sourceId, bookedOn: addDays('2015-01-01', day) }),
+      )
+    const file = daily('file')
+    const pluggy = daily('pluggy')
+    const edges = pairings(
+      pluggy,
+      file.map((observation) => ({ evidence: [observation] })),
+    )
+    assert.strictEqual(edges.length, days * 7 - 12)
+    // Sparse work: a few steps per allowed pair, not rows × columns.
+    assert.isAtMost(assignment(edges).steps, 4 * edges.length)
+
+    const resolved = resolveEntries([...file, ...pluggy])
+    assert.strictEqual(resolved.length, days)
+    assert.isTrue(
+      resolved.every(
+        (entry) =>
+          entry.evidence.length === 2 &&
+          entry.evidence[0]!.bookedOn === entry.evidence[1]!.bookedOn,
+      ),
+    )
+  })
+
   it('depends only on what was observed, not on input order', () => {
     const observations = [
       observed({ sourceId: 'file' }),
@@ -379,6 +421,35 @@ describe('proveBalances', () => {
         [-10_00, 0],
         [10_00, 0],
       ],
+    )
+  })
+
+  it('leaves out of a source balance an entry that source still reports as pending', () => {
+    // The file posts the debit on 1 October; the bank still shows it pending.
+    const debit = {
+      bookedOn: '2026-10-01',
+      amountCents: -10_00,
+      status: 'posted' as const,
+      evidence: [
+        { sourceId: 'file', bookedOn: '2026-10-01', status: 'posted' as const },
+        {
+          sourceId: 'bank',
+          bookedOn: '2026-10-02',
+          status: 'pending' as const,
+        },
+      ],
+    }
+    const intervals = proveBalances(
+      [debit],
+      [
+        { asOf: '2026-09-30', balanceCents: 1000_00, sourceId: 'bank' },
+        { asOf: '2026-10-01', balanceCents: 1000_00, sourceId: 'bank' },
+        { asOf: '2026-10-02', balanceCents: 1000_00, sourceId: 'bank' },
+      ],
+    )
+    assert.deepStrictEqual(
+      intervals.map((interval) => interval.differenceCents),
+      [0, 0],
     )
   })
 

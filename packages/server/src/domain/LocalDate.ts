@@ -22,8 +22,8 @@ export const dayOfMonth = (date: string, day: number) => {
 
 export const max = (a: string, b: string) => (a > b ? a : b)
 
-// Days since a fixed epoch (the inverse of civil-from-days); exact for the Gregorian calendar.
-const dayNumber = (date: string) => {
+/** Days since a fixed epoch (the inverse of civil-from-days); exact for the Gregorian calendar. */
+export const dayNumber = (date: string) => {
   const [year, month, day] = date.split('-').map(Number) as [
     number,
     number,
