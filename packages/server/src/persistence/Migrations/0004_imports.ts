@@ -13,7 +13,7 @@ export default Effect.gen(function* () {
       account_id TEXT NOT NULL REFERENCES accounts (id),
       source_id TEXT NOT NULL REFERENCES sources (id),
       file_name TEXT NOT NULL,
-      format TEXT NOT NULL CHECK (format IN ('ofx', 'csv')),
+      format TEXT NOT NULL CHECK (format IN ('ofx', 'csv', 'pdf')),
       content BLOB NOT NULL,
       period_start TEXT,
       period_end TEXT,
