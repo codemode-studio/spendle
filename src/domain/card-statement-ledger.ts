@@ -131,8 +131,16 @@ export function buildCardStatementLedger(input: {
    * that could pay one of them is not inferred for this card.
    */
   otherCardStatements?: Array<Pick<LedgerStatement, 'dueDate' | 'amountCents'>>
+  /**
+   * Whether a row has already posted (the same test as
+   * `statementCashSettlement`). Only posted payments reduce what a bill still
+   * owes when receipts are placed; pending ones are still shown. Defaults to
+   * every row posted.
+   */
+  isPosted?: (transactionId: string) => boolean
   today: string
 }): StatementLedgerEntry[] {
+  const isPosted = input.isPosted ?? (() => true)
   const statements = [...input.statements].sort((a, b) =>
     a.closingDate.localeCompare(b.closingDate),
   )
@@ -208,12 +216,20 @@ export function buildCardStatementLedger(input: {
     manualCents.set(entry, (manualCents.get(entry) ?? 0) - payment.amountCents)
     if (!link.partial) settledByHand.add(entry)
   }
+  // What each bill still owes, counting only payments already posted: a
+  // pending receipt is shown on its bill but does not push a posted one to
+  // the next cycle, since cash settlement will not count it either.
+  const postedCents = new Map<StatementLedgerEntry, number>()
+  const addPosted = (entry: StatementLedgerEntry, amountCents: number) =>
+    postedCents.set(entry, (postedCents.get(entry) ?? 0) + amountCents)
   const remainingCents = (entry: StatementLedgerEntry) =>
     settledByHand.has(entry)
       ? 0
       : Math.max(
           0,
-          entry.amountCents - entry.paidCents - (manualCents.get(entry) ?? 0),
+          entry.amountCents -
+            (postedCents.get(entry) ?? 0) -
+            (manualCents.get(entry) ?? 0),
         )
 
   const receipts: LedgerCardTransaction[] = []
@@ -241,15 +257,19 @@ export function buildCardStatementLedger(input: {
   // bill still open takes it, and whatever it leaves pays the current cycle.
   // A receipt before the due date of a bill outside the ledger (the one
   // closed before the copied history starts) paid that bill.
-  const placements = (
-    transaction: LedgerCardTransaction,
-  ): Array<{ entry: StatementLedgerEntry; amountCents: number }> => {
+  const neighbours = (transaction: LedgerCardTransaction) => {
     const home = statements.findIndex(
       (s) => transaction.postedAt <= s.closingDate,
     )
     const current = home === -1 ? undefined : entries[home]
     const previousIndex = (home === -1 ? entries.length : home) - 1
     const previous = previousIndex >= 0 ? entries[previousIndex] : undefined
+    return { current, previous }
+  }
+  const placements = (
+    transaction: LedgerCardTransaction,
+  ): Array<{ entry: StatementLedgerEntry; amountCents: number }> => {
+    const { current, previous } = neighbours(transaction)
     const linked = unpairedManual.find(
       ({ entry, payment }) =>
         (entry === previous || entry === current) &&
@@ -288,8 +308,9 @@ export function buildCardStatementLedger(input: {
     ]
   }
 
-  receipts.sort((a, b) => a.postedAt.localeCompare(b.postedAt))
-  for (const transaction of receipts) {
+  // Bank debits of placed bill payment groups; they never count twice.
+  const groupedBankIds = new Set<string>()
+  const settle = (transaction: LedgerCardTransaction) => {
     for (const { entry, amountCents: placedCents } of placements(transaction)) {
       const group = groupByTransaction.get(transaction.id)
       const groupBankIds =
@@ -306,6 +327,7 @@ export function buildCardStatementLedger(input: {
           (sum, id) => sum - (accountPaymentById.get(id)?.amountCents ?? 0),
           0,
         )
+      for (const id of bankIds) groupedBankIds.add(id)
       if (group && group.status === 'confirmed' && bankIds.length) {
         const amountCents = Math.max(0, transaction.amountCents - handCents)
         for (const id of bankIds)
@@ -318,6 +340,8 @@ export function buildCardStatementLedger(input: {
             evidenceIds: [transaction.id],
           })
         entry.paidCents += amountCents
+        if ([transaction.id, ...bankIds].some(isPosted))
+          addPosted(entry, amountCents)
       } else if (group && group.status === 'suggested' && bankIds.length) {
         for (const id of bankIds)
           entry.payments.push({
@@ -338,9 +362,93 @@ export function buildCardStatementLedger(input: {
           amountCents: placedCents,
         })
         entry.paidCents += placedCents
+        if (isPosted(transaction.id)) addPosted(entry, placedCents)
       }
     }
   }
+
+  // Order matters only for what each bill still owes when a receipt is
+  // placed: bill payment groups first, then bank debits identified by amount
+  // and date, then the card's own receipts, oldest first. A receipt that is
+  // the card side of an identified debit is its evidence and counts once.
+  receipts.sort((a, b) => a.postedAt.localeCompare(b.postedAt))
+  for (const transaction of receipts)
+    if (groupByTransaction.has(transaction.id)) settle(transaction)
+
+  // Bank-side evidence for a bill no group or link of the person settles.
+  const bankPayments = input.accountPayments.filter(
+    (payment) =>
+      looksLikeBankPayment(payment) &&
+      !explicitlyLinked.has(payment.id) &&
+      !manuallyLinked.has(payment.id) &&
+      !groupedBankIds.has(payment.id),
+  )
+  const handLinkedEntries = new Set(manualLinks.map(({ entry }) => entry))
+  const usedBankIds = new Set<string>()
+  const pairedReceiptIds = new Set<string>()
+  for (const entry of entries) {
+    if (
+      entry.payments.length ||
+      handLinkedEntries.has(entry) ||
+      entry.amountCents <= 0
+    )
+      continue
+    const exact = bankPayments.filter(
+      (payment) =>
+        !usedBankIds.has(payment.id) &&
+        -payment.amountCents === entry.amountCents &&
+        distance(payment.postedAt, entry.dueDate) <= INFERRED_WINDOW_DAYS,
+    )
+    if (exact.length !== 1) continue
+    const payment = exact[0]
+    const ambiguous = [
+      ...entries.filter((other) => other !== entry),
+      ...(input.otherCardStatements ?? []),
+    ].some(
+      (other) =>
+        other.amountCents === entry.amountCents &&
+        distance(payment.postedAt, other.dueDate) <= INFERRED_WINDOW_DAYS,
+    )
+    if (ambiguous) continue
+    usedBankIds.add(payment.id)
+    // The card's "Pagamento recebido" for this debit: same amount, within
+    // the payment window, posted where it could settle this bill.
+    const evidence = receipts.find((receipt) => {
+      if (groupByTransaction.has(receipt.id)) return false
+      if (pairedReceiptIds.has(receipt.id)) return false
+      if (receipt.amountCents !== -payment.amountCents) return false
+      if (distance(receipt.postedAt, payment.postedAt) > INFERRED_WINDOW_DAYS)
+        return false
+      const { current, previous } = neighbours(receipt)
+      if (current !== entry && previous !== entry) return false
+      // The card side of a debit the person linked by hand stays with it.
+      return !unpairedManual.some(
+        ({ payment: linked }) =>
+          -linked.amountCents === receipt.amountCents &&
+          distance(linked.postedAt, receipt.postedAt) <= INFERRED_WINDOW_DAYS,
+      )
+    })
+    if (evidence) pairedReceiptIds.add(evidence.id)
+    const evidenceIds = evidence ? [evidence.id] : []
+    entry.payments.push({
+      transactionId: payment.id,
+      kind: 'inferred',
+      groupId: null,
+      linkId: null,
+      amountCents: -payment.amountCents,
+      ...(evidence ? { evidenceIds } : {}),
+    })
+    entry.paidCents += -payment.amountCents
+    if ([payment.id, ...evidenceIds].some(isPosted))
+      addPosted(entry, -payment.amountCents)
+  }
+
+  for (const transaction of receipts)
+    if (
+      !groupByTransaction.has(transaction.id) &&
+      !pairedReceiptIds.has(transaction.id)
+    )
+      settle(transaction)
 
   for (const { link, entry, payment } of manualLinks) {
     entry.payments.push({
@@ -355,45 +463,6 @@ export function buildCardStatementLedger(input: {
     entry.paidCents += -payment.amountCents
   }
 
-  // Bank-side evidence when the card statement itself is silent.
-  const bankPayments = input.accountPayments.filter(
-    (payment) =>
-      looksLikeBankPayment(payment) &&
-      !explicitlyLinked.has(payment.id) &&
-      !manuallyLinked.has(payment.id),
-  )
-  const usedBankIds = new Set<string>()
-  for (const entry of entries) {
-    if (entry.payments.length || entry.amountCents <= 0) continue
-    const exact = bankPayments.filter(
-      (payment) =>
-        !usedBankIds.has(payment.id) &&
-        -payment.amountCents === entry.amountCents &&
-        distance(payment.postedAt, entry.dueDate) <= INFERRED_WINDOW_DAYS,
-    )
-    if (exact.length === 1) {
-      const payment = exact[0]
-      const ambiguous = [
-        ...entries.filter((other) => other !== entry),
-        ...(input.otherCardStatements ?? []),
-      ].some(
-        (other) =>
-          other.amountCents === entry.amountCents &&
-          distance(payment.postedAt, other.dueDate) <= INFERRED_WINDOW_DAYS,
-      )
-      if (!ambiguous) {
-        usedBankIds.add(payment.id)
-        entry.payments.push({
-          transactionId: payment.id,
-          kind: 'inferred',
-          groupId: null,
-          linkId: null,
-          amountCents: -payment.amountCents,
-        })
-        entry.paidCents += -payment.amountCents
-      }
-    }
-  }
   for (const entry of entries) {
     if (
       entry.paidCents >= entry.amountCents ||

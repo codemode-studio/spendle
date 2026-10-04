@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildCardStatementLedger } from './card-statement-ledger'
+import {
+  buildCardStatementLedger,
+  statementCashSettlement,
+} from './card-statement-ledger'
 
 const statements = [
   { closingDate: '2026-07-05', dueDate: '2026-07-15', amountCents: 100_000 },
@@ -508,5 +511,92 @@ describe('pagamento antecipado de fatura', () => {
       today: '2026-09-10',
     })
     expect(byDue(ledger)).toEqual({ '2026-07-15': 0, '2026-08-15': 0 })
+  })
+
+  const julyAugust = [
+    { closingDate: '2026-07-20', dueDate: '2026-07-27', amountCents: 100_000 },
+    { closingDate: '2026-08-20', dueDate: '2026-08-27', amountCents: 100_000 },
+  ]
+
+  it('identifica o débito da fatura anterior antes de antecipar a seguinte', () => {
+    const ledger = buildCardStatementLedger({
+      statements: julyAugust,
+      transactions: [receipt('advance', '2026-08-19', 20_000)],
+      accountPayments: [
+        {
+          id: 'bank',
+          postedAt: '2026-07-27',
+          amountCents: -100_000,
+          description: 'Pagamento fatura cartão',
+          categoryId: 'card_payment',
+        },
+      ],
+      reconciliations: [],
+      today: '2026-08-26',
+    })
+    expect(ledger[0]).toMatchObject({
+      paidCents: 100_000,
+      status: 'paid',
+      payments: [{ transactionId: 'bank', kind: 'inferred' }],
+    })
+    expect(ledger[1]).toMatchObject({
+      paidCents: 20_000,
+      payments: [{ transactionId: 'advance', kind: 'received' }],
+    })
+  })
+
+  it('conta uma vez o recebimento que é o lado do cartão do débito identificado', () => {
+    const ledger = buildCardStatementLedger({
+      statements: julyAugust,
+      transactions: [
+        receipt('july-receipt', '2026-07-27', 100_000),
+        receipt('advance', '2026-08-19', 20_000),
+      ],
+      accountPayments: [
+        {
+          id: 'bank',
+          postedAt: '2026-07-27',
+          amountCents: -100_000,
+          description: 'Pagamento fatura cartão',
+          categoryId: 'card_payment',
+        },
+      ],
+      reconciliations: [],
+      today: '2026-08-26',
+    })
+    expect(ledger[0]).toMatchObject({
+      paidCents: 100_000,
+      payments: [
+        {
+          transactionId: 'bank',
+          kind: 'inferred',
+          evidenceIds: ['july-receipt'],
+        },
+      ],
+    })
+    expect(ledger[1].paidCents).toBe(20_000)
+  })
+
+  it('não deixa um recebimento pendente desviar um pagamento lançado para a fatura seguinte', () => {
+    const isPosted = (id: string) => id !== 'pending'
+    const ledger = buildCardStatementLedger({
+      statements: julyAugust,
+      transactions: [
+        receipt('pending', '2026-07-23', 100_000),
+        receipt('posted', '2026-07-25', 20_000),
+      ],
+      accountPayments: [],
+      reconciliations: [],
+      isPosted,
+      today: '2026-08-26',
+    })
+    expect(ledger[0].payments.map((p) => p.transactionId)).toEqual([
+      'pending',
+      'posted',
+    ])
+    expect(ledger[1].payments).toEqual([])
+    expect(
+      ledger.map((entry) => statementCashSettlement(entry, isPosted).paidCents),
+    ).toEqual([20_000, 0])
   })
 })

@@ -658,7 +658,9 @@ export async function setReconciliationStatus(input: {
       .update(schema.reconciliationGroups)
       .set({
         status: input.status,
-        confirmationSource: input.status === 'confirmed' ? 'person' : null,
+        // Sending a group back to review is the person's decision too; the
+        // refresh does not rebuild or confirm it on its own.
+        confirmationSource: input.status === 'rejected' ? null : 'person',
       })
       .where(eq(schema.reconciliationGroups.id, input.groupId))
       .run()

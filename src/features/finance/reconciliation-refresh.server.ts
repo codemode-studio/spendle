@@ -200,12 +200,22 @@ export async function refreshReconciliationSuggestions() {
     )
   }
 
+  // Suggestions the refresh made are a projection too: they are rebuilt from
+  // the current facts on every run, so a pair that passes the automatic rule
+  // again is confirmed again and a pair that no longer matches goes away.
+  // Groups a person confirmed, rejected or sent back to review are kept.
+  const isProjectedSuggestion = (group: (typeof groups)[number]) =>
+    group.status === 'suggested' && group.confirmationSource !== 'person'
   const groupsById = new Map(groups.map((group) => [group.id, group]))
   const linkedTransactionIds = new Set(
     existingLinks
       .filter((link) => {
-        const status = groupsById.get(link.groupId)?.status
-        return status === 'suggested' || status === 'confirmed'
+        const group = groupsById.get(link.groupId)
+        return (
+          group &&
+          (group.status === 'confirmed' ||
+            (group.status === 'suggested' && !isProjectedSuggestion(group)))
+        )
       })
       .map((link) => link.transactionId),
   )
@@ -215,6 +225,85 @@ export async function refreshReconciliationSuggestions() {
       !linkedTransactionIds.has(transaction.id),
   )
   const suggestions = buildReconciliationSuggestions(candidates)
+  const suggestionByPairKey = new Map(
+    suggestions.map((suggestion) => [
+      [...suggestion.transactionIds].sort().join(':'),
+      suggestion,
+    ]),
+  )
+  const stale: string[] = []
+  const promoted: Array<{
+    group: (typeof groups)[number]
+    suggestion: (typeof suggestions)[number]
+  }> = []
+  for (const group of groups) {
+    if (!isProjectedSuggestion(group)) continue
+    const pairKey = existingLinks
+      .filter((link) => link.groupId === group.id)
+      .map((link) => link.transactionId)
+      .sort()
+      .join(':')
+    const suggestion = suggestionByPairKey.get(pairKey)
+    if (!suggestion || suggestion.type !== group.type) stale.push(group.id)
+    else if (suggestion.autoConfirm) promoted.push({ group, suggestion })
+  }
+  if (stale.length || promoted.length) {
+    db.transaction((transaction) => {
+      for (const groupId of stale) {
+        transaction
+          .delete(schema.reconciliationLinks)
+          .where(eq(schema.reconciliationLinks.groupId, groupId))
+          .run()
+        transaction
+          .delete(schema.reconciliationGroups)
+          .where(eq(schema.reconciliationGroups.id, groupId))
+          .run()
+      }
+      for (const { group, suggestion } of promoted) {
+        const categoryId = reconciliationCategory(group.type)
+        for (const link of existingLinks) {
+          if (link.groupId !== group.id) continue
+          transaction
+            .update(schema.reconciliationLinks)
+            .set({
+              previousCategoryId:
+                transactionCategoryById.get(link.transactionId) ?? null,
+            })
+            .where(eq(schema.reconciliationLinks.id, link.id))
+            .run()
+          if (categoryId)
+            transaction
+              .update(schema.transactions)
+              .set({ categoryId })
+              .where(eq(schema.transactions.id, link.transactionId))
+              .run()
+        }
+        transaction
+          .update(schema.reconciliationGroups)
+          .set({
+            status: 'confirmed',
+            confirmationSource: 'automatic',
+            confidence: suggestion.confidence,
+            reason: suggestion.reason,
+          })
+          .where(eq(schema.reconciliationGroups.id, group.id))
+          .run()
+        group.status = 'confirmed'
+        group.confirmationSource = 'automatic'
+      }
+    })
+    const staleIds = new Set(stale)
+    groups.splice(
+      0,
+      groups.length,
+      ...groups.filter((group) => !staleIds.has(group.id)),
+    )
+    existingLinks.splice(
+      0,
+      existingLinks.length,
+      ...existingLinks.filter((link) => !staleIds.has(link.groupId)),
+    )
+  }
   const rejectedPairKeys = new Set(
     groups
       .filter((group) => group.status === 'rejected' && group.pairKey)

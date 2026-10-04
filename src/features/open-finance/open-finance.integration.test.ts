@@ -2184,4 +2184,125 @@ describe('Open Finance card statement settlement', () => {
         ),
     ).toHaveLength(3)
   })
+
+  it('confirms a bank and card payment pair again when the receipt category returns', async () => {
+    const gateway = new FakePluggyGateway()
+    gateway.accounts = [account('BANK'), account('CREDIT')]
+    const cardRows = [
+      providerTransaction({
+        id: 'august',
+        accountId: 'provider-card',
+        date: new Date('2026-08-05T15:00:00Z'),
+        description: 'Loja agosto',
+        amount: 1000,
+        category: 'Shopping',
+      }),
+      providerTransaction({
+        id: 'card-credit',
+        accountId: 'provider-card',
+        date: new Date('2026-08-25T15:00:00Z'),
+        description: 'Pagamento efetuado',
+        type: 'CREDIT',
+        amount: -1000,
+        category: 'Credit card payment',
+      }),
+    ]
+    gateway.transactions.set('provider-card', cardRows)
+    gateway.transactions.set('provider-bank', [
+      providerTransaction({
+        id: 'bank-debit',
+        accountId: 'provider-bank',
+        date: new Date('2026-08-25T15:00:00Z'),
+        description: 'Pagamento fatura cartão',
+        amount: -1000,
+        category: 'Credit card payment',
+      }),
+    ])
+    const connectionId = await registeredConnection(database, gateway)
+    await mapPluggyAccount(
+      {
+        providerAccountId: 'provider-bank',
+        newTarget: {
+          type: 'account',
+          name: 'Conta Pluggy',
+          kind: 'checking',
+          purpose: 'operating',
+        },
+      },
+      gateway,
+      new Date('2026-08-26T15:00:00Z'),
+    )
+    const mapped = await mapPluggyAccount(
+      {
+        providerAccountId: 'provider-card',
+        newTarget: {
+          type: 'card',
+          name: 'Cartão revisão',
+          limitCents: 500_000,
+          closingDay: 20,
+          dueDay: 27,
+        },
+      },
+      gateway,
+      new Date('2026-08-26T15:00:00Z'),
+    )
+    const snapshot = async () => {
+      const finance = await getFinanceSnapshot()
+      const card = finance.cards.find((row) => row.id === mapped.creditCardId)!
+      return {
+        august: card.statements.find((row) => row.dueDate === '2026-08-27'),
+        scheduled: finance.cashProjection.scheduled
+          .filter((event) => event.id.startsWith(`${card.id}-`))
+          .filter((event) => event.date === '2026-08-27')
+          .map(({ amountCents }) => amountCents),
+      }
+    }
+    const settled = { paidCents: 100_000, status: 'paid' }
+    expect((await snapshot()).august).toMatchObject(settled)
+
+    const setReceiptCategory = (category: string) =>
+      gateway.transactions.set(
+        'provider-card',
+        cardRows.map((row) =>
+          row.id === 'card-credit' ? { ...row, category } : row,
+        ),
+      )
+    setReceiptCategory('Shopping')
+    await syncPluggyConnection({ connectionId }, gateway)
+    const groupStates = async () =>
+      (await database.db.select().from(database.schema.reconciliationGroups))
+        .map(({ status, confirmationSource }) => ({
+          status,
+          confirmationSource,
+        }))
+    expect(await groupStates()).toEqual([
+      { status: 'suggested', confirmationSource: null },
+    ])
+
+    setReceiptCategory('Credit card payment')
+    await syncPluggyConnection({ connectionId }, gateway)
+    expect(await snapshot()).toMatchObject({ august: settled, scheduled: [] })
+    await syncPluggyConnection({ connectionId }, gateway)
+    expect(await snapshot()).toMatchObject({ august: settled, scheduled: [] })
+    expect(await groupStates()).toEqual([
+      { status: 'confirmed', confirmationSource: 'automatic' },
+    ])
+
+    // A person sending the pair back to review, or rejecting it, keeps the
+    // last word over the automatic rule.
+    const [group] = await database.db
+      .select()
+      .from(database.schema.reconciliationGroups)
+    await setReconciliationStatus({ groupId: group.id, status: 'suggested' })
+    await syncPluggyConnection({ connectionId }, gateway)
+    await refreshReconciliationSuggestions()
+    expect(await groupStates()).toEqual([
+      { status: 'suggested', confirmationSource: 'person' },
+    ])
+    await setReconciliationStatus({ groupId: group.id, status: 'rejected' })
+    await refreshReconciliationSuggestions()
+    expect(await groupStates()).toEqual([
+      { status: 'rejected', confirmationSource: null },
+    ])
+  })
 })

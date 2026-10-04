@@ -629,8 +629,16 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
           paymentIds,
         }
       })
+      // Only payments already posted settle the projected cash: the bank
+      // debit or the card's own received payment for it, counted once. The
+      // ledger uses the same test to decide what a bill still owes.
+      const isPosted = (transactionId: string) => {
+        const row = transactionById.get(transactionId)
+        return row?.status === 'confirmed' && row.postedAt <= referenceDate
+      }
       const ledger = buildCardStatementLedger({
         statements: statementSummary.statements,
+        isPosted,
         transactions: transactionRows
           .filter((t) => t.creditCardId === card.id && t.status !== 'excluded')
           .map(withProviderCategory),
@@ -745,16 +753,9 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
             const entry = ledger.find(
               (item) => item.dueDate === statement.dueDate,
             )
-            // Only payments already posted settle the projected cash: the bank
-            // debit or the card's own received payment for it, counted once.
-            // With neither posted, the debit stays scheduled.
+            // With neither side of a payment posted, the debit stays scheduled.
             const settlement = entry
-              ? statementCashSettlement(entry, (transactionId) => {
-                  const row = transactionById.get(transactionId)
-                  return (
-                    row?.status === 'confirmed' && row.postedAt <= referenceDate
-                  )
-                })
+              ? statementCashSettlement(entry, isPosted)
               : { paidCents: 0, paid: false }
             return { ...statement, ...settlement }
           }),
