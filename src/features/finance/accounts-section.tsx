@@ -336,7 +336,7 @@ function AccountStatus({ account }: { account: AccountStatusSnapshot }) {
   )
 }
 
-function AccountFormFields({
+export function AccountFormFields({
   scopes,
   account,
 }: {
@@ -344,6 +344,10 @@ function AccountFormFields({
   account?: AccountFormSnapshot
 }) {
   const prefix = account ? `account-${account.id}` : 'account-new'
+  const [kind, setKind] = useState(account?.kind ?? 'checking')
+  const [purpose, setPurpose] = useState(account?.purpose ?? 'operating')
+  // A brokerage account is always an investment, so its purpose is fixed.
+  const brokerage = kind === 'investment'
   return (
     <FieldGroup className="grid gap-4 sm:grid-cols-2">
       <Field>
@@ -388,7 +392,8 @@ function AccountFormFields({
           id={`${prefix}-kind`}
           name="kind"
           className="w-full"
-          defaultValue={account?.kind}
+          value={kind}
+          onChange={(event) => setKind(event.target.value as typeof kind)}
         >
           <option value="checking">Conta corrente</option>
           <option value="savings">Poupança</option>
@@ -402,7 +407,9 @@ function AccountFormFields({
           id={`${prefix}-purpose`}
           name="purpose"
           className="w-full"
-          defaultValue={account?.purpose ?? 'operating'}
+          value={brokerage ? 'investment' : purpose}
+          onChange={(event) => setPurpose(event.target.value as typeof purpose)}
+          disabled={brokerage}
         >
           <option value="operating">Uso cotidiano</option>
           <option value="reserve">Reserva</option>

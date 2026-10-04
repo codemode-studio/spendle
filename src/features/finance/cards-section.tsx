@@ -27,6 +27,7 @@ import {
   FieldLabel,
 } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
+import { readCardForm } from '#/features/finance/card-form'
 import { NativeSelect } from '#/components/ui/native-select'
 import {
   Table,
@@ -45,8 +46,6 @@ import {
   currencyOptions,
   formatCurrency,
   formatMinorUnitsForInput,
-  parseCurrency,
-  toMinorUnits as toCents,
 } from '#/domain/currency'
 import { formatInstrumentName } from '#/domain/finance'
 import { formatMonthLong, formatShortDate as formatDate } from '#/domain/period'
@@ -519,24 +518,8 @@ function CardFormFields({
           min="1"
           max="31"
           defaultValue={card ? (card.dueDay ?? '') : 10}
-          required
         />
       </Field>
     </FieldGroup>
   )
-}
-
-function readCardForm(form: FormData) {
-  const lastFour = String(form.get('lastFour') || '')
-  const currency = parseCurrency(String(form.get('currency')))
-  return {
-    name: String(form.get('name')),
-    institutionName: String(form.get('institutionName')),
-    ownershipScopeId: String(form.get('ownershipScopeId')),
-    currency,
-    lastFour: lastFour || undefined,
-    limitCents: toCents(String(form.get('limit')), currency),
-    closingDay: Number(form.get('closingDay')),
-    dueDay: Number(form.get('dueDay')),
-  }
 }
