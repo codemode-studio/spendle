@@ -1,0 +1,27 @@
+{
+  "name": "@spendle/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/bin.ts",
+    "start": "node src/bin.ts",
+    "typecheck": "tsc --noEmit && effect-language-service diagnostics --project tsconfig.json --strict --format text",
+    "test": "vitest run",
+    "verify": "pnpm typecheck && pnpm test"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/language-service": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.2",
+    "vitest": "^5.0.3"
+  },
+  "engines": {
+    "node": ">=22.22.0"
+  }
+}

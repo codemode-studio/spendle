@@ -1,0 +1,55 @@
+# ADR 003: backend V2 em Effect
+
+Decisão de 04/10/2026, em implementação por PRs empilhados.
+
+## Problema
+
+Um assistente financeiro só é útil se os dados forem exatos. O backend V1 cresceu em módulos que recalculam tudo de forma síncrona: cerca de 20 pontos reexecutam reconciliação e recorrências sobre todas as transações dentro da requisição. Importação, sincronização com a Pluggy e fechamento de mês encadeiam etapas sem registro durável do que falta. Transações vindas da Pluggy não usam a base de conhecimento. A separação entre decisão humana e inferência depende só de convenção.
+
+## Decisão
+
+Um backend novo em `packages/server`, escrito em Effect 4 com `effect/sql` sobre `node:sqlite` (`@effect/sql-sqlite-node`), com banco próprio em `data/v2/`. O V1 continua funcionando até a troca. Não há migração de esquema do V1; dados do V1 entram depois por importação explícita de decisões humanas e reprocessamento das fontes.
+
+O foco inicial é Open Finance e importação manual, com reconciliação como diferencial do produto.
+
+## Modelo
+
+| Camada    | Conteúdo                                                                                   | Regra                                       |
+| --------- | ------------------------------------------------------------------------------------------ | ------------------------------------------- |
+| Fatos     | Observações de banco e arquivo: transações, saldos, faturas, com payload e proveniência    | Imutáveis; uma alteração é nova versão      |
+| Decisões  | Escolhas da pessoa: categoria, vínculo confirmado ou rejeitado, correção, exclusão         | Duráveis; só a pessoa cria ou desfaz        |
+| Projeções | Lançamentos canônicos, vínculos sugeridos, categorias inferidas, cobertura, prova de saldo | Reconstruíveis a partir de fatos e decisões |
+
+Um registro de eventos de domínio dispara reatores (resolução, conciliação, categorização, verificação de saldo) em filas drenáveis. Melhorar um algoritmo significa reprocessar o histórico, não migrar dados à mão.
+
+## Reconciliação
+
+- **Resolução de entidades:** a mesma movimentação vista pela Pluggy e por um OFX vira um lançamento só, com as duas observações como evidência. Pendente que vira postada atualiza o mesmo lançamento.
+- **Prova de saldo:** `saldo(t1) = saldo(t0) + movimentos postados em (t0, t1]` entre checkpoints compatíveis. Diferença diferente de zero é uma lacuna visível com ação sugerida, nunca liberada por confirmação.
+- **Vínculos:** transferência entre contas da mesma pessoa, pagamento de fatura (débito na conta ↔ crédito no cartão e ciclo quitado), estorno, parcelamento e aplicação/resgate. Cada vínculo tem as duas pontas, pontuação e evidência; é sugerido, confirmado automaticamente quando inequívoco ou pela pessoa, e uma rejeição nunca é sugerida de novo.
+
+## Aprendizado de categorias
+
+Duas camadas, para que uma inferência errada nunca sobrescreva o que a pessoa disse:
+
+1. **Decisões:** o equivalente à `knowledge_base`, escrita só por decisão explícita, por um único módulo.
+2. **Inferências:** cada sugestão guarda origem (regra, memória de comerciante, modelo), versão e confiança. Acima do limiar avaliado, é aplicada e pode ser desfeita; abaixo, vai para revisão. Confirmar ou corrigir cria uma decisão.
+
+O classificador por modelo usa escolha tipada com probabilidade (avaliar TypeSafe/Jev contra os dados reais antes de adotar).
+
+## PRs empilhados
+
+1. Fundação: pacote, runtime, configuração, SQLite e migrações, testes, documentação para agentes
+2. Registro de eventos e reatores drenáveis
+3. Núcleo do razão: instituições, contas, cartões, observações, lançamentos, checkpoints
+4. Ingestão Pluggy: conexão, webhook, sincronização com janela de 90 dias, saldos
+5. Importação manual: OFX e CSV, depois PDF
+6. Resolução de entidades e prova de saldo
+7. Reconciliação: transferências, faturas, estornos, parcelamentos
+8. Aprendizado de categorias
+9. API para o app web e troca do V1
+
+## Em aberto
+
+- Autenticação: o V1 não tem; definir antes de expor a API fora da rede local.
+- Importação dos dados do V1: quais decisões humanas e fontes trazer, e como validar a equivalência.

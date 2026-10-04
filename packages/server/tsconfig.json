@@ -1,0 +1,63 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2024"],
+    "types": ["node"],
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "useDefineForClassFields": true,
+    "skipLibCheck": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "namespaceImportPackages": [
+          "effect",
+          "@effect/platform-node",
+          "@effect/sql-sqlite-node"
+        ],
+        "diagnosticSeverity": {
+          "importFromBarrel": "error",
+          "anyUnknownInErrorContext": "error",
+          "unsafeEffectTypeAssertion": "error",
+          "instanceOfSchema": "error",
+          "deterministicKeys": "error",
+          "missingEffectServiceDependency": "error",
+          "leakingRequirements": "error",
+          "globalErrorInEffectCatch": "error",
+          "globalErrorInEffectFailure": "error",
+          "unknownInEffectCatch": "error",
+          "preferSchemaOverJson": "error",
+          "schemaSyncInEffect": "error",
+          "cryptoRandomUUID": "error",
+          "cryptoRandomUUIDInEffect": "error",
+          "nodeBuiltinImport": "error",
+          "globalDate": "error",
+          "globalDateInEffect": "error",
+          "globalConsole": "error",
+          "globalConsoleInEffect": "error",
+          "globalRandom": "error",
+          "globalRandomInEffect": "error",
+          "globalTimers": "error",
+          "globalTimersInEffect": "error",
+          "globalFetch": "error",
+          "globalFetchInEffect": "error",
+          "strictEffectProvide": "off",
+          "strictBooleanExpressions": "off",
+          "lazyEffect": "off",
+          "schemaNumber": "off"
+        }
+      }
+    ]
+  },
+  "include": ["src", "vitest.config.ts"]
+}
