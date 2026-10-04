@@ -204,6 +204,9 @@ const businessWords = new Set([
   'distribuidora',
 ])
 
+// A corporation's suffix: `SA`, `S.A.`, `S/A`.
+const corporation = /\bs\s?[./]?\s?a\b/
+
 // Wording that says both sides belong to the same person.
 const ownAccountWording =
   /\b(mesma titularidade|mesmo titular|entre contas|conta propria|contas proprias)\b/
@@ -302,10 +305,17 @@ const counterpartEvidence = (
   const isOwner = (name: ReadonlySet<string>) =>
     owners.every((owner) => owner.size > 0 && within(name, owner))
   // Read from the folded text itself: shared word filters drop `ltda`.
-  const namesBusiness = (entry: MatchableEntry) =>
-    foldDescription(entry.description)
-      .split(/[^a-z0-9]+/)
-      .some((word) => businessWords.has(word) && !institutions.has(word))
+  const namesBusiness = (entry: MatchableEntry) => {
+    const text = foldDescription(entry.description)
+    return (
+      text
+        .split(/[^a-z0-9]+/)
+        .some((word) => businessWords.has(word) && !institutions.has(word)) ||
+      // `S.A.` beside a bank's own name is left to the institution evidence.
+      (corporation.test(text) &&
+        !intersects(nameWords(entry.description), institutions))
+    )
+  }
   const thirdParty =
     [out, into].some((name) => name.size > 0 && !isOwner(name)) ||
     [outflow, inflow].some(namesBusiness)
