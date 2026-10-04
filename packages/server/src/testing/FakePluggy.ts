@@ -7,6 +7,9 @@ import * as Option from 'effect/Option'
 import * as Ref from 'effect/Ref'
 import * as TestClock from 'effect/testing/TestClock'
 
+import { Categories } from '../categories/Categories.ts'
+import * as Categorizer from '../categories/Categorizer.ts'
+import { KnowledgeStore } from '../categories/KnowledgeStore.ts'
 import * as Reactor from '../events/Reactor.ts'
 import { Imports } from '../imports/Imports.ts'
 import * as Entries from '../ledger/Entries.ts'
@@ -256,6 +259,17 @@ export const openFinanceTest = (
         Layer.provideMerge(LedgerTest),
       )
     }),
+  )
+
+/** `openFinanceTest` with category learning and its reactor. */
+export const categoriesTest = (
+  webhook: Option.Option<WebhookSettings> = Option.none(),
+) =>
+  Categorizer.reactor.pipe(
+    Layer.provideMerge(Categorizer.Categorizer.layer),
+    Layer.provideMerge(KnowledgeStore.layer),
+    Layer.provideMerge(Categories.layer),
+    Layer.provideMerge(openFinanceTest(webhook)),
   )
 
 /** Connects item `item-1` with the given Pluggy data, as the widget flow would, on 2026-10-04. */

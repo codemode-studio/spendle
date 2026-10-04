@@ -1,0 +1,432 @@
+import { assert, describe, it } from '@effect/vitest'
+import * as Effect from 'effect/Effect'
+import * as Ref from 'effect/Ref'
+
+import { Imports } from '../imports/Imports.ts'
+import { Accounts } from '../ledger/Accounts.ts'
+import { Entries } from '../ledger/Entries.ts'
+import { Observations } from '../ledger/Observations.ts'
+import type { PluggyTransaction } from '../openfinance/PluggyApi.ts'
+import {
+  bank,
+  categoriesTest,
+  connect,
+  drain,
+  tx,
+} from '../testing/FakePluggy.ts'
+import { Categorizer } from './Categorizer.ts'
+import { KnowledgeStore } from './KnowledgeStore.ts'
+
+const ofx = (lines: string) =>
+  new TextEncoder().encode(`OFXHEADER:100
+CHARSET:UTF-8
+
+<OFX><MSGS><STMTRS><CURDEF>BRL<BANKTRANLIST>${lines}</BANKTRANLIST></STMTRS></MSGS></OFX>`)
+
+const line = (fitid: string, date: string, amount: string, memo: string) =>
+  `<STMTTRN><DTPOSTED>${date}<TRNAMT>${amount}<FITID>${fitid}<MEMO>${memo}</STMTTRN>`
+
+// One checking account with a statement already imported.
+const statement = (lines: string) =>
+  Effect.gen(function* () {
+    const accounts = yield* Accounts
+    const owner = yield* accounts.createOwner({
+      name: 'Donald',
+      kind: 'person',
+    })
+    const account = yield* accounts.open({
+      ownerId: owner.id,
+      institutionName: 'Nubank',
+      name: 'Nubank',
+      kind: 'checking',
+      purpose: 'operating',
+      currency: 'BRL',
+    })
+    if (lines !== '')
+      yield* (yield* Imports).importFile({
+        accountId: account.id,
+        fileName: 'nubank.ofx',
+        bytes: ofx(lines),
+      })
+    yield* drain
+    const entries = yield* Entries
+    const categorizer = yield* Categorizer
+    // Entry ids by description and date, as the person would find them.
+    const entry = (description: string, bookedOn?: string) =>
+      Effect.map(
+        entries.entries(account.id),
+        (all) =>
+          all.find(
+            (found) =>
+              found.description === description &&
+              (bookedOn === undefined || found.bookedOn === bookedOn),
+          )!.id,
+      )
+    const inferenceOf = (entryId: string) =>
+      Effect.map(categorizer.explain(entryId), (inference) => ({
+        categoryId: inference.categoryId,
+        origin: inference.origin,
+        status: inference.status,
+        confidence: inference.confidence,
+      }))
+    return {
+      account,
+      categorizer,
+      store: yield* KnowledgeStore,
+      entry,
+      inferenceOf,
+    }
+  })
+
+describe('Categorizer', () => {
+  it.effect(
+    'keeps a decision on a pending Pluggy entry once it posts and merges with a statement line',
+    () =>
+      Effect.gen(function* () {
+        const purchase = (fields: Partial<PluggyTransaction> = {}) =>
+          tx('padaria', '2026-10-01', {
+            description: 'PADARIA SAO JOSE',
+            amount: 25.5,
+            ...fields,
+          })
+        const { openFinance, connectionId, state } = yield* connect({
+          accounts: [bank],
+          transactions: {
+            'provider-bank': [purchase({ status: 'PENDING' })],
+          },
+        })
+        const account = yield* openFinance.linkAccount({
+          providerAccountId: 'provider-bank',
+          target: { kind: 'checking', purpose: 'operating' },
+          historyMonths: 3,
+        })
+        yield* drain
+        const entries = yield* Entries
+        const categorizer = yield* Categorizer
+        const [pending] = yield* entries.entries(account.id)
+        assert.strictEqual(pending!.status, 'pending')
+        yield* categorizer.decide(pending!.id, 'groceries')
+
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: { 'provider-bank': [purchase()] },
+        }))
+        yield* openFinance.requestSync({ connectionId })
+        yield* drain
+        yield* (yield* Imports).importFile({
+          accountId: account.id,
+          fileName: 'extrato.ofx',
+          bytes: ofx(
+            line('f1', '20261001', '-25.50', 'Compra PADARIA SAO JOSE'),
+          ),
+        })
+        yield* drain
+
+        const [merged, ...others] = yield* entries.entries(account.id)
+        assert.deepStrictEqual(others, [])
+        assert.deepInclude(merged, { status: 'posted', sources: 2 })
+        const inference = yield* categorizer.explain(merged!.id)
+        assert.deepInclude(inference, {
+          categoryId: 'groceries',
+          origin: 'decision',
+          status: 'applied',
+          confidence: 100,
+        })
+      }).pipe(Effect.provide(categoriesTest())),
+  )
+
+  it.effect(
+    'learns from a decision and applies it to the same merchant’s other movements',
+    () =>
+      Effect.gen(function* () {
+        const { categorizer, store, entry, inferenceOf } = yield* statement(
+          line('a', '20260901', '-23.90', 'Uber *Trip 0109') +
+            line('b', '20260915', '-31.10', 'Uber *Trip 1509') +
+            line('c', '20260920', '-12.00', 'Padaria Real'),
+        )
+        const first = yield* entry('Uber *Trip 0109')
+        const second = yield* entry('Uber *Trip 1509')
+        assert.strictEqual((yield* inferenceOf(second)).status, 'none')
+
+        yield* categorizer.decide(first, 'transport')
+        yield* drain
+
+        assert.deepStrictEqual(yield* inferenceOf(second), {
+          categoryId: 'transport',
+          origin: 'pattern',
+          status: 'applied',
+          confidence: 98,
+        })
+        assert.strictEqual(
+          (yield* inferenceOf(yield* entry('Padaria Real'))).status,
+          'none',
+        )
+        const [pattern] = yield* store.list
+        assert.deepInclude(pattern, {
+          pattern: 'uber trip',
+          direction: 'expense',
+          categoryId: 'transport',
+          categoryName: 'Transporte',
+          confirmations: 1,
+        })
+      }).pipe(Effect.provide(categoriesTest())),
+  )
+
+  it.effect(
+    'applies a store edit to history, previewed exactly, and leaves decided entries alone',
+    () =>
+      Effect.gen(function* () {
+        const { categorizer, store, entry, inferenceOf } = yield* statement(
+          line('a', '20260901', '-80.00', 'Restaurante Sabor') +
+            line('b', '20260910', '-95.00', 'Restaurante Sabor') +
+            line('c', '20260920', '-60.00', 'Restaurante Sabor'),
+        )
+        const decided = yield* entry('Restaurante Sabor', '2026-09-01')
+        yield* categorizer.decide(decided, 'restaurants')
+        yield* drain
+        const [pattern] = yield* store.list
+
+        const preview = yield* categorizer.previewStoreEdit({
+          _tag: 'Recategorize',
+          id: pattern!.id,
+          categoryId: 'delivery',
+        })
+        assert.sameMembers(
+          preview.map((change) => change.entryId),
+          [
+            yield* entry('Restaurante Sabor', '2026-09-10'),
+            yield* entry('Restaurante Sabor', '2026-09-20'),
+          ],
+        )
+        assert.deepStrictEqual(
+          preview.map((change) => [
+            change.before.categoryId,
+            change.after.categoryId,
+          ]),
+          [
+            ['restaurants', 'delivery'],
+            ['restaurants', 'delivery'],
+          ],
+        )
+
+        yield* store.recategorize(pattern!.id, 'delivery')
+        yield* drain
+        for (const change of preview) {
+          const stored = yield* categorizer.explain(change.entryId)
+          const { candidates, entryId, ...expected } = change.after
+          assert.deepInclude(stored, { ...expected, entryId })
+          assert.deepStrictEqual(stored.candidates, candidates)
+        }
+        assert.deepInclude(yield* inferenceOf(decided), {
+          categoryId: 'restaurants',
+          origin: 'decision',
+        })
+        assert.deepInclude((yield* store.list)[0], {
+          categoryId: 'delivery',
+          confirmations: 1,
+          corrections: 1,
+        })
+      }).pipe(Effect.provide(categoriesTest())),
+  )
+
+  it.effect('sends a merchant to review when its patterns disagree', () =>
+    Effect.gen(function* () {
+      const { categorizer, entry, inferenceOf } = yield* statement(
+        line('a', '20260901', '-300.00', 'Pix enviado JOAO DA SILVA') +
+          line('b', '20260905', '-150.00', 'JOAO DA SILVA') +
+          line('c', '20260920', '-300.00', 'Pix enviado JOAO DA SILVA'),
+      )
+      yield* categorizer.decide(
+        yield* entry('Pix enviado JOAO DA SILVA', '2026-09-01'),
+        'family',
+      )
+      yield* categorizer.decide(yield* entry('JOAO DA SILVA'), 'maintenance')
+      yield* drain
+      const later = yield* entry('Pix enviado JOAO DA SILVA', '2026-09-20')
+      assert.deepStrictEqual(yield* inferenceOf(later), {
+        categoryId: 'family',
+        origin: 'pattern',
+        status: 'review',
+        confidence: 98,
+      })
+      const explained = yield* categorizer.explain(later)
+      assert.include(explained.reasons, 'conflicting_patterns')
+      assert.deepStrictEqual(
+        explained.candidates.map((candidate) => candidate.categoryId),
+        ['maintenance'],
+      )
+      assert.deepStrictEqual(
+        (yield* categorizer.reviewQueue).map((item) => item.inference.entryId),
+        [later],
+      )
+    }).pipe(Effect.provide(categoriesTest())),
+  )
+
+  it.effect(
+    'sends a pattern corrected more often than confirmed to review',
+    () =>
+      Effect.gen(function* () {
+        const { categorizer, entry, inferenceOf } = yield* statement(
+          line('a', '20260901', '-40.00', 'Loja Alfa') +
+            line('b', '20260905', '-41.00', 'Loja Alfa') +
+            line('c', '20260910', '-42.00', 'Loja Alfa') +
+            line('d', '20260920', '-43.00', 'Loja Alfa'),
+        )
+        const on = (day: string) => entry('Loja Alfa', `2026-09-${day}`)
+        yield* categorizer.decide(yield* on('01'), 'shopping')
+        yield* categorizer.decide(yield* on('05'), 'pets')
+        yield* categorizer.decide(yield* on('10'), 'shopping')
+        yield* drain
+        assert.deepInclude(yield* inferenceOf(yield* on('20')), {
+          categoryId: 'shopping',
+          status: 'review',
+        })
+      }).pipe(Effect.provide(categoriesTest())),
+  )
+
+  it.effect('sends both parts of a decided entry that split to review', () =>
+    Effect.gen(function* () {
+      const { account, categorizer, inferenceOf } = yield* statement('')
+      const observations = yield* Observations
+      // Two feeds report the same purchase, then one corrects its date.
+      const feed = (externalRef: string) =>
+        Effect.gen(function* () {
+          const source = yield* observations.registerSource({
+            kind: 'manual',
+            externalRef,
+            label: externalRef,
+          })
+          return (bookedOn: string) =>
+            Effect.andThen(
+              observations.recordTransactions({
+                sourceId: source.id,
+                accountId: account.id,
+                transactions: [
+                  {
+                    externalId: 'x1',
+                    bookedOn,
+                    amountCents: -12000,
+                    currency: 'BRL',
+                    description: 'Farmacia Central',
+                    status: 'posted',
+                    raw: null,
+                  },
+                ],
+              }),
+              drain,
+            )
+        })
+      const first = yield* feed('one')
+      const second = yield* feed('two')
+      yield* first('2026-09-10')
+      yield* second('2026-09-11')
+      const entries = yield* Entries
+      const [whole, ...none] = yield* entries.entries(account.id)
+      assert.deepStrictEqual(none, [])
+      yield* categorizer.decide(whole!.id, 'health')
+
+      yield* second('2026-09-25')
+      const parts = yield* entries.entries(account.id)
+      assert.strictEqual(parts.length, 2)
+      for (const part of parts) {
+        assert.deepStrictEqual(yield* inferenceOf(part.id), {
+          categoryId: 'health',
+          origin: 'decision',
+          status: 'review',
+          confidence: 70,
+        })
+        assert.deepStrictEqual((yield* categorizer.explain(part.id)).reasons, [
+          'decision_split',
+        ])
+      }
+      // Confirming a part settles it alone.
+      yield* categorizer.confirm(parts[0]!.id)
+      assert.deepInclude(yield* inferenceOf(parts[0]!.id), {
+        status: 'applied',
+        confidence: 100,
+      })
+      assert.strictEqual((yield* inferenceOf(parts[1]!.id)).status, 'review')
+    }).pipe(Effect.provide(categoriesTest())),
+  )
+
+  it.effect(
+    'undoes a decision and refuses categories nobody assigns by hand',
+    () =>
+      Effect.gen(function* () {
+        const { categorizer, entry, inferenceOf } = yield* statement(
+          line('a', '20260901', '-19.90', 'Netflix.com'),
+        )
+        const id = yield* entry('Netflix.com')
+        const refused = yield* Effect.flip(categorizer.decide(id, 'transfer'))
+        assert.strictEqual(refused.message, 'category_not_assignable: transfer')
+        yield* categorizer.decide(id, 'uncategorized')
+        assert.deepInclude(yield* inferenceOf(id), {
+          categoryId: 'uncategorized',
+          status: 'applied',
+        })
+        yield* categorizer.undo(id)
+        assert.strictEqual((yield* inferenceOf(id)).status, 'none')
+      }).pipe(Effect.provide(categoriesTest())),
+  )
+
+  it.effect(
+    'suggests Pluggy’s category for review until the person maps it',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance } = yield* connect({
+          accounts: [bank],
+          transactions: {
+            'provider-bank': [
+              tx('market', '2026-10-01', {
+                description: 'SUPERMERCADO BOM PRECO',
+                category: 'Groceries',
+                categoryId: '10000000',
+              }),
+              tx('shop', '2026-10-02', {
+                description: 'LOJA QUALQUER',
+                category: 'Shopping',
+                categoryId: '08000000',
+              }),
+            ],
+          },
+        })
+        const account = yield* openFinance.linkAccount({
+          providerAccountId: 'provider-bank',
+          target: { kind: 'checking', purpose: 'operating' },
+          historyMonths: 3,
+        })
+        yield* drain
+        const categorizer = yield* Categorizer
+        const entries = yield* Entries
+        const idOf = (description: string) =>
+          Effect.map(
+            entries.entries(account.id),
+            (all) => all.find((entry) => entry.description === description)!.id,
+          )
+        const market = yield* idOf('SUPERMERCADO BOM PRECO')
+        assert.deepInclude(yield* categorizer.explain(market), {
+          categoryId: 'groceries',
+          origin: 'provider',
+          status: 'review',
+          confidence: 60,
+        })
+        assert.strictEqual(
+          (yield* categorizer.explain(yield* idOf('LOJA QUALQUER'))).status,
+          'none',
+        )
+
+        yield* (yield* KnowledgeStore).setProviderMapping(
+          'pluggy',
+          '10000000',
+          'groceries',
+        )
+        yield* drain
+        assert.deepInclude(yield* categorizer.explain(market), {
+          categoryId: 'groceries',
+          origin: 'provider',
+          status: 'applied',
+          confidence: 90,
+        })
+      }).pipe(Effect.provide(categoriesTest())),
+  )
+})
