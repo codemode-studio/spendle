@@ -12,6 +12,7 @@ import * as SqlSchema from 'effect/sql/SqlSchema'
 import { EventLog } from '../events/EventLog.ts'
 import * as Reactor from '../events/Reactor.ts'
 import { entriesResolved } from '../ledger/Entries.ts'
+import { relationsChanged } from '../reconciliation/Reconciliation.ts'
 import { categoryChanged, uncategorized } from './Categories.ts'
 import { followCategoryDecisions } from './FollowDecisions.ts'
 import { categoryStoreChanged, KnowledgeStore } from './KnowledgeStore.ts'
@@ -255,6 +256,22 @@ const make = Effect.gen(function* () {
     }),
     execute: () => sql`SELECT id, bucket, active, system FROM categories`,
   })
+  const findRelations = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Schema.Struct({
+      key: Schema.String,
+      kind: Schema.Literals(['internal_transfer', 'card_payment', 'refund']),
+      outflowEntryId: Schema.String,
+      inflowEntryId: Schema.String,
+      status: Schema.Literals(['suggested', 'confirmed', 'conflict']),
+      score: Schema.Int,
+    }),
+    execute: () => sql`
+      SELECT key, kind, outflow_entry_id AS outflowEntryId, inflow_entry_id AS inflowEntryId,
+        status, score
+      FROM relations ORDER BY key
+    `,
+  })
   const selectInferences = sql`
     SELECT entry_id AS entryId, category_id AS categoryId, origin, origin_ref AS originRef,
       policy_version AS policyVersion, confidence, status,
@@ -301,6 +318,7 @@ const make = Effect.gen(function* () {
     const { entries, decisions } = yield* followed
     const input: PolicyInput = {
       entries,
+      relations: yield* findRelations(undefined),
       decisions,
       store: yield* store.rows,
       categories: yield* findCategories(undefined),
@@ -450,7 +468,16 @@ const make = Effect.gen(function* () {
     yield* assignable(categoryId)
     const decided = yield* entry(entryId)
     const keys = yield* write(entryId, categoryId, options.origin)
-    if (options.learn && categoryId !== uncategorized)
+    // A decision a confirmed transfer or card payment shadows teaches
+    // nothing: the movement is the person's own money moving.
+    const shadowed = (yield* findRelations(undefined)).some(
+      (relation) =>
+        relation.kind !== 'refund' &&
+        relation.status === 'confirmed' &&
+        (relation.outflowEntryId === entryId ||
+          relation.inflowEntryId === entryId),
+    )
+    if (options.learn && categoryId !== uncategorized && !shadowed)
       yield* store.learn(decided, categoryId, options.origin)
     yield* log.append([
       {
@@ -655,7 +682,7 @@ export class Categorizer extends Context.Service<
 
 /**
  * Recategorizes whenever what the policy reads changes: an account's
- * entries, the account itself, the store or a category. A rebuild reads
+ * entries, the account itself, relations, the store or a category. A rebuild reads
  * current state, so events it already covers are skipped.
  */
 export const reactor = Reactor.layer({
@@ -663,6 +690,7 @@ export const reactor = Reactor.layer({
   types: [
     entriesResolved,
     'AccountUpdated',
+    relationsChanged,
     categoryStoreChanged,
     categoryChanged,
   ],

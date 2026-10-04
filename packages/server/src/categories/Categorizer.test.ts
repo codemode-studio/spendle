@@ -3,7 +3,7 @@ import * as Effect from 'effect/Effect'
 import * as Ref from 'effect/Ref'
 
 import { Imports } from '../imports/Imports.ts'
-import { Accounts } from '../ledger/Accounts.ts'
+import { Accounts, CardTerms } from '../ledger/Accounts.ts'
 import { Entries } from '../ledger/Entries.ts'
 import { Observations } from '../ledger/Observations.ts'
 import type { PluggyTransaction } from '../openfinance/PluggyApi.ts'
@@ -17,11 +17,11 @@ import {
 import { Categorizer } from './Categorizer.ts'
 import { KnowledgeStore } from './KnowledgeStore.ts'
 
-const ofx = (lines: string) =>
+const ofx = (lines: string, tag = 'STMTRS') =>
   new TextEncoder().encode(`OFXHEADER:100
 CHARSET:UTF-8
 
-<OFX><MSGS><STMTRS><CURDEF>BRL<BANKTRANLIST>${lines}</BANKTRANLIST></STMTRS></MSGS></OFX>`)
+<OFX><MSGS><${tag}><CURDEF>BRL<BANKTRANLIST>${lines}</BANKTRANLIST></${tag}></MSGS></OFX>`)
 
 const line = (fitid: string, date: string, amount: string, memo: string) =>
   `<STMTTRN><DTPOSTED>${date}<TRNAMT>${amount}<FITID>${fitid}<MEMO>${memo}</STMTTRN>`
@@ -427,6 +427,153 @@ describe('Categorizer', () => {
           status: 'applied',
           confidence: 90,
         })
+      }).pipe(Effect.provide(categoriesTest())),
+  )
+})
+
+// Donald's bank accounts and card, each with a statement imported.
+const ownAccounts = (files: {
+  readonly nubank: string
+  readonly inter?: string
+  readonly card?: string
+}) =>
+  Effect.gen(function* () {
+    const accounts = yield* Accounts
+    const imports = yield* Imports
+    const owner = yield* accounts.createOwner({
+      name: 'Donald Silveira',
+      kind: 'person',
+    })
+    const open = (name: string, card?: CardTerms) =>
+      accounts.open({
+        ownerId: owner.id,
+        institutionName: name,
+        name,
+        kind: card ? 'credit_card' : 'checking',
+        purpose: 'operating',
+        currency: 'BRL',
+        ...(card ? { card } : {}),
+      })
+    const nubank = yield* open('Nubank')
+    const inter = yield* open('Inter')
+    const card = yield* open(
+      'Nubank Cartão',
+      new CardTerms({
+        closingDay: 3,
+        dueDay: 10,
+        limitCents: null,
+        lastFour: null,
+      }),
+    )
+    for (const [account, lines, tag] of [
+      [nubank, files.nubank, 'STMTRS'],
+      [inter, files.inter ?? '', 'STMTRS'],
+      [card, files.card ?? '', 'CCSTMTRS'],
+    ] as const) {
+      if (lines !== '')
+        yield* imports.importFile({
+          accountId: account.id,
+          fileName: `${account.name}.ofx`,
+          bytes: ofx(lines, tag),
+        })
+    }
+    yield* drain
+    const entries = yield* Entries
+    const categorizer = yield* Categorizer
+    const entryId = (accountId: string, amountCents: number) =>
+      Effect.map(
+        entries.entries(accountId),
+        (found) => found.find((entry) => entry.amountCents === amountCents)!.id,
+      )
+    const outcome = (accountId: string, amountCents: number) =>
+      Effect.gen(function* () {
+        const inference = yield* categorizer.explain(
+          yield* entryId(accountId, amountCents),
+        )
+        return [
+          inference.categoryId,
+          inference.origin,
+          inference.status,
+          inference.excludedFromSpending,
+        ]
+      })
+    return { nubank, inter, card, categorizer, entryId, outcome }
+  })
+
+describe('Categorizer with reconciliation', () => {
+  it.effect(
+    'gives confirmed transfers and card payments system categories, out of spending',
+    () =>
+      Effect.gen(function* () {
+        const { nubank, inter, card, categorizer, entryId, outcome } =
+          yield* ownAccounts({
+            nubank:
+              line('n1', '20260910', '-500.00', 'Pix enviado Donald') +
+              line('n2', '20260912', '-1500.00', 'Pagamento fatura'),
+            inter: line('i1', '20260910', '500.00', 'Pix recebido Donald'),
+            card: line('c1', '20260914', '1500.00', 'Pagamento recebido'),
+          })
+        const transfer = ['transfer', 'reconciliation', 'applied', true]
+        const payment = ['card_payment', 'reconciliation', 'applied', true]
+        assert.deepStrictEqual(yield* outcome(nubank.id, -50000), transfer)
+        assert.deepStrictEqual(yield* outcome(inter.id, 50000), transfer)
+        assert.deepStrictEqual(yield* outcome(nubank.id, -150000), payment)
+        assert.deepStrictEqual(yield* outcome(card.id, 150000), payment)
+
+        // A decision on a transfer stays stored but does not apply.
+        const sent = yield* entryId(nubank.id, -50000)
+        yield* categorizer.decide(sent, 'family')
+        const explained = yield* categorizer.explain(sent)
+        assert.deepInclude(explained, {
+          categoryId: 'transfer',
+          origin: 'reconciliation',
+        })
+        assert.include(explained.reasons, 'decision_shadowed')
+        assert.deepStrictEqual(
+          explained.candidates.map((candidate) => [
+            candidate.origin,
+            candidate.categoryId,
+          ]),
+          [['decision', 'family']],
+        )
+      }).pipe(Effect.provide(categoriesTest())),
+  )
+
+  it.effect('sends a suggested transfer to review without applying it', () =>
+    Effect.gen(function* () {
+      const { nubank, outcome } = yield* ownAccounts({
+        nubank: line('n1', '20260910', '-500.00', 'Pix enviado Donald'),
+        inter:
+          line('i1', '20260910', '500.00', 'Pix recebido Donald') +
+          line('i2', '20260911', '500.00', 'Pix recebido Donald'),
+      })
+      const review = ['transfer', 'reconciliation', 'review', false]
+      assert.deepStrictEqual(yield* outcome(nubank.id, -50000), review)
+    }).pipe(Effect.provide(categoriesTest())),
+  )
+
+  it.effect(
+    'gives a refund its purchase’s category and learns nothing from it',
+    () =>
+      Effect.gen(function* () {
+        const { card, categorizer, entryId, outcome } = yield* ownAccounts({
+          nubank: line('n1', '20260901', '-10.00', 'Tarifa'),
+          card:
+            line('c2', '20260916', '-250.00', 'Amazon Marketplace') +
+            line('c3', '20260925', '250.00', 'Estorno Amazon Marketplace'),
+        })
+        yield* categorizer.decide(yield* entryId(card.id, -25000), 'shopping')
+        assert.deepStrictEqual(yield* outcome(card.id, 25000), [
+          'shopping',
+          'refund',
+          'applied',
+          false,
+        ])
+        const store = yield* (yield* KnowledgeStore).list
+        assert.deepStrictEqual(
+          store.map((row) => [row.pattern, row.direction]),
+          [['amazon marketplace', 'expense']],
+        )
       }).pipe(Effect.provide(categoriesTest())),
   )
 })

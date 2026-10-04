@@ -22,6 +22,8 @@ export const confidence = {
   providerMapping: 90,
   /** A decision about a whole entry that has since split, for each part. */
   splitDecision: 70,
+  /** A confirmed transfer or card payment. */
+  reconciliation: 100,
   providerBuiltIn: 60,
 } as const
 
@@ -80,8 +82,19 @@ export interface PolicyCategory {
   readonly system: boolean
 }
 
+/** A reconciliation relation between two entries. */
+export interface PolicyRelation {
+  readonly key: string
+  readonly kind: 'internal_transfer' | 'card_payment' | 'refund'
+  readonly outflowEntryId: string
+  readonly inflowEntryId: string
+  readonly status: 'suggested' | 'confirmed' | 'conflict'
+  readonly score: number
+}
+
 export interface PolicyInput {
   readonly entries: ReadonlyArray<PolicyEntry>
+  readonly relations: ReadonlyArray<PolicyRelation>
   readonly decisions: FollowedCategoryDecisions
   readonly store: ReadonlyArray<PatternRow>
   readonly categories: ReadonlyArray<PolicyCategory>
@@ -114,14 +127,21 @@ const infer = (
  * The category of every entry, from facts, the person's decisions and the
  * store; the first rule that applies wins:
  *
- * 1. The person's decision, applied.
- * 2. A decision about an entry that has since split: each part to review.
- * 3. The merchant's exact pattern, applied; to review when alternative
+ * 1. A confirmed transfer or card payment: reconciliation's system
+ *    category on both sides, applied and out of spending. A person's
+ *    decision on such an entry stays stored, shadowed.
+ * 2. The person's decision, applied.
+ * 3. A decision about an entry that has since split: each part to review.
+ * 4. A confirmed refund: the credit takes its purchase's category and
+ *    status, so it lowers that category's spending. Nothing is learned.
+ * 5. A suggested (or conflicting) transfer or card payment: the system
+ *    category, to review, never applied.
+ * 6. The merchant's exact pattern, applied; to review when alternative
  *    patterns disagree or the pattern is corrected more than confirmed.
- * 4. The longest prefix covering the merchant, applied.
- * 5. The person's mapping of the provider category, applied; otherwise a
+ * 7. The longest prefix covering the merchant, applied.
+ * 8. The person's mapping of the provider category, applied; otherwise a
  *    built-in mapping, to review.
- * 6. Nothing.
+ * 9. Nothing.
  *
  * Instalments match through `knowledgePattern`, which drops their suffix.
  */
@@ -157,6 +177,74 @@ export const categorize = (input: PolicyInput): ReadonlyArray<Inference> => {
       .filter((row) => row.kind === 'provider_category')
       .map((row) => [row.pattern, row]),
   )
+
+  const systemCategory = {
+    internal_transfer: 'transfer',
+    card_payment: 'card_payment',
+  } as const
+  const relationsOf = new Map<string, Array<PolicyRelation>>()
+  for (const relation of input.relations) {
+    for (const entryId of [relation.outflowEntryId, relation.inflowEntryId]) {
+      const list = relationsOf.get(entryId) ?? []
+      list.push(relation)
+      relationsOf.set(entryId, list)
+    }
+  }
+
+  const reconciled = (
+    entry: PolicyEntry,
+    confirmed: boolean,
+  ): ReadonlyArray<Proposal> =>
+    (relationsOf.get(entry.id) ?? []).flatMap(
+      (relation): ReadonlyArray<Proposal> => {
+        if (relation.kind === 'refund') return []
+        if ((relation.status === 'confirmed') !== confirmed) return []
+        return [
+          {
+            categoryId: systemCategory[relation.kind],
+            origin: 'reconciliation',
+            originRef: relation.key,
+            confidence: confirmed ? confidence.reconciliation : relation.score,
+            status: confirmed ? 'applied' : 'review',
+            excludedFromSpending: confirmed,
+            reasons: [
+              relation.kind,
+              relation.status,
+              ...(confirmed && input.decisions.byEntry.has(entry.id)
+                ? ['decision_shadowed']
+                : []),
+            ],
+          },
+        ]
+      },
+    )
+
+  // The refund's credit follows its purchase, whose own inference is
+  // computed first (a purchase is an outflow, never a refund's credit).
+  const refunded = (entry: PolicyEntry): ReadonlyArray<Proposal> =>
+    (relationsOf.get(entry.id) ?? []).flatMap(
+      (relation): ReadonlyArray<Proposal> => {
+        if (
+          relation.kind !== 'refund' ||
+          relation.status !== 'confirmed' ||
+          relation.inflowEntryId !== entry.id
+        )
+          return []
+        const purchase = inferenceOf(relation.outflowEntryId)
+        if (purchase === undefined || purchase.categoryId === null) return []
+        return [
+          {
+            categoryId: purchase.categoryId,
+            origin: 'refund',
+            originRef: relation.key,
+            confidence: purchase.confidence,
+            status: purchase.status === 'applied' ? 'applied' : 'review',
+            excludedFromSpending: purchase.excludedFromSpending,
+            reasons: ['refund', `purchase_${purchase.origin}`],
+          },
+        ]
+      },
+    )
 
   const decided = (entry: PolicyEntry): ReadonlyArray<Proposal> => {
     const decision = input.decisions.byEntry.get(entry.id)
@@ -288,7 +376,27 @@ export const categorize = (input: PolicyInput): ReadonlyArray<Inference> => {
     })
   }
 
-  return input.entries.map((entry) =>
-    infer(entry.id, [...decided(entry), ...learned(entry), ...provided(entry)]),
-  )
+  const entries = new Map(input.entries.map((entry) => [entry.id, entry]))
+  const done = new Map<string, Inference>()
+  const visiting = new Set<string>()
+  function inferenceOf(entryId: string): Inference | undefined {
+    const found = done.get(entryId)
+    if (found) return found
+    const entry = entries.get(entryId)
+    // A cycle cannot happen (see `refunded`); guard rather than loop.
+    if (entry === undefined || visiting.has(entryId)) return undefined
+    visiting.add(entryId)
+    const inference = infer(entry.id, [
+      ...reconciled(entry, true),
+      ...decided(entry),
+      ...refunded(entry),
+      ...reconciled(entry, false),
+      ...learned(entry),
+      ...provided(entry),
+    ])
+    visiting.delete(entryId)
+    done.set(entryId, inference)
+    return inference
+  }
+  return input.entries.map((entry) => inferenceOf(entry.id)!)
 }
