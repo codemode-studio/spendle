@@ -772,6 +772,251 @@ describe('webhook reactions', () => {
       yield* drain
     }).pipe(Effect.provide(openFinanceTest(settings))),
   )
+
+  // The booked checkpoints of an account, in recording order, and the days
+  // whose checkpoint is withdrawn.
+  const checkpointsOf = (accountId: string) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+      const booked = yield* sql<{ asOf: string; balanceCents: number }>`
+        SELECT as_of AS asOf, balance_cents AS balanceCents FROM balance_observations
+        WHERE account_id = ${accountId} AND kind = 'booked' ORDER BY as_of, rowid
+      `
+      return {
+        booked: booked.map((row) => [row.asOf, row.balanceCents]),
+        invalidated: (yield* (yield* OpenFinance).invalidatedCheckpoints(
+          accountId,
+        )).map((checkpoint) => checkpoint.asOf),
+      }
+    })
+
+  it.effect(
+    'withdraws the old day of a correction without a converted amount until it converts',
+    () =>
+      Effect.gen(function* () {
+        const salary = tx('salary', '2026-08-14', {
+          type: 'CREDIT',
+          amount: 1000,
+          balance: 1000,
+        })
+        const { account, state } = yield* linkedBank([
+          [
+            'salary',
+            '2026-08-14',
+            { type: 'CREDIT', amount: 1000, balance: 1000 },
+          ],
+          ['market', '2026-08-15', { amount: 100, balance: 900 }],
+        ])
+        // Pluggy corrects the purchase to Aug 16 in dollars, not yet converted.
+        const setMarket = (market: ReturnType<typeof tx>) =>
+          Ref.update(state, (current) => ({
+            ...current,
+            transactions: { 'provider-bank': [salary, market] },
+          }))
+        yield* setMarket(
+          tx('market', '2026-08-16', {
+            currencyCode: 'USD',
+            amount: 30,
+            amountInAccountCurrency: null,
+            balance: null,
+          }),
+        )
+        yield* deliver({
+          eventId: 'evt-unconverted',
+          event: 'transactions/updated',
+          itemId: 'item-1',
+          accountId: 'provider-bank',
+          transactionIds: ['market'],
+        })
+        yield* drain
+        const sql = yield* SqlClient.SqlClient
+        const unresolvedOf = sql<{ id: string; bookedOn: string }>`
+          SELECT provider_transaction_id AS id, booked_on AS bookedOn
+          FROM open_finance_unresolved ORDER BY id
+        `
+        const factsOf = Effect.map(
+          (yield* Observations).current(account.id),
+          (current) =>
+            current.map((observation) => [
+              observation.externalId,
+              observation.bookedOn,
+              observation.amountCents,
+            ]),
+        )
+        assert.deepStrictEqual(
+          {
+            facts: yield* factsOf,
+            unresolved: [...(yield* unresolvedOf)],
+            ...(yield* checkpointsOf(account.id)),
+          },
+          {
+            facts: [
+              ['salary', '2026-08-14', 100000],
+              ['market', '2026-08-15', -10000],
+            ],
+            unresolved: [{ id: 'market', bookedOn: '2026-08-16' }],
+            booked: [
+              ['2026-08-14', 100000],
+              ['2026-08-15', 90000],
+            ],
+            invalidated: ['2026-08-15'],
+          },
+        )
+
+        // Pluggy converts it: R$150. A foreign line carries no running
+        // balance in the account currency, so Aug 16 gets no checkpoint.
+        yield* setMarket(
+          tx('market', '2026-08-16', {
+            currencyCode: 'USD',
+            amount: 30,
+            amountInAccountCurrency: 150,
+            balance: 850,
+          }),
+        )
+        yield* deliver({
+          eventId: 'evt-converted',
+          event: 'transactions/updated',
+          itemId: 'item-1',
+          accountId: 'provider-bank',
+          transactionIds: ['market'],
+        })
+        yield* drain
+        assert.deepStrictEqual(
+          {
+            facts: yield* factsOf,
+            unresolved: [...(yield* unresolvedOf)],
+            ...(yield* checkpointsOf(account.id)),
+          },
+          {
+            facts: [
+              ['salary', '2026-08-14', 100000],
+              ['market', '2026-08-16', -15000],
+            ],
+            unresolved: [],
+            booked: [
+              ['2026-08-14', 100000],
+              ['2026-08-15', 90000],
+            ],
+            invalidated: ['2026-08-15'],
+          },
+        )
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect(
+    'withdraws the checkpoint of a day whose transaction Pluggy deleted',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, account, connectionId, state } = yield* linkedBank(
+          [
+            [
+              'salary',
+              '2026-08-14',
+              { type: 'CREDIT', amount: 1000, balance: 1000 },
+            ],
+            ['market', '2026-08-15', { amount: 100, balance: 900 }],
+            ['recent', '2026-10-03'],
+          ],
+        )
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: {
+            'provider-bank': (
+              current.transactions['provider-bank'] ?? []
+            ).filter((transaction) => transaction.id !== 'market'),
+          },
+        }))
+        yield* deliver({
+          eventId: 'evt-del',
+          event: 'transactions/deleted',
+          itemId: 'item-1',
+          accountId: 'provider-bank',
+          transactionIds: ['market'],
+        })
+        yield* drain
+        // A later incremental sync does not bring it back.
+        yield* openFinance.requestSync({ connectionId })
+        yield* drain
+        assert.deepStrictEqual(
+          {
+            ids: yield* currentIds(account.id),
+            ...(yield* checkpointsOf(account.id)),
+          },
+          {
+            ids: ['salary', 'recent'],
+            booked: [
+              ['2026-08-14', 100000],
+              ['2026-08-15', 90000],
+            ],
+            invalidated: ['2026-08-15'],
+          },
+        )
+      }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  // After Pluggy removed item-1, the person connects the same bank again as
+  // item-2 and links its account to the ledger account they already had.
+  const relinkAfter = <A, E, R>(
+    removeItem: (
+      openFinance: OpenFinance['Service'],
+      connectionId: string,
+    ) => Effect.Effect<A, E, R>,
+  ) =>
+    Effect.gen(function* () {
+      const { openFinance, account, connectionId, state } = yield* linkedBank([
+        ['market', '2026-09-28'],
+      ])
+      yield* removeItem(openFinance, connectionId)
+      yield* drain
+      const owner = (yield* openFinance.connection(connectionId)).ownerId
+      const replacement = yield* openFinance.createConnectToken({
+        ownerId: owner,
+      })
+      yield* Ref.update(state, (current) => ({
+        ...current,
+        gone: false,
+        clientUserId: replacement.connectionId,
+        accounts: [{ ...bank, id: 'provider-bank-2' }],
+      }))
+      yield* openFinance.registerItem({
+        connectionId: replacement.connectionId,
+        itemId: 'item-2',
+      })
+      const relinked = yield* openFinance.linkAccount({
+        providerAccountId: 'provider-bank-2',
+        target: { accountId: account.id },
+        historyMonths: 3,
+      })
+      assert.deepStrictEqual(
+        {
+          relinked: relinked.id,
+          previous: (yield* openFinance.providerAccounts(connectionId)).map(
+            (provider) => provider.accountId,
+          ),
+        },
+        { relinked: account.id, previous: [account.id] },
+      )
+    })
+
+  it.effect('frees the ledger account of an item Pluggy deleted', () =>
+    relinkAfter(() =>
+      deliver({
+        eventId: 'evt-gone',
+        event: 'item/deleted',
+        itemId: 'item-1',
+      }),
+    ).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect('frees the ledger account of an item Pluggy no longer has', () =>
+    relinkAfter((openFinance, connectionId) =>
+      Effect.gen(function* () {
+        const state = yield* FakePluggyState
+        yield* Ref.update(state, (current) => ({ ...current, gone: true }))
+        yield* openFinance.requestSync({ connectionId })
+      }),
+    ).pipe(Effect.provide(openFinanceTest(settings))),
+  )
 })
 
 describe('webhook route', () => {

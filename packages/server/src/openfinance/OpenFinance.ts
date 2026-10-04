@@ -1031,24 +1031,39 @@ const make = Effect.gen(function* () {
               observation.bookedOn,
             ]),
           )
+          const dateTo = yield* today
           const reported: Array<ReportedTransaction> = []
+          // Every returned transaction in scope, recordable or not, by the
+          // day Pluggy now reports it on.
+          const returned: Array<{ externalId: string; bookedOn: string }> = []
+          // One without an amount in the account currency is skipped, as in
+          // a sync: its stored fact stays as it is, it is re-read until it
+          // gains one, and the days it left and joined yield no checkpoint
+          // meanwhile.
+          const unresolved: Array<{ id: string; bookedOn: string }> = []
+          const incompleteDays = new Set<string>()
           for (const transaction of fetched) {
+            const day = bookedOn(transaction.date)
+            const known = storedDay.get(transaction.id)
+            if (day < historyFrom && known === undefined) continue
+            returned.push({ externalId: transaction.id, bookedOn: day })
             const normalized = toReportedTransaction(item, transaction)
-            if (Option.isNone(normalized)) continue
-            if (
-              normalized.value.bookedOn < historyFrom &&
-              !storedDay.has(normalized.value.externalId)
-            )
+            if (Option.isNone(normalized)) {
+              incompleteDays.add(day)
+              if (known !== undefined) incompleteDays.add(known)
+              // A re-read covers history only from its start.
+              if (day >= historyFrom)
+                unresolved.push({ id: transaction.id, bookedOn: day })
               continue
+            }
             reported.push(normalized.value)
           }
 
           // The days these transactions are on or were on, before today;
           // only bank accounts carry checkpoints.
-          const dateTo = yield* today
           const affected = new Set<string>()
           if (item.type === 'BANK')
-            for (const transaction of reported) {
+            for (const transaction of returned) {
               affected.add(transaction.bookedOn)
               const previous = storedDay.get(transaction.externalId)
               if (previous !== undefined) affected.add(previous)
@@ -1074,7 +1089,6 @@ const make = Effect.gen(function* () {
           >()
           // A judged day with a line that cannot be compared with the stored
           // facts yields no checkpoint.
-          const incompleteDays = new Set<string>()
           const postedLines: Array<{ id: string; bookedOn: string }> = []
           for (const transaction of wholeDays) {
             const normalized = toReportedTransaction(item, transaction)
@@ -1101,6 +1115,23 @@ const make = Effect.gen(function* () {
                 accountId,
                 transactions: reported,
               })
+              for (const transaction of reported) {
+                yield* sql`
+                  DELETE FROM open_finance_unresolved
+                  WHERE provider_account_id = ${providerAccountId}
+                    AND provider_transaction_id = ${transaction.externalId}
+                `
+              }
+              for (const transaction of unresolved) {
+                yield* sql`
+                  INSERT INTO open_finance_unresolved (provider_account_id,
+                    provider_transaction_id, booked_on, last_seen_on)
+                  VALUES (${providerAccountId}, ${transaction.id}, ${transaction.bookedOn}, ${dateTo})
+                  ON CONFLICT (provider_account_id, provider_transaction_id)
+                  DO UPDATE SET booked_on = excluded.booked_on,
+                    last_seen_on = excluded.last_seen_on
+                `
+              }
               if (first === undefined || last === undefined) return recorded
               // A posted line this account does not hold on that day (one
               // never copied, or one settled since) leaves the day's stored
@@ -1128,7 +1159,7 @@ const make = Effect.gen(function* () {
                 dateFrom: first,
                 dateTo: addDays(last, 1),
                 stored,
-                reported: recorded.recorded,
+                reported: returned,
                 runningBalances,
                 only: judged,
                 incompleteDays,
@@ -1168,6 +1199,26 @@ const make = Effect.gen(function* () {
     'OpenFinance.invalidatedCheckpoints',
   )((accountId: string) => findInvalidatedCheckpoints(accountId))
 
+  /**
+   * Marks a connection disconnected and releases its links' ledger accounts,
+   * which stay linkable through another connection; account_id is kept as
+   * history. Shared by every way a connection ends: the person's disconnect
+   * and Pluggy's own deletion of the item.
+   */
+  const disconnectLocally = Effect.fnUntraced(function* (connectionId: string) {
+    const disconnectedAt = yield* now
+    yield* sql`
+      UPDATE open_finance_connections SET status = 'disconnected',
+        updated_at = ${disconnectedAt}
+      WHERE id = ${connectionId} AND status != 'disconnected'
+    `
+    yield* sql`
+      UPDATE open_finance_accounts SET unlinked_at = ${disconnectedAt}
+      WHERE connection_id = ${connectionId} AND account_id IS NOT NULL
+        AND unlinked_at IS NULL
+    `
+  })
+
   const disconnect = Effect.fn('OpenFinance.disconnect')(function* (
     connectionId: string,
   ) {
@@ -1181,23 +1232,7 @@ const make = Effect.gen(function* () {
         ),
       )
     }
-    // Its links release their ledger accounts, which stay linkable through
-    // another connection; account_id is kept as history.
-    const disconnectedAt = yield* now
-    yield* sql.withTransaction(
-      Effect.gen(function* () {
-        yield* sql`
-          UPDATE open_finance_connections SET status = 'disconnected',
-            updated_at = ${disconnectedAt}
-          WHERE id = ${connectionId}
-        `
-        yield* sql`
-          UPDATE open_finance_accounts SET unlinked_at = ${disconnectedAt}
-          WHERE connection_id = ${connectionId} AND account_id IS NOT NULL
-            AND unlinked_at IS NULL
-        `
-      }),
-    )
+    yield* sql.withTransaction(disconnectLocally(connectionId))
   })
 
   const findConnectionByItem = SqlSchema.findOneOption({
@@ -1222,10 +1257,7 @@ const make = Effect.gen(function* () {
   const markItemDeleted = Effect.fn('OpenFinance.markItemDeleted')(function* (
     connectionId: string,
   ) {
-    yield* sql`
-      UPDATE open_finance_connections SET status = 'disconnected', updated_at = ${yield* now}
-      WHERE id = ${connectionId}
-    `
+    yield* sql.withTransaction(disconnectLocally(connectionId))
   })
 
   /**
@@ -1244,10 +1276,8 @@ const make = Effect.gen(function* () {
           VALUES (${itemId}, ${deletedAt})
           ON CONFLICT (item_id) DO NOTHING
         `
-        yield* sql`
-          UPDATE open_finance_connections SET status = 'disconnected', updated_at = ${deletedAt}
-          WHERE item_id = ${itemId} AND status != 'disconnected'
-        `
+        const holder = yield* findConnectionByItem(itemId)
+        if (Option.isSome(holder)) yield* disconnectLocally(holder.value.id)
       }),
     )
   })
@@ -1289,20 +1319,48 @@ const make = Effect.gen(function* () {
       (observation) =>
         observation.sourceId === sourceId && ids.has(observation.externalId),
     )
-    const result = yield* observations.recordTransactions({
-      sourceId,
-      accountId: provider.accountId,
-      transactions: doomed.map((observation) => ({
-        externalId: observation.externalId,
-        bookedOn: observation.bookedOn,
-        amountCents: observation.amountCents,
-        currency: observation.currency,
-        description: observation.description,
-        status: 'removed' as const,
-        raw: { reason: 'deleted_by_provider' },
-      })),
-    })
-    return result.recorded.length
+    const accountId = provider.accountId
+    const days = [
+      ...new Set(doomed.map((observation) => observation.bookedOn)),
+    ].sort()
+    // The removal and the withdrawal of the checkpoints it falsifies land
+    // together. A checkpoint inferred with the deleted line no longer holds
+    // for its day; the next complete read of that day that infers the same
+    // balance reinstates it.
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const result = yield* observations.recordTransactions({
+          sourceId,
+          accountId,
+          transactions: doomed.map((observation) => ({
+            externalId: observation.externalId,
+            bookedOn: observation.bookedOn,
+            amountCents: observation.amountCents,
+            currency: observation.currency,
+            description: observation.description,
+            status: 'removed' as const,
+            raw: { reason: 'deleted_by_provider' },
+          })),
+        })
+        const first = days[0]
+        const last = days[days.length - 1]
+        if (first !== undefined && last !== undefined)
+          yield* reconcileCheckpoints({
+            accountId,
+            sourceId,
+            providerAccountId,
+            currency: provider.currency,
+            dateFrom: first,
+            dateTo: addDays(last, 1),
+            stored: doomed,
+            reported: doomed,
+            // No read of these days backs a closing balance.
+            runningBalances: new Map(),
+            only: new Set(days),
+          })
+        return result.recorded.length
+      }),
+    )
   })
 
   return {

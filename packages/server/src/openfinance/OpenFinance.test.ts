@@ -1225,7 +1225,7 @@ describe('OpenFinance', () => {
             invalidated: ['2026-09-10'],
           },
         )
-      }).pipe(Effect.provide(ManualLayer)),
+      }).pipe(Effect.provide(openFinanceManualTest())),
   )
 
   it.effect(
@@ -1275,7 +1275,7 @@ describe('OpenFinance', () => {
             invalidated: ['2026-09-10'],
           },
         )
-      }).pipe(Effect.provide(ManualLayer)),
+      }).pipe(Effect.provide(openFinanceManualTest())),
   )
 
   it.effect(
