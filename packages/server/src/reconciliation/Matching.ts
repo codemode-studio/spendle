@@ -204,8 +204,9 @@ const businessWords = new Set([
   'distribuidora',
 ])
 
-// A corporation's suffix: `SA`, `S.A.`, `S/A`.
-const corporation = /\bs\s?[./]?\s?a\b/
+// A corporation's suffix (`SA`, `S.A.`, `S/A`, `S-A`) with the word it
+// follows.
+const corporation = /([a-z0-9]+)?[\s.]*\bs\s?[./-]?\s?a\b/g
 
 // Wording that says both sides belong to the same person.
 const ownAccountWording =
@@ -311,9 +312,12 @@ const counterpartEvidence = (
       text
         .split(/[^a-z0-9]+/)
         .some((word) => businessWords.has(word) && !institutions.has(word)) ||
-      // `S.A.` beside a bank's own name is left to the institution evidence.
-      (corporation.test(text) &&
-        !intersects(nameWords(entry.description), institutions))
+      // A suffix right after a bank's own name (`Inter S.A.`) is that bank's,
+      // left to the institution evidence; any other names a company.
+      [...text.matchAll(corporation)].some(
+        ([, before]) =>
+          before === undefined || !institutions.has(unglue(before)),
+      )
     )
   }
   const thirdParty =

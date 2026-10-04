@@ -165,6 +165,13 @@ describe('matchRelations', () => {
         pair('Pix enviado Silva S.A.', 'Pix recebido Joao Silva', 'Joao Silva'),
         pair('Pix enviado Silva S/A', 'Pix recebido Joao Silva', 'Joao Silva'),
         pair('Pix enviado Silva SA', 'Pix recebido Joao Silva', 'Joao Silva'),
+        pair('Pix enviado Silva S-A', 'Pix recebido Joao Silva', 'Joao Silva'),
+        pair(
+          'Pix enviado Silva S.A. Banco Inter',
+          'Pix recebido Joao Silva',
+          'Joao Silva',
+          true,
+        ),
         pair('Pix enviado Banco Inter S.A.', 'Pix recebido', undefined, true),
       ],
       [
@@ -184,6 +191,8 @@ describe('matchRelations', () => {
         ['suggested', 'same_third_party'],
         ['suggested', 'same_third_party'],
         ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'names_other_account'],
         ['confirmed', 'names_other_account'],
       ],
     )
