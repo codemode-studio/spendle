@@ -394,8 +394,9 @@ const namesThirdParty = (
     !owners.every((owner) => owner.size > 0 && within(words, owner))
   )
     return true
-  // Read from the folded text itself: shared word filters drop `ltda`.
-  const text = foldDescription(description)
+  // Read from the folded text itself (shared word filters drop `ltda`), with
+  // multi-word bank names aliased like the institutions they are compared to.
+  const text = bankAliases(description)
   return (
     text
       .split(/[^a-z0-9]+/)
@@ -541,8 +542,13 @@ const cardBillWording = /\b(fatura|cartao|cartoes)\b/
  */
 const cardTarget = (outflow: MatchableEntry, card: MatchableEntry) => {
   const issuer = institutionWords(card)
+  // Every word that could name an issuer or payee, read past the shared
+  // description filter (which drops card brands such as `master`), so
+  // `Banco Master` names someone instead of no one.
   const named = new Set(
-    [...wordsOf(outflow, nameWords)].filter((word) => !cardWords.has(word)),
+    [...wordsOf(outflow, (text) => identityWords(text, new Set()))].filter(
+      (word) => !cardWords.has(word) && !institutionNoise.has(word),
+    ),
   )
   const bill = describes(outflow, cardBillWording)
   const target =

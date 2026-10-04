@@ -569,6 +569,41 @@ describe('matchRelations', () => {
     )
   })
 
+  it('never confirms a card payment naming an issuer the shared filters drop', () => {
+    const pay = (description: string) =>
+      relations([
+        entry('pay', 'inter', -50000, {
+          description,
+          institution: 'Banco Inter',
+        }),
+        entry('nu', 'card-nu', 50000, {
+          description: 'Pagamento recebido',
+          institution: 'Nubank',
+        }),
+      ]).flatMap((relation) => [relation.status, relation.reasons.at(-1)])
+    assert.deepStrictEqual(
+      [pay('Pagamento fatura Banco Master'), pay('Pagamento fatura Nubank')],
+      [
+        ['suggested', 'names_other_payee'],
+        ['confirmed', 'names_card_institution'],
+      ],
+    )
+  })
+
+  it('reads Banco do Brasil and its S.A. as the institution in a transfer', () => {
+    const transfer = relations([
+      entry('out', 'inter', -50000, {
+        description: 'Pix enviado Banco do Brasil S.A.',
+        institution: 'Banco Inter',
+      }),
+      entry('in', 'bb', 50000, {
+        description: 'Pix recebido',
+        institution: 'Banco do Brasil S.A.',
+      }),
+    ]).flatMap((relation) => [relation.status, relation.reasons.at(-1)])
+    assert.deepStrictEqual(transfer, ['confirmed', 'names_other_account'])
+  })
+
   it('reads alphanumeric issuers and payees as names, and codes as no one', () => {
     const pay = (description: string, card: MatchableEntry) =>
       relations([
