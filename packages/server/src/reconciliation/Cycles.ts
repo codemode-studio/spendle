@@ -1,4 +1,9 @@
-import { addDays, dayOfMonth, monthStart } from '../domain/LocalDate.ts'
+import {
+  addDays,
+  dayOfMonth,
+  monthStart,
+  nextBusinessDay,
+} from '../domain/LocalDate.ts'
 
 export interface CardTermsInput {
   readonly closingDay: number
@@ -11,9 +16,11 @@ export interface CycleBounds {
   /** Last day whose purchases enter this statement. */
   readonly closingOn: string
   readonly dueOn: string
+  /** Whether an issued statement set the closing, or only the card's configured days. */
+  readonly closing: 'statement' | 'forecast'
 }
 
-/** The closing that ends the cycle containing `date`. */
+/** The configured closing that ends the cycle containing `date`. */
 const closingFor = (date: string, closingDay: number) => {
   const thisMonth = dayOfMonth(date, closingDay)
   return date <= thisMonth
@@ -21,7 +28,21 @@ const closingFor = (date: string, closingDay: number) => {
     : dayOfMonth(monthStart(date, 1), closingDay)
 }
 
-/** The statement cycle a card movement on `date` belongs to. */
+/**
+ * The due date for a closing: the configured due day after the closing,
+ * moved to the next weekday. Days are compared after clamping to the month,
+ * so a due day that collapses onto the closing moves to the next month.
+ */
+export const dueAfter = (closingOn: string, dueDay: number) => {
+  const sameMonth = dayOfMonth(closingOn, dueDay)
+  return nextBusinessDay(
+    sameMonth > closingOn
+      ? sameMonth
+      : dayOfMonth(monthStart(closingOn, 1), dueDay),
+  )
+}
+
+/** The forecast statement cycle a card movement on `date` belongs to. */
 export const cycleContaining = (
   date: string,
   terms: CardTermsInput,
@@ -31,13 +52,11 @@ export const cycleContaining = (
     monthStart(closingOn, -1),
     terms.closingDay,
   )
-  // A due day after the closing day falls in the closing month; otherwise the next.
-  const dueMonth =
-    terms.dueDay > terms.closingDay ? closingOn : monthStart(closingOn, 1)
   return {
     startsOn: addDays(previousClosing, 1),
     closingOn,
-    dueOn: dayOfMonth(dueMonth, terms.dueDay),
+    dueOn: dueAfter(closingOn, terms.dueDay),
+    closing: 'forecast',
   }
 }
 
@@ -45,6 +64,8 @@ export interface CycleEntry {
   readonly id: string
   readonly bookedOn: string
   readonly amountCents: number
+  /** The provider's bill this movement was charged on, when it says. */
+  readonly billId: string | null
 }
 
 export interface CyclePayment {
@@ -56,8 +77,10 @@ export interface CyclePayment {
   readonly via: 'card' | 'bank'
 }
 
-export interface StatementTotal {
-  readonly asOf: string
+/** An issued statement: the period it covers and what it says is owed. */
+export interface IssuedStatement {
+  readonly startsOn: string
+  readonly closingOn: string
   /** Negative: what the statement says is owed. */
   readonly cents: number
 }
@@ -68,8 +91,11 @@ export interface CardCycle extends CycleBounds {
   readonly status: CycleStatus
   /** Purchases and credits of the cycle; negative when something is owed. */
   readonly totalCents: number
+  /** What the cycle bills: the issued statement's total, else the entries' total. Positive when owed. */
+  readonly billedCents: number
   readonly paidCents: number
   readonly entryIds: ReadonlyArray<string>
+  /** The part of each payment applied to this cycle. */
   readonly payments: ReadonlyArray<CyclePayment>
   /** The issued statement's total and how far the entries are from it. */
   readonly statement: {
@@ -78,88 +104,196 @@ export interface CardCycle extends CycleBounds {
   } | null
 }
 
+export interface CardCycles {
+  readonly cycles: ReadonlyArray<CardCycle>
+  /** Payments beyond everything billed so far: credit on the card. */
+  readonly unappliedCents: number
+}
+
+// An issued closing replaces the forecast it is near; beyond this it is a different cycle.
+const replacesForecastWithinDays = 15
+// The shortest cycle a forecast may open after an issued closing.
+const minimumCycleDays = 20
+
 /**
- * Builds the card's statement cycles from the first movement to today.
+ * Closings from the first movement to today. Issued statements set their
+ * own closings (and the day before their period, the previous closing);
+ * configured days fill the months no statement covers.
+ */
+const closings = (
+  first: string,
+  through: string,
+  issued: ReadonlyArray<string>,
+  terms: CardTermsInput,
+) => {
+  const actual = [...new Set(issued)].sort()
+  const result: Array<{ closingOn: string; closing: CycleBounds['closing'] }> =
+    []
+  let forecast = closingFor(first, terms.closingDay)
+  for (;;) {
+    const last = result.at(-1)?.closingOn
+    const next = actual.find((date) =>
+      last === undefined ? date >= first : date > last,
+    )
+    const chosen =
+      next !== undefined &&
+      next <= addDays(forecast, replacesForecastWithinDays)
+        ? { closingOn: next, closing: 'statement' as const }
+        : { closingOn: forecast, closing: 'forecast' as const }
+    result.push(chosen)
+    if (chosen.closingOn >= through) return result
+    forecast = closingFor(
+      addDays(chosen.closingOn, minimumCycleDays),
+      terms.closingDay,
+    )
+  }
+}
+
+/**
+ * Builds the card's statement cycles from the first movement or statement
+ * to today, and applies payments to them.
  *
- * Entries enter the cycle containing their booking date. A payment settles
- * the cycle that most recently closed before it was made. A statement total
- * dated from a cycle's closing up to the day before the next closing is that
- * cycle's statement,
- * and its difference from the entries is the cycle's proof: zero means every
- * purchase on the statement is accounted for.
+ * Cycle bounds come from issued statements when there are any; configured
+ * closing and due days are a forecast for the rest. An entry belongs to the
+ * cycle containing its date, except that entries the provider assigns to one
+ * bill stay together, in the cycle of the latest of them.
+ *
+ * What a cycle owes is its issued statement's total when there is one, since
+ * imported entries may be incomplete; the difference from the entries is
+ * reported as the statement proof, apart from payment status.
+ *
+ * Payments apply in date order to the oldest cycle that still owes,
+ * among the cycles that had started when the payment was made, so a payment
+ * can settle several bills or pay the open one in advance. What exceeds
+ * everything billed is unapplied credit.
  */
 export const cardCycles = (input: {
   readonly terms: CardTermsInput
   readonly entries: ReadonlyArray<CycleEntry>
   readonly payments: ReadonlyArray<CyclePayment>
-  readonly statements: ReadonlyArray<StatementTotal>
+  readonly statements: ReadonlyArray<IssuedStatement>
   readonly today: string
-}): ReadonlyArray<CardCycle> => {
+}): CardCycles => {
   const dates = [
     ...input.entries.map((entry) => entry.bookedOn),
     ...input.payments.map((payment) => payment.paidOn),
+    ...input.statements.map((statement) => statement.startsOn),
   ]
-  if (dates.length === 0) return []
+  if (dates.length === 0) return { cycles: [], unappliedCents: 0 }
   const first = dates.reduce((a, b) => (a < b ? a : b))
+  const lastStatement = input.statements
+    .map((statement) => statement.closingOn)
+    .reduce((a, b) => (a > b ? a : b), input.today)
 
-  const cycles: Array<CycleBounds> = []
-  for (let bounds = cycleContaining(first, input.terms); ;) {
-    cycles.push(bounds)
-    if (bounds.closingOn >= input.today) break
-    bounds = cycleContaining(addDays(bounds.closingOn, 1), input.terms)
+  const ends = closings(
+    first,
+    lastStatement,
+    input.statements.flatMap((statement) => [
+      addDays(statement.startsOn, -1),
+      statement.closingOn,
+    ]),
+    input.terms,
+  )
+  // The latest report of a statement speaks for it.
+  const statementOf = new Map<string, IssuedStatement>()
+  for (const statement of input.statements)
+    statementOf.set(statement.closingOn, statement)
+
+  const firstStart = (closingOn: string) => {
+    const issued = statementOf.get(closingOn)?.startsOn
+    const forecast = addDays(
+      dayOfMonth(monthStart(closingOn, -1), input.terms.closingDay),
+      1,
+    )
+    const start = issued ?? forecast
+    return start < first ? start : first
+  }
+  const bounds: ReadonlyArray<CycleBounds> = ends.map((end, index) => ({
+    startsOn:
+      index === 0
+        ? firstStart(end.closingOn)
+        : addDays(ends[index - 1]!.closingOn, 1),
+    closingOn: end.closingOn,
+    dueOn: dueAfter(end.closingOn, input.terms.dueDay),
+    closing: end.closing,
+  }))
+  const cycleOf = (date: string) => {
+    const index = bounds.findIndex((cycle) => date <= cycle.closingOn)
+    return index === -1 ? bounds.length - 1 : index
   }
 
-  return cycles.map((bounds, index) => {
-    const next = cycles[index + 1]
-    const entries = input.entries.filter(
-      (entry) =>
-        entry.bookedOn >= bounds.startsOn && entry.bookedOn <= bounds.closingOn,
-    )
-    const settles = (date: string) =>
-      date > bounds.closingOn && (next === undefined || date <= next.closingOn)
-    const payments = input.payments.filter((payment) => settles(payment.paidOn))
-    const totalCents = entries.reduce(
-      (sum, entry) => sum + entry.amountCents,
-      0,
-    )
-    const paidCents = payments.reduce(
-      (sum, payment) => sum + payment.amountCents,
-      0,
-    )
-    // Issued on its closing day or after it, but before the next closing.
-    const observed = input.statements
-      .filter(
-        (statement) =>
-          statement.asOf >= bounds.closingOn &&
-          (next === undefined || statement.asOf < next.closingOn),
-      )
-      .at(-1)
+  // Entries of one provider bill go where the latest of them falls.
+  const latestOfBill = new Map<string, string>()
+  for (const entry of input.entries) {
+    if (entry.billId === null) continue
+    const latest = latestOfBill.get(entry.billId)
+    if (latest === undefined || entry.bookedOn > latest)
+      latestOfBill.set(entry.billId, entry.bookedOn)
+  }
+  const entriesOf = bounds.map((): Array<CycleEntry> => [])
+  for (const entry of input.entries) {
+    const date =
+      entry.billId === null ? entry.bookedOn : latestOfBill.get(entry.billId)!
+    entriesOf[cycleOf(date)]!.push(entry)
+  }
 
-    const owed = -totalCents - paidCents
+  const totals = entriesOf.map((entries) =>
+    entries.reduce((sum, entry) => sum + entry.amountCents, 0),
+  )
+  const billed = bounds.map((cycle, index) => {
+    const statement = statementOf.get(cycle.closingOn)
+    return 0 - (statement ? statement.cents : totals[index]!)
+  })
+
+  const applied = bounds.map((): Array<CyclePayment> => [])
+  const paid = bounds.map(() => 0)
+  let unappliedCents = 0
+  const ordered = [...input.payments].sort(
+    (a, b) =>
+      a.paidOn.localeCompare(b.paidOn) || a.entryId.localeCompare(b.entryId),
+  )
+  for (const payment of ordered) {
+    let remaining = payment.amountCents
+    const started = cycleOf(payment.paidOn)
+    for (let index = 0; index <= started && remaining > 0; index++) {
+      const owed = billed[index]! - paid[index]!
+      if (owed <= 0) continue
+      const part = Math.min(owed, remaining)
+      paid[index]! += part
+      applied[index]!.push({ ...payment, amountCents: part })
+      remaining -= part
+    }
+    unappliedCents += remaining
+  }
+
+  const cycles = bounds.map((cycle, index): CardCycle => {
+    const statement = statementOf.get(cycle.closingOn)
+    const owed = billed[index]! - paid[index]!
     const status: CycleStatus =
-      input.today <= bounds.closingOn
+      input.today <= cycle.closingOn
         ? 'open'
         : owed <= 0
           ? 'paid'
-          : paidCents > 0
-            ? 'partially_paid'
-            : input.today > bounds.dueOn
-              ? 'overdue'
+          : input.today > cycle.dueOn
+            ? 'overdue'
+            : paid[index]! > 0
+              ? 'partially_paid'
               : 'due'
-
     return {
-      ...bounds,
+      ...cycle,
       status,
-      totalCents,
-      paidCents,
-      entryIds: entries.map((entry) => entry.id),
-      payments,
-      statement: observed
+      totalCents: totals[index]!,
+      billedCents: billed[index]!,
+      paidCents: paid[index]!,
+      entryIds: entriesOf[index]!.map((entry) => entry.id),
+      payments: applied[index]!,
+      statement: statement
         ? {
-            observedCents: observed.cents,
-            differenceCents: observed.cents - totalCents,
+            observedCents: statement.cents,
+            differenceCents: statement.cents - totals[index]!,
           }
         : null,
     }
   })
+  return { cycles, unappliedCents }
 }
