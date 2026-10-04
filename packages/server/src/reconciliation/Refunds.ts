@@ -48,45 +48,40 @@ const storeWords = new Set([
 ])
 
 // Words that name a kind of business, not which one: two pharmacies are not
-// the same shop, and a pharmacy is not a restaurant. Words for one kind
-// share it.
+// the same shop, and a pharmacy is not a restaurant. Only true synonyms
+// share a kind (`farmacia` and `drogaria`); different trades under one
+// name (`Acougue Bom Preco` and `Supermercado Bom Preco`) stay different
+// kinds, so the shops are never taken for one.
 const kindGroups: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
-  [
-    'market',
-    [
-      'mercado',
-      'supermercado',
-      'supermercados',
-      'hipermercado',
-      'mercearia',
-      'atacado',
-      'atacadao',
-      'hortifruti',
-      'acougue',
-    ],
-  ],
+  ['market', ['mercado', 'supermercado', 'supermercados', 'hipermercado']],
+  ['grocery', ['mercearia']],
+  ['wholesale', ['atacado', 'atacadao']],
+  ['produce', ['hortifruti']],
+  ['butcher', ['acougue']],
   ['pharmacy', ['farmacia', 'farmacias', 'drogaria', 'drogarias']],
   ['fuel', ['posto', 'combustivel', 'combustiveis']],
-  ['bakery', ['padaria', 'panificadora', 'confeitaria']],
-  [
-    'food',
-    [
-      'restaurante',
-      'bar',
-      'lanchonete',
-      'pizzaria',
-      'churrascaria',
-      'cafe',
-      'cafeteria',
-      'sorveteria',
-    ],
-  ],
-  ['lodging', ['hotel', 'pousada']],
-  ['auto', ['auto', 'autopecas', 'pecas', 'oficina', 'estacionamento']],
+  ['bakery', ['padaria', 'panificadora']],
+  ['confectionery', ['confeitaria']],
+  ['restaurant', ['restaurante']],
+  ['bar', ['bar']],
+  ['snack', ['lanchonete']],
+  ['pizza', ['pizzaria']],
+  ['grill', ['churrascaria']],
+  ['cafe', ['cafe', 'cafeteria']],
+  ['ice_cream', ['sorveteria']],
+  ['hotel', ['hotel']],
+  ['inn', ['pousada']],
+  ['auto', ['auto']],
+  ['auto_parts', ['autopecas', 'pecas']],
+  ['garage', ['oficina']],
+  ['parking', ['estacionamento']],
   ['pet', ['pet', 'petshop']],
-  ['health', ['clinica', 'hospital', 'laboratorio']],
+  ['clinic', ['clinica']],
+  ['hospital', ['hospital']],
+  ['laboratory', ['laboratorio']],
   ['optician', ['otica']],
-  ['books', ['livraria', 'papelaria']],
+  ['bookshop', ['livraria']],
+  ['stationery', ['papelaria']],
   ['gym', ['academia']],
   ['retail', ['magazine']],
 ]

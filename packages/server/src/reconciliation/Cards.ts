@@ -75,7 +75,8 @@ type InstallmentReport = {
 // Observations of one entry may each carry part of the metadata, even a
 // single field. Each field combines on its own across all of them; one with
 // two different values is unknown, whatever order they come in. Without an
-// agreed instalment number and count there is no metadata at all.
+// agreed instalment number and count the purchase date and total still
+// count, for the description to number the instalment.
 const mergeInstallments = (
   reports: ReadonlyArray<InstallmentReport>,
 ): Installment | null => {
@@ -85,13 +86,13 @@ const mergeInstallments = (
   }
   const number = only(reports.map((report) => report.number))
   const total = only(reports.map((report) => report.total))
-  if (number === null || total === null) return null
-  return {
-    number,
-    total,
+  const merged = {
+    number: number !== null && total !== null ? number : null,
+    total: number !== null && total !== null ? total : null,
     purchaseDate: only(reports.map((report) => report.purchaseDate)),
     totalAmountCents: only(reports.map((report) => report.totalAmountCents)),
   }
+  return Object.values(merged).every((value) => value === null) ? null : merged
 }
 
 const PaymentRelationRow = Schema.Struct({

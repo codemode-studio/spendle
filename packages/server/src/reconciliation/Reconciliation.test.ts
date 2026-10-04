@@ -1020,6 +1020,33 @@ describe('Reconciliation', () => {
   )
 
   it.effect(
+    'does not confirm a refund against another shop of the same business',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, card, entryId } = yield* setup
+        yield* (yield* Imports).importFile({
+          accountId: card.id,
+          fileName: 'cartao-bom-preco.ofx',
+          bytes: ofx(
+            line('b1', '20260910', '-50.00', 'Acougue Bom Preco') +
+              line('b2', '20260911', '-250.00', 'Supermercado Bom Preco') +
+              line('b3', '20260915', '50.00', 'Estorno Supermercado Bom Preco'),
+            'CCSTMTRS',
+          ),
+        })
+        yield* drain
+        const supermarket = yield* entryId(card.id, -25000)
+        const refunds = (yield* reconciliation.relations).filter(
+          (relation) => relation.kind === 'refund',
+        )
+        assert.deepStrictEqual(
+          refunds.map((relation) => [relation.outflowEntryId, relation.status]),
+          [[supermarket, 'suggested']],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
     'links several refunds of one purchase, refuses one beyond it, and keeps them against later debits',
     () =>
       Effect.gen(function* () {

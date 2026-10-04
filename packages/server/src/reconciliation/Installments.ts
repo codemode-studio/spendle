@@ -6,10 +6,14 @@ export interface InstallmentLine {
   readonly bookedOn: string
   readonly amountCents: number
   readonly description: string
-  /** From the provider (Pluggy's card metadata), when it says so. */
+  /**
+   * From the provider (Pluggy's card metadata), when it says so. Any field
+   * may be missing; without a number and count the description numbers the
+   * instalment.
+   */
   readonly installment: {
-    readonly number: number
-    readonly total: number
+    readonly number: number | null
+    readonly total: number | null
     /** When the purchase was made; the same for each of its instalments. */
     readonly purchaseDate: string | null
     /** The purchase's total in centavos, positive: the sum of its instalments. */
@@ -67,11 +71,18 @@ interface Item {
 /**
  * Whether `next` can be a later instalment of the purchase `chain` follows:
  * a higher number, an amount within the rounding a split can leave (one
- * centavo per instalment), and the same purchase date when both are known,
- * else about a month between statements per instalment (one cycle more
- * after a first instalment the provider may date on the purchase).
+ * centavo per instalment), and the same purchase date when both are known
+ * and the provider numbers both, else about a month between statements per
+ * instalment (one cycle more after a first instalment the provider may date
+ * on the purchase, when the provider numbers `next` too or `established`
+ * says it begins a monthly chain of its own). Different purchase dates are
+ * always different purchases.
  */
-const continues = (chain: ReadonlyArray<Item>, next: Item) => {
+const continues = (
+  chain: ReadonlyArray<Item>,
+  next: Item,
+  established = false,
+) => {
   const last = chain.at(-1)!
   if (chain.some((item) => item.number === next.number)) return false
   if (next.number < last.number) return false
@@ -80,21 +91,34 @@ const continues = (chain: ReadonlyArray<Item>, next: Item) => {
   // A shared purchase date proves one purchase, whatever the dates of its
   // instalments; different ones prove two. Unknown is neither.
   const purchase = chain.find((item) => item.purchaseDate !== null)
-  if (purchase && next.purchaseDate !== null)
-    return purchase.purchaseDate === next.purchaseDate
+  if (purchase && next.purchaseDate !== null) {
+    if (purchase.purchaseDate !== next.purchaseDate) return false
+    // A date alone does not prove numbers read from a description.
+    if (purchase.trusted && next.trusted) return true
+  }
   const steps = next.number - last.number
   const days = daysBetween(last.line.bookedOn, next.line.bookedOn)
   // The provider may date the first instalment on the purchase and later
   // ones on their bills, so from a trusted first instalment the gap may be
   // up to one more cycle.
   const extra =
-    last.number === 1 && last.trusted && next.trusted
+    last.number === 1 && last.trusted && (next.trusted || established)
       ? maxDaysPerInstallment
       : 0
   return (
     days >= steps * minDaysPerInstallment &&
     days <= steps * maxDaysPerInstallment + extra
   )
+}
+
+/** Whether every instalment of `later` continues `chain`, in order. */
+const joins = (chain: ReadonlyArray<Item>, later: ReadonlyArray<Item>) => {
+  const joined = [...chain]
+  for (const item of later) {
+    if (!continues(joined, item, true)) return false
+    joined.push(item)
+  }
+  return true
 }
 
 /**
@@ -109,7 +133,8 @@ const continues = (chain: ReadonlyArray<Item>, next: Item) => {
  * A plan needs the provider's instalment metadata, or at least two lines that
  * progress monthly, because a trailing "03/10" alone may be a date. What
  * remains comes from the provider's purchase total when every instalment so
- * far was seen, and from the latest instalment's amount otherwise.
+ * far was seen and none reports a different total, and from the latest
+ * instalment's amount otherwise.
  */
 export const installmentPlans = (
   lines: ReadonlyArray<InstallmentLine>,
@@ -117,11 +142,23 @@ export const installmentPlans = (
   const groups = new Map<string, Array<Item>>()
   for (const line of lines) {
     if (line.amountCents >= 0) continue
-    const parsed = line.installment ?? fromDescription(line.description)
+    const metadata = line.installment
+    const numbered =
+      metadata?.number != null && metadata.total != null
+        ? { number: metadata.number, total: metadata.total }
+        : null
+    const parsed = numbered ?? fromDescription(line.description)
     if (!parsed) continue
     const key = [baseOf(line.description), parsed.total].join('|')
     const group = groups.get(key) ?? []
-    group.push({ line, ...parsed, trusted: line.installment !== null })
+    group.push({
+      line,
+      number: parsed.number,
+      total: parsed.total,
+      purchaseDate: metadata?.purchaseDate ?? null,
+      totalAmountCents: metadata?.totalAmountCents ?? null,
+      trusted: numbered !== null,
+    })
     groups.set(key, group)
   }
 
@@ -139,6 +176,23 @@ export const installmentPlans = (
       if (chain) chain.push(item)
       else chains.push([item])
     }
+    // A first instalment the provider dated on the purchase may sit two
+    // cycles before the second; description-only instalments join it then,
+    // once they progress monthly among themselves, so a lone date-like
+    // suffix never does.
+    for (const chain of [...chains]) {
+      if (chain.length < 2 || chain[0]!.trusted) continue
+      const first = chains.find(
+        (candidate) =>
+          candidate !== chain &&
+          candidate.at(-1)!.number === 1 &&
+          candidate.at(-1)!.trusted &&
+          joins(candidate, chain),
+      )
+      if (!first) continue
+      first.push(...chain)
+      chains.splice(chains.indexOf(chain), 1)
+    }
 
     for (const chain of chains) {
       if (!chain.some((item) => item.trusted) && chain.length < 2) continue
@@ -146,9 +200,13 @@ export const installmentPlans = (
       const numbers = chain.map((item) => item.number)
       const total = latest.total
       const remaining = Math.max(0, total - latest.number)
-      const knownTotal =
-        chain.find((item) => item.totalAmountCents !== null)
-          ?.totalAmountCents ?? null
+      // Instalments that disagree on the purchase total leave it unknown.
+      const totals = new Set(
+        chain.flatMap((item) =>
+          item.totalAmountCents === null ? [] : [item.totalAmountCents],
+        ),
+      )
+      const knownTotal = totals.size === 1 ? [...totals][0]! : null
       const everyInstallment = numbers.every(
         (number, index) => number === index + 1,
       )
