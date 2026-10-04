@@ -489,6 +489,106 @@ describe('OpenFinance', () => {
       }).pipe(Effect.provide(TestLayer)),
   )
 
+  it.effect(
+    'records a pending purchase that left one response when it returns posted',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, connectionId, state } = yield* connect({
+          accounts: [bank],
+          transactions: {
+            'provider-bank': [
+              tx('purchase', '2026-09-10', {
+                status: 'PENDING',
+                amount: 55.3,
+              }),
+              tx('recent', '2026-10-03'),
+            ],
+          },
+        })
+        const account = yield* openFinance.linkAccount({
+          providerAccountId: 'provider-bank',
+          target: { kind: 'checking', purpose: 'operating' },
+          historyMonths: 3,
+        })
+        yield* drain
+        const respond = (transactions: ReadonlyArray<PluggyTransaction>) =>
+          Effect.gen(function* () {
+            yield* Ref.update(state, (current) => ({
+              ...current,
+              transactions: { 'provider-bank': transactions },
+            }))
+            yield* openFinance.requestSync({ connectionId })
+            yield* drain
+          })
+        // One response omits the purchase; the next returns it posted.
+        yield* respond([tx('recent', '2026-10-03')])
+        yield* respond([
+          tx('purchase', '2026-09-10', { amount: 55.3 }),
+          tx('recent', '2026-10-03'),
+        ])
+        const current = yield* (yield* Observations).current(account.id)
+        assert.deepStrictEqual(
+          current.map((observation) => [
+            observation.externalId,
+            observation.status,
+            observation.amountCents,
+          ]),
+          [
+            ['purchase', 'posted', -5530],
+            ['recent', 'posted', -1000],
+          ],
+        )
+      }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect(
+    'stops revisiting a vanished pending purchase after the retention period',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, state } = yield* connect({
+          accounts: [bank],
+          transactions: {
+            'provider-bank': [
+              tx('purchase', '2026-09-10', {
+                status: 'PENDING',
+                amount: 55.3,
+              }),
+              tx('recent', '2026-10-03'),
+            ],
+          },
+        })
+        const account = yield* openFinance.linkAccount({
+          providerAccountId: 'provider-bank',
+          target: { kind: 'checking', purpose: 'operating' },
+          historyMonths: 3,
+        })
+        yield* openFinance.syncAccount('provider-bank')
+        const respond = (transactions: ReadonlyArray<PluggyTransaction>) =>
+          Effect.gen(function* () {
+            yield* Ref.update(state, (current) => ({
+              ...current,
+              transactions: { 'provider-bank': transactions },
+            }))
+            yield* openFinance.syncAccount('provider-bank')
+          })
+        yield* respond([tx('recent', '2026-10-03')])
+        // 31 days after its removal, the purchase's day is no longer re-read.
+        yield* TestClock.setTime(
+          DateTime.toEpochMillis(DateTime.makeUnsafe('2026-11-04T15:00:00Z')),
+        )
+        yield* respond([tx('recent', '2026-10-03')])
+        yield* respond([
+          tx('purchase', '2026-09-10', { amount: 55.3 }),
+          tx('recent', '2026-10-03'),
+        ])
+        const current = yield* (yield* Observations).current(account.id)
+        assert.deepStrictEqual(
+          current.map((observation) => observation.externalId),
+          ['recent'],
+        )
+      }).pipe(Effect.provide(ManualLayer)),
+  )
+
   it.effect('does not take a skipped foreign purchase for a removed one', () =>
     Effect.gen(function* () {
       const { openFinance, connectionId, state } = yield* connect({

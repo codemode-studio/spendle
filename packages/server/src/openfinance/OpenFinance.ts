@@ -144,6 +144,13 @@ const transactionsReady = (item: PluggyItem) =>
  */
 const unresolvedRetentionDays = 30
 
+/**
+ * How long a pending transaction removed for being absent from a response
+ * keeps its day re-read, counted from its removal. Pluggy may omit a
+ * transaction temporarily and return it later, often already posted.
+ */
+const absentPendingRetentionDays = 30
+
 export class InvalidatedCheckpoint extends Schema.Class<InvalidatedCheckpoint>(
   'InvalidatedCheckpoint',
 )({
@@ -202,6 +209,19 @@ const make = Effect.gen(function* () {
     execute: (providerAccountId) => sql`
         SELECT booked_on AS bookedOn FROM open_finance_unresolved
         WHERE provider_account_id = ${providerAccountId} ORDER BY booked_on LIMIT 1
+      `,
+  })
+
+  const findOldestAbsentPending = SqlSchema.findOneOption({
+    Request: Schema.Struct({
+      providerAccountId: Schema.String,
+      removedSince: Schema.String,
+    }),
+    Result: Schema.Struct({ bookedOn: Schema.String }),
+    execute: ({ providerAccountId, removedSince }) => sql`
+        SELECT booked_on AS bookedOn FROM open_finance_absent_pending
+        WHERE provider_account_id = ${providerAccountId} AND removed_on >= ${removedSince}
+        ORDER BY booked_on LIMIT 1
       `,
   })
 
@@ -666,16 +686,27 @@ const make = Effect.gen(function* () {
       yield* findOldestUnresolved(providerAccountId),
       { onNone: () => null, onSome: (row) => row.bookedOn },
     )
+    const dateTo = yield* today
+    // A pending transaction removed for being absent from an earlier response
+    // is re-read until it returns or its retention passes: once removed it is
+    // no longer among the current observations above.
+    const absentRemovedSince = addDays(dateTo, -absentPendingRetentionDays)
+    const oldestAbsentPending = Option.match(
+      yield* findOldestAbsentPending({
+        providerAccountId,
+        removedSince: absentRemovedSince,
+      }),
+      { onNone: () => null, onSome: (row) => row.bookedOn },
+    )
     const continuation =
       latest === null ? historyFrom : continuationStart(latest)
     const dateFrom = max(
       historyFrom,
-      [oldestPending, oldestUnresolved].reduce<string>(
+      [oldestPending, oldestUnresolved, oldestAbsentPending].reduce<string>(
         (earliest, day) => (day !== null && day < earliest ? day : earliest),
         continuation,
       ),
     )
-    const dateTo = yield* today
 
     const items = yield* pluggy.listAccounts(owner.itemId)
     const item = items.find((candidate) => candidate.id === providerAccountId)
@@ -770,6 +801,30 @@ const make = Effect.gen(function* () {
             VALUES (${providerAccountId}, ${transaction.id}, ${transaction.bookedOn}, ${dateTo})
             ON CONFLICT (provider_account_id, provider_transaction_id)
             DO UPDATE SET booked_on = excluded.booked_on, last_seen_on = excluded.last_seen_on
+          `
+        }
+        // A transaction removed for absence and reported again is no longer
+        // awaited; one removed now is awaited from today; past retention it is
+        // dropped.
+        for (const id of seen) {
+          yield* sql`
+            DELETE FROM open_finance_absent_pending
+            WHERE provider_account_id = ${providerAccountId}
+              AND provider_transaction_id = ${id}
+          `
+        }
+        yield* sql`
+          DELETE FROM open_finance_absent_pending
+          WHERE provider_account_id = ${providerAccountId}
+            AND removed_on < ${absentRemovedSince}
+        `
+        for (const observation of vanished) {
+          yield* sql`
+            INSERT INTO open_finance_absent_pending (provider_account_id,
+              provider_transaction_id, booked_on, removed_on)
+            VALUES (${providerAccountId}, ${observation.externalId}, ${observation.bookedOn}, ${dateTo})
+            ON CONFLICT (provider_account_id, provider_transaction_id)
+            DO UPDATE SET booked_on = excluded.booked_on, removed_on = excluded.removed_on
           `
         }
         if (item.type === 'BANK') {

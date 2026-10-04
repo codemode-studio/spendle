@@ -62,6 +62,20 @@ export default Effect.gen(function* () {
     )
   `
 
+  // Pending transactions recorded as removed because a response omitted
+  // them. Pluggy may return such a transaction later, often posted, so syncs
+  // keep re-reading back to its day until it is seen again or a retention
+  // period from its removal passes. Its recorded status stays removed meanwhile.
+  yield* sql`
+    CREATE TABLE open_finance_absent_pending (
+      provider_account_id TEXT NOT NULL REFERENCES open_finance_accounts (provider_account_id),
+      provider_transaction_id TEXT NOT NULL,
+      booked_on TEXT NOT NULL,
+      removed_on TEXT NOT NULL,
+      PRIMARY KEY (provider_account_id, provider_transaction_id)
+    )
+  `
+
   // Booked checkpoints inferred from running balances that a later read no
   // longer supports: one of the day's stored posted transactions lacks a
   // running balance in the latest read (omitted, unconvertible, or moved to
