@@ -183,6 +183,15 @@ const losingCell = (pdf: PdfText, cell: string) => ({
   items: pdf.items.filter((item) => item.text !== cell),
 })
 
+/** The extracted text with one cell lost from the row printing another. */
+const losingCellIn = (pdf: PdfText, row: string, cell: string) => {
+  const y = pdf.items.find((item) => item.text === row)?.y
+  return {
+    ...pdf,
+    items: pdf.items.filter((item) => item.y !== y || item.text !== cell),
+  }
+}
+
 const amounts = (result: ReturnType<typeof parsePdf>) =>
   Result.getOrThrow(result).lines.map((line) => line.amountCents)
 
@@ -460,7 +469,7 @@ describe('PDF amounts printed apart from a currency sign', () => {
   )
 })
 
-describe('Card bill payments whose row could not be read', () => {
+describe('Card bill payments whose row lost a cell', () => {
   const rowsOf = (result: ReturnType<typeof parsePdf>) => {
     const statement = Result.getOrThrow(result)
     return {
@@ -469,29 +478,19 @@ describe('Card bill payments whose row could not be read', () => {
     }
   }
 
-  it.effect('counts a Nubank payment that lost its date as rejected', () =>
-    Effect.gen(function* () {
-      const pdf = yield* extractPdfText(
-        nubankBill([
-          ['02 JUL', 'Mercado', 'R$ 100,00'],
-          ['11 JUL', 'Plano NuCel', 'R$ 250,00'],
-          ['08 JUL', 'Pagamento em 08 JUL', '-R$ 500,00'],
-        ]),
-      )
-      assert.deepStrictEqual(
-        rowsOf(parsePdf(losingCell(pdf, '08 JUL'), 'card')),
-        {
-          amounts: [-10_000, -25_000],
-          rejectedRows: 1,
-        },
-      )
-    }),
-  )
+  const nubankCells = () =>
+    extractPdfText(
+      nubankBill([
+        ['02 JUL', 'Mercado', 'R$', '100,00'],
+        ['11 JUL', 'Plano NuCel', 'R$', '250,00'],
+        ['08 JUL', 'Pagamento em 08 JUL', '-R$', '500,00'],
+      ]),
+    )
 
-  it.effect('counts an Inter payment that lost its date as rejected', () =>
-    Effect.gen(function* () {
-      const pdf = yield* extractPdfText(
-        tablePdf([
+  const interCells = () =>
+    extractPdfText(
+      tablePdf(
+        [
           ['Banco Inter S/A inter.co/atendimento'],
           ['Este é o valor que você precisa pagar nesse mês 15/09/2026'],
           ['Resumo da fatura'],
@@ -500,16 +499,138 @@ describe('Card bill payments whose row could not be read', () => {
           ['Despesas do mês R$ 150,00'],
           ['Despesas da fatura'],
           ['CARTÃO 5364****3879'],
-          ['20 de ago. 2026', 'Compra A', '-', 'R$ 100,00'],
-          ['21 de ago. 2026', 'Compra B', '-', 'R$ 50,00'],
-          ['22 de ago. 2026', 'CRED PARC LOJ', '-', '+ R$ 20,00'],
-          ['25 de ago. 2026', 'PAGAMENTO ON LINE', '-', '+ R$ 140,00'],
+          ['20 de ago. 2026', 'Compra A', '-', 'R$', '100,00'],
+          ['21 de ago. 2026', 'Compra B', '-', 'R$', '50,00'],
+          ['22 de ago. 2026', 'CRED PARC LOJ', '-', '+ R$', '20,00'],
+          ['25 de ago. 2026', 'PAGAMENTO ON LINE', '-', '+ R$', '140,00'],
           ['Data de corte: 08/10/2026'],
+        ],
+        110,
+      ),
+    )
+
+  it.effect('reads intact bills without rejected rows', () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(
+        [
+          rowsOf(parsePdf(yield* nubankCells(), 'card')),
+          rowsOf(parsePdf(yield* interCells(), 'card')),
+        ],
+        [
+          { amounts: [-10_000, -25_000, 50_000], rejectedRows: 0 },
+          { amounts: [-10_000, -5_000, 2_000, 14_000], rejectedRows: 0 },
+        ],
+      )
+    }),
+  )
+
+  // Any line on a transaction page that prints an amount is a row unless the
+  // layout knows it as a summary, whatever cell it lost.
+  it.effect('counts a payment that lost its currency sign as rejected', () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(
+        [
+          rowsOf(
+            parsePdf(
+              losingCellIn(yield* nubankCells(), 'Pagamento em 08 JUL', '-R$'),
+              'card',
+            ),
+          ),
+          rowsOf(
+            parsePdf(
+              losingCellIn(yield* interCells(), '25 de ago. 2026', '+ R$'),
+              'card',
+            ),
+          ),
+        ],
+        [
+          { amounts: [-10_000, -25_000], rejectedRows: 1 },
+          { amounts: [-10_000, -5_000, 2_000], rejectedRows: 1 },
+        ],
+      )
+    }),
+  )
+
+  // A row's date is not checked by any total, so a lost date cell is found
+  // by comparing the extractions, like a lost amount.
+  it.effect('refuses a bill whose payment lost its date', () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(
+        [
+          parsePdf(losingCell(yield* nubankCells(), '08 JUL'), 'card'),
+          parsePdf(losingCell(yield* interCells(), '25 de ago. 2026'), 'card'),
+        ],
+        [Result.fail('unsupported_format'), Result.fail('unsupported_format')],
+      )
+    }),
+  )
+})
+
+describe('Account statements whose day lost its date', () => {
+  // Movements under a day header take its date; without it they would be
+  // booked on the previous day, which no balance can show.
+  it.effect('refuses an Inter statement missing a day header date', () =>
+    Effect.gen(function* () {
+      const pdf = yield* extractPdfText(
+        tablePdf([
+          ['Instituição: Banco Inter'],
+          ['Período: 01/06/2026 a 30/06/2026'],
+          ['Saldo total Saldo disponível: Saldo bloqueado:'],
+          ['R$ 130,00', 'R$ 130,00', 'R$ 0,00'],
+          [
+            '1 de Junho de 2026',
+            'Saldo do dia: R$ 150,00 Valor Saldo por transação',
+          ],
+          ['Pix recebido: EMPRESA', 'R$ 50,00', 'R$ 150,00'],
+          ['2 de Junho de 2026', 'Saldo do dia: R$ 130,00'],
+          ['Pix enviado: LOJA', '-R$ 20,00', 'R$ 130,00'],
         ]),
       )
       assert.deepStrictEqual(
-        rowsOf(parsePdf(losingCell(pdf, '25 de ago. 2026'), 'card')),
-        { amounts: [-10_000, -5_000, 2_000], rejectedRows: 1 },
+        Result.getOrThrow(parsePdf(pdf, 'account')).lines.map((line) => [
+          line.bookedOn,
+          line.amountCents,
+        ]),
+        [
+          ['2026-06-01', 5_000],
+          ['2026-06-02', -2_000],
+        ],
+      )
+      assert.deepStrictEqual(
+        parsePdf(losingCell(pdf, '2 de Junho de 2026'), 'account'),
+        Result.fail('unsupported_format'),
+      )
+    }),
+  )
+
+  it.effect('refuses a Nubank statement missing a day date', () =>
+    Effect.gen(function* () {
+      const pdf = yield* extractPdfText(
+        tablePdf([
+          ['Nu Financeira S.A. nubank.com.br'],
+          ['01 DE AGOSTO DE 2026 a 31 DE AGOSTO DE 2026'],
+          ['Saldo final do período R$ 1.000,00'],
+          ['Movimentações'],
+          ['01 AGO 2026', 'Total de entradas', '+ 1.500,00'],
+          ['Crédito em conta', '1.500,00'],
+          ['05 AGO 2026', 'Total de saídas', '- 500,00'],
+          ['Pix enviado', '500,00'],
+          ['O saldo líquido corresponde ao total de depósitos em conta.'],
+        ]),
+      )
+      assert.deepStrictEqual(
+        Result.getOrThrow(parsePdf(pdf, 'account')).lines.map((line) => [
+          line.bookedOn,
+          line.amountCents,
+        ]),
+        [
+          ['2026-08-01', 150_000],
+          ['2026-08-05', -50_000],
+        ],
+      )
+      assert.deepStrictEqual(
+        parsePdf(losingCell(pdf, '05 AGO 2026'), 'account'),
+        Result.fail('unsupported_format'),
       )
     }),
   )

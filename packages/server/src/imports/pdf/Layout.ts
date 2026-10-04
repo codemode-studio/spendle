@@ -137,6 +137,30 @@ export const readingOrder = (lines: ReadonlyArray<PositionedLine>) =>
       left.bounds.page - right.bounds.page || right.bounds.y - left.bounds.y,
   )
 
+/**
+ * An amount with two decimals, whatever currency sign precedes it or not:
+ * Brazilian `1.234,56` and dot-decimal `1,234.56`. Digits or a separator
+ * followed by a digit on either side mean it is part of a longer number.
+ */
+export const amountToken =
+  /(?<!\d[.,]?)(?:(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}|(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})(?![.,]?\d)/g
+
+/** Whether a line prints an amount, with or without a sign or currency. */
+export const printsAmount = (text: string) => text.search(amountToken) >= 0
+
+/**
+ * Whether a line of a card bill's transaction pages that is not a readable
+ * row is a row that could not be read. Every line there printing an amount
+ * is a row unless the layout knows it as a summary (totals, subtotals,
+ * limits, exchange details), whatever cell it lost: its date, its currency
+ * sign or its description. A line naming a payment is always a row, as no
+ * bill total includes payments.
+ */
+export const isUnreadRow = (
+  text: string,
+  { summary, payment }: { readonly summary: RegExp; readonly payment: RegExp },
+) => printsAmount(text) && (payment.test(text) || !summary.test(text))
+
 /** Reads a money token such as `R$ -1.234,56` or `−R$ 5,00` in cents. */
 export const cents = (token: string) =>
   parseMoney(token.replace(/−/g, '-').replace(/\s+/g, ''))

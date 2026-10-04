@@ -11,7 +11,14 @@ import { btgAccount } from './pdf/BtgAccount.ts'
 import { interAccount } from './pdf/InterAccount.ts'
 import { interCard } from './pdf/InterCard.ts'
 import { interGlobal } from './pdf/InterGlobal.ts'
-import { groupLines } from './pdf/Layout.ts'
+import {
+  amountToken,
+  fold,
+  groupLines,
+  monthAbbreviations,
+  monthNames,
+  monthNumber,
+} from './pdf/Layout.ts'
 import type { PdfLayout, PositionedLine, PositionedText } from './pdf/Layout.ts'
 import { mercadoPagoAccount } from './pdf/MercadoPagoAccount.ts'
 import { nubankAccount } from './pdf/NubankAccount.ts'
@@ -73,53 +80,68 @@ export const extractPdfText = Effect.fn('Pdf.extractText')(function* (
 
 const visibleLength = (value: string) => value.replace(/\s+/g, '').length
 
-/**
- * An amount with two decimals, whatever currency sign precedes it or not:
- * Brazilian `1.234,56` and dot-decimal `1,234.56`. Digits or a separator
- * followed by a digit on either side mean it is part of a longer number.
- */
-const amountToken =
-  /(?<!\d[.,]?)(?:(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}|(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})(?![.,]?\d)/g
+/** Month names and abbreviations, as layouts print them in dates. */
+const monthPattern = [...monthNames, ...monthAbbreviations].join('|')
 
-/** How many times each amount is printed in the given text. */
-const amountCounts = (text: string) => {
+/**
+ * A date as layouts print it: `01/08/2026`, `01/08/26`, `01-08-2026`,
+ * `02 JUL`, `05 AGO 2026`, `20 de ago. 2026` or `1 de Junho de 2026`,
+ * matched on text folded to unaccented capitals. Only day and month are
+ * compared: the plain text can print a year in a cell of its own.
+ */
+const dateToken = new RegExp(
+  `(?<![\\d.,/-])(\\d{1,2})(?:\\s+(?:DE\\s+)?(${monthPattern})\\b|([/-])(\\d{1,2})(?:\\3(?:\\d{4}|\\d{2}))?(?![\\d/]))`,
+  'g',
+)
+
+/**
+ * How many times each amount and each date is printed in the given text,
+ * keyed by kind. Currency signs and the sign of an amount are dropped, and a
+ * date is reduced to its day and month.
+ */
+const tokenCounts = (text: string) => {
   const counts = new Map<string, number>()
-  for (const [token] of text.matchAll(amountToken)) {
-    const amount = token.replace(/[.,]/g, '')
-    counts.set(amount, (counts.get(amount) ?? 0) + 1)
+  const add = (key: string) => counts.set(key, (counts.get(key) ?? 0) + 1)
+  for (const [token] of text.matchAll(amountToken))
+    add(`amount:${token.replace(/[.,]/g, '')}`)
+  for (const match of fold(text).matchAll(dateToken)) {
+    const day = Number(match[1])
+    const month = match[2] ? monthNumber(match[2]) : Number(match[4])
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12)
+      add(`date:${day}-${month}`)
   }
   return counts
 }
 
 /**
- * Whether every amount the plain text prints was also seen by the positioned
- * extraction, as many times. Layouts read rows from positioned lines and
- * check them against the printed totals and balances, but rows those controls
- * cannot see (bill payments, a statement's first movement, a day of an
- * account without a running balance, movements that offset) can only be
- * found missing by comparing the two extractions. Amounts are compared rather
- * than rows because the plain text splits table cells over separate lines,
- * even a currency sign from its amount, and counted because two rows can
- * print the same amount. Currency signs and the sign of the amount are
- * ignored: layouts print amounts bare, with `$` or with `R$`, and a sign
- * printed apart from its amount would otherwise make the extractions disagree.
+ * Whether every amount and date the plain text prints was also seen by the
+ * positioned extraction, as many times. Layouts read rows from positioned
+ * lines and check them against the printed totals and balances, but those
+ * controls cannot see every lost cell: rows outside them (bill payments, a
+ * statement's first movement, a day of an account without a running
+ * balance, movements that offset), and dates, which no total checks, so a
+ * row or a day header that lost its date would be booked on another day.
+ * Such losses can only be found by comparing the two extractions. Tokens
+ * are compared rather than rows because the plain text splits table cells
+ * over separate lines, even a currency sign from its amount, and counted
+ * because two rows can print the same amount or date. Currency signs and
+ * the sign of the amount are ignored: layouts print amounts bare, with `$`
+ * or with `R$`, and a sign printed apart from its amount would otherwise
+ * make the extractions disagree.
  */
-const seesEveryAmount = (
-  text: string,
-  lines: ReadonlyArray<PositionedLine>,
-) => {
-  const positioned = amountCounts(lines.map((line) => line.text).join('\n'))
-  return [...amountCounts(text)].every(
-    ([amount, count]) => (positioned.get(amount) ?? 0) >= count,
+const seesEveryToken = (text: string, lines: ReadonlyArray<PositionedLine>) => {
+  const positioned = tokenCounts(lines.map((line) => line.text).join('\n'))
+  return [...tokenCounts(text)].every(
+    ([token, count]) => (positioned.get(token) ?? 0) >= count,
   )
 }
 
 /**
  * Reads a statement from a PDF's text with the single bank layout that
  * recognizes it. Text a layout cannot see — pages needing OCR, positioned
- * text much shorter than the plain text, or an amount the positioned text
- * lost — could hide lines, so such a file is refused rather than read
- * partially.
+ * text much shorter than the plain text, or an amount or date the
+ * positioned text lost — could hide lines or misdate them, so such a file
+ * is refused rather than read partially.
  */
 export const parsePdf = (
   pdf: PdfText,
@@ -137,8 +159,7 @@ export const parsePdf = (
   }
 
   const lines = groupLines(pdf.items)
-  if (!seesEveryAmount(pdf.text, lines))
-    return Result.fail('unsupported_format')
+  if (!seesEveryToken(pdf.text, lines)) return Result.fail('unsupported_format')
   const text = `${pdf.text}\n${lines.map((line) => line.text).join('\n')}`
   const matching = pdfLayouts.filter((layout) => layout.matches(text))
   if (matching.length !== 1) return Result.fail('unsupported_format')

@@ -6,6 +6,7 @@ import {
   addMonths,
   calendarDate,
   cents,
+  isUnreadRow,
   mostFrequent,
   monthNumber,
   nextDay,
@@ -35,11 +36,13 @@ const trailingMoney = (line: PositionedLine | undefined) => {
 const rowPattern =
   /^(\d{2}) de (jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\. (\d{4}) (.+?) [-] (\+\s+)?R\$\s*((?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})$/i
 
-// A row that lost a cell still prints its amount, and starts with a date or
-// names a payment. Purchases must add up to the month's expenses, but a
-// payment is outside them and would vanish unnoticed.
-const rowCandidate =
-  /^\d{2} de (?:jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\.|\bpagamento\s+(?:on\s*line|de\s+fatura)\b/i
+// Lines of the transaction pages that print an amount but are not rows: the
+// bill's summary, totals and subtotals, and exchange details.
+const nonRows = {
+  summary:
+    /^(?:fatura (?:atual|anterior)|valor antecipado|despesas do m[eê]s|total|subtotal|limite|pagamento m[ií]nimo)\b|\b(?:convers[aã]o|cota[cç][aã]o)\b/i,
+  payment: /\bpagamento\s+(?:on\s*line|de\s+fatura)\b/i,
+}
 
 /**
  * Reads an Inter card bill. The cycle ends a month before the next cut date
@@ -47,8 +50,9 @@ const rowCandidate =
  * booked in the month it is billed. Bill payments are recorded as money
  * arriving on the card on the day they were made, so they pair with the bank
  * debit; they stay out of the bill's totals, so `parsePdf` refuses a file
- * whose positioned text lost an amount, such as a payment, and a payment row
- * that kept its amount but cannot be read is rejected.
+ * whose positioned text lost an amount or a date, and any other line
+ * printing an amount that is neither a row nor a summary is counted as
+ * rejected.
  */
 export const parseInterCard = ({
   lines,
@@ -94,8 +98,9 @@ export const parseInterCard = ({
     if (!transactionPages.has(line.bounds.page)) continue
     const match = line.text.match(rowPattern)
     if (!match) {
-      if (trailingMoney(line) !== null && rowCandidate.test(line.text))
-        rejectedRows++
+      // Purchases must add up to the month's expenses, but a payment is
+      // outside them and would vanish unnoticed.
+      if (isUnreadRow(line.text, nonRows)) rejectedRows++
       continue
     }
     const [, day, rawMonth, year, rawDescription, creditMarker, rawAmount] =

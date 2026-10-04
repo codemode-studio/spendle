@@ -4,6 +4,7 @@ import type { StatementProblem } from '../Statement.ts'
 import {
   calendarDate,
   cents,
+  isUnreadRow,
   mostFrequent,
   monthNumber,
   readingOrder,
@@ -17,7 +18,14 @@ import type {
 
 const months = 'JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ'
 
-const trailingAmount = /R\$\s*(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2}$/
+// Lines of the transaction pages that print an amount but are not rows: the
+// bill's totals, section subtotals and an international purchase's exchange
+// details.
+const nonRows = {
+  summary:
+    /^(?:total|subtotal|limite|pagamento m[ií]nimo|pagamentos e financiamentos|transa[cç][oõ]es)\b|\b(?:convers[aã]o|cota[cç][aã]o)\b|^(?:USD|US\$|EUR|€)\s/i,
+  payment: /\bpagamento\s+em\b/i,
+}
 
 /**
  * Reads a Nubank card bill. Rows print day and month only; the year comes
@@ -25,8 +33,9 @@ const trailingAmount = /R\$\s*(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2}$/
  * earlier bills are recorded as money arriving on the card, so the card
  * ledger and the bank debit can be paired; they are not part of the bill, so
  * only purchases and credits must add up to `Total a pagar`; `parsePdf`
- * refuses a file whose positioned text lost an amount, such as a payment,
- * and a payment row that kept its amount but cannot be read is rejected.
+ * refuses a file whose positioned text lost an amount or a date, and any
+ * other line printing an amount that is neither a row nor a summary is
+ * counted as rejected.
  */
 export const parseNubankCard = ({
   lines,
@@ -83,13 +92,6 @@ export const parseNubankCard = ({
     `^(\\d{2})\\s+(${months})\\s+(?:(?:[•*]{4})\\s*(\\d{4})\\s+)?(.+?)\\s+([−-]?\\s*R\\$)\\s*((?:\\d{1,3}(?:\\.\\d{3})*|\\d+),\\d{2})$`,
     'i',
   )
-  // A row that lost its date or another cell still prints its amount, and
-  // starts with a date or names a payment. Purchases must add up to the
-  // total, but a payment is outside it and would vanish unnoticed.
-  const rowCandidate = new RegExp(
-    `^\\d{2}\\s+(?:${months})\\b|\\bpagamento\\s+em\\b`,
-    'i',
-  )
   const rows: Array<LayoutLine> = []
   const payments = new Set<LayoutLine>()
   let rejectedRows = 0
@@ -97,8 +99,9 @@ export const parseNubankCard = ({
     if (!transactionPages.has(line.bounds.page)) continue
     const match = line.text.match(rowPattern)
     if (!match) {
-      if (trailingAmount.test(line.text) && rowCandidate.test(line.text))
-        rejectedRows++
+      // Purchases must add up to the total, but a payment is outside it and
+      // would vanish unnoticed.
+      if (isUnreadRow(line.text, nonRows)) rejectedRows++
       continue
     }
     const [, day, rawMonth, , rawDescription, marker, rawAmount] = match
