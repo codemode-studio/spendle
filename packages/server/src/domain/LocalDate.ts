@@ -21,3 +21,28 @@ export const dayOfMonth = (date: string, day: number) => {
 }
 
 export const max = (a: string, b: string) => (a > b ? a : b)
+
+// Days since a fixed epoch (the inverse of civil-from-days); exact for the Gregorian calendar.
+const dayNumber = (date: string) => {
+  const [year, month, day] = date.split('-').map(Number) as [
+    number,
+    number,
+    number,
+  ]
+  const y = month <= 2 ? year - 1 : year
+  const era = Math.floor(y / 400)
+  const yearOfEra = y - era * 400
+  const dayOfYear =
+    Math.floor((153 * (month + (month > 2 ? -3 : 9)) + 2) / 5) + day - 1
+  return (
+    era * 146097 +
+    yearOfEra * 365 +
+    Math.floor(yearOfEra / 4) -
+    Math.floor(yearOfEra / 100) +
+    dayOfYear
+  )
+}
+
+/** Whole days between two dates, regardless of order. */
+export const daysBetween = (a: string, b: string) =>
+  Math.abs(dayNumber(a) - dayNumber(b))

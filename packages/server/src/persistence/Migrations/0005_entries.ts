@@ -27,6 +27,18 @@ export default Effect.gen(function* () {
     )
   `
   yield* sql`CREATE INDEX entry_evidence_entry ON entry_evidence (entry_id)`
+  // Which entry each observation identity last belonged to. Rows outlive the
+  // evidence they describe, so an entry keeps its id when its first
+  // observation is removed and another one still confirms it.
+  yield* sql`
+    CREATE TABLE entry_identity (
+      source_id TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      external_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL,
+      PRIMARY KEY (source_id, account_id, external_id)
+    )
+  `
   // The last event sequence each account's entries reflect, so a burst of
   // observations resolves the account once.
   yield* sql`

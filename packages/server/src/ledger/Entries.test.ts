@@ -1,5 +1,6 @@
 import { assert, describe, it } from '@effect/vitest'
 import * as Effect from 'effect/Effect'
+import * as Ref from 'effect/Ref'
 import * as TestClock from 'effect/testing/TestClock'
 
 import { Imports } from '../imports/Imports.ts'
@@ -13,6 +14,7 @@ import {
 } from '../testing/FakePluggy.ts'
 import { CardTerms } from './Accounts.ts'
 import { Entries } from './Entries.ts'
+import { Observations } from './Observations.ts'
 
 // A September statement for the account: salary in, bakery out, closing at R$ 900,00.
 const septemberOfx = (lines = '') =>
@@ -26,7 +28,8 @@ CHARSET:UTF-8
 </BANKTRANLIST><LEDGERBAL><BALAMT>900.00<DTASOF>20260930</LEDGERBAL>
 </STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>`)
 
-// Pluggy sees the same two movements a day later, plus October's, with R$ 830,00 now.
+// Pluggy sees the same two movements a day later, plus October's, with the
+// bank's running balance after each one.
 const pluggyData = {
   accounts: [{ ...bank, balance: 830 }],
   transactions: {
@@ -34,14 +37,24 @@ const pluggyData = {
       tx('p-salary', '2026-09-06', {
         type: 'CREDIT',
         amount: 1000,
+        balance: 1000,
         description: 'Salário Empresa',
       }),
       tx('p-bakery', '2026-09-11', {
         amount: 100,
+        balance: 900,
         description: 'Padaria São João',
       }),
-      tx('p-market', '2026-10-02', { amount: 50, description: 'Mercado' }),
-      tx('p-coffee', '2026-10-04', { amount: 20, description: 'Café' }),
+      tx('p-market', '2026-10-02', {
+        amount: 50,
+        balance: 850,
+        description: 'Mercado',
+      }),
+      tx('p-coffee', '2026-10-04', {
+        amount: 20,
+        balance: 830,
+        description: 'Café',
+      }),
     ],
   },
 }
@@ -96,42 +109,47 @@ describe('Entries', () => {
   )
 
   it.effect(
-    'proves the balance from the statement close to the latest Pluggy balance',
+    'proves every interval between the statement close and Pluggy end-of-day balances',
     () =>
       Effect.gen(function* () {
         const { account, entries } = yield* linkedWithStatement()
         const proof = yield* entries.balanceProof(account.id)
-        // Pluggy's R$ 830,00 "now" becomes R$ 850,00 at the end of 3 October,
-        // before today's R$ 20,00 coffee.
-        assert.deepStrictEqual(proof, {
-          supported: true,
-          intervals: [
-            {
-              from: '2026-09-30',
-              to: '2026-10-03',
-              expectedChangeCents: -5000,
-              postedChangeCents: -5000,
-              differenceCents: 0,
-            },
+        // Booked checkpoints: Pluggy's end of 6 Sep, 11 Sep and 2 Oct (today, 4 Oct,
+        // may still change) and the statement's close on 30 Sep.
+        assert.deepStrictEqual(
+          proof.supported
+            ? proof.intervals.map((interval) => [
+                interval.from,
+                interval.to,
+                interval.differenceCents,
+              ])
+            : [],
+          [
+            ['2026-09-06', '2026-09-11', 0],
+            ['2026-09-11', '2026-09-30', 0],
+            ['2026-09-30', '2026-10-02', 0],
           ],
-          conflicts: [],
-        })
+        )
+        assert.deepStrictEqual(proof.supported ? proof.conflicts : null, [])
       }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect('shows a gap when a movement is missing from every source', () =>
     Effect.gen(function* () {
-      // The bank's balance is R$ 30,00 lower than the movements explain.
-      const { account, entries } = yield* linkedWithStatement(septemberOfx(), {
-        ...pluggyData,
-        accounts: [{ ...bank, balance: 800 }],
-      })
+      // The statement closes R$ 30,00 above what the movements explain.
+      const { account, entries } = yield* linkedWithStatement(
+        new TextEncoder().encode(
+          new TextDecoder()
+            .decode(septemberOfx())
+            .replace('<BALAMT>900.00', '<BALAMT>930.00'),
+        ),
+      )
       const proof = yield* entries.balanceProof(account.id)
       assert.deepStrictEqual(
         proof.supported
           ? proof.intervals.map((interval) => interval.differenceCents)
           : [],
-        [-3000],
+        [0, 3000, -3000],
       )
     }).pipe(Effect.provide(openFinanceTest())),
   )
@@ -197,5 +215,85 @@ CHARSET:UTF-8
         reason: 'credit_card',
       })
     }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect('keeps an entry id when its first observation disappears', () =>
+    Effect.gen(function* () {
+      const { openFinance, connectionId, state } = yield* connect({
+        accounts: [bank],
+        transactions: {
+          'provider-bank': [
+            tx('hold', '2026-10-02', {
+              status: 'PENDING',
+              description: 'Padaria Central',
+            }),
+          ],
+        },
+      })
+      const account = yield* openFinance.linkAccount({
+        providerAccountId: 'provider-bank',
+        target: { kind: 'checking', purpose: 'operating' },
+        historyMonths: 3,
+      })
+      yield* drain
+      yield* TestClock.adjust('1 minute')
+      yield* (yield* Imports).importFile({
+        accountId: account.id,
+        fileName: 'out.ofx',
+        bytes: new TextEncoder().encode(`<OFX><STMTRS><CURDEF>BRL<BANKTRANLIST>
+          <STMTTRN><DTPOSTED>20261002<TRNAMT>-10.00<FITID>f1<MEMO>PADARIA CENTRAL</STMTTRN>
+          </BANKTRANLIST></STMTRS></OFX>`),
+      })
+      yield* drain
+      const entries = yield* Entries
+      const [before] = yield* entries.entries(account.id)
+
+      // Pluggy drops the hold; the statement still confirms the movement.
+      yield* Ref.update(state, (current) => ({
+        ...current,
+        transactions: { 'provider-bank': [] },
+      }))
+      yield* openFinance.requestSync({ connectionId })
+      yield* drain
+      const after = yield* entries.entries(account.id)
+      assert.deepStrictEqual(
+        after.map((entry) => [entry.id, entry.sources]),
+        [[before!.id, 1]],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'uses the latest report of a day, even when it repeats an earlier value',
+    () =>
+      Effect.gen(function* () {
+        const { account, entries } = yield* linkedWithStatement()
+        const observations = yield* Observations
+        const source = yield* observations.registerSource({
+          kind: 'manual',
+          externalRef: 'checks',
+          label: 'checks',
+        })
+        const report = (balanceCents: number) =>
+          observations.recordBalance({
+            sourceId: source.id,
+            accountId: account.id,
+            balance: {
+              kind: 'booked',
+              asOf: '2026-10-03',
+              balanceCents,
+              currency: 'BRL',
+            },
+          })
+        yield* report(85000)
+        yield* report(84000)
+        yield* report(85000)
+        const proof = yield* entries.balanceProof(account.id)
+        const last = proof.supported ? proof.intervals.at(-1) : undefined
+        assert.deepStrictEqual(
+          [last?.to, last?.differenceCents],
+          ['2026-10-03', 0],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 })
