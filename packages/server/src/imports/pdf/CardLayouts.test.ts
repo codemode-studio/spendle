@@ -161,6 +161,63 @@ describe('Inter card bill', () => {
     }
   })
 
+  it('checks the summary even when the purchases add up to the month', () => {
+    // R$ 150,00 of purchases, R$ 30,00 paid early, but R$ 20,00 read as due.
+    const items = gross
+      .filter((item) => !item.text.includes('CRED PARC'))
+      .map((item) =>
+        /^Fatura atual/.test(item.text)
+          ? { ...item, text: 'Fatura atual R$ 20,00' }
+          : item,
+      )
+    assert.deepStrictEqual(
+      read(parseInterCard, items),
+      Result.fail('summary_balance_mismatch'),
+    )
+  })
+
+  it('refuses a bill whose text shows a row the layout lost', () => {
+    const positioned = gross.filter((item) => !item.text.includes('CRED PARC'))
+    const fixed = positioned.map((item) =>
+      /^Fatura atual/.test(item.text)
+        ? { ...item, text: 'Fatura atual R$ 150,00' }
+        : /^Valor antecipado/.test(item.text)
+          ? { ...item, text: 'Valor antecipado R$ 0,00' }
+          : item,
+    )
+    const text = gross.map((item) => item.text).join('\n')
+    assert.isTrue(Result.isSuccess(read(parseInterCard, fixed)))
+    assert.deepStrictEqual(
+      parseInterCard({ text, lines: groupLines(fixed) }),
+      Result.fail('summary_balance_mismatch'),
+    )
+    // Extraction repeating every line is not a lost row.
+    const repeated = [...fixed, ...fixed].map((item) => item.text).join('\n')
+    assert.isTrue(
+      Result.isSuccess(
+        parseInterCard({ text: repeated, lines: groupLines(fixed) }),
+      ),
+    )
+  })
+
+  it('refuses an impossible purchase date before shifting instalments', () => {
+    const items = gross.map((item) =>
+      item.text.includes('Compra A')
+        ? {
+            ...item,
+            text: item.text.replace(
+              '20 de ago. 2026 Compra A',
+              '31 de jun. 2026 Compra A (Parcela 03 de 03)',
+            ),
+          }
+        : item,
+    )
+    assert.deepStrictEqual(
+      read(parseInterCard, items),
+      Result.fail('invalid_date'),
+    )
+  })
+
   it('accepts a bill paid before the cut by its month expenses', () => {
     const items = [
       positionedText(
@@ -263,6 +320,36 @@ describe('Nubank card bill', () => {
       read(
         parseNubankCard,
         items.filter((item) => !item.text.includes('NuCel')),
+      ),
+      Result.fail('summary_balance_mismatch'),
+    )
+  })
+})
+
+describe('Nubank card bill dates', () => {
+  const bill = (due: string, rows: ReadonlyArray<string>) => [
+    positionedText(`Data de vencimento: ${due}`, 1, 120, 440),
+    positionedText('Período vigente: 02 DEZ a 02 JAN', 1, 120, 415),
+    positionedText('Total a pagar R$ 10,00', 1, 140, 400),
+    positionedText('TRANSAÇÕES DE 02 DEZ A 02 JAN', 2, 50, 730),
+    ...rows.map((row, index) => positionedText(row, 2, 120, 640 - index * 30)),
+  ]
+
+  it('refuses an impossible due date', () => {
+    assert.deepStrictEqual(
+      read(parseNubankCard, bill('32 JAN 2027', ['20 DEZ Livraria R$ 10,00'])),
+      Result.fail('invalid_date'),
+    )
+  })
+
+  it('refuses a payment dated outside the cycle', () => {
+    assert.deepStrictEqual(
+      read(
+        parseNubankCard,
+        bill('10 JAN 2027', [
+          '20 DEZ Livraria R$ 10,00',
+          '30 NOV Pagamento em 30 NOV −R$ 500,00',
+        ]),
       ),
       Result.fail('summary_balance_mismatch'),
     )

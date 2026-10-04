@@ -4,8 +4,8 @@ import { parseDate } from '../Statement.ts'
 import type { StatementProblem } from '../Statement.ts'
 import {
   addMonths,
+  calendarDate,
   cents,
-  isoDate,
   mostFrequent,
   monthNumber,
   nextDay,
@@ -43,6 +43,7 @@ const rowPattern =
  * debit; they stay out of the bill's totals.
  */
 export const parseInterCard = ({
+  text,
   lines,
 }: LayoutInput): Result.Result<LayoutStatement, StatementProblem> => {
   const dueDate = dateIn(
@@ -90,11 +91,13 @@ export const parseInterCard = ({
     const description = rawDescription!.replace(/\s+/g, ' ').trim()
     const amount = cents(rawAmount!)
     if (amount === null) return Result.fail('summary_balance_mismatch')
-    const purchasedOn = isoDate(
+    // Checked before any month arithmetic, which would hide an impossible day.
+    const purchasedOn = calendarDate(
       Number(year),
       monthNumber(rawMonth!),
       Number(day),
     )
+    if (purchasedOn === null) return Result.fail('invalid_date')
     if (/^pagamento(?:\s+on\s*line|\s+de\s+fatura)$/i.test(description)) {
       const row = {
         bookedOn: purchasedOn,
@@ -146,7 +149,22 @@ export const parseInterCard = ({
     monthlyExpenses !== null
       ? charged === monthlyExpenses || reconciledGross
       : (anticipated ?? 0) === 0 && charged === statementTotal
-  if (billed.length === 0 || !balanced) {
+  // The summary must close on its own: what is due is the month's expenses
+  // less what was paid early, or zero when the early payment covered more.
+  const summaryCloses =
+    monthlyExpenses === null ||
+    statementTotal + (anticipated ?? 0) === monthlyExpenses ||
+    (statementTotal === 0 && (anticipated ?? 0) >= monthlyExpenses)
+  // Every row the plain text shows must have been read from the layout, so a
+  // credit or payment lost in positioning cannot go unnoticed. Extraction may
+  // repeat text, so rows are compared as lines, not counted.
+  const squash = (line: string) => line.replace(/\s+/g, ' ').trim()
+  const read = new Set(rows.map((row) => squash(row.source.text)))
+  const lost = text
+    .split('\n')
+    .map(squash)
+    .some((line) => rowPattern.test(line) && !read.has(line))
+  if (billed.length === 0 || !balanced || !summaryCloses || lost) {
     return Result.fail('summary_balance_mismatch')
   }
 

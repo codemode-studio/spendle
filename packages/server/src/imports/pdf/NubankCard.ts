@@ -2,8 +2,8 @@ import * as Result from 'effect/Result'
 
 import type { StatementProblem } from '../Statement.ts'
 import {
+  calendarDate,
   cents,
-  isoDate,
   mostFrequent,
   monthNumber,
   readingOrder,
@@ -51,8 +51,14 @@ export const parseNubankCard = ({
   const endMonth = monthNumber(cycle[4]!)
   const endYear = endMonth > dueMonth ? dueYear - 1 : dueYear
   const startYear = startMonth > endMonth ? endYear - 1 : endYear
-  const periodStart = isoDate(startYear, startMonth, Number(cycle[1]))
-  const periodEnd = isoDate(endYear, endMonth, Number(cycle[3]))
+  const periodStart = calendarDate(startYear, startMonth, Number(cycle[1]))
+  const periodEnd = calendarDate(endYear, endMonth, Number(cycle[3]))
+  if (
+    calendarDate(dueYear, dueMonth, Number(due[1])) === null ||
+    periodStart === null ||
+    periodEnd === null
+  )
+    return Result.fail('invalid_date')
 
   const total = lines
     .find((line) =>
@@ -87,7 +93,12 @@ export const parseNubankCard = ({
     const month = monthNumber(rawMonth!)
     const year =
       startYear !== endYear && month >= startMonth ? startYear : endYear
-    const bookedOn = isoDate(year, month, Number(day))
+    const bookedOn = calendarDate(year, month, Number(day))
+    if (bookedOn === null) return Result.fail('invalid_date')
+    // Payments made during the cycle are printed in it too; one dated
+    // outside it was misread, or its year guessed wrong.
+    if (bookedOn < periodStart || bookedOn > periodEnd)
+      return Result.fail('summary_balance_mismatch')
     if (payment) {
       const row = {
         bookedOn,
@@ -99,8 +110,6 @@ export const parseNubankCard = ({
       payments.add(row)
       continue
     }
-    if (bookedOn < periodStart || bookedOn > periodEnd)
-      return Result.fail('summary_balance_mismatch')
     rows.push({
       bookedOn,
       description,

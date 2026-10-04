@@ -196,6 +196,12 @@ const daysInMonth = (year: number, month: number) => {
   ]!
 }
 
+/** `isoDate` for a day that exists in the calendar, else null. */
+export const calendarDate = (year: number, month: number, day: number) =>
+  month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month)
+    ? isoDate(year, month, day)
+    : null
+
 const splitDate = (date: string) => {
   const [year = 0, month = 1, day = 1] = date.split('-').map(Number)
   return { year, month, day }
