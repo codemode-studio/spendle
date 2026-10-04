@@ -131,4 +131,91 @@ describe('Accounts', () => {
         )
       }).pipe(Effect.provide(LedgerTest)),
   )
+
+  it.effect('treats Itaú and ITAU as the same institution', () =>
+    Effect.gen(function* () {
+      const { accounts, owner } = yield* setup
+      const base = {
+        ownerId: owner.id,
+        kind: 'checking',
+        purpose: 'operating',
+        currency: 'BRL',
+      } as const
+      const first = yield* accounts.open({
+        ...base,
+        institutionName: 'Itaú',
+        name: 'PF',
+      })
+      const second = yield* accounts.open({
+        ...base,
+        institutionName: 'ITAU',
+        name: 'PJ',
+      })
+      assert.strictEqual(second.institutionId, first.institutionId)
+    }).pipe(Effect.provide(LedgerTest)),
+  )
+
+  it.effect('rejects a blank name without writing anything', () =>
+    Effect.gen(function* () {
+      const { accounts, owner } = yield* setup
+      const error = yield* accounts
+        .open({
+          ownerId: owner.id,
+          institutionName: 'Nubank',
+          name: '   ',
+          kind: 'checking',
+          purpose: 'operating',
+          currency: 'BRL',
+        })
+        .pipe(Effect.flip)
+      assert.strictEqual(
+        error._tag === 'InvalidAccount' && error.reason,
+        'blank_name',
+      )
+      assert.strictEqual((yield* accounts.list).length, 0)
+    }).pipe(Effect.provide(LedgerTest)),
+  )
+
+  it.effect(
+    'keeps both of two concurrent edits and never combines them into an invalid account',
+    () =>
+      Effect.gen(function* () {
+        const { accounts, owner } = yield* setup
+        const account = yield* accounts.open({
+          ownerId: owner.id,
+          institutionName: 'Nubank',
+          name: 'Conta',
+          kind: 'checking',
+          purpose: 'operating',
+          currency: 'BRL',
+        })
+        yield* Effect.all(
+          [
+            accounts.update(account.id, { name: 'Renomeada' }),
+            accounts.update(account.id, { purpose: 'reserve' }),
+          ],
+          { concurrency: 'unbounded' },
+        )
+        const stored = yield* accounts.get(account.id)
+        assert.deepStrictEqual(
+          [stored.name, stored.purpose],
+          ['Renomeada', 'reserve'],
+        )
+
+        const results = yield* Effect.all(
+          [
+            accounts
+              .update(account.id, { kind: 'credit_card', card: terms })
+              .pipe(Effect.result),
+            accounts
+              .update(account.id, { kind: 'investment' })
+              .pipe(Effect.result),
+          ],
+          { concurrency: 'unbounded' },
+        )
+        const final = yield* accounts.get(account.id)
+        assert.isTrue(results.some((result) => result._tag === 'Failure'))
+        assert.isTrue((final.kind === 'credit_card') === (final.card !== null))
+      }).pipe(Effect.provide(LedgerTest)),
+  )
 })

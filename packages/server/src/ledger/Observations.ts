@@ -93,8 +93,21 @@ export class SourceNotFound extends Schema.TaggedError<SourceNotFound>()(
   }
 }
 
+export class InvalidReport extends Schema.TaggedError<InvalidReport>()(
+  'InvalidReport',
+  { issue: Schema.String },
+) {
+  override get message(): string {
+    return `Invalid report: ${this.issue}`
+  }
+}
+
 type RecordError =
-  AccountNotFound | SourceNotFound | CurrencyMismatch | LedgerStoreError
+  | InvalidReport
+  | AccountNotFound
+  | SourceNotFound
+  | CurrencyMismatch
+  | LedgerStoreError
 
 export interface ObservationsShape {
   /** Returns the source for `(kind, externalRef)`, creating it on first use. */
@@ -126,6 +139,16 @@ export interface ObservationsShape {
   ) => Effect.Effect<ReadonlyArray<TransactionObservation>, LedgerStoreError>
 }
 
+const LatestRow = Schema.Struct({
+  version: Schema.Int,
+  bookedOn: Schema.String,
+  amountCents: Schema.Int,
+  currency: Schema.String,
+  description: Schema.String,
+  status: TransactionStatus,
+  raw: Schema.String,
+})
+
 const ObservationRow = Schema.Struct({
   id: Schema.String,
   sourceId: Schema.String,
@@ -139,17 +162,27 @@ const ObservationRow = Schema.Struct({
   status: TransactionStatus,
 }).pipe(Schema.decodeTo(TransactionObservation))
 
+// The raw payload is part of the fact: a provider correcting only a merchant
+// detail is still a new report and a new version.
 const sameReport = (
-  stored: TransactionObservation,
+  stored: typeof LatestRow.Type,
   reported: ReportedTransaction,
+  raw: string,
 ) =>
   stored.bookedOn === reported.bookedOn &&
   stored.amountCents === reported.amountCents &&
   stored.currency === reported.currency &&
   stored.description === reported.description &&
-  stored.status === reported.status
+  stored.status === reported.status &&
+  stored.raw === raw
 
 const encodeRaw = Schema.encodeEffect(Schema.fromJsonString(Schema.Json))
+const decodeTransactions = Schema.decodeUnknownEffect(
+  Schema.Array(ReportedTransaction),
+)
+const decodeBalance = Schema.decodeUnknownEffect(ReportedBalance)
+const invalid = (cause: Schema.SchemaError) =>
+  new InvalidReport({ issue: cause.message })
 
 export class Observations extends Context.Service<
   Observations,
@@ -194,9 +227,11 @@ export class Observations extends Context.Service<
           accountId: Schema.String,
           externalId: Schema.String,
         }),
-        Result: ObservationRow,
+        Result: LatestRow,
         execute: (key) => sql`
-          SELECT ${observationColumns} FROM transaction_observations
+          SELECT version, booked_on AS bookedOn, amount_cents AS amountCents, currency,
+            description, status, raw
+          FROM transaction_observations
           WHERE source_id = ${key.sourceId} AND account_id = ${key.accountId}
             AND external_id = ${key.externalId}
           ORDER BY version DESC LIMIT 1
@@ -251,16 +286,21 @@ export class Observations extends Context.Service<
           readonly externalRef: string
           readonly label: string
         }) {
-          const existing = yield* findSource(input).pipe(
+          // Insert-or-ignore then read, so two concurrent registrations agree.
+          yield* sql`
+            INSERT INTO sources (id, kind, external_ref, label, created_at)
+            VALUES (${yield* newId}, ${input.kind}, ${input.externalRef}, ${input.label}, ${yield* now})
+            ON CONFLICT (kind, external_ref) DO NOTHING
+          `.pipe(Effect.mapError(storeError('registerSource')))
+          const source = yield* findSource(input).pipe(
             Effect.mapError(storeError('registerSource')),
           )
-          if (Option.isSome(existing)) return existing.value
-          const source = new Source({ id: yield* newId, ...input })
-          yield* sql`
-          INSERT INTO sources (id, kind, external_ref, label, created_at)
-          VALUES (${source.id}, ${source.kind}, ${source.externalRef}, ${source.label}, ${yield* now})
-        `.pipe(Effect.mapError(storeError('registerSource')))
-          return source
+          if (Option.isNone(source)) {
+            return yield* storeError('registerSource')(
+              'source vanished after insert',
+            )
+          }
+          return source.value
         },
       )
 
@@ -271,10 +311,13 @@ export class Observations extends Context.Service<
           readonly transactions: ReadonlyArray<ReportedTransaction>
         }) {
           const { sourceId, accountId } = input
+          const transactions = yield* decodeTransactions(
+            input.transactions,
+          ).pipe(Effect.mapError(invalid))
           yield* guard(
             sourceId,
             accountId,
-            input.transactions.map((transaction) => transaction.currency),
+            transactions.map((transaction) => transaction.currency),
           )
           const observedAt = yield* now
           return yield* sql
@@ -282,7 +325,8 @@ export class Observations extends Context.Service<
               Effect.gen(function* () {
                 const recorded: Array<TransactionObservation> = []
                 let unchanged = 0
-                for (const reported of input.transactions) {
+                for (const reported of transactions) {
+                  const raw = yield* encodeRaw(reported.raw)
                   const latest = yield* findLatest({
                     sourceId,
                     accountId,
@@ -290,7 +334,7 @@ export class Observations extends Context.Service<
                   })
                   if (
                     Option.isSome(latest) &&
-                    sameReport(latest.value, reported)
+                    sameReport(latest.value, reported, raw)
                   ) {
                     unchanged++
                     continue
@@ -315,7 +359,7 @@ export class Observations extends Context.Service<
                   VALUES (${observation.id}, ${sourceId}, ${accountId}, ${observation.externalId},
                     ${observation.version}, ${observation.bookedOn}, ${observation.amountCents},
                     ${observation.currency}, ${observation.description}, ${observation.status},
-                    ${yield* encodeRaw(reported.raw)}, ${observedAt})
+                    ${raw}, ${observedAt})
                 `
                   recorded.push(observation)
                 }
@@ -345,22 +389,33 @@ export class Observations extends Context.Service<
           readonly accountId: string
           readonly balance: ReportedBalance
         }) {
-          const { sourceId, accountId, balance } = input
+          const { sourceId, accountId } = input
+          const balance = yield* decodeBalance(input.balance).pipe(
+            Effect.mapError(invalid),
+          )
           yield* guard(sourceId, accountId, [balance.currency])
           const id = yield* newId
           const observedAt = yield* now
           return yield* sql
             .withTransaction(
               Effect.gen(function* () {
-                const inserted = yield* sql<{ id: string }>`
-                INSERT INTO balance_observations (id, source_id, account_id, kind, as_of,
-                  balance_cents, currency, observed_at)
-                VALUES (${id}, ${sourceId}, ${accountId}, ${balance.kind}, ${balance.asOf},
-                  ${balance.balanceCents}, ${balance.currency}, ${observedAt})
-                ON CONFLICT DO NOTHING
-                RETURNING id
-              `
-                if (inserted.length === 0) return false
+                // Only a repeat of the latest report for this source, account,
+                // kind and day is redundant; going back to an earlier value is
+                // a correction and is recorded in order.
+                const latest = yield* sql<{ balanceCents: number }>`
+                  SELECT balance_cents AS balanceCents FROM balance_observations
+                  WHERE source_id = ${sourceId} AND account_id = ${accountId}
+                    AND kind = ${balance.kind} AND as_of = ${balance.asOf}
+                  ORDER BY rowid DESC LIMIT 1
+                `
+                if (latest[0]?.balanceCents === balance.balanceCents)
+                  return false
+                yield* sql`
+                  INSERT INTO balance_observations (id, source_id, account_id, kind, as_of,
+                    balance_cents, currency, observed_at)
+                  VALUES (${id}, ${sourceId}, ${accountId}, ${balance.kind}, ${balance.asOf},
+                    ${balance.balanceCents}, ${balance.currency}, ${observedAt})
+                `
                 yield* log.append([
                   {
                     type: 'BalanceObserved',

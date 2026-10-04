@@ -6,6 +6,7 @@ import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
 import * as Schema from 'effect/Schema'
 import * as SqlClient from 'effect/sql/SqlClient'
+import type { SqlError } from 'effect/sql/SqlError'
 import * as SqlSchema from 'effect/sql/SqlSchema'
 
 import { Currency } from '../domain/Money.ts'
@@ -103,6 +104,7 @@ export class InvalidAccount extends Schema.TaggedError<InvalidAccount>()(
       'card_terms_required',
       'card_terms_forbidden',
       'investment_purpose',
+      'blank_name',
     ]),
   },
 ) {
@@ -114,6 +116,8 @@ export class InvalidAccount extends Schema.TaggedError<InvalidAccount>()(
         return 'Only a credit card has card terms'
       case 'investment_purpose':
         return 'An investment account must have the investment purpose'
+      case 'blank_name':
+        return 'Account and institution names cannot be blank'
     }
   }
 }
@@ -125,6 +129,25 @@ export class LedgerStoreError extends Schema.TaggedError<LedgerStoreError>()(
   override get message(): string {
     return `Ledger ${this.operation} failed`
   }
+}
+
+/** Identifies an institution regardless of case and accents: `Itaú`, `ITAU`. */
+export const institutionKey = (name: string) =>
+  name
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('pt-BR')
+    .replace(/\s+/g, ' ')
+
+// Names are stored trimmed; one that is blank after trimming is rejected
+// before anything is written.
+const trimmedName = (name: string | undefined) => {
+  if (name === undefined) return Effect.succeed(undefined)
+  const trimmed = name.trim()
+  return trimmed
+    ? Effect.succeed(trimmed)
+    : Effect.fail(new InvalidAccount({ reason: 'blank_name' }))
 }
 
 // A credit card is the only kind with card terms, and a brokerage account is
@@ -246,7 +269,7 @@ export class Accounts extends Context.Service<Accounts, AccountsShape>()(
         Request: Schema.String,
         Result: Schema.Struct({ id: Schema.String }),
         execute: (name) =>
-          sql`SELECT id FROM institutions WHERE lower(name) = lower(${name})`,
+          sql`SELECT id FROM institutions WHERE name_key = ${institutionKey(name)}`,
       })
       const findOwner = SqlSchema.findOneOption({
         Request: Schema.String,
@@ -257,17 +280,21 @@ export class Accounts extends Context.Service<Accounts, AccountsShape>()(
       const institutionId = (name: string) =>
         Effect.gen(function* () {
           const trimmed = name.trim()
+          yield* sql`
+            INSERT INTO institutions (id, name, name_key, created_at)
+            VALUES (${yield* newId}, ${trimmed}, ${institutionKey(trimmed)}, ${yield* now})
+            ON CONFLICT (name_key) DO NOTHING
+          `
           const existing = yield* findInstitution(trimmed)
-          if (Option.isSome(existing)) return existing.value.id
-          const id = yield* newId
-          yield* sql`INSERT INTO institutions (id, name, created_at) VALUES (${id}, ${trimmed}, ${yield* now})`
-          return id
+          if (Option.isNone(existing))
+            return yield* Effect.die('institution vanished after insert')
+          return existing.value.id
         })
 
       const writeTerms = (
         accountId: string,
         card: CardTerms | null | undefined,
-      ) =>
+      ): Effect.Effect<void, SqlError> =>
         card
           ? sql`
               INSERT INTO credit_card_terms (account_id, closing_day, due_day, limit_cents, last_four)
@@ -275,7 +302,7 @@ export class Accounts extends Context.Service<Accounts, AccountsShape>()(
               ON CONFLICT (account_id) DO UPDATE SET closing_day = excluded.closing_day,
                 due_day = excluded.due_day, limit_cents = excluded.limit_cents,
                 last_four = excluded.last_four
-            `
+            `.pipe(Effect.asVoid)
           : Effect.void
 
       const get = Effect.fn('Accounts.get')(function* (accountId: string) {
@@ -304,6 +331,8 @@ export class Accounts extends Context.Service<Accounts, AccountsShape>()(
 
       const open = Effect.fn('Accounts.open')(function* (input: OpenAccount) {
         yield* validate(input)
+        const name = (yield* trimmedName(input.name))!
+        const institutionName = (yield* trimmedName(input.institutionName))!
         const id = yield* newId
         yield* sql
           .withTransaction(
@@ -313,8 +342,8 @@ export class Accounts extends Context.Service<Accounts, AccountsShape>()(
               }
               yield* sql`
                 INSERT INTO accounts (id, owner_id, institution_id, name, kind, purpose, currency, created_at)
-                VALUES (${id}, ${input.ownerId}, ${yield* institutionId(input.institutionName)},
-                  ${input.name.trim()}, ${input.kind}, ${input.purpose}, ${input.currency}, ${yield* now})
+                VALUES (${id}, ${input.ownerId}, ${yield* institutionId(institutionName)},
+                  ${name}, ${input.kind}, ${input.purpose}, ${input.currency}, ${yield* now})
               `
               yield* writeTerms(id, input.card)
               yield* log.append([
@@ -341,39 +370,54 @@ export class Accounts extends Context.Service<Accounts, AccountsShape>()(
         accountId: string,
         changes: AccountChanges,
       ) {
-        const current = yield* get(accountId)
-        const next = {
-          kind: changes.kind ?? current.kind,
-          purpose: changes.purpose ?? current.purpose,
-          card: changes.card ?? current.card,
-        }
-        yield* validate(next)
+        const name = yield* trimmedName(changes.name)
+        const institutionName = yield* trimmedName(changes.institutionName)
         const changed = Object.keys(changes).filter(
           (key) => changes[key as keyof AccountChanges] !== undefined,
         )
+        // Read, validate and write in one transaction: SQLite serializes
+        // transactions, so a concurrent edit can neither be lost nor combine
+        // with this one into an invalid account.
         yield* sql
           .withTransaction(
             Effect.gen(function* () {
+              const current = yield* get(accountId)
+              const next = {
+                kind: changes.kind ?? current.kind,
+                purpose: changes.purpose ?? current.purpose,
+                card: changes.card ?? current.card,
+              }
+              yield* validate(next)
               const institution =
-                changes.institutionName === undefined
+                institutionName === undefined
                   ? current.institutionId
-                  : yield* institutionId(changes.institutionName)
+                  : yield* institutionId(institutionName).pipe(
+                      Effect.mapError(storeError('update')),
+                    )
               yield* sql`
-                UPDATE accounts SET name = ${changes.name?.trim() ?? current.name},
-                  institution_id = ${institution}, kind = ${next.kind}, purpose = ${next.purpose}
-                WHERE id = ${accountId}
-              `
-              yield* writeTerms(accountId, changes.card)
-              yield* log.append([
-                {
-                  type: 'AccountUpdated',
-                  streamId: accountId,
-                  payload: { accountId, changed },
-                },
-              ])
+              UPDATE accounts SET name = ${name ?? current.name},
+                institution_id = ${institution}, kind = ${next.kind}, purpose = ${next.purpose}
+              WHERE id = ${accountId}
+            `.pipe(Effect.mapError(storeError('update')))
+              yield* writeTerms(accountId, changes.card).pipe(
+                Effect.mapError(storeError('update')),
+              )
+              yield* log
+                .append([
+                  {
+                    type: 'AccountUpdated',
+                    streamId: accountId,
+                    payload: { accountId, changed },
+                  },
+                ])
+                .pipe(Effect.mapError(storeError('update')))
             }),
           )
-          .pipe(Effect.mapError(storeError('update')))
+          .pipe(
+            Effect.catchTag('SqlError', (cause) =>
+              Effect.fail(storeError('update')(cause)),
+            ),
+          )
         return yield* get(accountId)
       })
 

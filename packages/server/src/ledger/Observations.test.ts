@@ -180,4 +180,138 @@ describe('Observations', () => {
       )
     }).pipe(Effect.provide(LedgerTest)),
   )
+
+  it.effect('refuses to delete or replace stored observations', () =>
+    Effect.gen(function* () {
+      const { observations, account, source } = yield* setup
+      yield* observations.recordTransactions({
+        sourceId: source.id,
+        accountId: account.id,
+        transactions: [coffee],
+      })
+      yield* observations.recordBalance({
+        sourceId: source.id,
+        accountId: account.id,
+        balance: {
+          kind: 'booked',
+          asOf: '2026-09-30',
+          balanceCents: 1000,
+          currency: 'BRL',
+        },
+      })
+      const sql = yield* SqlClient.SqlClient
+      const attempts = [
+        sql`DELETE FROM transaction_observations`,
+        sql`DELETE FROM balance_observations`,
+        sql`INSERT OR REPLACE INTO transaction_observations
+          SELECT id, source_id, account_id, external_id, version, booked_on, 0, currency,
+            description, status, raw, observed_at
+          FROM transaction_observations`,
+      ]
+      for (const attempt of attempts) {
+        const error = yield* attempt.pipe(Effect.flip)
+        assert.strictEqual(error._tag, 'SqlError')
+      }
+      assert.deepStrictEqual(
+        (yield* observations.current(account.id)).map(
+          (observation) => observation.amountCents,
+        ),
+        [-1250],
+      )
+    }).pipe(Effect.provide(LedgerTest)),
+  )
+
+  it.effect('records a change that only touches the raw payload', () =>
+    Effect.gen(function* () {
+      const { observations, account, source } = yield* setup
+      const record = (raw: ReportedTransaction['raw']) =>
+        observations.recordTransactions({
+          sourceId: source.id,
+          accountId: account.id,
+          transactions: [{ ...coffee, raw }],
+        })
+      yield* record({ merchant: { cnpj: '00.000.000/0001-00' } })
+      const corrected = yield* record({
+        merchant: { cnpj: '11.111.111/0001-11' },
+      })
+      assert.deepStrictEqual(
+        corrected.recorded.map((observation) => observation.version),
+        [2],
+      )
+    }).pipe(Effect.provide(LedgerTest)),
+  )
+
+  it.effect(
+    'rejects fractional centavos and impossible dates before writing',
+    () =>
+      Effect.gen(function* () {
+        const { observations, account, source } = yield* setup
+        const balance = yield* observations
+          .recordBalance({
+            sourceId: source.id,
+            accountId: account.id,
+            balance: {
+              kind: 'booked',
+              asOf: '2026-09-30',
+              balanceCents: 0.5,
+              currency: 'BRL',
+            },
+          })
+          .pipe(Effect.flip)
+        const date = yield* observations
+          .recordTransactions({
+            sourceId: source.id,
+            accountId: account.id,
+            transactions: [{ ...coffee, bookedOn: '2026-02-30' }],
+          })
+          .pipe(Effect.flip)
+        assert.deepStrictEqual(
+          [balance._tag, date._tag],
+          ['InvalidReport', 'InvalidReport'],
+        )
+        assert.strictEqual((yield* observations.current(account.id)).length, 0)
+      }).pipe(Effect.provide(LedgerTest)),
+  )
+
+  it.effect(
+    'records a balance that returns to an earlier value as a correction',
+    () =>
+      Effect.gen(function* () {
+        const { observations, account, source } = yield* setup
+        const record = (balanceCents: number) =>
+          observations.recordBalance({
+            sourceId: source.id,
+            accountId: account.id,
+            balance: {
+              kind: 'booked',
+              asOf: '2026-09-30',
+              balanceCents,
+              currency: 'BRL',
+            },
+          })
+        assert.deepStrictEqual(
+          [yield* record(1000), yield* record(2000), yield* record(1000)],
+          [true, true, true],
+        )
+      }).pipe(Effect.provide(LedgerTest)),
+  )
+
+  it.effect('registers a source once when two callers race', () =>
+    Effect.gen(function* () {
+      const observations = yield* Observations
+      const input = {
+        kind: 'file',
+        externalRef: 'sha-1',
+        label: 'set.ofx',
+      } as const
+      const [a, b] = yield* Effect.all(
+        [
+          observations.registerSource(input),
+          observations.registerSource(input),
+        ],
+        { concurrency: 'unbounded' },
+      )
+      assert.strictEqual(a.id, b.id)
+    }).pipe(Effect.provide(LedgerTest)),
+  )
 })
