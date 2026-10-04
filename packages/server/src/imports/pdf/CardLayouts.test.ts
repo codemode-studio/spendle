@@ -218,6 +218,47 @@ describe('Inter card bill', () => {
     )
   })
 
+  const withPayment = (date: string, amount: string) =>
+    gross.flatMap((item) =>
+      item.text.includes('CRED PARC')
+        ? [
+            item,
+            {
+              ...item,
+              y: item.y - 20,
+              text: item.text
+                .replace(
+                  '22 de ago. 2026 CRED PARC LOJ PARCELA',
+                  `${date} PAGAMENTO ON LINE`,
+                )
+                .replace('R$ 20,00', `R$ ${amount}`),
+            },
+          ]
+        : [item],
+    )
+
+  it('accepts an overpaid bill with statement credits', () => {
+    const items = withPayment('25 de ago. 2026', '140,00').map((item) =>
+      /^Fatura atual/.test(item.text)
+        ? { ...item, text: 'Fatura atual R$ 0,00' }
+        : /^Valor antecipado/.test(item.text)
+          ? { ...item, text: 'Valor antecipado R$ 160,00' }
+          : item,
+    )
+    const statement = summary(read(parseInterCard, items))
+    assert.deepStrictEqual(
+      [statement.closingBalance?.cents, statement.lines.length],
+      [0, 4],
+    )
+  })
+
+  it('refuses a payment dated outside the cycle', () => {
+    assert.deepStrictEqual(
+      read(parseInterCard, withPayment('30 de nov. 2026', '500,00')),
+      Result.fail('summary_balance_mismatch'),
+    )
+  })
+
   it('accepts a bill paid before the cut by its month expenses', () => {
     const items = [
       positionedText(
@@ -294,6 +335,18 @@ describe('Nubank card bill', () => {
         ['2026-07-08', 'Pagamento em 08 JUL', 50_000],
       ],
     })
+  })
+
+  it('refuses a bill whose text shows a payment the layout lost', () => {
+    const positioned = items.filter((item) => !item.text.includes('Pagamento'))
+    const text = items.map((item) => item.text).join('\n')
+    assert.deepStrictEqual(
+      parseNubankCard({ text, lines: groupLines(positioned) }),
+      Result.fail('summary_balance_mismatch'),
+    )
+    assert.isTrue(
+      Result.isSuccess(parseNubankCard({ text, lines: groupLines(items) })),
+    )
   })
 
   it('places a cycle spanning the new year in both years', () => {

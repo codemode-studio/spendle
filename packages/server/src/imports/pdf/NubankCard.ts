@@ -25,6 +25,7 @@ const months = 'JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ'
  * only purchases and credits must add up to `Total a pagar`.
  */
 export const parseNubankCard = ({
+  text,
   lines,
 }: LayoutInput): Result.Result<LayoutStatement, StatementProblem> => {
   const due = lines
@@ -121,7 +122,19 @@ export const parseNubankCard = ({
 
   const billed = rows.filter((row) => !payments.has(row))
   const charged = -billed.reduce((sum, row) => sum + row.amountCents, 0)
-  if (billed.length === 0 || charged !== totalCents)
+  // Payments are outside the bill's total, so a payment lost in positioning
+  // would go unnoticed: every row the plain text shows, by its date and
+  // amount, must have been read from the layout.
+  const signature = (line: string) => {
+    const match = line.replace(/\s+/g, ' ').trim().match(rowPattern)
+    return match ? `${match[1]} ${match[2]!.toUpperCase()} ${match[6]}` : null
+  }
+  const read = new Set(rows.map((row) => signature(row.source.text)))
+  const lost = text
+    .split('\n')
+    .map(signature)
+    .some((key) => key !== null && !read.has(key))
+  if (billed.length === 0 || charged !== totalCents || lost)
     return Result.fail('summary_balance_mismatch')
 
   return Result.succeed({

@@ -99,6 +99,10 @@ export const parseInterCard = ({
     )
     if (purchasedOn === null) return Result.fail('invalid_date')
     if (/^pagamento(?:\s+on\s*line|\s+de\s+fatura)$/i.test(description)) {
+      // A payment printed on the bill was made during its cycle; one dated
+      // outside it was misread.
+      if (purchasedOn < periodStart || purchasedOn > periodEnd)
+        return Result.fail('summary_balance_mismatch')
       const row = {
         bookedOn: purchasedOn,
         description,
@@ -135,13 +139,13 @@ export const parseInterCard = ({
     (sum, row) => sum + Math.max(row.amountCents, 0),
     0,
   )
+  // The amount due is checked by the shared summary equation below.
   const reconciledGross =
     monthlyExpenses !== null &&
     anticipated !== null &&
     credits > 0 &&
     anticipated >= credits &&
-    charged + credits === monthlyExpenses &&
-    statementTotal + anticipated === monthlyExpenses
+    charged + credits === monthlyExpenses
   // Purchases must add up to the month's expenses when the bill prints them.
   // The amount due is only a valid target when nothing was paid early:
   // otherwise a missing purchase could equal what is still due.
