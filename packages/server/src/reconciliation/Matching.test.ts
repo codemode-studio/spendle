@@ -137,12 +137,22 @@ describe('matchRelations', () => {
           true,
         ),
         pair('Pix enviado Donald', 'Pix recebido Donald'),
+        pair(
+          'Pix enviado Joao Silva Junior',
+          'Pix recebido Joao Silva Junior',
+          'Joao Silva',
+        ),
+        pair('Pix enviado Joao Silva Neto', 'Pix recebido Joao', 'Joao Silva'),
+        pair('Pix enviado Joao Silva', 'Pix recebido Joao Silva', 'Joao Silva'),
       ],
       [
         ['suggested', 'same_third_party'],
         ['suggested', 'same_third_party'],
         ['suggested', 'same_third_party'],
         ['suggested', 'names_other_account'],
+        ['confirmed', 'same_counterparty'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
         ['confirmed', 'same_counterparty'],
       ],
     )

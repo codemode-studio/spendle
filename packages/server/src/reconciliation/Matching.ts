@@ -282,9 +282,11 @@ const counterpartEvidence = (
   const owners = [outflow, inflow].map((entry) =>
     counterparties(entry.ownerName ?? '', institutions),
   )
-  // A name is the owner's when it agrees with every account's owner.
+  // A name is the owner's when every word of it belongs to every account's
+  // owner: `Donald` fits `Donald Silveira`, but `Joao Silva Junior` names
+  // someone else than `Joao Silva`.
   const isOwner = (name: ReadonlySet<string>) =>
-    owners.every((owner) => compareNames(name, owner) === 'same')
+    owners.every((owner) => owner.size > 0 && within(name, owner))
   const thirdParty = [out, into].some((name) => name.size > 0 && !isOwner(name))
   const reasons: Array<string> = []
   if (names === 'same')
