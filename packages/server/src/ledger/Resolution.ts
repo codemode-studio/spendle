@@ -562,10 +562,70 @@ const sourceOrders = (
 }
 
 /**
+ * For each entry, the entries sharing a meaningful word or a file
+ * transaction id with one of its reports, found through an index of those
+ * keys and remembered.
+ */
+const talkers = (entries: ReadonlyArray<Building>) => {
+  const { named } = wordCache()
+  const keysOf = (entry: Building) =>
+    new Set(
+      entry.evidence.flatMap((evidence) => [
+        ...[...named(evidence.description)].map((word) => `word:${word}`),
+        ...(evidence.fileTransactionId === null
+          ? []
+          : [`file:${evidence.fileTransactionId}`]),
+      ]),
+    )
+  const byKey = new Map<string, Array<Building>>()
+  for (const entry of entries)
+    for (const key of keysOf(entry)) {
+      const list = byKey.get(key) ?? []
+      list.push(entry)
+      byKey.set(key, list)
+    }
+  const memo = new Map<Building, Set<Building>>()
+  return (entry: Building) => {
+    let found = memo.get(entry)
+    if (found === undefined) {
+      found = new Set<Building>()
+      for (const key of keysOf(entry))
+        for (const other of byKey.get(key) ?? [])
+          if (other !== entry) found.add(other)
+      memo.set(entry, found)
+    }
+    return found
+  }
+}
+
+// The neighbours after `index` that may complete a triple with `entry` and
+// the neighbour at `index`, in order: all of them when those two talk, else
+// those that talk to either, found through who they talk to.
+const seconds = (
+  neighbors: ReadonlyArray<Building>,
+  position: ReadonlyMap<Building, number>,
+  index: number,
+  toEntry: ReadonlySet<Building>,
+  toFirst: ReadonlySet<Building>,
+) => {
+  if (toEntry.has(neighbors[index]!)) return neighbors.slice(index + 1)
+  const after = new Set<number>()
+  for (const talkers of [toEntry, toFirst])
+    for (const other of talkers) {
+      const at = position.get(other)
+      if (at !== undefined && at > index) after.add(at)
+    }
+  return [...after].sort((a, b) => a - b).map((at) => neighbors[at]!)
+}
+
+/**
  * Revisits each entry with one or two entries it could share a movement with
  * and regroups their evidence when it fits in fewer entries, until nothing
  * changes or `bound` entries remain. Each change removes an entry, so it
  * ends; entries are visited oldest first, so the result is deterministic.
+ * A regrouping only succeeds when some two of its entries share a
+ * meaningful word or a file transaction id (each new entry's reports are
+ * chained by them), so sets without such a pair are skipped untried.
  */
 const regroupLocally = (
   built: ReadonlyArray<Building>,
@@ -581,6 +641,7 @@ const regroupLocally = (
     const rank = new Map(current.map((entry, index) => [entry, index]))
     const gone = new Set<Building>()
     const born: Array<Building> = []
+    const talking = talkers(current)
     // Replaces `set` with fewer entries when its evidence fits in them.
     const tryRegroup = (set: Array<Building>) => {
       const items = set.flatMap((member) => member.evidence)
@@ -597,12 +658,20 @@ const regroupLocally = (
       const neighbors = [...near(entry)]
         .filter((other) => !gone.has(other) && linked(entry, other))
         .sort((a, b) => rank.get(a)! - rank.get(b)!)
+      const position = new Map(neighbors.map((other, at) => [other, at]))
+      const toEntry = talking(entry)
       search: for (const [index, first] of neighbors.entries()) {
-        if (tryRegroup([entry, first])) {
+        if (toEntry.has(first) && tryRegroup([entry, first])) {
           changed = true
           break
         }
-        for (const second of neighbors.slice(index + 1))
+        for (const second of seconds(
+          neighbors,
+          position,
+          index,
+          toEntry,
+          talking(first),
+        ))
           if (tryRegroup([entry, first, second])) {
             changed = true
             break search

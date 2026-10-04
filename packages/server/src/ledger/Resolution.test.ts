@@ -307,6 +307,23 @@ describe('resolveEntries', () => {
     assert.isTrue(resolved.every((entry) => entry.evidence.length === 3))
   })
 
+  it('keeps equal same-day debits with unrelated payees apart in three sources', () => {
+    // 80 equal debits on one day from each of three sources, every payee
+    // named differently: nothing ties any two reports to one movement.
+    const observations = ['a', 'b', 'c'].flatMap((sourceId) =>
+      Array.from({ length: 80 }, (_, n) =>
+        observed({
+          sourceId,
+          amountCents: -1000,
+          description: `Pix enviado ${sourceId}${String(n).padStart(3, '0')}`,
+        }),
+      ),
+    )
+    const resolved = resolveEntries(observations)
+    assert.strictEqual(resolved.length, 240)
+    assert.isTrue(resolved.every((entry) => entry.evidence.length === 1))
+  })
+
   it('pairs two continuous daily histories without a history-sized problem', () => {
     const days = 4000
     const daily = (sourceId: string) =>
