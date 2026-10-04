@@ -6,6 +6,7 @@ import * as schema from '#/db/schema'
 import type { OwnershipScopeType } from '#/domain/ledger'
 import { normalizeDescription } from '#/domain/finance'
 import { assertIsoDate } from '#/domain/period'
+import { reconciliationCategory } from '#/domain/reconciliation'
 import {
   categorizeTransactionsWithAi,
   filterConfidentAiSuggestions,
@@ -634,14 +635,7 @@ export async function setReconciliationStatus(input: {
           .set({ previousCategoryId: linked.categoryId })
           .where(eq(schema.reconciliationLinks.id, link.id))
           .run()
-        const categoryId =
-          group.type === 'card_payment'
-            ? 'card_payment'
-            : group.type === 'profit_distribution'
-              ? 'profit_distribution_income'
-              : group.type === 'refund'
-                ? null
-                : 'transfer'
+        const categoryId = reconciliationCategory(group.type)
         if (categoryId) {
           transaction
             .update(schema.transactions)

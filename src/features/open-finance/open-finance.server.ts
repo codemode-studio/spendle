@@ -1,6 +1,18 @@
 import { createHash, randomUUID } from 'node:crypto'
 
-import { and, asc, desc, eq, isNull, lt, lte, max, or, sql } from 'drizzle-orm'
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  isNull,
+  lt,
+  lte,
+  max,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm'
 import type { Account, Item, Transaction } from 'pluggy-sdk'
 
 import { db, ensureDatabase } from '#/db/index.server'
@@ -672,6 +684,46 @@ async function storeTransactionObservation(
   if (canonical) {
     const promoted =
       canonical.status === 'pending' && normalized.status === 'confirmed'
+    // Same ledger fact, but the provider may now describe it differently (a
+    // category or status change). Matching reads those inputs, so a changed
+    // version asks for a reconciliation refresh.
+    const current = (
+      await db
+        .select({
+          providerStatus:
+            schema.openFinanceTransactionObservations.providerStatus,
+          providerCategory:
+            schema.openFinanceTransactionObservations.providerCategory,
+          postedAt: schema.openFinanceTransactionObservations.postedAt,
+          description: schema.openFinanceTransactionObservations.description,
+          amountCents: schema.openFinanceTransactionObservations.amountCents,
+        })
+        .from(schema.openFinanceTransactionObservations)
+        .where(
+          and(
+            eq(
+              schema.openFinanceTransactionObservations.canonicalTransactionId,
+              canonical.id,
+            ),
+            notInArray(schema.openFinanceTransactionObservations.resolution, [
+              'correction_pending',
+              'rejected',
+              'deleted',
+            ]),
+          ),
+        )
+        .orderBy(desc(schema.openFinanceTransactionObservations.observedAt))
+        .limit(1)
+    ).at(0)
+    const matchingChanged =
+      promoted ||
+      (current
+        ? current.providerStatus !== normalized.providerStatus ||
+          current.providerCategory !== normalized.providerCategory ||
+          current.postedAt !== normalized.postedAt ||
+          current.description !== normalized.description ||
+          current.amountCents !== normalized.amountCents
+        : normalized.providerCategory !== null)
     db.transaction((transaction) => {
       if (promoted) {
         transaction
@@ -707,7 +759,7 @@ async function storeTransactionObservation(
         })
         .run()
     })
-    return { kind: 'evidence' as const }
+    return { kind: 'evidence' as const, matchingChanged }
   }
 
   const suggestion = await suggestCategory({
@@ -789,6 +841,7 @@ async function syncProviderAccount(
       created: 0,
       evidence: 0,
       corrections: 0,
+      matchingChanges: 0,
       openingBalanceCents: null,
     }
   }
@@ -810,6 +863,7 @@ async function syncProviderAccount(
     created: 0,
     evidence: 0,
     corrections: 0,
+    matchingChanges: 0,
   }
   try {
     for (const providerTransaction of providerTransactions) {
@@ -819,6 +873,8 @@ async function syncProviderAccount(
       )
       if (result.kind === 'skipped') continue
       counts[result.kind === 'correction' ? 'corrections' : result.kind] += 1
+      if ('matchingChanged' in result && result.matchingChanged)
+        counts.matchingChanges += 1
     }
   } finally {
     refreshBankAnchor(account)
@@ -893,6 +949,7 @@ export async function syncPluggyConnection(
       corrections: 0,
       openings: 0,
     }
+    let matchingChanges = 0
     if (canReadTransactions) {
       for (const account of accounts) {
         const result = await syncProviderAccount(account, gateway)
@@ -900,6 +957,7 @@ export async function syncPluggyConnection(
         totals.created += result.created
         totals.evidence += result.evidence
         totals.corrections += result.corrections
+        matchingChanges += result.matchingChanges
         if (result.openingBalanceCents !== null) totals.openings += 1
       }
     }
@@ -916,7 +974,7 @@ export async function syncPluggyConnection(
         finishedAt: new Date(),
       })
       .where(eq(schema.openFinanceSyncRuns.id, runId))
-    if (totals.created || totals.openings) {
+    if (totals.created || totals.openings || matchingChanges) {
       await refreshReconciliationAfterCommit()
     }
     return {

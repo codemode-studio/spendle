@@ -1,6 +1,6 @@
 import { measureOperation } from './diagnostics.server'
 import { randomUUID } from 'node:crypto'
-import { eq, isNotNull } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 
 import { db, ensureDatabase } from '#/db/index.server'
 import * as schema from '#/db/schema'
@@ -8,9 +8,11 @@ import { isSettlementCategory } from '#/domain/card-payment'
 import {
   buildReconciliationSuggestions,
   isAutomaticMatchStillValid,
+  reconciliationCategory,
 } from '#/domain/reconciliation'
 import { validateReconciliationsWithAi } from './ai.server'
 import { suggestCategory } from './categories.server'
+import { readCurrentProviderCategories } from './provider-category.server'
 import { refreshRecurrences } from './recurrence.server'
 
 export async function refreshReconciliationSuggestions() {
@@ -23,7 +25,7 @@ export async function refreshReconciliationSuggestions() {
     existingLinks,
     groups,
     settingsRows,
-    observationRows,
+    providerCategory,
   ] = await Promise.all([
     db.select().from(schema.transactions),
     db.select().from(schema.accounts),
@@ -32,25 +34,29 @@ export async function refreshReconciliationSuggestions() {
     db.select().from(schema.reconciliationLinks),
     db.select().from(schema.reconciliationGroups),
     db.select().from(schema.appSettings).limit(1),
-    db
-      .select({
-        transactionId:
-          schema.openFinanceTransactionObservations.canonicalTransactionId,
-        providerCategory:
-          schema.openFinanceTransactionObservations.providerCategory,
-        resolution: schema.openFinanceTransactionObservations.resolution,
-        observedAt: schema.openFinanceTransactionObservations.observedAt,
-      })
-      .from(schema.openFinanceTransactionObservations)
-      .where(
-        isNotNull(
-          schema.openFinanceTransactionObservations.canonicalTransactionId,
-        ),
-      ),
+    readCurrentProviderCategories(),
   ])
   const transactionStatusById = new Map(
     transactionRows.map((transaction) => [transaction.id, transaction.status]),
   )
+  const transactionCategoryById = new Map(
+    transactionRows.map((transaction) => [
+      transaction.id,
+      transaction.categoryId,
+    ]),
+  )
+  // Undoing a match only undoes its own classification: a row whose category
+  // changed after the confirmation (a person's later choice) keeps it.
+  const stillMatchCategory = (
+    type: Parameters<typeof reconciliationCategory>[0],
+    transactionId: string,
+  ) => {
+    const categoryId = reconciliationCategory(type)
+    return (
+      categoryId !== null &&
+      transactionCategoryById.get(transactionId) === categoryId
+    )
+  }
   const invalidGroupIds = new Set(
     existingLinks
       .filter(
@@ -66,6 +72,7 @@ export async function refreshReconciliationSuggestions() {
           for (const link of existingLinks.filter(
             (candidate) => candidate.groupId === group.id,
           )) {
+            if (!stillMatchCategory(group.type, link.transactionId)) continue
             transaction
               .update(schema.transactions)
               .set({ categoryId: link.previousCategoryId })
@@ -97,28 +104,6 @@ export async function refreshReconciliationSuggestions() {
     cardRows.map((card) => [card.id, card.ownershipScopeId]),
   )
   const scopeType = new Map(scopeRows.map((scope) => [scope.id, scope.type]))
-  // Provider category of the version backing each ledger row; pending or
-  // rejected corrections don't describe the current fact.
-  const providerCategory = new Map<string, string | null>()
-  const providerObservedAt = new Map<string, number>()
-  for (const observation of observationRows) {
-    if (!observation.transactionId) continue
-    if (
-      observation.resolution === 'correction_pending' ||
-      observation.resolution === 'rejected' ||
-      observation.resolution === 'deleted'
-    ) {
-      continue
-    }
-    const observedAt = observation.observedAt.getTime()
-    if ((providerObservedAt.get(observation.transactionId) ?? -1) > observedAt)
-      continue
-    providerObservedAt.set(observation.transactionId, observedAt)
-    providerCategory.set(
-      observation.transactionId,
-      observation.providerCategory,
-    )
-  }
   const contextualTransactions = transactionRows.map((transaction) => {
     const ownershipScopeId = transaction.accountId
       ? accountScope.get(transaction.accountId)
@@ -154,8 +139,9 @@ export async function refreshReconciliationSuggestions() {
   })
   if (dissolved.length) {
     const restoredCategory = new Map<string, string | null>()
-    for (const { links } of dissolved) {
+    for (const { group, links } of dissolved) {
       for (const link of links) {
+        if (!stillMatchCategory(group.type, link.transactionId)) continue
         const transaction = contextualById.get(link.transactionId)!
         // A settlement category was the rule's own classification of the old
         // facts; classify the current facts again instead of restoring it.

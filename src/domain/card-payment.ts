@@ -60,21 +60,34 @@ export function isIdentifiedCardPaymentReceipt(input: {
   )
 }
 
+// Card credit that reports a bill payment: by its wording, or identified by
+// the provider category without reading like a refund.
+export function isCardPaymentReceipt(input: {
+  creditCardId?: string | null
+  amountCents: number
+  description?: string | null
+  providerCategory?: string | null
+}) {
+  const receipt = {
+    creditCardId: input.creditCardId ?? 'card',
+    amountCents: input.amountCents,
+    description: input.description,
+    providerCategory: input.providerCategory,
+  }
+  return (
+    isReceivedCardPayment(receipt) || isIdentifiedCardPaymentReceipt(receipt)
+  )
+}
+
 // Rows that never count as card spending: settled category or received payment.
 export function isCardPaymentRow(input: {
   creditCardId?: string | null
   amountCents: number
   categoryId?: string | null
   description?: string | null
+  providerCategory?: string | null
 }) {
-  return (
-    isSettlementCategory(input.categoryId) ||
-    isReceivedCardPayment({
-      creditCardId: input.creditCardId ?? 'card',
-      amountCents: input.amountCents,
-      description: input.description,
-    })
-  )
+  return isSettlementCategory(input.categoryId) || isCardPaymentReceipt(input)
 }
 
 export function isSettlementCategory(categoryId: string | null | undefined) {

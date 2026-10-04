@@ -7,6 +7,7 @@ import {
   createManualBalanceCheckpoint,
   createManualTransaction,
   setReconciliationStatus,
+  updateTransactionCategory,
 } from '#/features/finance/finance.server'
 import {
   getFinanceSnapshot,
@@ -1853,6 +1854,156 @@ describe('Open Finance history window', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('settles a card-only statement with a receipt identified only by the Pluggy category', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-08-26T15:00:00Z'))
+      const gateway = new FakePluggyGateway()
+      gateway.accounts = [account('CREDIT')]
+      const purchase = (id: string, date: string, amount: number) =>
+        providerTransaction({
+          id,
+          accountId: 'provider-card',
+          date: new Date(`${date}T15:00:00Z`),
+          description: `Loja ${id}`,
+          amount,
+          category: 'Shopping',
+        })
+      gateway.transactions.set('provider-card', [
+        purchase('august', '2026-08-05', 1000),
+        purchase('september-a', '2026-08-21', 300),
+        purchase('september-b', '2026-08-24', 100),
+        providerTransaction({
+          id: 'card-credit',
+          accountId: 'provider-card',
+          date: new Date('2026-08-25T15:00:00Z'),
+          description: 'Pagamento efetuado',
+          type: 'CREDIT',
+          amount: -1000,
+          category: 'Credit card payment',
+        }),
+      ])
+      await registeredConnection(database, gateway)
+      await mapPluggyAccount(
+        {
+          providerAccountId: 'provider-card',
+          newTarget: {
+            type: 'card',
+            name: 'Cartão só',
+            limitCents: 500_000,
+            closingDay: 20,
+            dueDay: 27,
+          },
+        },
+        gateway,
+        mappedAt,
+      )
+      await refreshReconciliationSuggestions()
+
+      const snapshot = await getFinanceSnapshot()
+      const card = snapshot.cards.find((row) => row.name === 'Cartão só')!
+      const statement = (dueDate: string) =>
+        card.statements.find((row) => row.dueDate === dueDate)
+      expect(statement('2026-08-27')).toMatchObject({
+        amountCents: 100_000,
+        paidCents: 100_000,
+        status: 'paid',
+      })
+      // The receipt is not a September credit.
+      expect(statement('2026-09-27')?.amountCents).toBe(40_000)
+      expect(
+        snapshot.cashProjection.scheduled.filter(
+          (event) =>
+            event.id.startsWith(`${card.id}-`) && event.date === '2026-08-27',
+        ),
+      ).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('dissolves an automatic match when a sync changes only the provider category of the receipt', async () => {
+    const { gateway, connectionId, card } = await bankAndCardWithBillPayment({
+      purchases: [],
+      paymentDate: '2026-09-10',
+      cardDescription: 'Pagamento efetuado',
+      cardCategory: 'Credit card payment',
+    })
+    expect(await groupsOf(card.id)).toEqual([
+      { status: 'confirmed', type: 'card_payment' },
+    ])
+
+    const transactions = gateway.transactions.get('provider-card')!
+    gateway.transactions.set(
+      'provider-card',
+      transactions.map((transaction) =>
+        transaction.id === 'card-credit'
+          ? { ...transaction, category: 'Shopping' }
+          : transaction,
+      ),
+    )
+    await syncPluggyConnection({ connectionId }, gateway)
+
+    expect(
+      (await groupsOf(card.id)).filter((group) => group.status === 'confirmed'),
+    ).toEqual([])
+    expect(await categoryOf(card.id)).not.toBe('card_payment')
+  })
+
+  it('keeps a later human category when an accepted correction dissolves an automatic match', async () => {
+    const { gateway, connectionId, bank, card } =
+      await bankAndCardWithBillPayment({
+        purchases: [],
+        paymentDate: '2026-09-10',
+        cardDescription: 'Pagamento recebido',
+        cardCategory: 'Credit card payment',
+      })
+    expect(await groupsOf(card.id)).toEqual([
+      { status: 'confirmed', type: 'card_payment' },
+    ])
+    await updateTransactionCategory({
+      transactionId: card.id,
+      categoryId: 'shopping',
+      saveRule: false,
+    })
+
+    const transactions = gateway.transactions.get('provider-card')!
+    gateway.transactions.set(
+      'provider-card',
+      transactions.map((transaction) =>
+        transaction.id === 'card-credit'
+          ? {
+              ...transaction,
+              description: 'Estorno loja',
+              category: 'Shopping',
+            }
+          : transaction,
+      ),
+    )
+    await syncPluggyConnection({ connectionId }, gateway)
+    const { db, schema } = database
+    const [correction] = await db
+      .select()
+      .from(schema.openFinanceTransactionObservations)
+      .where(
+        eq(
+          schema.openFinanceTransactionObservations.resolution,
+          'correction_pending',
+        ),
+      )
+    await resolvePluggyCorrection({
+      observationId: correction.id,
+      action: 'accept',
+    })
+
+    expect(
+      (await groupsOf(card.id)).filter((group) => group.status === 'confirmed'),
+    ).toEqual([])
+    expect(await categoryOf(card.id)).toBe('shopping')
+    // The bank debit still carries the rule's classification of itself.
+    expect(await categoryOf(bank.id)).toBe('card_payment')
   })
 
   it('starts a new card at the statement cycle containing the window start', async () => {

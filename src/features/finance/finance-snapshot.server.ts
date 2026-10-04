@@ -27,6 +27,7 @@ import { addRecurrencePeriod } from '#/domain/recurrence-schedule'
 import { knowledgeExactPatterns } from '#/domain/knowledge-pattern'
 import { readInterFutureControl } from './pdf-parsers/inter-future-control'
 import { readNubankFutureControl } from './pdf-parsers/nubank-future-control'
+import { readCurrentProviderCategories } from './provider-category.server'
 import { desc, eq } from 'drizzle-orm'
 
 import { db, ensureDatabase } from '#/db/index.server'
@@ -101,6 +102,7 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
     installmentRows,
     settingsRows,
     recurrenceKnowledgeRows,
+    providerCategoryById,
   ] = await Promise.all([
     db
       .select()
@@ -214,7 +216,14 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
           })
           .from(schema.knowledgeBase)
           .where(eq(schema.knowledgeBase.kind, 'recurrence')),
+    readCurrentProviderCategories(),
   ])
+  // Card rows carry the provider category of their current observation, so a
+  // bill payment receipt identified only by it is never spending.
+  const withProviderCategory = <T extends { id: string }>(row: T) => ({
+    ...row,
+    providerCategory: providerCategoryById.get(row.id) ?? null,
+  })
 
   const settings = settingsRows[0]
   const categoriesById = new Map(
@@ -471,7 +480,7 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
           t.status !== 'excluded' &&
           t.postedAt >= source.periodStart! &&
           t.postedAt <= source.periodEnd! &&
-          !isCardPaymentRow(t),
+          !isCardPaymentRow(withProviderCategory(t)),
       )
       if (!observed.length) continue
       observedStatements.set(cycle.dueDate, {
@@ -505,11 +514,13 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
             : [],
         ),
       ],
-      transactions: transactionRows.filter(
-        (transaction) =>
-          transaction.creditCardId === card.id &&
-          transaction.status !== 'excluded',
-      ),
+      transactions: transactionRows
+        .filter(
+          (transaction) =>
+            transaction.creditCardId === card.id &&
+            transaction.status !== 'excluded',
+        )
+        .map(withProviderCategory),
       installmentPlans: installmentRows.filter(
         (plan) => plan.creditCardId === card.id,
       ),
@@ -553,7 +564,10 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
         )
         const purchases = transactions
           .filter((t) => t.creditCardId === card.id && t.status !== 'excluded')
-          .map((t) => ({ ...t, bucket: t.category?.bucket ?? null }))
+          .map((t) => ({
+            ...withProviderCategory(t),
+            bucket: t.category?.bucket ?? null,
+          }))
         const details = sourceImportId
           ? cardBudgetLines({
               id: card.id + ':' + statement.dueDate,
@@ -617,9 +631,9 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
       })
       const ledger = buildCardStatementLedger({
         statements: statementSummary.statements,
-        transactions: transactionRows.filter(
-          (t) => t.creditCardId === card.id && t.status !== 'excluded',
-        ),
+        transactions: transactionRows
+          .filter((t) => t.creditCardId === card.id && t.status !== 'excluded')
+          .map(withProviderCategory),
         accountPayments: transactionRows.filter(
           (t) =>
             t.accountId &&

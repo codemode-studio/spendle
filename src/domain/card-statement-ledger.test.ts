@@ -348,3 +348,43 @@ describe('pagamento confirmado sem descrição de recebimento', () => {
     expect(ledger.flatMap((entry) => entry.transactionIds)).toEqual(['a'])
   })
 })
+
+describe('recebimento identificado pela categoria do provedor', () => {
+  const credit = (description: string) => ({
+    id: 'card-credit',
+    postedAt: '2026-07-10',
+    amountCents: 100_000,
+    description,
+    categoryId: null,
+    providerCategory: 'Credit card payment',
+  })
+
+  it('quita a fatura sem débito bancário vinculado', () => {
+    const ledger = buildCardStatementLedger({
+      statements,
+      transactions: [credit('Pagamento efetuado')],
+      accountPayments: [],
+      reconciliations: [],
+      today: '2026-09-10',
+    })
+    const july = ledger.find((entry) => entry.dueDate === '2026-07-15')!
+    expect(july).toMatchObject({ paidCents: 100_000, status: 'paid' })
+    // The receipt is not a credit of the cycle it posted in.
+    const august = ledger.find((entry) => entry.dueDate === '2026-08-15')!
+    expect(august.transactionIds).toEqual([])
+  })
+
+  it('não trata um estorno como recebimento', () => {
+    const ledger = buildCardStatementLedger({
+      statements,
+      transactions: [credit('Estorno loja')],
+      accountPayments: [],
+      reconciliations: [],
+      today: '2026-09-10',
+    })
+    const july = ledger.find((entry) => entry.dueDate === '2026-07-15')!
+    expect(july.paidCents).toBe(0)
+    const august = ledger.find((entry) => entry.dueDate === '2026-08-15')!
+    expect(august.transactionIds).toEqual(['card-credit'])
+  })
+})

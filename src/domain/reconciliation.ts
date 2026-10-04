@@ -221,6 +221,17 @@ export function isAutomaticMatchStillValid(
   return false
 }
 
+/**
+ * Category a confirmed match assigns to both of its rows, or null when the
+ * match keeps the rows' own categories (a refund).
+ */
+export function reconciliationCategory(type: ReconciliationSuggestion['type']) {
+  if (type === 'card_payment') return 'card_payment'
+  if (type === 'profit_distribution') return 'profit_distribution_income'
+  if (type === 'refund') return null
+  return 'transfer'
+}
+
 export function buildReconciliationSuggestions(
   transactions: ReconciliationTransaction[],
 ) {

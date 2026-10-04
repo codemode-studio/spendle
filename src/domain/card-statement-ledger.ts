@@ -1,6 +1,6 @@
 import {
   isCardPaymentDescription,
-  isReceivedCardPayment,
+  isCardPaymentReceipt,
   isSettlementCategory,
 } from './card-payment'
 import { daysBetween } from './period'
@@ -22,6 +22,8 @@ export interface LedgerCardTransaction {
   amountCents: number
   description: string
   categoryId: string | null
+  /** Provider category of the current observation (Pluggy), if any. */
+  providerCategory?: string | null
 }
 
 export interface LedgerAccountPayment {
@@ -189,15 +191,11 @@ export function buildCardStatementLedger(input: {
   }
 
   for (const transaction of input.transactions) {
-    // The card statement reports the payment by its wording, or a confirmed
-    // bill payment group already says this credit is the receipt (such as one
-    // identified by the provider category).
+    // The card statement reports the payment by its wording or the provider
+    // category, with or without a bank debit matched to it, or a confirmed
+    // bill payment group already says this credit is the receipt.
     const received =
-      isReceivedCardPayment({
-        creditCardId: 'card',
-        amountCents: transaction.amountCents,
-        description: transaction.description,
-      }) ||
+      isCardPaymentReceipt(transaction) ||
       (transaction.amountCents > 0 &&
         groupByTransaction.get(transaction.id)?.status === 'confirmed')
     if (received) {
