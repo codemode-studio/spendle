@@ -875,4 +875,52 @@ describe('Cards', () => {
         )
       }).pipe(Effect.provide(openFinanceTest())),
   )
+
+  it.effect(
+    'is not overdue on the business day after a due day that falls on a national holiday',
+    () =>
+      Effect.gen(function* () {
+        // Due on Monday 12 October 2026, a national holiday: still payable on the 13th.
+        yield* TestClock.setTime(
+          DateTime.toEpochMillis(DateTime.makeUnsafe('2026-10-13T15:00:00Z')),
+        )
+        const accounts = yield* Accounts
+        const imports = yield* Imports
+        const owner = yield* accounts.createOwner({
+          name: 'Eu',
+          kind: 'person',
+        })
+        const card = yield* accounts.open({
+          ownerId: owner.id,
+          institutionName: 'Nubank',
+          purpose: 'operating',
+          currency: 'BRL',
+          name: 'Cartão',
+          kind: 'credit_card',
+          card: new CardTerms({
+            closingDay: 5,
+            dueDay: 12,
+            limitCents: null,
+            lastFour: null,
+          }),
+        })
+        yield* imports.importFile({
+          accountId: card.id,
+          fileName: 'cartao.ofx',
+          bytes: ofx('CCSTMTRS', line('c1', '20260920', '-100.00', 'Mercado')),
+        })
+        yield* drain
+        const result = yield* (yield* Cards).cycles(card.id)
+        const cycle = result.cycles[0]
+        assert.deepStrictEqual(
+          [
+            cycle?.closingOn,
+            cycle?.totalCents,
+            cycle?.payableUntil,
+            cycle?.status,
+          ],
+          ['2026-10-05', -10000, '2026-10-13', 'due'],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
 })

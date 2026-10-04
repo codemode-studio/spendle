@@ -1,9 +1,5 @@
-import {
-  addDays,
-  dayOfMonth,
-  monthStart,
-  nextBusinessDay,
-} from '../domain/LocalDate.ts'
+import { nextBusinessDay } from '../domain/BankingCalendar.ts'
+import { addDays, dayOfMonth, monthStart } from '../domain/LocalDate.ts'
 
 export interface CardTermsInput {
   readonly closingDay: number
@@ -32,7 +28,7 @@ const closingFor = (date: string, closingDay: number) => {
 
 /**
  * The due date for a closing: the configured due day after the closing,
- * moved to the next weekday. Days are compared after clamping to the month,
+ * moved to the next business day. Days are compared after clamping to the month,
  * so a due day that collapses onto the closing moves to the next month.
  */
 export const dueAfter = (closingOn: string, dueDay: number) => {
@@ -459,8 +455,8 @@ const allocate = (
  * (and the open one in advance), so a payment can settle several bills.
  * What exceeds everything billed is unapplied credit.
  *
- * A cycle is overdue only after `payableUntil`: a due date on a weekend,
- * printed or forecast, moves to the next business day.
+ * A cycle is overdue only after `payableUntil`: a due date on a weekend or
+ * national bank holiday, printed or forecast, moves to the next business day.
  */
 export const cardCycles = (input: {
   readonly terms: CardTermsInput

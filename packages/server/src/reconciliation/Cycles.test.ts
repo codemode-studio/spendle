@@ -58,6 +58,11 @@ describe('dueAfter', () => {
     assert.strictEqual(dueAfter('2026-02-28', 31), '2026-03-31')
   })
 
+  it('moves a due date on a national holiday to the next business day', () => {
+    // 12 October 2026 is a Monday and a national holiday.
+    assert.strictEqual(dueAfter('2026-10-05', 12), '2026-10-13')
+  })
+
   it('moves a weekend due date to Monday', () => {
     // 11 July 2026 is a Saturday.
     assert.strictEqual(dueAfter('2026-07-03', 11), '2026-07-13')
@@ -420,6 +425,27 @@ describe('cardCycles', () => {
         result.cycles[0]?.status,
       ],
       ['2026-08-15', '2026-08-17', 'due'],
+    )
+  })
+
+  it('is not overdue on the business day after a printed due date on a national holiday', () => {
+    // Monday 12 October 2026 is a national holiday; Tuesday is the deadline.
+    const result = cardCycles({
+      terms: { closingDay: 5, dueDay: 12 },
+      entries: [entry('market', '2026-09-20', -10000)],
+      payments: [],
+      statements: [
+        issued('2026-09-06', '2026-10-05', -10000, { dueOn: '2026-10-12' }),
+      ],
+      today: '2026-10-13',
+    })
+    assert.deepStrictEqual(
+      [
+        result.cycles[0]?.dueOn,
+        result.cycles[0]?.payableUntil,
+        result.cycles[0]?.status,
+      ],
+      ['2026-10-12', '2026-10-13', 'due'],
     )
   })
 

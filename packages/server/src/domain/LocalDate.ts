@@ -79,9 +79,3 @@ export const weekday = (date: string) => {
     7
   )
 }
-
-/** The date itself on a weekday, else the following Monday. Bank holidays are not known here. */
-export const nextBusinessDay = (date: string) => {
-  const day = weekday(date)
-  return day === 6 ? addDays(date, 2) : day === 0 ? addDays(date, 1) : date
-}
