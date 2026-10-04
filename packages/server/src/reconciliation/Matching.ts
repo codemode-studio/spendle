@@ -208,6 +208,39 @@ const businessWords = new Set([
 // follows.
 const corporation = /([a-z0-9]+)?[\s.]*\bs\s?[./-]?\s?a\b/g
 
+// Words that only describe the movement or how it was sent, never who is on
+// the other side.
+const movementWords = new Set([
+  'pix',
+  'ted',
+  'doc',
+  'tev',
+  'transf',
+  'transferencia',
+  'enviado',
+  'enviada',
+  'recebido',
+  'recebida',
+  'para',
+  'pagamento',
+  'pgto',
+  'pagto',
+  'pag',
+  'credito',
+  'debito',
+  'deposito',
+  'conta',
+  'chave',
+  'aleatoria',
+  'qr',
+  'qrcode',
+  'code',
+  'celular',
+  'telefone',
+  'email',
+  'evp',
+])
+
 // Wording that says both sides belong to the same person.
 const ownAccountWording =
   /\b(mesma titularidade|mesmo titular|entre contas|conta propria|contas proprias)\b/
@@ -320,9 +353,30 @@ const counterpartEvidence = (
       )
     )
   }
+  // Every word that could identify the other side: whatever is not the
+  // owner's name, a bank, transfer wording or a code may be someone else, so
+  // it keeps the pair suggested. Read from the folded text, not through the
+  // shared filters that drop company words such as `ltda` or `online`.
+  const identity = (entry: MatchableEntry) =>
+    new Set(
+      foldDescription(entry.description)
+        .split(/[^a-z0-9]+/)
+        .filter(
+          (word) =>
+            word.length > 1 &&
+            /[a-z]/.test(word) &&
+            !isCode(word) &&
+            !transferWords.has(word) &&
+            !movementWords.has(word) &&
+            !institutions.has(unglue(word)),
+        )
+        .map(unglue),
+    )
   const thirdParty =
-    [out, into].some((name) => name.size > 0 && !isOwner(name)) ||
-    [outflow, inflow].some(namesBusiness)
+    [outflow, inflow].some((entry) => {
+      const words = identity(entry)
+      return words.size > 0 && !isOwner(words)
+    }) || [outflow, inflow].some(namesBusiness)
   const reasons: Array<string> = []
   if (names === 'same')
     reasons.push(thirdParty ? 'same_third_party' : 'same_counterparty')

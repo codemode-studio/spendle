@@ -172,6 +172,21 @@ describe('matchRelations', () => {
           'Joao Silva',
           true,
         ),
+        pair(
+          'Pix enviado Silva Online',
+          'Pix recebido Joao Silva',
+          'Joao Silva',
+        ),
+        pair(
+          'Pix enviado Joao Silva Nacional',
+          'Pix recebido Joao Silva',
+          'Joao Silva',
+        ),
+        pair(
+          'Pix enviado chave aleatoria Joao Silva',
+          'Pix recebido Joao Silva',
+          'Joao Silva',
+        ),
         pair('Pix enviado Banco Inter S.A.', 'Pix recebido', undefined, true),
       ],
       [
@@ -193,6 +208,9 @@ describe('matchRelations', () => {
         ['suggested', 'same_third_party'],
         ['suggested', 'same_third_party'],
         ['suggested', 'names_other_account'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
+        ['confirmed', 'same_counterparty'],
         ['confirmed', 'names_other_account'],
       ],
     )
