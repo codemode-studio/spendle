@@ -799,6 +799,100 @@ describe('Reconciliation', () => {
       }),
   )
 
+  it.effect(
+    'revisits an automatic transfer when a secondary source names another payer',
+    () =>
+      Effect.gen(function* () {
+        // The statement and Inter's feed report the Pix alike; the feed then
+        // corrects its description to add Maria Souza, leaving the entry as is.
+        const { reconciliation, inter, interEntries, report } =
+          yield* twoAccounts
+        yield* (yield* Imports).importFile({
+          accountId: inter.id,
+          fileName: 'inter.ofx',
+          bytes: ofx(line('i1', '20260910', '500.00', 'Pix recebido Donald')),
+        })
+        yield* drain
+        yield* report('a1', '2026-09-10', 'Pix recebido Donald')
+        assert.deepStrictEqual(
+          (yield* interEntries).map((entry) => entry.sources),
+          [2],
+        )
+        assert.deepStrictEqual(shape(yield* reconciliation.relations), [
+          ['internal_transfer', 'confirmed', 'auto'],
+        ])
+
+        yield* report('a1', '2026-09-10', 'Pix recebido Donald de Maria Souza')
+        assert.deepStrictEqual(
+          (yield* interEntries).map((entry) => [
+            entry.description,
+            entry.sources,
+          ]),
+          [['Pix recebido Donald', 2]],
+        )
+        assert.deepStrictEqual(shape(yield* reconciliation.relations), [
+          ['internal_transfer', 'suggested', 'auto'],
+        ])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'revisits an automatic card payment when a secondary source names another payer',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, card, entryId } = yield* setup
+        const observations = yield* Observations
+        const feed = yield* observations.registerSource({
+          kind: 'manual',
+          externalRef: 'nubank-card-feed',
+          label: 'Nubank',
+        })
+        const report = (description: string) =>
+          Effect.andThen(
+            observations.recordTransactions({
+              sourceId: feed.id,
+              accountId: card.id,
+              transactions: [
+                {
+                  externalId: 'f1',
+                  bookedOn: '2026-09-14',
+                  amountCents: 150000,
+                  currency: 'BRL',
+                  description,
+                  status: 'posted',
+                  raw: null,
+                },
+              ],
+            }),
+            drain,
+          )
+        const entries = yield* Entries
+        const receipt = Effect.andThen(entryId(card.id, 150000), (id) =>
+          Effect.map(entries.entries(card.id), (found) =>
+            found
+              .filter((entry) => entry.id === id)
+              .map((entry) => [entry.description, entry.sources]),
+          ),
+        )
+        const payment = Effect.map(reconciliation.relations, (relations) =>
+          shape(
+            relations.filter((relation) => relation.kind === 'card_payment'),
+          ),
+        )
+        yield* report('Pagamento recebido')
+        assert.deepStrictEqual(yield* receipt, [['Pagamento recebido', 2]])
+        assert.deepStrictEqual(yield* payment, [
+          ['card_payment', 'confirmed', 'auto'],
+        ])
+
+        yield* report('Pagamento recebido de Maria Souza')
+        assert.deepStrictEqual(yield* receipt, [['Pagamento recebido', 2]])
+        assert.deepStrictEqual(yield* payment, [
+          ['card_payment', 'suggested', 'auto'],
+        ])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
   it.effect('revisits relations when an account changes kind', () =>
     Effect.gen(function* () {
       const { reconciliation, inter } = yield* setup

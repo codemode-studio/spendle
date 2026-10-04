@@ -396,8 +396,31 @@ const compareNames = (a: ReadonlySet<string>, b: ReadonlySet<string>) => {
 }
 
 /**
+ * How every source's names on one side compare with every source's on the
+ * other (see `compareNames`), never pooled: pooling `Joao Silva` and `Joao
+ * Carlos da Silva` would make `Carlos Silva` fit. `same` only when every
+ * pair of descriptions that both name someone agrees, `different` when every
+ * such pair has no word in common, `uncertain` when any pair is unsure or
+ * pairs disagree with each other, `unnamed` when no pair names someone on
+ * both sides.
+ */
+const compareSources = (
+  outflow: ReadonlyArray<ReadonlySet<string>>,
+  inflow: ReadonlyArray<ReadonlySet<string>>,
+) => {
+  const compared = new Set(
+    outflow
+      .flatMap((out) => inflow.map((into) => compareNames(out, into)))
+      .filter((result) => result !== 'unnamed'),
+  )
+  if (compared.size === 0) return 'unnamed'
+  if (compared.size > 1) return 'uncertain'
+  return [...compared][0]!
+}
+
+/**
  * What the descriptions say about the other side of a transfer: the
- * accounts' owner named on both sides (see `compareNames`), own-account
+ * accounts' owner named on both sides (see `compareSources`), own-account
  * wording, or the other account's institution named are evidence it is the
  * person's own money moving; two different counterparties contradict it.
  * Any name other than the owner's outweighs every other evidence: a bank or
@@ -412,11 +435,10 @@ const counterpartEvidence = (
   const outInstitution = institutionWords(outflow)
   const inInstitution = institutionWords(inflow)
   const institutions = new Set([...outInstitution, ...inInstitution])
-  const names = (entry: MatchableEntry) =>
-    wordsOf(entry, (text) => counterparties(text, institutions))
-  const out = names(outflow)
-  const into = names(inflow)
-  const compared = compareNames(out, into)
+  const compared = compareSources(
+    descriptionsOf(outflow).map((text) => counterparties(text, institutions)),
+    descriptionsOf(inflow).map((text) => counterparties(text, institutions)),
+  )
   const different = compared === 'different'
   const owners = [outflow, inflow].map((entry) =>
     counterparties(entry.ownerName ?? '', institutions),

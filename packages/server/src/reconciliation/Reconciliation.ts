@@ -495,13 +495,17 @@ export class Reconciliation extends Context.Service<
 }
 
 /**
- * Re-matches relations whenever an account's entries change, or the account
+ * Re-matches relations whenever an account's entries change, the account
  * itself (a new kind turns a transfer into a card payment, or invalidates a
- * confirmation).
+ * confirmation), or an observation: matching reads every source's latest
+ * description, so a correction that leaves entries alone (a secondary source
+ * now naming a third party) still changes relations. A rebuild reads current
+ * state, so one that runs before the entries resolve is followed by another
+ * on their `EntriesResolved`.
  */
 export const reactor = Reactor.layer({
   name: 'reconciliation',
-  types: [entriesResolved, 'AccountUpdated'],
+  types: [entriesResolved, 'AccountUpdated', 'TransactionObserved'],
   handle: (event) =>
     Effect.gen(function* () {
       const reconciliation = yield* Reconciliation

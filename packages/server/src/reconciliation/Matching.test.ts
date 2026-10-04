@@ -464,6 +464,79 @@ describe('matchRelations', () => {
     )
   })
 
+  it('compares counterparties source by source, so one agreeing source never hides another that disagrees', () => {
+    // Joao Carlos da Silva owns both accounts.
+    const transfer = (
+      outflow: ReadonlyArray<string>,
+      inflow: ReadonlyArray<string>,
+    ) =>
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: outflow[0]!,
+          descriptions: outflow,
+          ownerName: 'Joao Carlos da Silva',
+          institution: 'Nubank',
+        }),
+        entry('in', 'inter', 50000, {
+          description: inflow[0]!,
+          descriptions: inflow,
+          ownerName: 'Joao Carlos da Silva',
+          institution: 'Banco Inter',
+        }),
+      ]).flatMap((relation) => [
+        relation.status,
+        relation.reasons.find((reason) => reason.endsWith('counterparties')) ??
+          relation.reasons.find((reason) => reason.endsWith('counterparty')),
+      ])
+    assert.deepStrictEqual(
+      [
+        transfer(
+          ['Pix enviado Joao Silva Banco Nubank'],
+          ['Pix recebido Carlos Silva'],
+        ),
+        transfer(
+          [
+            'Pix enviado Joao Silva Banco Nubank',
+            'Pix enviado Joao Carlos da Silva Banco Nubank',
+          ],
+          ['Pix recebido Carlos Silva'],
+        ),
+        transfer(
+          [
+            'Pix enviado Joao Carlos da Silva Banco Nubank',
+            'Pix enviado Joao Silva Banco Nubank',
+          ],
+          ['Pix recebido Carlos Silva'],
+        ),
+        transfer(
+          ['Pix enviado Joao Silva'],
+          ['Pix recebido Carlos Silva', 'Pix recebido Joao Carlos da Silva'],
+        ),
+        transfer(
+          ['Pix enviado Joao', 'Pix enviado Carlos'],
+          ['Pix recebido Joao'],
+        ),
+        transfer(
+          ['Pix enviado Joao Silva', 'Pix enviado Joao Carlos da Silva'],
+          ['Pix recebido Joao Silva'],
+        ),
+        transfer(
+          ['Pix enviado Joao Silva', 'Pix enviado'],
+          ['Pix recebido Joao Silva'],
+        ),
+      ],
+      [
+        ['suggested', 'uncertain_counterparties'],
+        ['suggested', 'uncertain_counterparties'],
+        ['suggested', 'uncertain_counterparties'],
+        ['suggested', 'uncertain_counterparties'],
+        ['suggested', 'uncertain_counterparties'],
+        ['confirmed', 'same_counterparty'],
+        ['confirmed', 'same_counterparty'],
+      ],
+    )
+  })
+
   it('reads alphanumeric issuers and payees as names, and codes as no one', () => {
     const pay = (description: string, card: MatchableEntry) =>
       relations([
