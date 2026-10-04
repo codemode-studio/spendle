@@ -604,6 +604,32 @@ describe('matchRelations', () => {
     assert.deepStrictEqual(transfer, ['confirmed', 'names_other_account'])
   })
 
+  it('keeps a pair suggested when an issuer or payee name is unfamiliar or alphanumeric', () => {
+    const card = relations([
+      entry('pay', 'inter', -50000, {
+        description: 'Pagamento fatura Banco Brasil',
+        institution: 'Banco Inter',
+      }),
+      entry('nu', 'card-nu', 50000, {
+        description: 'Pagamento recebido',
+        institution: 'Nubank',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    const transfer = relations([
+      entry('out', 'inter', -50000, {
+        description: 'Pix enviado 88i Banco Inter',
+        institution: 'Nubank',
+        ownerName: 'Joao Silva',
+      }),
+      entry('in', 'bank-inter', 50000, {
+        description: 'Pix recebido Joao Silva',
+        institution: 'Banco Inter',
+        ownerName: 'Joao Silva',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    assert.deepStrictEqual([card, transfer], [['suggested'], ['suggested']])
+  })
+
   it('reads alphanumeric issuers and payees as names, and codes as no one', () => {
     const pay = (description: string, card: MatchableEntry) =>
       relations([

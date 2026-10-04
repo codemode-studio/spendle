@@ -263,16 +263,14 @@ const months = 'jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez'
 
 // Words whose shape marks them as a reference rather than a name: a run of
 // four or more digits (ids, agencies, masked card endings such as
-// `xxxx1234`), more digits than letters (`nf123`, `e2e` ids), a day glued to
-// a month (`10set`, `10set26`), or a card mask (`xxxx`).
+// `xxxx1234`, e2e ids), a day glued to a month (`10set`, `10set26`), or a
+// card mask (`xxxx`).
 const code = new RegExp(
   `^(?:.*\\d{4}.*|\\d{1,2}(?:${months})\\d{0,4}|x{3,}\\d*)$`,
 )
-const isCode = (word: string) => {
-  if (code.test(word)) return true
-  const digits = word.replace(/\D/g, '').length
-  return word.length > 2 && digits >= word.length - digits
-}
+// Only these shapes are codes; any other word with letters, short
+// alphanumeric names like `88i` or `99pay` included, may name someone.
+const isCode = (word: string) => code.test(word)
 
 // A bank name glued to its `bank` suffix names the same bank as its words
 // apart: `C6BANK` is `C6 Bank`, `Nubank` is `Nu Pagamentos`.
@@ -547,7 +545,7 @@ const cardTarget = (outflow: MatchableEntry, card: MatchableEntry) => {
   // `Banco Master` names someone instead of no one.
   const named = new Set(
     [...wordsOf(outflow, (text) => identityWords(text, new Set()))].filter(
-      (word) => !cardWords.has(word) && !institutionNoise.has(word),
+      (word) => !cardWords.has(word),
     ),
   )
   const bill = describes(outflow, cardBillWording)
