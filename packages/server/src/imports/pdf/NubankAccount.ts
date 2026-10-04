@@ -8,6 +8,7 @@ import {
   lastFour,
   monthNumber,
   readingOrder,
+  signedAmount,
 } from './Layout.ts'
 import type { LayoutLine, PdfLayout, PositionedLine } from './Layout.ts'
 
@@ -161,13 +162,6 @@ export const readNubankAccountRows = (
   return Result.succeed(rows)
 }
 
-const amountAtEnd = (line: string) => {
-  const amount = line.match(
-    /(?:R\$\s*)?([-−]?(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})\s*$/,
-  )?.[1]
-  return amount ? cents(amount) : null
-}
-
 export const nubankAccount: PdfLayout = {
   id: 'nubank/account-statement/v1',
   kind: 'account',
@@ -183,9 +177,12 @@ export const nubankAccount: PdfLayout = {
     if (Result.isFailure(rows)) return Result.fail(rows.failure)
     const period = readPeriod(text)
     const closing = text.match(
-      /saldo final do per[ií]odo\s*R\$\s*([-−]?(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})/i,
+      new RegExp(
+        `saldo final do per[ií]odo\\s*(${signedAmount({ currency: 'required' })})`,
+        'i',
+      ),
     )?.[1]
-    const closingCents = closing ? amountAtEnd(closing) : null
+    const closingCents = closing ? cents(closing) : null
     return Result.succeed({
       lines: rows.success,
       period,

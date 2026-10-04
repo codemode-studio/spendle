@@ -1,8 +1,19 @@
 import * as Result from 'effect/Result'
 
 import { parseDate } from '../Statement.ts'
-import { cents, isoDate, monthNumber, readingOrder } from './Layout.ts'
+import {
+  cents,
+  isoDate,
+  monthNumber,
+  readingOrder,
+  signedAmount,
+} from './Layout.ts'
 import type { LayoutLine, PdfLayout } from './Layout.ts'
+
+const money = signedAmount({ currency: 'required' })
+// The amount and the balance after it. A debit's minus can be drawn apart
+// from its amount; the shortest description leaves it to the amount.
+const movementPattern = new RegExp(`^(.*?)\\s+(${money})\\s+(${money})\\s*$`)
 
 /**
  * Reads an Inter account statement, where days are headed `1 de Junho de
@@ -40,9 +51,7 @@ export const interAccount: PdfLayout = {
         bookedOn = isoDate(Number(day[3]), month, Number(day[1]))
         continue
       }
-      const movement = line.text.match(
-        /^(.*?)\s+(-?R\$\s*[\d.]+,\d{2})\s+(-?R\$\s*[\d.]+,\d{2})\s*$/,
-      )
+      const movement = line.text.match(movementPattern)
       if (!movement || !bookedOn) continue
       const amount = cents(movement[2]!)
       const balance = cents(movement[3]!)
@@ -63,7 +72,10 @@ export const interAccount: PdfLayout = {
       .map((line) => line.text)
       .join('\n')
       .match(
-        /Saldo total\s+Saldo disponível:\s+Saldo bloqueado:\s*R\$\s*([\d.]+,\d{2})/i,
+        new RegExp(
+          `Saldo total\\s+Saldo disponível:\\s+Saldo bloqueado:\\s*(${money})`,
+          'i',
+        ),
       )?.[1]
     const closingCents = closing ? cents(closing) : null
     if (closingCents === null || previous !== closingCents)

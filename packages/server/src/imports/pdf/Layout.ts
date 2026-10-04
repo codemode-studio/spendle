@@ -161,9 +161,29 @@ export const isUnreadRow = (
   { summary, payment }: { readonly summary: RegExp; readonly payment: RegExp },
 ) => printsAmount(text) && (payment.test(text) || !summary.test(text))
 
-/** Reads a money token such as `R$ -1.234,56` or `−R$ 5,00` in cents. */
+const minus = '[-−–]'
+const brazilianAmount = String.raw`(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}`
+
+/**
+ * The source of a signed Brazilian money token, to embed in a layout's row
+ * pattern. The minus, a hyphen, `−` or `–`, may come before or after the
+ * `R$` and be drawn apart from it: `- R$ 50,00`, `-R$50,00`, `R$ -50,00`,
+ * `- 50,00`. Embedding it whole keeps a row's description from taking a sign
+ * drawn as its own fragment. Parenthesised amounts are negative too.
+ */
+export const signedAmount = ({
+  currency = 'optional',
+}: { readonly currency?: 'optional' | 'required' } = {}) => {
+  const number = String.raw`(?:${brazilianAmount}|\(${brazilianAmount}\))`
+  const signed = String.raw`R\$\s*(?:${minus}\s*)?${number}|${minus}\s*R\$\s*${number}`
+  return currency === 'required'
+    ? `(?:${signed})`
+    : String.raw`(?:${signed}|(?:${minus}\s*)?${number})`
+}
+
+/** Reads a money token such as `R$ -1.234,56` or `− R$ 5,00` in cents. */
 export const cents = (token: string) =>
-  parseMoney(token.replace(/−/g, '-').replace(/\s+/g, ''))
+  parseMoney(token.replace(/[−–]/g, '-').replace(/\s+/g, ''))
 
 /** Removes accents and uppercases, for matching month names. */
 export const fold = (value: string) =>

@@ -1,8 +1,15 @@
 import * as Result from 'effect/Result'
 
 import { parseDate } from '../Statement.ts'
-import { cents, readingOrder } from './Layout.ts'
+import { cents, readingOrder, signedAmount } from './Layout.ts'
 import type { LayoutLine, PdfLayout } from './Layout.ts'
+
+const money = signedAmount()
+// Date, description, amount and the balance after it. A minus drawn apart
+// from its amount stays with the amount, not the description.
+const movementPattern = new RegExp(
+  `^(\\d{2}/\\d{2}/\\d{2})\\s+(.+?)\\s+(${money})\\s+(${money})$`,
+)
 
 /**
  * Reads the `Conta corrente - Movimentação` section of a BTG Pactual
@@ -48,9 +55,7 @@ export const btgAccount: PdfLayout = {
         active = false
         continue
       }
-      const move = line.text.match(
-        /^(\d{2}\/\d{2}\/\d{2})\s+(.+?)\s+(-?[\d.]+,\d{2})\s+(-?[\d.]+,\d{2})$/,
-      )
+      const move = line.text.match(movementPattern)
       if (!move) continue
       const bookedOn = parseDate(move[1]!)
       const amount = cents(move[3]!)

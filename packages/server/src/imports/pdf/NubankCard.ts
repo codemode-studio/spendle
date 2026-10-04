@@ -8,6 +8,7 @@ import {
   mostFrequent,
   monthNumber,
   readingOrder,
+  signedAmount,
 } from './Layout.ts'
 import type {
   LayoutInput,
@@ -89,7 +90,7 @@ export const parseNubankCard = ({
       .map((line) => line.bounds.page),
   )
   const rowPattern = new RegExp(
-    `^(\\d{2})\\s+(${months})\\s+(?:(?:[•*]{4})\\s*(\\d{4})\\s+)?(.+?)\\s+([−-]?\\s*R\\$)\\s*((?:\\d{1,3}(?:\\.\\d{3})*|\\d+),\\d{2})$`,
+    `^(\\d{2})\\s+(${months})\\s+(?:(?:[•*]{4})\\s*(\\d{4})\\s+)?(.+?)\\s+(${signedAmount({ currency: 'required' })})$`,
     'i',
   )
   const rows: Array<LayoutLine> = []
@@ -104,7 +105,7 @@ export const parseNubankCard = ({
       if (isUnreadRow(line.text, nonRows)) rejectedRows++
       continue
     }
-    const [, day, rawMonth, , rawDescription, marker, rawAmount] = match
+    const [, day, rawMonth, , rawDescription, rawAmount] = match
     const description = rawDescription!.replace(/\s+/g, ' ').trim()
     const payment = /^pagamento\s+em\b/i.test(description)
     const amount = cents(rawAmount!)
@@ -133,7 +134,7 @@ export const parseNubankCard = ({
       bookedOn,
       description,
       // A purchase is printed positive; a refund or credit with a minus.
-      amountCents: /^[−-]/.test(marker!) ? Math.abs(amount) : -Math.abs(amount),
+      amountCents: -amount,
       source: line,
     })
   }

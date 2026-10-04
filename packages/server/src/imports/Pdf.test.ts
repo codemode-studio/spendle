@@ -377,6 +377,46 @@ describe('PDF amounts printed apart from a currency sign', () => {
       }),
   )
 
+  // Nothing before the first movement shows its balance, so only its sign
+  // says whether it was a debit.
+  it.effect(
+    'keeps a first Inter debit whose minus is drawn apart from the amount',
+    () =>
+      Effect.gen(function* () {
+        const pdf = yield* extractPdfText(
+          tablePdf(
+            [
+              ['Instituição: Banco Inter'],
+              ['Período: 01/06/2026 a 30/06/2026'],
+              ['Saldo total Saldo disponível: Saldo bloqueado:'],
+              ['R$ 70,00', 'R$ 70,00', 'R$ 0,00'],
+              [
+                '1 de Junho de 2026 Saldo do dia: R$ 70,00 Valor Saldo por transação',
+              ],
+              ['Pix enviado: LOJA', '-', 'R$ 50,00', 'R$ 50,00'],
+              ['Pix recebido: AMIGO', '', 'R$ 20,00', 'R$ 70,00'],
+            ],
+            110,
+          ),
+        )
+        assert.include(pdf.text, '\n-\nR$ 50,00\n')
+        const statement = Result.getOrThrow(parsePdf(pdf, 'account'))
+        assert.deepStrictEqual(
+          [
+            statement.lines.map((line) => [line.description, line.amountCents]),
+            statement.rejectedRows,
+          ],
+          [
+            [
+              ['Pix enviado: LOJA', -5_000],
+              ['Pix recebido: AMIGO', 2_000],
+            ],
+            0,
+          ],
+        )
+      }),
+  )
+
   it.effect('refuses a Nubank account statement missing a day', () =>
     Effect.gen(function* () {
       const pdf = yield* extractPdfText(

@@ -1,6 +1,6 @@
 import * as Result from 'effect/Result'
 
-import { cents, fold, lastFour } from './Layout.ts'
+import { cents, fold, lastFour, signedAmount } from './Layout.ts'
 import type { LayoutLine, PdfLayout, PositionedLine } from './Layout.ts'
 
 const transactionDate = /\b(\d{2})-(\d{2})-(\d{2,4})\b/
@@ -8,9 +8,8 @@ const operationId = /\b(\d{8,})\b/
 
 const normalizeText = (value: string) => value.replace(/\s+/g, ' ').trim()
 
-const moneyMatches = (value: string) => [
-  ...value.matchAll(/R\$\s*[-−]?\(?(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2}\)?/gi),
-]
+const money = new RegExp(signedAmount({ currency: 'required' }), 'gi')
+const moneyMatches = (value: string) => [...value.matchAll(money)]
 
 const toIsoDate = (match: RegExpMatchArray) => {
   const year = match[3]!.length === 2 ? `20${match[3]}` : match[3]!
