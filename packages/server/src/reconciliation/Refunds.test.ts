@@ -176,6 +176,37 @@ describe('refund matching', () => {
     )
   })
 
+  it('does not confirm shops of different kinds, or a short shared name, as one merchant', () => {
+    const result = matchRelations(
+      [
+        entry('pharmacy', -5000, '2026-09-02', 'Farmacia Santa Maria'),
+        entry(
+          'pharmacy-back',
+          5000,
+          '2026-09-10',
+          'Estorno Restaurante Santa Maria',
+        ),
+        entry('meal', -7000, '2026-09-02', 'Kfc'),
+        entry('meal-back', 7000, '2026-09-10', 'Estorno Kfc'),
+        entry('drugstore', -9000, '2026-09-02', 'Drogaria Raia'),
+        entry('drugstore-back', 9000, '2026-09-10', 'Estorno Farmacia Raia'),
+      ],
+      new Map(),
+    )
+    assert.deepStrictEqual(
+      result.relations.map((relation) => [
+        relation.outflowId,
+        relation.status,
+        relation.reasons.includes('different_business'),
+      ]),
+      [
+        ['drugstore', 'confirmed', false],
+        ['meal', 'suggested', false],
+        ['pharmacy', 'suggested', true],
+      ],
+    )
+  })
+
   it('never takes a credit the provider calls cashback for a refund', () => {
     assert.deepStrictEqual(
       summary([

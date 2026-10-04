@@ -1134,6 +1134,28 @@ describe('Reconciliation', () => {
   )
 
   it.effect(
+    'drops a refund once its credit is called anything but a refund',
+    () =>
+      Effect.gen(function* () {
+        const { source, report, refunds } = yield* cardCredit
+        const credit = (operationType: string) =>
+          Effect.andThen(
+            report(source.id, 'credit', 25000, '2026-09-25', { operationType }),
+            refunds,
+          )
+        assert.deepStrictEqual(
+          [
+            yield* credit('ESTORNO'),
+            yield* credit('PAGAMENTO_FATURA'),
+            yield* credit('CHARGEBACK'),
+            yield* credit('OPERACOES_CREDITO_CONTRATADAS_CARTAO'),
+          ],
+          [['confirmed'], [], ['confirmed'], []],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
     'reads the current operation of each source, and doubts a credit any source calls cashback',
     () =>
       Effect.gen(function* () {

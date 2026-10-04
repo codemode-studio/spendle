@@ -12,9 +12,10 @@ const refundHint =
 // Credits that give money for another reason than returning a purchase.
 const otherCredit =
   /\b(cashback|emprestimo|financiamento|rendimento|rendimentos|juros|salario|bonus|premio|pontos)\b/
-// The same, as provider operation types.
-const otherOperation =
-  /cashback|emprestimo|financiamento|rendimento|juros|salario|bonus|premio|pontos/i
+// Provider operation types that say a credit returns a purchase. A credit
+// any source gives another operation type (a bill payment, contracted
+// credit, cashback, interest) is not a refund.
+const refundOperation = /estorno|chargeback|devolu|cancel|reembols/i
 
 // Words shop names share without naming the same shop: kinds of shop,
 // company suffixes, web addresses and places.
@@ -47,53 +48,53 @@ const storeWords = new Set([
 ])
 
 // Words that name a kind of business, not which one: two pharmacies are not
-// the same shop.
-const businessKinds = new Set([
-  'mercado',
-  'supermercado',
-  'supermercados',
-  'hipermercado',
-  'mercearia',
-  'atacado',
-  'atacadao',
-  'farmacia',
-  'farmacias',
-  'drogaria',
-  'drogarias',
-  'posto',
-  'combustivel',
-  'combustiveis',
-  'padaria',
-  'panificadora',
-  'confeitaria',
-  'restaurante',
-  'bar',
-  'lanchonete',
-  'pizzaria',
-  'churrascaria',
-  'cafe',
-  'cafeteria',
-  'sorveteria',
-  'acougue',
-  'hortifruti',
-  'hotel',
-  'pousada',
-  'auto',
-  'autopecas',
-  'pecas',
-  'oficina',
-  'pet',
-  'petshop',
-  'clinica',
-  'hospital',
-  'laboratorio',
-  'otica',
-  'livraria',
-  'papelaria',
-  'academia',
-  'estacionamento',
-  'magazine',
-])
+// the same shop, and a pharmacy is not a restaurant. Words for one kind
+// share it.
+const kindGroups: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
+  [
+    'market',
+    [
+      'mercado',
+      'supermercado',
+      'supermercados',
+      'hipermercado',
+      'mercearia',
+      'atacado',
+      'atacadao',
+      'hortifruti',
+      'acougue',
+    ],
+  ],
+  ['pharmacy', ['farmacia', 'farmacias', 'drogaria', 'drogarias']],
+  ['fuel', ['posto', 'combustivel', 'combustiveis']],
+  ['bakery', ['padaria', 'panificadora', 'confeitaria']],
+  [
+    'food',
+    [
+      'restaurante',
+      'bar',
+      'lanchonete',
+      'pizzaria',
+      'churrascaria',
+      'cafe',
+      'cafeteria',
+      'sorveteria',
+    ],
+  ],
+  ['lodging', ['hotel', 'pousada']],
+  ['auto', ['auto', 'autopecas', 'pecas', 'oficina', 'estacionamento']],
+  ['pet', ['pet', 'petshop']],
+  ['health', ['clinica', 'hospital', 'laboratorio']],
+  ['optician', ['otica']],
+  ['books', ['livraria', 'papelaria']],
+  ['gym', ['academia']],
+  ['retail', ['magazine']],
+]
+const businessKinds = new Map(
+  kindGroups.flatMap(([kind, words]) =>
+    words.map((word) => [word, kind] as const),
+  ),
+)
 
 // Wording a credit uses to say it gives money back, not who gives it.
 const refundWords = new Set([
@@ -125,24 +126,46 @@ const merchantWords = (description: string) =>
     ),
   )
 
+/** The kinds of business a description names. */
+const kindsOf = (description: string) =>
+  new Set(
+    [...meaningfulWords(description)].flatMap((word) => {
+      const kind = businessKinds.get(word)
+      return kind === undefined ? [] : [kind]
+    }),
+  )
+
+type Merchant = 'same' | 'uncertain' | 'different'
+
 /**
  * Whether two descriptions name one shop: every distinctive word of one
- * appears in the other (`Amazon Marketplace` and `Estorno Amazon
- * Marketplace`), `same`; a shared word with others that disagree
- * (`Amazon Prime` and `Amazon Marketplace`), `uncertain`; nothing
- * distinctive in common, `different`.
+ * appears in the other, and they share one of at least four letters
+ * (`Amazon Marketplace` and `Estorno Amazon Marketplace`), `same`; a shared
+ * word with others that disagree (`Amazon Prime` and `Amazon
+ * Marketplace`), only short shared words, or kinds of business that differ
+ * (`Farmacia Santa Maria` and `Restaurante Santa Maria`), `uncertain`;
+ * nothing distinctive in common, `different`.
  */
 const compareMerchants = (
   a: string,
   b: string,
-): 'same' | 'uncertain' | 'different' => {
+): { readonly merchant: Merchant; readonly differentBusiness: boolean } => {
   const left = merchantWords(a)
   const right = merchantWords(b)
   const shared = [...left].filter((word) => right.has(word))
-  if (shared.length === 0) return 'different'
-  return shared.length === left.size || shared.length === right.size
-    ? 'same'
-    : 'uncertain'
+  const leftKinds = kindsOf(a)
+  const rightKinds = kindsOf(b)
+  const differentBusiness =
+    leftKinds.size > 0 &&
+    rightKinds.size > 0 &&
+    ![...leftKinds].some((kind) => rightKinds.has(kind))
+  if (shared.length === 0) return { merchant: 'different', differentBusiness }
+  const whole = shared.length === left.size || shared.length === right.size
+  const distinctive = shared.some((word) => word.length >= 4)
+  return {
+    merchant: whole && distinctive && !differentBusiness ? 'same' : 'uncertain',
+    differentBusiness,
+  }
 }
 
 /** Whether a credit can give back part of a purchase; checked on every rebuild. */
@@ -159,7 +182,7 @@ interface Candidate {
   readonly refund: MatchableEntry
   readonly days: number
   readonly score: number
-  readonly merchant: 'same' | 'uncertain' | 'different'
+  readonly merchant: Merchant
   readonly reasons: ReadonlyArray<string>
 }
 
@@ -170,7 +193,10 @@ const evaluate = (
 ) => {
   const reasons = ['same_account']
   let score = 40
-  const merchant = compareMerchants(purchase.description, refund.description)
+  const { merchant, differentBusiness } = compareMerchants(
+    purchase.description,
+    refund.description,
+  )
   if (merchant === 'same') {
     score += 30
     reasons.push('same_merchant')
@@ -178,6 +204,7 @@ const evaluate = (
     score += 15
     reasons.push('similar_merchant')
   }
+  if (differentBusiness) reasons.push('different_business')
   if (refundHint.test(foldDescription(refund.description))) {
     score += 15
     reasons.push('refund_wording')
@@ -197,7 +224,8 @@ const evaluate = (
  * come within `refundWindowDays` of the purchase, fit in what is left of it
  * after earlier refunds (`refundedCents`), and say it is a refund or name
  * the same merchant. Cashback, loans, interest and similar credits are not
- * refunds. Entries in `used` are already in another relation.
+ * refunds, nor is a credit with any provider operation type other than a
+ * refund's (estorno, chargeback, devolução, cancelamento). Entries in `used` are already in another relation.
  *
  * A pairing is confirmed automatically only when it names the purchase's
  * merchant, scores at least `autoConfirmScore`, both entries are posted, no
@@ -235,7 +263,7 @@ export const matchRefunds = (
     // Any source calling it something else is enough to doubt it.
     if (
       otherCredit.test(text) ||
-      (refund.operationTypes ?? []).some((type) => otherOperation.test(type))
+      (refund.operationTypes ?? []).some((type) => !refundOperation.test(type))
     )
       continue
     const wording = refundHint.test(text)

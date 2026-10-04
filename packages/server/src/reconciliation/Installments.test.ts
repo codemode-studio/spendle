@@ -45,6 +45,23 @@ describe('installmentPlans', () => {
     )
   })
 
+  it('keeps a first instalment dated on the purchase in the plan of its later bills', () => {
+    const metadata = (number: number) => ({
+      number,
+      total: 3,
+      purchaseDate: null,
+      totalAmountCents: null,
+    })
+    const plans = installmentPlans([
+      line('a', '2026-07-04', 'Apple Store', -10000, metadata(1)),
+      line('b', '2026-09-10', 'Apple Store', -10000, metadata(2)),
+    ])
+    assert.deepStrictEqual(
+      plans.map((plan) => [plan.seen, plan.remainingCents]),
+      [[[1, 2], -10000]],
+    )
+  })
+
   it('does not take a lone trailing date for an instalment', () => {
     assert.deepStrictEqual(
       installmentPlans([line('a', '2026-09-15', 'Padaria 03/10')]),

@@ -68,7 +68,8 @@ interface Item {
  * Whether `next` can be a later instalment of the purchase `chain` follows:
  * a higher number, an amount within the rounding a split can leave (one
  * centavo per instalment), and the same purchase date when both are known,
- * else about a month between statements per instalment.
+ * else about a month between statements per instalment (one cycle more
+ * after a first instalment the provider may date on the purchase).
  */
 const continues = (chain: ReadonlyArray<Item>, next: Item) => {
   const last = chain.at(-1)!
@@ -83,9 +84,16 @@ const continues = (chain: ReadonlyArray<Item>, next: Item) => {
     return purchase.purchaseDate === next.purchaseDate
   const steps = next.number - last.number
   const days = daysBetween(last.line.bookedOn, next.line.bookedOn)
+  // The provider may date the first instalment on the purchase and later
+  // ones on their bills, so from a trusted first instalment the gap may be
+  // up to one more cycle.
+  const extra =
+    last.number === 1 && last.trusted && next.trusted
+      ? maxDaysPerInstallment
+      : 0
   return (
     days >= steps * minDaysPerInstallment &&
-    days <= steps * maxDaysPerInstallment
+    days <= steps * maxDaysPerInstallment + extra
   )
 }
 

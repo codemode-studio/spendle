@@ -68,13 +68,16 @@ const decodeInstallment = Schema.decodeUnknownOption(
 )
 
 type Installment = NonNullable<InstallmentLine['installment']>
+type InstallmentReport = {
+  readonly [K in keyof Installment]: Installment[K] | null
+}
 
-// Observations of one entry may each carry part of the metadata. Fields
-// combine; a field with two different values across all of them is
-// unknown, whatever order they come in. Disagreeing on which instalment it
-// is leaves no metadata at all.
+// Observations of one entry may each carry part of the metadata, even a
+// single field. Each field combines on its own across all of them; one with
+// two different values is unknown, whatever order they come in. Without an
+// agreed instalment number and count there is no metadata at all.
 const mergeInstallments = (
-  reports: ReadonlyArray<Installment>,
+  reports: ReadonlyArray<InstallmentReport>,
 ): Installment | null => {
   const only = <T>(values: ReadonlyArray<T | null>) => {
     const distinct = new Set(values.filter((value) => value !== null))
@@ -538,7 +541,7 @@ const make = Effect.gen(function* () {
       string,
       {
         line: Omit<InstallmentLine, 'installment'>
-        reports: Array<Installment>
+        reports: Array<InstallmentReport>
       }
     >()
     for (const row of yield* findLines(accountId)) {
@@ -554,10 +557,10 @@ const make = Effect.gen(function* () {
         },
         reports: [],
       }
-      if (metadata?.number && metadata.total)
+      if (metadata)
         known.reports.push({
-          number: metadata.number,
-          total: metadata.total,
+          number: metadata.number || null,
+          total: metadata.total || null,
           purchaseDate: metadata.purchaseDate?.slice(0, 10) ?? null,
           totalAmountCents:
             typeof metadata.totalAmount === 'number'

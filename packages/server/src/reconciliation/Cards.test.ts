@@ -571,6 +571,64 @@ describe('Cards', () => {
   )
 
   it.effect(
+    'takes a purchase total from a source that reports nothing else, and doubts it when another disagrees',
+    () =>
+      Effect.gen(function* () {
+        const { cards, card } = yield* setup
+        const observations = yield* Observations
+        const record = (
+          ref: string,
+          description: string,
+          installment: (number: number) => Record<string, number>,
+        ) =>
+          Effect.gen(function* () {
+            const source = yield* observations.registerSource({
+              kind: 'open_finance',
+              externalRef: ref,
+              label: ref,
+            })
+            yield* observations.recordTransactions({
+              sourceId: source.id,
+              accountId: card.id,
+              transactions: [1, 2].map((number) => ({
+                externalId: `${ref}-${number}`,
+                bookedOn: `2026-0${6 + number}-20`,
+                amountCents: -3333,
+                currency: 'BRL',
+                description,
+                status: 'posted' as const,
+                raw: { installment: installment(number) },
+              })),
+            })
+          })
+        yield* record('apple-numbers', 'Apple Store', (number) => ({
+          number,
+          total: 3,
+        }))
+        yield* record('apple-total', 'Apple Store', () => ({
+          totalAmount: 100,
+        }))
+        yield* record('dell-numbers', 'Dell Online', (number) => ({
+          number,
+          total: 3,
+          totalAmount: 100,
+        }))
+        yield* record('dell-total', 'Dell Online', () => ({
+          totalAmount: 120,
+        }))
+        yield* drain
+        const plans = yield* cards.installments(card.id)
+        assert.deepStrictEqual(
+          plans.map((plan) => [plan.description, plan.remainingCents]),
+          [
+            ['Apple Store', -3334],
+            ['Dell Online', -3333],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
     'reads instalments from the description when a payload has no metadata',
     () =>
       Effect.gen(function* () {
