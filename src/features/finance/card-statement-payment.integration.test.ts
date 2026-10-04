@@ -238,3 +238,50 @@ describe('fatura paga na projeção de caixa', () => {
     ).toBe(-20_000)
   })
 })
+
+describe('pagamento pendente na projeção de caixa', () => {
+  let database: TestDatabase | undefined
+
+  afterEach(() => {
+    database?.close()
+    vi.useRealTimers()
+  })
+
+  it('mantém a fatura agendada enquanto o pagamento não sai do caixa', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-08T12:00:00Z'))
+    database = await openTestDatabase()
+    await database.db
+      .update(schema.creditCards)
+      .set({ dueDay: 15 })
+      .where(eq(schema.creditCards.id, database.ids.card))
+    await createManualTransaction({
+      targetType: 'card',
+      targetId: database.ids.card,
+      postedAt: '2026-08-20',
+      description: 'Compra no cartão',
+      direction: 'outflow',
+      amountCents: 30_000,
+      categoryId: 'groceries',
+    })
+    await database.db.insert(schema.transactions).values({
+      id: 'scheduled-payment',
+      accountId: database.ids.brlAccount,
+      categoryId: 'card_payment',
+      fingerprint: 'scheduled-payment',
+      postedAt: '2026-09-14',
+      description: 'Pagamento fatura cartão',
+      normalizedDescription: 'pagamento fatura cartao',
+      amountCents: -30_000,
+      currency: 'BRL',
+      status: 'pending',
+    })
+
+    const snapshot = await getFinanceSnapshot()
+    expect(
+      snapshot.cashProjection.scheduled.find(
+        (event) => event.id === `${database!.ids.card}-2026-09-15`,
+      )?.amountCents,
+    ).toBe(-30_000)
+  })
+})

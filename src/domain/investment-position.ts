@@ -46,13 +46,31 @@ export function positionCurrentAmountMinor(
 }
 
 /**
- * Emergency reserve progress: the linked positions when there are any,
- * otherwise the progress recorded on the goal before positions existed.
+ * A position carries its own value once it has an initial amount or a
+ * manual valuation; until then it only adds the movements classified into it.
+ */
+export function hasOwnValuation(position: PositionValuation) {
+  return (
+    position.initialAmountMinor !== 0 ||
+    position.manualCurrentAmountMinor !== null
+  )
+}
+
+/**
+ * Emergency reserve progress. The progress recorded on the goal before
+ * positions existed is the opening amount that movement-only positions add
+ * to; once a linked position has its own valuation, the positions are the
+ * whole reserve and the recorded amount is no longer counted.
  */
 export function reserveProgressCents(input: {
   recordedCents: number
-  linkedPositionCents: ReadonlyArray<number>
+  linkedPositions: ReadonlyArray<{ cents: number; ownValuation: boolean }>
 }) {
-  if (!input.linkedPositionCents.length) return input.recordedCents
-  return input.linkedPositionCents.reduce((sum, cents) => sum + cents, 0)
+  const positionsCents = input.linkedPositions.reduce(
+    (sum, position) => sum + position.cents,
+    0,
+  )
+  return input.linkedPositions.some((position) => position.ownValuation)
+    ? positionsCents
+    : input.recordedCents + positionsCents
 }

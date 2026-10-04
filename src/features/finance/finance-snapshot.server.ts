@@ -7,12 +7,16 @@ import {
 } from '#/domain/monthly-cash-flow'
 import { shiftDays } from '#/domain/period'
 import {
+  hasOwnValuation,
   positionCurrentAmountMinor,
   reserveProgressCents,
 } from '#/domain/investment-position'
 import { cardBudgetLines, temporaryFixedBucket } from '#/domain/card-budget'
 import { isCardPaymentRow } from '#/domain/card-payment'
-import { buildCardStatementLedger } from '#/domain/card-statement-ledger'
+import {
+  buildCardStatementLedger,
+  statementCashSettlement,
+} from '#/domain/card-statement-ledger'
 import {
   buildCommitmentBudget,
   commitmentBucket,
@@ -688,11 +692,18 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
           const entry = ledger.find(
             (item) => item.dueDate === statement.dueDate,
           )
-          return {
-            ...statement,
-            paidCents: entry?.paidCents ?? 0,
-            paid: entry?.status === 'paid',
-          }
+          // Only bank debits already posted settle the projected cash; the
+          // card's own received payment needs no bank row.
+          const settlement = entry
+            ? statementCashSettlement(entry, (payment) => {
+                const row = transactionById.get(payment.transactionId)
+                return (
+                  !row?.accountId ||
+                  (row.status === 'confirmed' && row.postedAt <= referenceDate)
+                )
+              })
+            : { paidCents: 0, paid: false }
+          return { ...statement, ...settlement }
         }),
       outstandingCents: statementSummary.outstandingCents,
       availableLimitCents: Math.max(
@@ -857,14 +868,15 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
         settings.reserveMonths
     const reserveCurrentCents = reserveProgressCents({
       recordedCents: emergencyGoal?.currentCents ?? 0,
-      linkedPositionCents: emergencyGoal
+      linkedPositions: emergencyGoal
         ? investmentPositionRows
             .filter(
               (position) =>
                 position.active && position.goalId === emergencyGoal.id,
             )
-            .map(
-              (position) =>
+            .map((position) => ({
+              ownValuation: hasOwnValuation(position),
+              cents:
                 convertToBaseCurrency(
                   positionCurrentAmountMinor(
                     position,
@@ -879,7 +891,7 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
                   ),
                   position.currency,
                 ) ?? 0,
-            )
+            }))
         : [],
     })
     const reserveComplete =

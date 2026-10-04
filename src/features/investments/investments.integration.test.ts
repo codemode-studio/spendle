@@ -8,6 +8,7 @@ import {
   classifyInvestmentTransaction,
   deleteInvestmentMovement,
   getInvestmentsSnapshot,
+  updateInvestmentPositionValue,
 } from './investments.server'
 
 const quotes = {
@@ -266,5 +267,68 @@ describe('progresso da reserva e valor das posições', () => {
     expect(snapshot.summary.reserveCurrentCents).toBe(610_000)
     const planning = await getPlanningSnapshot()
     expect(planning.dashboard.reserve.currentCents).toBe(610_000)
+  })
+})
+
+describe('primeira posição da reserva com progresso registrado', () => {
+  let database: TestDatabase
+
+  beforeAll(async () => {
+    database = await openTestDatabase()
+    await database.db.insert(database.schema.accounts).values({
+      id: 'broker',
+      ownershipScopeId: database.ids.personScope,
+      institutionId: database.ids.institution,
+      name: 'Corretora',
+      kind: 'investment',
+      purpose: 'investment',
+      currency: 'BRL',
+    })
+    await database.db.insert(database.schema.investmentGoals).values({
+      id: 'reserve-goal',
+      name: 'Reserva de emergência',
+      type: 'emergency_reserve',
+      targetCents: 1_000_000,
+      currentCents: 420_000,
+      priority: 1,
+    })
+    await database.db.insert(database.schema.transactions).values({
+      id: 'first-contribution',
+      accountId: 'broker',
+      fingerprint: 'first-contribution',
+      postedAt: '2026-09-10',
+      description: 'Aporte',
+      normalizedDescription: 'aporte',
+      amountCents: 10_000,
+      currency: 'BRL',
+      status: 'confirmed',
+    })
+  })
+
+  afterAll(() => database.close())
+
+  it('soma o aporte ao progresso registrado até a posição ter valor próprio', async () => {
+    const { positionId } = await classifyInvestmentTransaction({
+      transactionId: 'first-contribution',
+      newPosition: {
+        name: 'Tesouro Selic',
+        assetClassId: 'fixed-income',
+        goalId: 'reserve-goal',
+      },
+    })
+    const reserve = async () => ({
+      investments: (await getInvestmentsSnapshot(quotes)).summary
+        .reserveCurrentCents,
+      planning: (await getPlanningSnapshot()).dashboard.reserve.currentCents,
+    })
+    expect(await reserve()).toEqual({ investments: 430_000, planning: 430_000 })
+
+    // A valuation of the position is the whole reserve, not an addition.
+    await updateInvestmentPositionValue({
+      positionId,
+      amountMinor: 435_000,
+      asOf: '2026-09-20',
+    })
+    expect(await reserve()).toEqual({ investments: 435_000, planning: 435_000 })
   })
 })

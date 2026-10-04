@@ -274,6 +274,36 @@ export function buildCardStatementLedger(input: {
   return entries.sort((a, b) => a.dueDate.localeCompare(b.dueDate))
 }
 
+/**
+ * What a statement has settled in cash: the same settling payments as its
+ * status, limited to those `isPosted` accepts. A pending or future bank
+ * debit is shown on the statement but has not left the account yet.
+ */
+export function statementCashSettlement(
+  entry: StatementLedgerEntry,
+  isPosted: (payment: StatementPayment) => boolean,
+) {
+  const settled = entry.payments.filter(
+    (p) =>
+      ['manual', 'confirmed', 'received', 'inferred'].includes(p.kind) &&
+      isPosted(p),
+  )
+  // A confirmed group lists each bank debit with the card row's amount.
+  const groups = new Set<string>()
+  let paidCents = 0
+  for (const payment of settled) {
+    if (payment.groupId) {
+      if (groups.has(payment.groupId)) continue
+      groups.add(payment.groupId)
+    }
+    paidCents += payment.amountCents
+  }
+  const paid =
+    settled.some((p) => p.kind === 'manual' && !p.partial) ||
+    (entry.amountCents > 0 && paidCents >= entry.amountCents)
+  return { paidCents, paid }
+}
+
 function statementStatus(
   entry: StatementLedgerEntry,
   today: string,

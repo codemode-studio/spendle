@@ -922,6 +922,104 @@ describe('Open Finance history window', () => {
     expect(pending[0].postedAt).toBe('2026-05-20')
   })
 
+  it('keeps the booked opening when a correction moves a fact before the window', async () => {
+    const gateway = new FakePluggyGateway()
+    const connectionId = await connectedAccount(database, gateway)
+    const balance = async () =>
+      (await getFinanceSnapshot()).accounts.find(
+        (item) => item.id === database.ids.brlAccount,
+      )?.balanceCents
+    expect(await balance()).toBe(90_000)
+
+    gateway.transactions.set('provider-bank', [
+      providerTransaction({
+        date: new Date('2026-05-20T15:00:00Z'),
+        amount: 20,
+      }),
+    ])
+    await syncPluggyConnection({ connectionId }, gateway)
+    const [pending] = await database.db
+      .select()
+      .from(database.schema.openFinanceTransactionObservations)
+      .where(
+        eq(
+          database.schema.openFinanceTransactionObservations.resolution,
+          'correction_pending',
+        ),
+      )
+    await resolvePluggyCorrection({
+      observationId: pending.id,
+      action: 'accept',
+    })
+
+    // The moved debit now predates the opening, which Pluggy's booked
+    // 900.00 already explains.
+    expect(await balance()).toBe(90_000)
+    await syncPluggyConnection({ connectionId }, gateway)
+    expect(await balance()).toBe(90_000)
+    const active = await database.db
+      .select()
+      .from(database.schema.balanceCheckpoints)
+      .where(
+        eq(
+          database.schema.balanceCheckpoints.accountId,
+          database.ids.brlAccount,
+        ),
+      )
+    expect(
+      active.filter((checkpoint) => checkpoint.reviewState !== 'invalidated'),
+    ).toMatchObject([
+      { kind: 'opening', asOf: '2026-05-31', balanceCents: 90_000 },
+    ])
+  })
+
+  it('derives a resumed opening from the accepted correction', async () => {
+    const gateway = new FakePluggyGateway()
+    gateway.accounts = [
+      {
+        ...account(),
+        bankData: { ...account().bankData!, closingBalance: null },
+      },
+    ]
+    const connectionId = await registeredConnection(database, gateway)
+    await mapPluggyAccount(
+      {
+        providerAccountId: 'provider-bank',
+        existingTarget: { type: 'account', id: database.ids.brlAccount },
+      },
+      gateway,
+      mappedAt,
+    )
+
+    // The retry reports the booked 900.00 and corrects the debit to 20.00.
+    gateway.accounts = [account()]
+    gateway.transactions.set('provider-bank', [
+      providerTransaction({ amount: 20 }),
+    ])
+    const retry = await syncPluggyConnection({ connectionId }, gateway)
+    expect(retry).toMatchObject({ corrections: 1 })
+    const balance = async () =>
+      (await getFinanceSnapshot()).accounts.find(
+        (item) => item.id === database.ids.brlAccount,
+      )?.balanceCents
+    expect(await balance()).toBe(90_000)
+
+    const [pending] = await database.db
+      .select()
+      .from(database.schema.openFinanceTransactionObservations)
+      .where(
+        eq(
+          database.schema.openFinanceTransactionObservations.resolution,
+          'correction_pending',
+        ),
+      )
+    await resolvePluggyCorrection({
+      observationId: pending.id,
+      action: 'accept',
+    })
+    expect(await balance()).toBe(90_000)
+  })
+
   it('starts a new card at the statement cycle containing the window start', async () => {
     const gateway = new FakePluggyGateway()
     gateway.accounts = [account('CREDIT')]

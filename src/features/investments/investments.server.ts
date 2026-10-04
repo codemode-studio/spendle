@@ -7,6 +7,7 @@ import * as schema from '#/db/schema'
 import { convertMinorUnitsAtRate } from '#/domain/currency'
 import { allocationAmount, calculateConservativeBase } from '#/domain/finance'
 import {
+  hasOwnValuation,
   positionCurrentAmountMinor,
   reserveProgressCents,
 } from '#/domain/investment-position'
@@ -210,6 +211,7 @@ export async function getInvestmentsSnapshot(
             ? ('estimated' as const)
             : ('manual' as const),
         currentAt: position.manualCurrentAt,
+        ownValuation: hasOwnValuation(position),
         quote: quote ?? null,
         movements: positionMovements
           .map((movement) => ({
@@ -296,10 +298,13 @@ export async function getInvestmentsSnapshot(
     ) * settings.reserveMonths
   const reserveCurrentCents = reserveProgressCents({
     recordedCents: emergencyGoal?.currentCents ?? 0,
-    linkedPositionCents: emergencyGoal
+    linkedPositions: emergencyGoal
       ? items
           .filter((item) => item.goalId === emergencyGoal.id)
-          .map((item) => item.currentBaseCents ?? 0)
+          .map((item) => ({
+            cents: item.currentBaseCents ?? 0,
+            ownValuation: item.ownValuation,
+          }))
       : [],
   })
   const totalCents = items.reduce(
