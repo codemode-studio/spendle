@@ -556,6 +556,46 @@ describe('Cards', () => {
       }).pipe(Effect.provide(openFinanceTest())),
   )
 
+  it.effect('reads a PAGTO credit as a payment of the earlier bill', () =>
+    Effect.gen(function* () {
+      const pagto = yield* history(
+        line('c1', '20260615', '-100.00', 'Mercado') +
+          line('c2', '20260708', '100.00', 'PAGTO RECEBIDO') +
+          line('c3', '20260715', '-100.00', 'Hotel'),
+        '',
+      )
+      assert.deepStrictEqual(
+        summary((yield* pagto.cards.cycles(pagto.card.id)).cycles).slice(0, 2),
+        [
+          ['2026-07-03', -10000, 10000, 'paid', ['card']],
+          ['2026-08-03', -10000, 0, 'overdue', []],
+        ],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect('keeps a refund under a PAG* descriptor off the earlier bill', () =>
+    Effect.gen(function* () {
+      const refund = yield* history(
+        line('c1', '20260615', '-100.00', 'Mercado') +
+          line('c2', '20260710', '-6.00', 'PAG*123') +
+          line('c3', '20260712', '6.00', 'PAG*123') +
+          line('c4', '20260715', '-200.00', 'Hotel'),
+        '',
+      )
+      assert.deepStrictEqual(
+        summary((yield* refund.cards.cycles(refund.card.id)).cycles).slice(
+          0,
+          2,
+        ),
+        [
+          ['2026-07-03', -10000, 0, 'overdue', []],
+          ['2026-08-03', -20000, 0, 'overdue', []],
+        ],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
   it.effect('pays the bill a bank debit matched, not the oldest one', () =>
     Effect.gen(function* () {
       const { cards, card } = yield* history(

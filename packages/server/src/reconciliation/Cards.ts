@@ -44,7 +44,9 @@ const PaymentRelationRow = Schema.Struct({
   paidOn: Schema.String,
 })
 
-const paymentHint = /\b(pagamento|pgto|pag)\b/
+// Payment wording on the card side. A bare `pag` names a payment, but not
+// as a processor's descriptor (`PAG*LOJA`), which a refund keeps.
+const paymentHint = /\b(pagamento|pagto|pgto)\b|\bpag\b(?!\s*\*)/
 const refundHint = /\b(estorno|reembolso|cancelamento)\b/
 
 // Explicit bill-payment wording: "fatura", or a payment of a "cartão de crédito".
