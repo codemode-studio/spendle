@@ -1203,6 +1203,89 @@ describe('Reconciliation', () => {
     return { reconciliation, source, register, report, refunds }
   })
 
+  // Amazon purchases on the card, then a credit the feed calls an ESTORNO;
+  // what each purchase's refund relations are.
+  const estornoAgainst = (
+    purchasesCents: ReadonlyArray<number>,
+    description: string,
+  ) =>
+    Effect.gen(function* () {
+      const { reconciliation, card } = yield* setup
+      const observations = yield* Observations
+      const source = yield* observations.registerSource({
+        kind: 'open_finance',
+        externalRef: 'amazon-feed',
+        label: 'Amazon feed',
+      })
+      yield* observations.recordTransactions({
+        sourceId: source.id,
+        accountId: card.id,
+        transactions: [
+          ...purchasesCents.map((amountCents, index) => ({
+            externalId: `order-${index}`,
+            bookedOn: '2026-09-16',
+            amountCents,
+            currency: 'BRL',
+            description: 'Amazon Marketplace',
+            status: 'posted' as const,
+            raw: null,
+          })),
+          {
+            externalId: 'credit',
+            bookedOn: '2026-09-25',
+            amountCents: 5000,
+            currency: 'BRL',
+            description,
+            status: 'posted' as const,
+            raw: { operationType: 'ESTORNO' },
+          },
+        ],
+      })
+      yield* drain
+      const found = yield* (yield* Entries).entries(card.id)
+      const amountOf = (id: string) =>
+        found.find((entry) => entry.id === id)?.amountCents
+      return (yield* reconciliation.relations)
+        .filter((relation) => relation.kind === 'refund')
+        .map((relation) => [amountOf(relation.outflowEntryId), relation.status])
+    })
+
+  for (const description of [
+    'Estorno parcial Amazon Marketplace',
+    'Devolucao parcial Amazon Marketplace',
+    'Estorno parc Amazon Marketplace',
+  ])
+    it.effect(
+      `keeps "${description}" suggested while a larger purchase of the shop could be its order`,
+      () =>
+        Effect.gen(function* () {
+          assert.deepStrictEqual(
+            (yield* estornoAgainst([-5000, -25000], description)).map(
+              ([, status]) => status,
+            ),
+            ['suggested'],
+          )
+        }).pipe(Effect.provide(openFinanceTest())),
+    )
+
+  it.effect('confirms a partial refund of the only order it can return', () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(
+        yield* estornoAgainst([-25000], 'Estorno parcial Amazon Marketplace'),
+        [[-25000, 'confirmed']],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect('confirms a whole refund against the purchase of its amount', () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(
+        yield* estornoAgainst([-5000, -25000], 'Estorno Amazon Marketplace'),
+        [[-5000, 'confirmed']],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
   it.effect('drops a refund once a credit is corrected to cashback', () =>
     Effect.gen(function* () {
       const { source, report, refunds } = yield* cardCredit

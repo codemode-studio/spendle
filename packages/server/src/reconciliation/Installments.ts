@@ -28,7 +28,11 @@ export interface InstallmentLine {
 }
 
 export interface InstallmentPlan {
-  /** Stable for the purchase: folded description, instalment count and first instalment seen. */
+  /**
+   * Stable for the purchase: folded description, instalment count and first
+   * instalment seen (its number, date and entry, so two purchases on one
+   * day stay apart).
+   */
   readonly key: string
   readonly description: string
   readonly amountCents: number
@@ -235,7 +239,7 @@ export const installmentPlans = (
             ? 0
             : remaining * latest.line.amountCents
       plans.push({
-        key: `${groupKey}|${chain[0]!.number}@${chain[0]!.line.bookedOn}`,
+        key: `${groupKey}|${chain[0]!.number}@${chain[0]!.line.bookedOn}|${chain[0]!.line.entryId}`,
         description: latest.line.description,
         amountCents: latest.line.amountCents,
         total,

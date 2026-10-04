@@ -569,6 +569,40 @@ describe('Cards', () => {
     }).pipe(Effect.provide(openFinanceTest())),
   )
 
+  it.effect('gives two same-day purchases at one store their own plans', () =>
+    Effect.gen(function* () {
+      const { cards, card } = yield* setup
+      const observations = yield* Observations
+      const source = yield* observations.registerSource({
+        kind: 'open_finance',
+        externalRef: 'feed',
+        label: 'feed',
+      })
+      yield* observations.recordTransactions({
+        sourceId: source.id,
+        accountId: card.id,
+        transactions: [-3000, -9000].map((amountCents) => ({
+          externalId: `apple${amountCents}`,
+          bookedOn: '2026-08-15',
+          amountCents,
+          currency: 'BRL',
+          description: 'Apple Store',
+          status: 'posted' as const,
+          raw: { installment: { number: 1, total: 3 } },
+        })),
+      })
+      yield* drain
+      const plans = yield* cards.installments(card.id)
+      assert.deepStrictEqual(
+        [
+          plans.map((plan) => plan.remainingCents).sort((a, b) => a - b),
+          new Set(plans.map((plan) => plan.key)).size,
+        ],
+        [[-18000, -6000], 2],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
   it.effect(
     'leaves a purchase total unknown once any two sources disagree on it',
     () =>

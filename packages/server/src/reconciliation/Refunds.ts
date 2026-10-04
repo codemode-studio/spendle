@@ -16,6 +16,12 @@ const otherCredit =
 // any source gives another operation type (a bill payment, contracted
 // credit, cashback, interest) is not a refund.
 const refundOperation = /estorno|chargeback|devolu|cancel|reembols/i
+// Wording that says a credit returns only part of its purchase, so its
+// amount need not equal the purchase's: `Estorno parcial`, `Devolucao
+// parcial`, `Reembolso parcial`, `Estorno parc` (but not `parc 02/10`, an
+// instalment number).
+const partialWording =
+  /\bparcia(?:l|is|lmente)\b|\b(?:estorno|estornado|estornada|devolucao|reembolso|credito)\s+parc\b(?!\.?\s*\d)/
 
 // Words shop names share without naming the same shop: kinds of shop,
 // company suffixes, web addresses and places.
@@ -121,7 +127,9 @@ const refundWords = new Set([
   'chargeback',
   'compra',
   'credito',
+  'parc',
   'parcial',
+  'parciais',
   'total',
   'valor',
 ])
@@ -214,6 +222,7 @@ const evaluate = (
   refund: MatchableEntry,
   remainingCents: number,
 ) => {
+  const text = foldDescription(refund.description)
   const reasons = ['same_account']
   let score = 40
   const { merchant, differentBusiness } = compareMerchants(
@@ -228,11 +237,15 @@ const evaluate = (
     reasons.push('similar_merchant')
   }
   if (differentBusiness) reasons.push('different_business')
-  if (refundHint.test(foldDescription(refund.description))) {
+  if (refundHint.test(text)) {
     score += 15
     reasons.push('refund_wording')
   }
-  if (refund.amountCents === remainingCents) {
+  // A credit that says it is partial may equal a smaller purchase by
+  // chance; its amount then tells no purchase of the shop from another.
+  if (partialWording.test(text)) {
+    reasons.push('partial_wording')
+  } else if (refund.amountCents === remainingCents) {
     score += 15
     reasons.push('full_amount')
   } else {
@@ -253,7 +266,9 @@ const evaluate = (
  * A pairing is confirmed automatically only when it names the purchase's
  * merchant, scores at least `autoConfirmScore`, both entries are posted, no
  * rival comes within `rivalMargin`, and the person never rejected a
- * pairing for either entry. Refund wording alone leaves it for review.
+ * pairing for either entry. Refund wording alone leaves it for review. A
+ * credit that says it is partial earns nothing for equalling a purchase, so
+ * while another purchase of the shop could hold it, it stays suggested.
  *
  * `takes` says whether a pairing may take its entries from other relations
  * competing for them; one it refuses leaves the purchase's amount to the
