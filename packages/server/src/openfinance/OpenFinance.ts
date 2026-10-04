@@ -9,7 +9,7 @@ import * as Semaphore from 'effect/Semaphore'
 import * as SqlClient from 'effect/sql/SqlClient'
 import * as SqlSchema from 'effect/sql/SqlSchema'
 
-import { max } from '../domain/LocalDate.ts'
+import { addDays, max } from '../domain/LocalDate.ts'
 import { EventLog } from '../events/EventLog.ts'
 import {
   Accounts,
@@ -134,6 +134,21 @@ const transactionsReady = (item: PluggyItem) =>
   item.status === 'UPDATED' &&
   item.statusDetail?.transactions?.isUpdated !== false
 
+/**
+ * How long an unresolved transaction is kept after the last response that
+ * reported it. Pluggy may drop a transaction from one response and return it
+ * later; one absence must not stop re-reading its day.
+ */
+const unresolvedRetentionDays = 30
+
+export class InvalidatedCheckpoint extends Schema.Class<InvalidatedCheckpoint>(
+  'InvalidatedCheckpoint',
+)({
+  balanceObservationId: Schema.String,
+  sourceId: Schema.String,
+  asOf: Schema.String,
+}) {}
+
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   const crypto = yield* Crypto.Crypto
@@ -187,6 +202,45 @@ const make = Effect.gen(function* () {
       `,
   })
 
+  // The latest booked observation of each day from a source, with whether it
+  // was already withdrawn.
+  const findLatestCheckpoints = SqlSchema.findAll({
+    Request: Schema.Struct({
+      accountId: Schema.String,
+      sourceId: Schema.String,
+      from: Schema.String,
+      to: Schema.String,
+    }),
+    Result: Schema.Struct({
+      id: Schema.String,
+      asOf: Schema.String,
+      invalidated: Schema.Number,
+    }),
+    execute: ({ accountId, sourceId, from, to }) => sql`
+        SELECT b.id, b.as_of AS asOf,
+          EXISTS (SELECT 1 FROM open_finance_checkpoint_invalidations i
+            WHERE i.balance_observation_id = b.id) AS invalidated
+        FROM balance_observations b
+        WHERE b.account_id = ${accountId} AND b.source_id = ${sourceId}
+          AND b.kind = 'booked' AND b.as_of >= ${from} AND b.as_of < ${to}
+          AND b.rowid = (
+            SELECT max(l.rowid) FROM balance_observations l
+            WHERE l.account_id = b.account_id AND l.source_id = b.source_id
+              AND l.kind = 'booked' AND l.as_of = b.as_of
+          )
+      `,
+  })
+  const findInvalidatedCheckpoints = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: InvalidatedCheckpoint,
+    execute: (accountId) => sql`
+        SELECT balance_observation_id AS balanceObservationId, source_id AS sourceId,
+          as_of AS asOf
+        FROM open_finance_checkpoint_invalidations
+        WHERE account_id = ${accountId} ORDER BY as_of, balance_observation_id
+      `,
+  })
+
   const connection = Effect.fn('OpenFinance.connection')(function* (
     connectionId: string,
   ) {
@@ -233,13 +287,17 @@ const make = Effect.gen(function* () {
         externalRef: item.id,
         label: item.connector.name,
       })
-      yield* sql`
+      // A disconnect may have completed while Pluggy answered; its response
+      // must not bring the connection back.
+      const updated = yield* sql`
           UPDATE open_finance_connections SET source_id = ${source.id},
             connector_name = ${item.connector.name}, status = ${connectionStatusOf(item)},
             provider_status = ${item.status}, error_code = ${item.error?.code ?? null},
             updated_at = ${yield* now}
-          WHERE id = ${current.id}
+          WHERE id = ${current.id} AND status != 'disconnected'
+          RETURNING id
         `
+      if (updated.length === 0) return yield* fail('connection_disconnected')
       yield* storeProviderAccounts(
         current.id,
         yield* pluggy.listAccounts(item.id),
@@ -397,12 +455,15 @@ const make = Effect.gen(function* () {
     const sourceId = owner.sourceId
 
     const pluggyItem = yield* pluggy.getItem(owner.itemId)
-    yield* sql`
+    // As in `applyItem`: a disconnect completed meanwhile wins.
+    const updated = yield* sql`
       UPDATE open_finance_connections SET status = ${connectionStatusOf(pluggyItem)},
         provider_status = ${pluggyItem.status}, error_code = ${pluggyItem.error?.code ?? null},
         updated_at = ${yield* now}
-      WHERE id = ${owner.id}
+      WHERE id = ${owner.id} AND status != 'disconnected'
+      RETURNING id
     `
+    if (updated.length === 0) return yield* fail('connection_disconnected')
     if (!transactionsReady(pluggyItem)) {
       const waiting: SyncResult = {
         recorded: 0,
@@ -531,20 +592,29 @@ const make = Effect.gen(function* () {
     })
     // Only after recording: a failed write must not forget what to re-read.
     // Every unresolved transaction from `dateFrom` on was covered by this
-    // read: it is still unresolved, now recorded, or gone.
+    // read: one still unresolved is kept as seen today, one now recorded is
+    // done, and one absent is dropped only after a long absence.
     yield* sql.withTransaction(
       Effect.gen(function* () {
+        for (const transaction of reported) {
+          yield* sql`
+            DELETE FROM open_finance_unresolved
+            WHERE provider_account_id = ${providerAccountId}
+              AND provider_transaction_id = ${transaction.externalId}
+          `
+        }
         yield* sql`
           DELETE FROM open_finance_unresolved
           WHERE provider_account_id = ${providerAccountId} AND booked_on >= ${dateFrom}
+            AND last_seen_on < ${addDays(dateTo, -unresolvedRetentionDays)}
         `
         for (const transaction of unresolved) {
           yield* sql`
             INSERT INTO open_finance_unresolved (provider_account_id, provider_transaction_id,
-              booked_on)
-            VALUES (${providerAccountId}, ${transaction.id}, ${transaction.bookedOn})
+              booked_on, last_seen_on)
+            VALUES (${providerAccountId}, ${transaction.id}, ${transaction.bookedOn}, ${dateTo})
             ON CONFLICT (provider_account_id, provider_transaction_id)
-            DO UPDATE SET booked_on = excluded.booked_on
+            DO UPDATE SET booked_on = excluded.booked_on, last_seen_on = excluded.last_seen_on
           `
         }
       }),
@@ -554,16 +624,20 @@ const make = Effect.gen(function* () {
       // last collected: kept for reference, never used as a booked
       // checkpoint. An execution that did not refresh accounts reports an old
       // balance, which must not be dated today.
+      // A fully successful execution has no `statusDetail`; its collection
+      // time is then the item's `lastUpdatedAt`, or the account's.
       const accountsStatus = pluggyItem.statusDetail?.accounts
       if (accountsStatus?.isUpdated !== false) {
+        const collectedAt =
+          accountsStatus?.lastUpdatedAt ??
+          pluggyItem.lastUpdatedAt ??
+          item.updatedAt
         yield* observations.recordBalance({
           sourceId,
           accountId,
           balance: {
             kind: 'available',
-            asOf: accountsStatus?.lastUpdatedAt
-              ? bookedOn(accountsStatus.lastUpdatedAt)
-              : dateTo,
+            asOf: collectedAt ? bookedOn(collectedAt) : dateTo,
             balanceCents: toMinorUnits(item.balance, item.currencyCode),
             currency: item.currencyCode,
           },
@@ -571,7 +645,35 @@ const make = Effect.gen(function* () {
       }
       // Booked checkpoints come from the bank's running balances, for
       // complete days only: today may still receive movements.
-      for (const checkpoint of endOfDayBalances(running)) {
+      const checkpoints = endOfDayBalances(running)
+      // A day this read covered that no longer closes on one balance (a line
+      // without a running balance, or lines that disagree) withdraws the
+      // checkpoint an earlier read inferred for it. Should a later read infer
+      // the same balance again, it is already known and not re-recorded, so
+      // the day stays without a checkpoint: a missing checkpoint is safe, a
+      // stale one is not.
+      const closed = new Set(checkpoints.map((checkpoint) => checkpoint.asOf))
+      const covered = new Set(running.map((line) => line.bookedOn))
+      const invalidatedAt = yield* now
+      for (const previous of yield* findLatestCheckpoints({
+        accountId,
+        sourceId,
+        from: dateFrom,
+        to: dateTo,
+      })) {
+        if (
+          previous.invalidated === 1 ||
+          !covered.has(previous.asOf) ||
+          closed.has(previous.asOf)
+        )
+          continue
+        yield* sql`
+          INSERT INTO open_finance_checkpoint_invalidations (balance_observation_id, account_id,
+            source_id, as_of, invalidated_at)
+          VALUES (${previous.id}, ${accountId}, ${sourceId}, ${previous.asOf}, ${invalidatedAt})
+        `
+      }
+      for (const checkpoint of checkpoints) {
         if (checkpoint.asOf >= dateTo) continue
         yield* observations.recordBalance({
           sourceId,
@@ -630,6 +732,15 @@ const make = Effect.gen(function* () {
     ])
   })
 
+  /**
+   * Booked checkpoints a later read withdrew. A reader of booked balances
+   * from an open_finance source takes each day's latest observation and
+   * treats the day as having no checkpoint when it is listed here.
+   */
+  const invalidatedCheckpoints = Effect.fn(
+    'OpenFinance.invalidatedCheckpoints',
+  )((accountId: string) => findInvalidatedCheckpoints(accountId))
+
   const disconnect = Effect.fn('OpenFinance.disconnect')(function* (
     connectionId: string,
   ) {
@@ -660,6 +771,7 @@ const make = Effect.gen(function* () {
     disconnect,
     connection,
     providerAccounts,
+    invalidatedCheckpoints,
   }
 })
 

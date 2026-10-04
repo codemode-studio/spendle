@@ -14,6 +14,8 @@ export const PluggyItem = Schema.Struct({
   executionStatus: Schema.optional(Schema.NullOr(Schema.String)),
   clientUserId: Schema.optional(Schema.NullOr(Schema.String)),
   connector: Schema.Struct({ id: Schema.Number, name: Schema.String }),
+  /** When the item last finished an execution successfully. */
+  lastUpdatedAt: Schema.optional(Schema.NullOr(Schema.String)),
   // Per-product collection state; `isUpdated: false` means this execution did
   // not refresh that product, and `lastUpdatedAt` is when it last was.
   statusDetail: Schema.optional(
@@ -44,6 +46,8 @@ export const PluggyAccount = Schema.Struct({
   number: Schema.optional(Schema.NullOr(Schema.String)),
   balance: Schema.Number,
   currencyCode: Schema.String,
+  /** When Pluggy last updated this account record. */
+  updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
   creditData: Schema.optional(
     Schema.NullOr(
       Schema.Struct({

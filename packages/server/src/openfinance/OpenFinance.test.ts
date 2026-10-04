@@ -6,6 +6,7 @@ import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
 import * as Ref from 'effect/Ref'
 import * as Result from 'effect/Result'
+import * as Schema from 'effect/Schema'
 import * as TestClock from 'effect/testing/TestClock'
 import * as SqlClient from 'effect/sql/SqlClient'
 
@@ -14,7 +15,7 @@ import * as Reactor from '../events/Reactor.ts'
 import { Accounts, CardTerms } from '../ledger/Accounts.ts'
 import { Observations } from '../ledger/Observations.ts'
 import { LedgerTest } from '../testing/layers.ts'
-import { OpenFinance } from './OpenFinance.ts'
+import { OpenFinance, OpenFinanceError } from './OpenFinance.ts'
 import type {
   PluggyAccount,
   PluggyItem,
@@ -35,8 +36,12 @@ interface FakeState {
   readonly statusDetail?: PluggyItem['statusDetail']
   /** Accounts of a given item; others list `accounts`. */
   readonly itemAccounts?: Readonly<Record<string, ReadonlyArray<PluggyAccount>>>
+  /** The item's top-level `lastUpdatedAt`. */
+  readonly itemLastUpdatedAt?: string
   /** Runs before Pluggy answers `getItem`, to hold responses back. */
   readonly beforeGetItem?: Effect.Effect<void>
+  /** Runs after Pluggy produced the item, delaying its delivery. */
+  readonly afterGetItem?: Effect.Effect<void>
 }
 
 class FakePluggyState extends Context.Service<
@@ -91,13 +96,16 @@ const makeFake = (state: Ref.Ref<FakeState>) =>
             status: 404,
           })
         }
-        return {
+        const item: PluggyItem = {
           id: itemId,
           status: current.itemStatus ?? 'UPDATED',
           clientUserId: current.clientUserId,
           connector: { id: 1, name: 'Nubank' },
           statusDetail: current.statusDetail,
+          lastUpdatedAt: current.itemLastUpdatedAt,
         }
+        yield* current.afterGetItem ?? Effect.void
+        return item
       }),
     deleteItem: (itemId) =>
       Ref.update(state, (current) => ({
@@ -119,7 +127,7 @@ const makeFake = (state: Ref.Ref<FakeState>) =>
       ),
   })
 
-const TestLayer = Layer.unwrap(
+const ManualLayer = Layer.unwrap(
   Effect.gen(function* () {
     const state = yield* Ref.make<FakeState>({
       clientUserId: '',
@@ -127,8 +135,7 @@ const TestLayer = Layer.unwrap(
       transactions: {},
       deleted: [],
     })
-    return SyncReactor.layer.pipe(
-      Layer.provideMerge(OpenFinance.layer),
+    return OpenFinance.layer.pipe(
       Layer.provideMerge(Reactor.Reactors.layer),
       Layer.provideMerge(Layer.succeed(PluggyClient, makeFake(state))),
       Layer.provideMerge(Layer.succeed(FakePluggyState, state)),
@@ -137,9 +144,14 @@ const TestLayer = Layer.unwrap(
   }),
 )
 
+const TestLayer = SyncReactor.layer.pipe(Layer.provideMerge(ManualLayer))
+
 // Connects an item with the given Pluggy data, as the widget flow would.
 const connect = (
-  data: Omit<FakeState, 'clientUserId' | 'deleted' | 'beforeGetItem'>,
+  data: Omit<
+    FakeState,
+    'clientUserId' | 'deleted' | 'beforeGetItem' | 'afterGetItem'
+  >,
 ) =>
   Effect.gen(function* () {
     yield* TestClock.setTime(
@@ -829,6 +841,251 @@ describe('OpenFinance', () => {
             fresh: [
               { kind: 'available', asOf: '2026-10-02', balanceCents: 70000 },
             ],
+          },
+        )
+      }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect(
+    'withdraws a booked checkpoint once its day gains a line without a running balance',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, connectionId, state } = yield* connect({
+          accounts: [{ ...bank, balance: 900 }],
+          transactions: {
+            'provider-bank': [
+              tx('salary', '2026-10-01', {
+                type: 'CREDIT',
+                amount: 1000,
+                balance: 1000,
+              }),
+              tx('market', '2026-10-02', { amount: 100, balance: 900 }),
+            ],
+          },
+        })
+        const account = yield* openFinance.linkAccount({
+          providerAccountId: 'provider-bank',
+          target: { kind: 'checking', purpose: 'operating' },
+          historyMonths: 3,
+        })
+        yield* drain
+        // Pluggy now also reports a 2 October fee, without a running balance:
+        // the day no longer closes on R$900.
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: {
+            'provider-bank': [
+              ...current.transactions['provider-bank']!,
+              tx('fee', '2026-10-02', { amount: 50, balance: null }),
+            ],
+          },
+        }))
+        yield* openFinance.requestSync({ connectionId })
+        yield* drain
+        // A repeated read withdraws it only once.
+        yield* openFinance.requestSync({ connectionId })
+        yield* drain
+
+        assert.deepStrictEqual(
+          {
+            booked: (yield* balancesOf(account.id)).filter(
+              (balance) => balance.kind === 'booked',
+            ),
+            invalidated: (yield* openFinance.invalidatedCheckpoints(
+              account.id,
+            )).map((checkpoint) => checkpoint.asOf),
+          },
+          {
+            booked: [
+              { kind: 'booked', asOf: '2026-10-01', balanceCents: 100000 },
+              { kind: 'booked', asOf: '2026-10-02', balanceCents: 90000 },
+            ],
+            invalidated: ['2026-10-02'],
+          },
+        )
+      }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect(
+    'keeps re-reading a foreign purchase Pluggy omitted from one response',
+    () =>
+      Effect.gen(function* () {
+        const abroad = tx('abroad', '2026-09-10', {
+          currencyCode: 'USD',
+          amount: 10,
+          amountInAccountCurrency: null,
+        })
+        const { openFinance, connectionId, state } = yield* connect({
+          accounts: [bank],
+          transactions: {
+            'provider-bank': [abroad, tx('recent', '2026-10-03')],
+          },
+        })
+        const account = yield* openFinance.linkAccount({
+          providerAccountId: 'provider-bank',
+          target: { kind: 'checking', purpose: 'operating' },
+          historyMonths: 3,
+        })
+        yield* drain
+        const setTransactions = (
+          transactions: ReadonlyArray<PluggyTransaction>,
+        ) =>
+          Ref.update(state, (current) => ({
+            ...current,
+            transactions: { 'provider-bank': transactions },
+          }))
+        // One response leaves it out; the next returns it converted.
+        yield* setTransactions([tx('recent', '2026-10-03')])
+        yield* openFinance.requestSync({ connectionId })
+        yield* drain
+        yield* setTransactions([
+          { ...abroad, amountInAccountCurrency: 55.3 },
+          tx('recent', '2026-10-03'),
+        ])
+        yield* openFinance.requestSync({ connectionId })
+        yield* drain
+        assert.deepStrictEqual(
+          (yield* (yield* Observations).current(account.id)).map(
+            (observation) => [observation.externalId, observation.amountCents],
+          ),
+          [
+            ['abroad', -5530],
+            ['recent', -1000],
+          ],
+        )
+      }).pipe(Effect.provide(TestLayer)),
+  )
+
+  // Without the sync reactor: its 5-second sweep would replay every tick of
+  // the month the clock jumps.
+  it.effect(
+    'stops re-reading an unresolved purchase absent for over 30 days',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, state } = yield* connect({
+          accounts: [bank],
+          transactions: {
+            'provider-bank': [
+              tx('abroad', '2026-09-10', {
+                currencyCode: 'USD',
+                amountInAccountCurrency: null,
+              }),
+              tx('recent', '2026-10-03'),
+            ],
+          },
+        })
+        yield* openFinance.linkAccount({
+          providerAccountId: 'provider-bank',
+          target: { kind: 'checking', purpose: 'operating' },
+          historyMonths: 3,
+        })
+        yield* openFinance.syncAccount('provider-bank')
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: { 'provider-bank': [] },
+        }))
+        const sql = yield* SqlClient.SqlClient
+        const unresolvedAfterSyncOn = (instant: string) =>
+          Effect.gen(function* () {
+            yield* TestClock.setTime(
+              DateTime.toEpochMillis(DateTime.makeUnsafe(instant)),
+            )
+            yield* openFinance.syncAccount('provider-bank')
+            return (yield* sql<{ id: string }>`
+              SELECT provider_transaction_id AS id FROM open_finance_unresolved
+            `).map((row) => row.id)
+          })
+        assert.deepStrictEqual(
+          {
+            // Last seen 4 October.
+            thirtyDays: yield* unresolvedAfterSyncOn('2026-11-03T15:00:00Z'),
+            thirtyOneDays: yield* unresolvedAfterSyncOn('2026-11-04T15:00:00Z'),
+          },
+          { thirtyDays: ['abroad'], thirtyOneDays: [] },
+        )
+      }).pipe(Effect.provide(ManualLayer)),
+  )
+
+  it.effect(
+    'dates the available balance of a fully successful execution by the item update',
+    () =>
+      Effect.gen(function* () {
+        // Pluggy reports no statusDetail when every product succeeded.
+        const { openFinance } = yield* connect({
+          accounts: [{ ...bank, balance: 700 }],
+          transactions: { 'provider-bank': [tx('market', '2026-10-02')] },
+          statusDetail: null,
+          // 02:30 UTC on 3 October is still 2 October in São Paulo.
+          itemLastUpdatedAt: '2026-10-03T02:30:00.000Z',
+        })
+        const account = yield* openFinance.linkAccount({
+          providerAccountId: 'provider-bank',
+          target: { kind: 'checking', purpose: 'operating' },
+          historyMonths: 3,
+        })
+        yield* drain
+        assert.deepStrictEqual(yield* balancesOf(account.id), [
+          { kind: 'available', asOf: '2026-10-02', balanceCents: 70000 },
+        ])
+      }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect(
+    'keeps a connection disconnected while a refresh and a sync were waiting on Pluggy',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance, connectionId, state } = yield* connect({
+          accounts: [bank],
+          transactions: { 'provider-bank': [tx('market', '2026-10-02')] },
+        })
+        yield* openFinance.linkAccount({
+          providerAccountId: 'provider-bank',
+          target: { kind: 'checking', purpose: 'operating' },
+          historyMonths: 3,
+        })
+        yield* drain
+        // Pluggy has produced both answers but neither arrives until the
+        // disconnect completed.
+        const arrived = yield* Ref.make(0)
+        const bothWaiting = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          afterGetItem: Effect.gen(function* () {
+            if ((yield* Ref.updateAndGet(arrived, (n) => n + 1)) >= 2)
+              yield* Deferred.succeed(bothWaiting, undefined)
+            yield* Deferred.await(release)
+          }),
+        }))
+        const [refreshed, synced] = yield* Effect.all(
+          [
+            Effect.result(openFinance.refreshConnection(connectionId)),
+            Effect.result(openFinance.syncAccount('provider-bank')),
+            Effect.gen(function* () {
+              yield* Deferred.await(bothWaiting)
+              yield* openFinance.disconnect(connectionId)
+              yield* Deferred.succeed(release, undefined)
+            }),
+          ],
+          { concurrency: 'unbounded' },
+        )
+        const reason = (
+          result: Result.Result<unknown, { readonly _tag: string }>,
+        ) =>
+          Result.isFailure(result) &&
+          Schema.is(OpenFinanceError)(result.failure)
+            ? result.failure.reason
+            : null
+        assert.deepStrictEqual(
+          {
+            refreshed: reason(refreshed),
+            synced: reason(synced),
+            status: (yield* openFinance.connection(connectionId)).status,
+          },
+          {
+            refreshed: 'connection_disconnected',
+            synced: 'connection_disconnected',
+            status: 'disconnected',
           },
         )
       }).pipe(Effect.provide(TestLayer)),

@@ -42,13 +42,42 @@ export default Effect.gen(function* () {
 
   // Transactions read without an amount in the account currency (a foreign
   // purchase not yet converted). Syncs re-read back to the oldest one until
-  // it can be recorded or Pluggy no longer reports it.
+  // it can be recorded or Pluggy has not reported it for a while: Pluggy may
+  // omit a transaction from one response and return it in the next.
   yield* sql`
     CREATE TABLE open_finance_unresolved (
       provider_account_id TEXT NOT NULL REFERENCES open_finance_accounts (provider_account_id),
       provider_transaction_id TEXT NOT NULL,
       booked_on TEXT NOT NULL,
+      last_seen_on TEXT NOT NULL,
       PRIMARY KEY (provider_account_id, provider_transaction_id)
     )
+  `
+
+  // Booked checkpoints inferred from running balances that a later read no
+  // longer supports: the day gained a line without a running balance, or its
+  // lines stopped agreeing on one closing balance. The balance observation
+  // stays immutable; this row records that it was withdrawn. Readers of
+  // booked checkpoints from an open_finance source must take the day's latest
+  // observation and treat the day as having no checkpoint when that
+  // observation is listed here (never falling back to an older one).
+  yield* sql`
+    CREATE TABLE open_finance_checkpoint_invalidations (
+      balance_observation_id TEXT PRIMARY KEY REFERENCES balance_observations (id),
+      account_id TEXT NOT NULL REFERENCES accounts (id),
+      source_id TEXT NOT NULL REFERENCES sources (id),
+      as_of TEXT NOT NULL,
+      invalidated_at TEXT NOT NULL
+    )
+  `
+  yield* sql`
+    CREATE TRIGGER open_finance_checkpoint_invalidations_no_update
+    BEFORE UPDATE ON open_finance_checkpoint_invalidations
+    BEGIN SELECT RAISE(ABORT, 'checkpoint invalidations are immutable'); END
+  `
+  yield* sql`
+    CREATE TRIGGER open_finance_checkpoint_invalidations_no_delete
+    BEFORE DELETE ON open_finance_checkpoint_invalidations
+    BEGIN SELECT RAISE(ABORT, 'checkpoint invalidations are immutable'); END
   `
 })
