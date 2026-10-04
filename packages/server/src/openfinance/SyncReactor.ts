@@ -13,6 +13,25 @@ const permanent = new Set([
   'not_linked',
 ])
 
+// Conditions of one account that a retry cannot fix: an account Pluggy no
+// longer lists keeps its history and is skipped, so it neither holds the
+// queue nor stops the connection's other accounts.
+const accountScoped = new Set(['not_linked', 'provider_account_not_found'])
+
+const syncOne = (providerAccountId: string) =>
+  Effect.gen(function* () {
+    yield* (yield* OpenFinance).syncAccount(providerAccountId)
+  }).pipe(
+    Effect.catchIf(
+      (error) =>
+        error._tag === 'OpenFinanceError' && accountScoped.has(error.reason),
+      (error) =>
+        Effect.logWarning(
+          `Skipping sync of ${providerAccountId}: ${error.message}`,
+        ),
+    ),
+  )
+
 /**
  * Runs queued Pluggy syncs. A request for one account syncs it; a request for
  * a connection refreshes the item and syncs every linked account. Pluggy
@@ -26,7 +45,7 @@ export const layer = Reactor.layer({
       const openFinance = yield* OpenFinance
       const request = yield* decodeRequest(event.payload)
       if (request.providerAccountId !== undefined) {
-        yield* openFinance.syncAccount(request.providerAccountId)
+        yield* syncOne(request.providerAccountId)
         return
       }
       yield* openFinance.refreshConnection(request.connectionId)
@@ -35,7 +54,7 @@ export const layer = Reactor.layer({
       )).filter((account) => account.accountId !== null)
       yield* Effect.forEach(
         linked,
-        (account) => openFinance.syncAccount(account.providerAccountId),
+        (account) => syncOne(account.providerAccountId),
         {
           discard: true,
         },

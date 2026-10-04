@@ -27,4 +27,30 @@ describe('endOfDayBalances', () => {
       [],
     )
   })
+
+  it('skips a day with a line missing its running balance or amount', () => {
+    // The R$50 debit after the R$900 balance carries none: closing is unknown.
+    assert.deepStrictEqual(
+      endOfDayBalances([
+        {
+          bookedOn: '2026-09-10',
+          amountCents: -10000,
+          balanceAfterCents: 90000,
+        },
+        { bookedOn: '2026-09-10', amountCents: -5000, balanceAfterCents: null },
+        {
+          bookedOn: '2026-09-11',
+          amountCents: -2000,
+          balanceAfterCents: 83000,
+        },
+        { bookedOn: '2026-09-11', amountCents: null, balanceAfterCents: null },
+        {
+          bookedOn: '2026-09-12',
+          amountCents: -3000,
+          balanceAfterCents: 80000,
+        },
+      ]),
+      [{ asOf: '2026-09-12', balanceCents: 80000 }],
+    )
+  })
 })

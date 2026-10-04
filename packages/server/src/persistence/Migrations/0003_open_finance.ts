@@ -39,4 +39,16 @@ export default Effect.gen(function* () {
       updated_at TEXT NOT NULL
     )
   `
+
+  // Transactions read without an amount in the account currency (a foreign
+  // purchase not yet converted). Syncs re-read back to the oldest one until
+  // it can be recorded or Pluggy no longer reports it.
+  yield* sql`
+    CREATE TABLE open_finance_unresolved (
+      provider_account_id TEXT NOT NULL REFERENCES open_finance_accounts (provider_account_id),
+      provider_transaction_id TEXT NOT NULL,
+      booked_on TEXT NOT NULL,
+      PRIMARY KEY (provider_account_id, provider_transaction_id)
+    )
+  `
 })

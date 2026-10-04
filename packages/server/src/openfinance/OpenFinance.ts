@@ -30,6 +30,7 @@ import {
   toReportedTransaction,
 } from './Normalize.ts'
 import { endOfDayBalances } from './EndOfDay.ts'
+import type { RunningLine } from './EndOfDay.ts'
 import type { PluggyAccount, PluggyItem } from './PluggyApi.ts'
 import { PluggyClient } from './PluggyClient.ts'
 
@@ -177,6 +178,15 @@ const make = Effect.gen(function* () {
       `,
   })
 
+  const findOldestUnresolved = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ bookedOn: Schema.String }),
+    execute: (providerAccountId) => sql`
+        SELECT booked_on AS bookedOn FROM open_finance_unresolved
+        WHERE provider_account_id = ${providerAccountId} ORDER BY booked_on LIMIT 1
+      `,
+  })
+
   const connection = Effect.fn('OpenFinance.connection')(function* (
     connectionId: string,
   ) {
@@ -224,7 +234,7 @@ const make = Effect.gen(function* () {
         label: item.connector.name,
       })
       yield* sql`
-          UPDATE open_finance_connections SET item_id = ${item.id}, source_id = ${source.id},
+          UPDATE open_finance_connections SET source_id = ${source.id},
             connector_name = ${item.connector.name}, status = ${connectionStatusOf(item)},
             provider_status = ${item.status}, error_code = ${item.error?.code ?? null},
             updated_at = ${yield* now}
@@ -280,6 +290,15 @@ const make = Effect.gen(function* () {
     // with this connection's clientUserId may attach to it.
     if (item.clientUserId !== current.id)
       return yield* fail('item_belongs_elsewhere')
+    // Another registration may have pinned an item while Pluggy answered:
+    // the first to pin wins, and the loser stores nothing.
+    const pinned = yield* sql`
+      UPDATE open_finance_connections SET item_id = ${item.id}, updated_at = ${yield* now}
+      WHERE id = ${current.id} AND status != 'disconnected'
+        AND (item_id IS NULL OR item_id = ${item.id})
+      RETURNING id
+    `
+    if (pinned.length === 0) return yield* fail('item_already_registered')
     yield* applyItem(current, item)
     return yield* providerAccounts(current.id)
   })
@@ -423,13 +442,20 @@ const make = Effect.gen(function* () {
             : found,
         null,
       )
+    // A transaction skipped for lacking an amount in the account currency is
+    // re-read until it gains one or Pluggy stops reporting it.
+    const oldestUnresolved = Option.match(
+      yield* findOldestUnresolved(providerAccountId),
+      { onNone: () => null, onSome: (row) => row.bookedOn },
+    )
     const continuation =
       latest === null ? historyFrom : continuationStart(latest)
     const dateFrom = max(
       historyFrom,
-      oldestPending !== null && oldestPending < continuation
-        ? oldestPending
-        : continuation,
+      [oldestPending, oldestUnresolved].reduce<string>(
+        (earliest, day) => (day !== null && day < earliest ? day : earliest),
+        continuation,
+      ),
     )
     const dateTo = yield* today
 
@@ -444,26 +470,33 @@ const make = Effect.gen(function* () {
     })
 
     const reported: Array<ReportedTransaction> = []
-    const running: Array<{
-      bookedOn: string
-      amountCents: number
-      balanceAfterCents: number
-    }> = []
+    const running: Array<RunningLine> = []
+    const unresolved: Array<{ id: string; bookedOn: string }> = []
     let skipped = 0
     for (const transaction of fetched) {
       const normalized = toReportedTransaction(item, transaction)
       if (Option.isNone(normalized)) {
         skipped++
+        const day = bookedOn(transaction.date)
+        if (day < historyFrom) continue
+        unresolved.push({ id: transaction.id, bookedOn: day })
+        // Its amount is unknown, so its day cannot be closed.
+        if (transaction.status !== 'PENDING') {
+          running.push({
+            bookedOn: day,
+            amountCents: null,
+            balanceAfterCents: null,
+          })
+        }
         continue
       }
       if (normalized.value.bookedOn < historyFrom) continue
       reported.push(normalized.value)
-      const balanceAfterCents = runningBalanceCents(item, transaction)
-      if (normalized.value.status === 'posted' && balanceAfterCents !== null) {
+      if (normalized.value.status === 'posted') {
         running.push({
           bookedOn: normalized.value.bookedOn,
           amountCents: normalized.value.amountCents,
-          balanceAfterCents,
+          balanceAfterCents: runningBalanceCents(item, transaction),
         })
       }
     }
@@ -496,19 +529,46 @@ const make = Effect.gen(function* () {
       accountId,
       transactions: reported,
     })
+    // Only after recording: a failed write must not forget what to re-read.
+    // Every unresolved transaction from `dateFrom` on was covered by this
+    // read: it is still unresolved, now recorded, or gone.
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        yield* sql`
+          DELETE FROM open_finance_unresolved
+          WHERE provider_account_id = ${providerAccountId} AND booked_on >= ${dateFrom}
+        `
+        for (const transaction of unresolved) {
+          yield* sql`
+            INSERT INTO open_finance_unresolved (provider_account_id, provider_transaction_id,
+              booked_on)
+            VALUES (${providerAccountId}, ${transaction.id}, ${transaction.bookedOn})
+            ON CONFLICT (provider_account_id, provider_transaction_id)
+            DO UPDATE SET booked_on = excluded.booked_on
+          `
+        }
+      }),
+    )
     if (item.type === 'BANK') {
-      // Pluggy's account balance is the available balance at this moment:
-      // kept for reference, never used as a booked checkpoint.
-      yield* observations.recordBalance({
-        sourceId,
-        accountId,
-        balance: {
-          kind: 'available',
-          asOf: dateTo,
-          balanceCents: toMinorUnits(item.balance, item.currencyCode),
-          currency: item.currencyCode,
-        },
-      })
+      // Pluggy's account balance is the available balance when accounts were
+      // last collected: kept for reference, never used as a booked
+      // checkpoint. An execution that did not refresh accounts reports an old
+      // balance, which must not be dated today.
+      const accountsStatus = pluggyItem.statusDetail?.accounts
+      if (accountsStatus?.isUpdated !== false) {
+        yield* observations.recordBalance({
+          sourceId,
+          accountId,
+          balance: {
+            kind: 'available',
+            asOf: accountsStatus?.lastUpdatedAt
+              ? bookedOn(accountsStatus.lastUpdatedAt)
+              : dateTo,
+            balanceCents: toMinorUnits(item.balance, item.currencyCode),
+            currency: item.currencyCode,
+          },
+        })
+      }
       // Booked checkpoints come from the bank's running balances, for
       // complete days only: today may still receive movements.
       for (const checkpoint of endOfDayBalances(running)) {

@@ -132,6 +132,10 @@ export class PluggyClient extends Context.Service<
           http.execute,
           Effect.mapError(fail('authenticate', 'unavailable')),
         )
+        if (response.status === 429) {
+          yield* Effect.sleep(rateLimitWait(response.headers))
+          return yield* fail('authenticate', 'unavailable', 429)()
+        }
         if (response.status !== 200) {
           return yield* fail(
             'authenticate',

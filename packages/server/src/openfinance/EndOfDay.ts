@@ -1,8 +1,12 @@
-/** A posted line with the running balance the bank reported after it. */
+/**
+ * A posted line with the running balance the bank reported after it. `null`
+ * marks what the provider left out: an amount it could not convert, or a line
+ * without a running balance.
+ */
 export interface RunningLine {
   readonly bookedOn: string
-  readonly amountCents: number
-  readonly balanceAfterCents: number
+  readonly amountCents: number | null
+  readonly balanceAfterCents: number | null
 }
 
 /**
@@ -12,7 +16,8 @@ export interface RunningLine {
  * accepted only if some line could have opened the day:
  * `balanceAfter - amount = E - (sum of the day's amounts)`. A day yields a
  * checkpoint only when exactly one closing balance is consistent; any doubt
- * yields none, never a guess.
+ * yields none, never a guess. A day with any incomplete line yields none
+ * either: its latest line may be the one without a balance.
  */
 export const endOfDayBalances = (
   lines: ReadonlyArray<RunningLine>,
@@ -24,7 +29,15 @@ export const endOfDayBalances = (
     byDay.set(line.bookedOn, day)
   }
   const checkpoints: Array<{ asOf: string; balanceCents: number }> = []
-  for (const [asOf, day] of [...byDay].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [asOf, lines] of [...byDay].sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
+    const day = lines.flatMap(({ amountCents, balanceAfterCents }) =>
+      amountCents === null || balanceAfterCents === null
+        ? []
+        : [{ amountCents, balanceAfterCents }],
+    )
+    if (day.length < lines.length) continue
     const total = day.reduce((sum, line) => sum + line.amountCents, 0)
     const openings = new Set(
       day.map((line) => line.balanceAfterCents - line.amountCents),

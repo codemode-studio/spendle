@@ -3,20 +3,24 @@ import * as Schema from 'effect/Schema'
 // The subset of Pluggy's REST payloads the ledger uses. Unknown fields are
 // ignored, so additions on Pluggy's side do not break decoding.
 
+const ProductStatus = Schema.Struct({
+  isUpdated: Schema.Boolean,
+  lastUpdatedAt: Schema.optional(Schema.NullOr(Schema.String)),
+})
+
 export const PluggyItem = Schema.Struct({
   id: Schema.String,
   status: Schema.String,
   executionStatus: Schema.optional(Schema.NullOr(Schema.String)),
   clientUserId: Schema.optional(Schema.NullOr(Schema.String)),
   connector: Schema.Struct({ id: Schema.Number, name: Schema.String }),
-  // Per-product collection state; `transactions.isUpdated: false` means this
-  // execution did not refresh transactions.
+  // Per-product collection state; `isUpdated: false` means this execution did
+  // not refresh that product, and `lastUpdatedAt` is when it last was.
   statusDetail: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
-        transactions: Schema.optional(
-          Schema.NullOr(Schema.Struct({ isUpdated: Schema.Boolean })),
-        ),
+        accounts: Schema.optional(Schema.NullOr(ProductStatus)),
+        transactions: Schema.optional(Schema.NullOr(ProductStatus)),
       }),
     ),
   ),

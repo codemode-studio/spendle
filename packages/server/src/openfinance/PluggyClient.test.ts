@@ -149,6 +149,35 @@ describe('PluggyClient', () => {
     }),
   )
 
+  it.effect('waits for the rate-limit window before authenticating again', () =>
+    Effect.gen(function* () {
+      let auths = 0
+      const { pluggy } = yield* fakePluggy((url) => {
+        if (url.pathname === '/auth') {
+          auths++
+          if (auths === 1)
+            return new Response('{}', {
+              status: 429,
+              headers: { 'RateLimit-Reset': '30' },
+            })
+          return json({ apiKey: 'key' })
+        }
+        return json({
+          id: 'item-1',
+          status: 'UPDATED',
+          connector: { id: 1, name: 'Nubank' },
+        })
+      })
+
+      const fiber = yield* Effect.forkChild(pluggy.getItem('item-1'))
+      yield* TestClock.adjust('29 seconds')
+      assert.strictEqual(auths, 1)
+      yield* TestClock.adjust('2 seconds')
+      const item = yield* Fiber.join(fiber)
+      assert.deepStrictEqual([item.id, auths], ['item-1', 2])
+    }),
+  )
+
   it.effect('reports a missing configuration without calling Pluggy', () =>
     Effect.gen(function* () {
       const pluggy = yield* PluggyClient.make({
