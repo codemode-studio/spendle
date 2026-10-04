@@ -42,14 +42,15 @@ O classificador por modelo usa escolha tipada com probabilidade (avaliar TypeSaf
 1. Fundação: pacote, runtime, configuração, SQLite e migrações, testes, documentação para agentes
 2. Registro de eventos e reatores drenáveis
 3. Núcleo do razão: instituições, contas, cartões, observações, lançamentos, checkpoints
-4. Ingestão Pluggy: conexão, webhook, sincronização com janela de 90 dias, saldos
-5. Importação manual: OFX e CSV, depois PDF
-6. Resolução de entidades e prova de saldo
-7. Reconciliação: transferências, faturas, estornos, parcelamentos
-8. Aprendizado de categorias
-9. API para o app web e troca do V1
+4. Ingestão Pluggy: conexão, contas, sincronização com janela de 90 dias, saldos
+5. Webhooks Pluggy: endpoint autenticado, caixa de entrada idempotente, reator de sincronização, registro na Pluggy e exposição pública só desse caminho
+6. Importação manual: OFX e CSV, depois PDF
+7. Resolução de entidades e prova de saldo
+8. Reconciliação: transferências, faturas, estornos, parcelamentos
+9. Aprendizado de categorias
+10. API para o app web e troca do V1
 
 ## Em aberto
 
-- Autenticação: o V1 não tem; definir antes de expor a API fora da rede local.
+- Autenticação: o V1 não tem; definir antes de expor a API fora da rede local. O webhook da Pluggy é a única rota pública e se autentica pelo segredo próprio.
 - Importação dos dados do V1: quais decisões humanas e fontes trazer, e como validar a equivalência.
