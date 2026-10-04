@@ -88,6 +88,42 @@ describe('toReportedTransaction', () => {
       ['pending', 'Padaria'],
     )
   })
+
+  it('keeps the provider category id beside its name', () => {
+    const reported = Option.getOrThrow(
+      toReportedTransaction(
+        { type: 'BANK', currencyCode: 'BRL' },
+        transaction({
+          category: 'Groceries',
+          categoryId: '10000000',
+          merchant: { name: 'Mercado', category: 'Supermercados' },
+        }),
+      ),
+    )
+    assert.deepInclude(reported.raw as Record<string, unknown>, {
+      category: 'Groceries',
+      categoryId: '10000000',
+    })
+    assert.deepStrictEqual(
+      Option.getOrThrow(
+        toReportedTransaction(
+          { type: 'BANK', currencyCode: 'BRL' },
+          transaction({}),
+        ),
+      ).raw,
+      {
+        type: 'DEBIT',
+        amount: 10.1,
+        currencyCode: 'BRL',
+        category: null,
+        categoryId: null,
+        providerCode: null,
+        operationType: null,
+        merchant: null,
+        installment: null,
+      },
+    )
+  })
 })
 
 describe('bookedOn', () => {
