@@ -1,9 +1,15 @@
+import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer'
 import { assert, describe, it } from '@effect/vitest'
+import * as Deferred from 'effect/Deferred'
 import * as Effect from 'effect/Effect'
+import * as Fiber from 'effect/Fiber'
 import * as Option from 'effect/Option'
 import * as Redacted from 'effect/Redacted'
 import * as Ref from 'effect/Ref'
+import * as Stream from 'effect/Stream'
 import * as Layer from 'effect/Layer'
+import * as HttpClient from 'effect/http/HttpClient'
+import * as HttpClientRequest from 'effect/http/HttpClientRequest'
 import * as HttpRouter from 'effect/http/HttpRouter'
 import * as HttpServer from 'effect/http/HttpServer'
 
@@ -281,6 +287,76 @@ describe('webhook reactions', () => {
       }).pipe(Effect.provide(openFinanceTest(settings))),
   )
 
+  it.effect('drops a refresh Pluggy can no longer answer and keeps going', () =>
+    Effect.gen(function* () {
+      const { openFinance, connectionId, state } = yield* linkedBank([
+        ['market', '2026-09-28'],
+      ])
+      yield* Ref.update(state, (current) => ({ ...current, gone: true }))
+      yield* deliver({
+        eventId: 'evt-stale',
+        event: 'transactions/updated',
+        itemId: 'item-1',
+        accountId: 'provider-bank',
+        transactionIds: ['market'],
+      })
+      yield* deliver({
+        eventId: 'evt-after',
+        event: 'item/deleted',
+        itemId: 'item-1',
+      })
+      yield* drain
+      assert.strictEqual(
+        (yield* openFinance.connection(connectionId)).status,
+        'disconnected',
+      )
+    }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect('keeps a deletion that arrives while a sync is fetching', () =>
+    Effect.gen(function* () {
+      const { openFinance, account, state } = yield* linkedBank([
+        ['market', '2026-09-28'],
+      ])
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* Ref.update(state, (current) => ({
+        ...current,
+        gate: { entered, release },
+      }))
+      // The sync takes Pluggy's answer, which still lists the transaction.
+      const sync = yield* Effect.forkChild(
+        openFinance.syncAccount('provider-bank'),
+      )
+      yield* Deferred.await(entered)
+      const removal = yield* Effect.forkChild(
+        openFinance.removeTransactions('provider-bank', ['market']),
+      )
+      // Let the removal run as far as it can: to the end without the lock,
+      // or until it waits for the sync with it.
+      for (let turn = 0; turn < 100; turn++) {
+        if (removal.pollUnsafe() !== undefined) break
+        yield* Effect.yieldNow
+      }
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(sync)
+      yield* Fiber.join(removal)
+      assert.deepStrictEqual(yield* currentIds(account.id), [])
+    }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
+  it.effect('accepts events whose error has no code', () =>
+    Effect.gen(function* () {
+      const result = yield* deliver({
+        eventId: 'evt-payment',
+        event: 'scheduled_payment/error',
+        error: { title: 'Falhou', description: 'Saldo insuficiente' },
+      })
+      assert.strictEqual(result.status, 202)
+      yield* drain
+    }).pipe(Effect.provide(openFinanceTest(settings))),
+  )
+
   it.effect('accepts connector events, which carry no item', () =>
     Effect.gen(function* () {
       const result = yield* deliver({
@@ -368,5 +444,30 @@ describe('webhook route', () => {
         ),
       ).pipe(Effect.map((response) => assert.strictEqual(response.status, 413)))
     }),
+  )
+
+  it.live(
+    'answers 413 over a real connection to a chunked body past the limit',
+    () =>
+      Effect.gen(function* () {
+        const chunk = new TextEncoder().encode('x'.repeat(16 * 1024))
+        // A streamed body has no Content-Length: Node receives it chunked.
+        const response = yield* HttpClient.execute(
+          HttpClientRequest.post('/api/pluggy/webhook').pipe(
+            HttpClientRequest.setHeader('authorization', `Bearer ${secret}`),
+            HttpClientRequest.bodyStream(
+              Stream.fromIterable([chunk, chunk, chunk, chunk, chunk]),
+            ),
+          ),
+        )
+        assert.strictEqual(response.status, 413)
+      }).pipe(
+        Effect.provide(
+          HttpRouter.serve(routes, { disableListenLog: true }).pipe(
+            Layer.provideMerge(openFinanceTest(settings)),
+            Layer.provideMerge(NodeHttpServer.layerTest),
+          ),
+        ),
+      ),
   )
 })

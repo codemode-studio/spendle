@@ -1066,39 +1066,49 @@ const make = Effect.gen(function* () {
       providerAccountId: string,
       transactionIds: ReadonlyArray<string>,
     ) {
-      // A deletion for an account that was never copied removes nothing.
-      const found = yield* findProviderAccount(providerAccountId)
-      if (Option.isNone(found)) {
-        yield* Effect.logInfo(
-          `No copied account for Pluggy account ${providerAccountId}; nothing to remove`,
-        )
-        return 0
-      }
-      const provider = found.value
-      const owner = yield* connection(provider.connectionId)
-      if (provider.accountId === null || owner.sourceId === null) return 0
-      const sourceId = owner.sourceId
-      const ids = new Set(transactionIds)
-      const doomed = (yield* observations.current(provider.accountId)).filter(
-        (observation) =>
-          observation.sourceId === sourceId && ids.has(observation.externalId),
+      // Under the sync lock, so an in-flight sync cannot write back what
+      // Pluggy deleted while it was fetching.
+      return yield* lockFor(providerAccountId).withPermits(1)(
+        removeLocked(providerAccountId, transactionIds),
       )
-      const result = yield* observations.recordTransactions({
-        sourceId,
-        accountId: provider.accountId,
-        transactions: doomed.map((observation) => ({
-          externalId: observation.externalId,
-          bookedOn: observation.bookedOn,
-          amountCents: observation.amountCents,
-          currency: observation.currency,
-          description: observation.description,
-          status: 'removed' as const,
-          raw: { reason: 'deleted_by_provider' },
-        })),
-      })
-      return result.recorded.length
     },
   )
+  const removeLocked = Effect.fnUntraced(function* (
+    providerAccountId: string,
+    transactionIds: ReadonlyArray<string>,
+  ) {
+    // A deletion for an account that was never copied removes nothing.
+    const found = yield* findProviderAccount(providerAccountId)
+    if (Option.isNone(found)) {
+      yield* Effect.logInfo(
+        `No copied account for Pluggy account ${providerAccountId}; nothing to remove`,
+      )
+      return 0
+    }
+    const provider = found.value
+    const owner = yield* connection(provider.connectionId)
+    if (provider.accountId === null || owner.sourceId === null) return 0
+    const sourceId = owner.sourceId
+    const ids = new Set(transactionIds)
+    const doomed = (yield* observations.current(provider.accountId)).filter(
+      (observation) =>
+        observation.sourceId === sourceId && ids.has(observation.externalId),
+    )
+    const result = yield* observations.recordTransactions({
+      sourceId,
+      accountId: provider.accountId,
+      transactions: doomed.map((observation) => ({
+        externalId: observation.externalId,
+        bookedOn: observation.bookedOn,
+        amountCents: observation.amountCents,
+        currency: observation.currency,
+        description: observation.description,
+        status: 'removed' as const,
+        raw: { reason: 'deleted_by_provider' },
+      })),
+    })
+    return result.recorded.length
+  })
 
   return {
     refreshTransactions,

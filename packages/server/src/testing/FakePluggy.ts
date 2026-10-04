@@ -1,5 +1,6 @@
 import * as Context from 'effect/Context'
 import * as DateTime from 'effect/DateTime'
+import * as Deferred from 'effect/Deferred'
 import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
@@ -41,6 +42,16 @@ export interface FakePluggyData {
   readonly afterGetItem?: Effect.Effect<void>
   /** The item's top-level `lastUpdatedAt`. */
   readonly itemLastUpdatedAt?: string
+  /** Pluggy removed the item on its side: every read answers 404. */
+  readonly gone?: boolean
+  /**
+   * Holds transaction reads after their response is taken: `entered`
+   * completes when a read is waiting, `release` lets it return.
+   */
+  readonly gate?: {
+    readonly entered: Deferred.Deferred<void>
+    readonly release: Deferred.Deferred<void>
+  }
   readonly connectTokens: ReadonlyArray<{
     readonly clientUserId: string
     readonly webhookUrl?: string | undefined
@@ -130,22 +141,43 @@ const makeFake = (state: Ref.Ref<FakePluggyData>) =>
         deleted: [...current.deleted, itemId],
       })),
     listAccounts: (itemId) =>
-      Effect.map(
-        Ref.get(state),
-        (current) => current.itemAccounts?.[itemId] ?? current.accounts,
+      Effect.flatMap(Ref.get(state), (current) =>
+        current.gone
+          ? Effect.fail(
+              new PluggyError({
+                operation: 'listAccounts',
+                reason: 'not_found',
+                status: 404,
+              }),
+            )
+          : Effect.succeed(current.itemAccounts?.[itemId] ?? current.accounts),
       ),
     listTransactions: (query) =>
-      Effect.map(Ref.get(state), (current) => {
+      Effect.gen(function* () {
+        const current = yield* Ref.get(state)
+        if (current.gone)
+          return yield* new PluggyError({
+            operation: 'listTransactions',
+            reason: 'not_found',
+            status: 404,
+          })
         const all = current.transactions[query.accountId] ?? []
-        if ('ids' in query)
-          return all.filter((transaction) => query.ids.includes(transaction.id))
-        // The fake does not model creation time: everything counts as new.
-        if ('createdAtFrom' in query) return all
-        return all.filter(
-          (transaction) =>
-            transaction.date.slice(0, 10) >= query.dateFrom &&
-            transaction.date.slice(0, 10) <= query.dateTo,
-        )
+        const result =
+          'ids' in query
+            ? all.filter((transaction) => query.ids.includes(transaction.id))
+            : // The fake does not model creation time: everything counts as new.
+              'createdAtFrom' in query
+              ? all
+              : all.filter(
+                  (transaction) =>
+                    transaction.date.slice(0, 10) >= query.dateFrom &&
+                    transaction.date.slice(0, 10) <= query.dateTo,
+                )
+        if (current.gate) {
+          yield* Deferred.succeed(current.gate.entered, undefined)
+          yield* Deferred.await(current.gate.release)
+        }
+        return result
       }),
   })
 
