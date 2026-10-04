@@ -8,7 +8,10 @@ import * as SqlSchema from 'effect/sql/SqlSchema'
 import { addDays, daysBetween, today } from '../domain/LocalDate.ts'
 import { foldDescription } from '../imports/Statement.ts'
 import { Accounts } from '../ledger/Accounts.ts'
+import { toMinorUnits } from '../openfinance/Normalize.ts'
 import { billPaymentWindowDays, billPayments, cardCycles } from './Cycles.ts'
+import { installmentPlans } from './Installments.ts'
+import type { InstallmentLine } from './Installments.ts'
 import { cardPaymentWindowDays } from './Matching.ts'
 import type { CardCycle, CardCycles, CyclePayment } from './Cycles.ts'
 
@@ -38,6 +41,48 @@ const DebitRow = Schema.Struct({
   /** The card credit an unconfirmed relation pairs the debit with. */
   pairedInflowId: Schema.NullOr(Schema.String),
 })
+
+// Observations keep the provider payload; only the instalment fields are read.
+const LineRow = Schema.Struct({
+  entryId: Schema.String,
+  bookedOn: Schema.String,
+  amountCents: Schema.Int,
+  description: Schema.String,
+  raw: Schema.fromJsonString(
+    Schema.Struct({
+      installment: Schema.optional(
+        Schema.NullOr(
+          Schema.Struct({
+            number: Schema.optional(Schema.NullOr(Schema.Int)),
+            total: Schema.optional(Schema.NullOr(Schema.Int)),
+            totalAmount: Schema.optional(Schema.NullOr(Schema.Number)),
+            purchaseDate: Schema.optional(Schema.NullOr(Schema.String)),
+          }),
+        ),
+      ),
+    }),
+  ),
+})
+
+type Installment = NonNullable<InstallmentLine['installment']>
+
+// Observations of one entry may each carry part of the metadata. Fields
+// combine; a field two sources disagree on is unknown.
+const mergeInstallment = (
+  a: Installment | null,
+  b: Installment | null,
+): Installment | null => {
+  if (a === null || b === null) return a ?? b
+  if (a.number !== b.number || a.total !== b.total) return null
+  const field = <T>(x: T | null, y: T | null) =>
+    x === null ? y : y === null || x === y ? x : null
+  return {
+    number: a.number,
+    total: a.total,
+    purchaseDate: field(a.purchaseDate, b.purchaseDate),
+    totalAmountCents: field(a.totalAmountCents, b.totalAmountCents),
+  }
+}
 
 const PaymentRelationRow = Schema.Struct({
   inflowEntryId: Schema.String,
@@ -452,7 +497,64 @@ const make = Effect.gen(function* () {
       : cardCycles({ ...history, payments: [...payments, ...inferred] })
   })
 
-  return { cycles }
+  const findLines = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: LineRow,
+    execute: (accountId) => sql`
+      SELECT e.id AS entryId, e.booked_on AS bookedOn, e.amount_cents AS amountCents,
+        e.description, o.raw
+      FROM ledger_entries e
+      JOIN entry_evidence v ON v.entry_id = e.id
+      JOIN transaction_observations o ON o.source_id = v.source_id
+        AND o.account_id = v.account_id AND o.external_id = v.external_id
+        AND o.version = (
+          SELECT max(version) FROM transaction_observations l
+          WHERE l.source_id = o.source_id AND l.account_id = o.account_id
+            AND l.external_id = o.external_id
+        )
+      WHERE e.account_id = ${accountId} AND e.status = 'posted'
+    `,
+  })
+
+  /**
+   * Purchases charged in instalments on the card, with what remains to be
+   * billed. Pluggy's instalment metadata is used when any observation of the
+   * entry carries it; otherwise the description is read.
+   */
+  const installments = Effect.fn('Cards.installments')(function* (
+    accountId: string,
+  ) {
+    const card = yield* accounts.get(accountId)
+    if (card.card === null)
+      return yield* new CardsError({ reason: 'not_a_card', accountId })
+    const byEntry = new Map<string, InstallmentLine>()
+    for (const row of yield* findLines(accountId)) {
+      const metadata = row.raw.installment
+      const installment =
+        metadata?.number && metadata.total
+          ? {
+              number: metadata.number,
+              total: metadata.total,
+              purchaseDate: metadata.purchaseDate?.slice(0, 10) ?? null,
+              totalAmountCents:
+                typeof metadata.totalAmount === 'number'
+                  ? Math.abs(toMinorUnits(metadata.totalAmount, card.currency))
+                  : null,
+            }
+          : null
+      const known = byEntry.get(row.entryId)
+      byEntry.set(row.entryId, {
+        entryId: row.entryId,
+        bookedOn: row.bookedOn,
+        amountCents: row.amountCents,
+        description: row.description,
+        installment: mergeInstallment(known?.installment ?? null, installment),
+      })
+    }
+    return installmentPlans([...byEntry.values()])
+  })
+
+  return { cycles, installments }
 })
 
 export class Cards extends Context.Service<

@@ -992,4 +992,86 @@ describe('Reconciliation', () => {
       )
     }).pipe(Effect.provide(openFinanceTest())),
   )
+
+  it.effect('links a card refund to the purchase it gives back', () =>
+    Effect.gen(function* () {
+      const { reconciliation, card } = yield* setup
+      yield* (yield* Imports).importFile({
+        accountId: card.id,
+        fileName: 'cartao-2.ofx',
+        bytes: ofx(
+          line('c2', '20260916', '-250.00', 'Amazon Marketplace') +
+            line('c3', '20260925', '250.00', 'Estorno Amazon Marketplace'),
+          'CCSTMTRS',
+        ),
+      })
+      yield* drain
+      const refunds = (yield* reconciliation.relations).filter(
+        (relation) => relation.kind === 'refund',
+      )
+      assert.deepStrictEqual(
+        refunds.map((relation) => [
+          relation.status,
+          relation.reasons.includes('refund_wording'),
+        ]),
+        [['confirmed', true]],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'links several refunds of one purchase, refuses one beyond it, and keeps them against later debits',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, nubank, card, entryId } = yield* setup
+        const imports = yield* Imports
+        yield* imports.importFile({
+          accountId: card.id,
+          fileName: 'cartao-pedido.ofx',
+          bytes: ofx(
+            line('p1', '20260916', '-250.00', 'Loja Online') +
+              line('p2', '20260920', '50.00', 'Credito') +
+              line('p3', '20260922', '200.00', 'Credito ajuste') +
+              line('p4', '20260923', '10.00', 'Credito'),
+            'CCSTMTRS',
+          ),
+        })
+        yield* drain
+        const order = yield* entryId(card.id, -25000)
+        const keys = []
+        for (const amount of [5000, 20000]) {
+          keys.push(
+            yield* reconciliation.link({
+              outflowEntryId: order,
+              inflowEntryId: yield* entryId(card.id, amount),
+            }),
+          )
+        }
+        const beyond = yield* reconciliation
+          .link({
+            outflowEntryId: order,
+            inflowEntryId: yield* entryId(card.id, 1000),
+          })
+          .pipe(Effect.flip)
+
+        // A bank debit of the same amount arrives later; the refund holds.
+        yield* imports.importFile({
+          accountId: nubank.id,
+          fileName: 'nubank-2.ofx',
+          bytes: ofx(line('n4', '20260922', '-200.00', 'Pagamento fatura')),
+        })
+        yield* drain
+        const relations = yield* reconciliation.relations
+        assert.deepStrictEqual(
+          [
+            beyond._tag === 'ReconciliationError' && beyond.reason,
+            keys.map(
+              (key) =>
+                relations.find((relation) => relation.key === key)?.status,
+            ),
+          ],
+          ['exceeds_purchase', ['confirmed', 'confirmed']],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
 })

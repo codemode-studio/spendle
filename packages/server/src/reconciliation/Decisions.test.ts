@@ -2,7 +2,8 @@ import { assert, describe, it } from '@effect/vitest'
 
 import { followDecisions } from './Decisions.ts'
 import type { StoredDecision } from './Decisions.ts'
-import { matchRelations, relationKey } from './Matching.ts'
+import { relationKey } from './Keys.ts'
+import { matchRelations } from './Matching.ts'
 import type { MatchableEntry } from './Matching.ts'
 
 const stored = (
