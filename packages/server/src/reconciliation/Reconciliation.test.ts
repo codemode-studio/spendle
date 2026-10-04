@@ -294,6 +294,70 @@ describe('Reconciliation', () => {
       }).pipe(Effect.provide(openFinanceTest())),
   )
 
+  it.effect(
+    'reports a confirmation hidden by merged entries and lets the person reject it',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, report, interEntries, nubank, nubankEntry } =
+          yield* separateReports
+        yield* (yield* Imports).importFile({
+          accountId: nubank.id,
+          fileName: 'nubank-2.ofx',
+          bytes: ofx(line('n2', '20260914', '-500.00', 'Pix enviado')),
+        })
+        yield* drain
+        const second = (yield* (yield* Entries).entries(nubank.id)).find(
+          (entry) => entry.id !== nubankEntry,
+        )!.id
+        const inflow = (description: string) =>
+          Effect.map(
+            interEntries,
+            (found) =>
+              found.find((entry) => entry.description === description)!.id,
+          )
+        // The person links each outflow to its own inflow.
+        const links = new Map([
+          [
+            yield* reconciliation.link({
+              outflowEntryId: nubankEntry,
+              inflowEntryId: yield* inflow('Pix recebido Donald'),
+            }),
+            nubankEntry,
+          ],
+          [
+            yield* reconciliation.link({
+              outflowEntryId: second,
+              inflowEntryId: yield* inflow('Deposito'),
+            }),
+            second,
+          ],
+        ])
+
+        // Inter corrects its report: both inflows are one Pix and merge. One
+        // confirmation holds the merged entry; the other waits for the person.
+        yield* report('a1', '2026-09-10', 'Pix recebido Donald')
+        assert.strictEqual((yield* interEntries).length, 1)
+        const [kept] = yield* reconciliation.relations
+        const [hidden, reserved] = [...links].find(
+          ([, outflow]) => outflow !== kept?.outflowEntryId,
+        )!
+        assert.deepStrictEqual(
+          (yield* reconciliation.orphanedDecisions).map((orphan) => [
+            orphan.key,
+            orphan.reason,
+            orphan.reserved,
+          ]),
+          [[hidden, 'overlapping_confirmation', [reserved]]],
+        )
+
+        yield* reconciliation.decide(hidden, 'rejected')
+        assert.deepStrictEqual(yield* reconciliation.orphanedDecisions, [])
+        assert.deepStrictEqual(shape(yield* reconciliation.relations), [
+          ['internal_transfer', 'confirmed', 'person'],
+        ])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
   it.effect('lets the person reject a confirmation whose entry vanished', () =>
     Effect.gen(function* () {
       const { reconciliation, report, nubankEntry } = yield* twoAccounts

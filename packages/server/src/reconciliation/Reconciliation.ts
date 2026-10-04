@@ -47,14 +47,15 @@ export class ReconciliationError extends Schema.TaggedError<ReconciliationError>
 
 /**
  * A person's confirmation that no longer holds its entries: one vanished
- * (`entry_missing`), or its observations now sit in several entries
- * (`entry_split`). Its surviving partner stays reserved until the person
- * rejects it or links the partner elsewhere.
+ * (`entry_missing`), its observations now sit in several entries
+ * (`entry_split`), or entries merged so another confirmation holds one of
+ * them (`overlapping_confirmation`). The entries it still reserves stay out
+ * of automatic pairing until the person rejects it or links them elsewhere.
  */
 export interface OrphanedDecision {
   readonly key: string
   readonly missing: ReadonlyArray<string>
-  readonly reason: 'entry_missing' | 'entry_split'
+  readonly reason: 'entry_missing' | 'entry_split' | 'overlapping_confirmation'
   /** The entries it still reserves. */
   readonly reserved: ReadonlyArray<string>
 }
@@ -196,19 +197,21 @@ const make = Effect.gen(function* () {
       })),
       new Set(entries.map((entry) => entry.id)),
     )
-    const matching = matchRelations(entries, followed.decisions)
-    const orphaned = matching.orphaned.map((orphan): OrphanedDecision => {
-      const key = followed.storedKeys.get(orphan.key) ?? orphan.key
-      const { outflowId, inflowId } = parseRelationKey(orphan.key)
-      return {
-        key,
-        missing: orphan.missing,
-        reason: followed.split.has(key) ? 'entry_split' : 'entry_missing',
-        reserved: [outflowId, inflowId].filter(
-          (id) => !orphan.missing.includes(id),
-        ),
-      }
-    })
+    const matching = matchRelations(
+      entries,
+      followed.decisions,
+      new Set(followed.split.flatMap((split) => split.reserved)),
+    )
+    const orphaned = [
+      ...matching.orphaned.map((orphan): OrphanedDecision => ({
+        ...orphan,
+        key: followed.storedKeys.get(orphan.key) ?? orphan.key,
+      })),
+      ...followed.split.map((split): OrphanedDecision => ({
+        ...split,
+        reason: 'entry_split',
+      })),
+    ].sort((a, b) => a.key.localeCompare(b.key))
     return { relations: matching.relations, orphaned }
   })
 
@@ -322,10 +325,12 @@ const make = Effect.gen(function* () {
           detail: key,
         })
       if (decision === 'confirmed')
-        return yield* new ReconciliationError({
-          reason: 'entry_not_found',
-          detail: orphan.missing.join(', '),
-        })
+        return yield* orphan.reason === 'overlapping_confirmation'
+          ? new ReconciliationError({ reason: 'already_linked', detail: key })
+          : new ReconciliationError({
+              reason: 'entry_not_found',
+              detail: orphan.missing.join(', '),
+            })
     }
     yield* record(key, decision)
   })

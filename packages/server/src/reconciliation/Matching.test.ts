@@ -64,6 +64,22 @@ describe('matchRelations', () => {
     assert.isTrue(different[0]!.reasons.includes('different_counterparties'))
   })
 
+  it('only suggests a transfer whose names merely share a surname or a generic word', () => {
+    const pair = (outflow: string, inflow: string) =>
+      relations([
+        entry('out', 'nubank', -50000, { description: outflow }),
+        entry('in', 'inter', 50000, { description: inflow }),
+      ]).map((relation) => relation.status)
+    assert.deepStrictEqual(
+      [
+        pair('Pix enviado Maria Silva', 'Pix recebido Joao Silva'),
+        pair('Pix enviado Internet Fibra', 'Pix recebido Internet Veloz'),
+        pair('Pix enviado Donald Silveira', 'Pix recebido Donald'),
+      ],
+      [['suggested'], ['suggested'], ['confirmed']],
+    )
+  })
+
   it('confirms a transfer that names the other account or own-account wording', () => {
     const named = relations([
       entry('out', 'nubank', -50000, {
@@ -268,7 +284,54 @@ describe('matchRelations', () => {
     )
     assert.deepStrictEqual(
       [result.relations, result.orphaned],
-      [[], [{ key, missing: ['gone'] }]],
+      [
+        [],
+        [
+          {
+            key,
+            missing: ['gone'],
+            reason: 'entry_missing',
+            reserved: ['in'],
+          },
+        ],
+      ],
+    )
+  })
+
+  it('reports a confirmation whose entry another confirmation already holds', () => {
+    // Two confirmed transfers whose outflows merged into `out`.
+    const first = relationKey('internal_transfer', 'out', 'in-a')
+    const second = relationKey('internal_transfer', 'out', 'in-b')
+    const result = matchRelations(
+      [
+        entry('out', 'nubank', -10000, { description: 'Pix enviado Donald' }),
+        entry('in-a', 'inter', 10000, { description: 'Pix recebido Donald' }),
+        entry('in-b', 'btg', 10000, { description: 'Pix recebido Donald' }),
+        entry('other', 'nubank', -10000, {
+          description: 'Pix enviado Donald',
+        }),
+      ],
+      new Map<string, Decision>([
+        [first, 'confirmed'],
+        [second, 'confirmed'],
+      ]),
+    )
+    assert.deepStrictEqual(
+      [
+        result.relations.map((relation) => [relation.key, relation.origin]),
+        result.orphaned,
+      ],
+      [
+        [[first, 'person']],
+        [
+          {
+            key: second,
+            missing: [],
+            reason: 'overlapping_confirmation',
+            reserved: ['in-b'],
+          },
+        ],
+      ],
     )
   })
 

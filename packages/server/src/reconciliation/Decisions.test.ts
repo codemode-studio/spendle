@@ -2,7 +2,8 @@ import { assert, describe, it } from '@effect/vitest'
 
 import { followDecisions } from './Decisions.ts'
 import type { StoredDecision } from './Decisions.ts'
-import { relationKey } from './Matching.ts'
+import { matchRelations, relationKey } from './Matching.ts'
+import type { MatchableEntry } from './Matching.ts'
 
 const stored = (
   outflowId: string,
@@ -40,14 +41,82 @@ describe('followDecisions', () => {
     )
     const split = followDecisions([confirmed], entries)
     assert.deepStrictEqual(
-      [[...split.decisions.keys()], [...split.split], [...rejected.decisions]],
+      [[...split.decisions.keys()], split.split, [...rejected.decisions]],
       [
-        [confirmed.key],
-        [confirmed.key],
+        [],
+        [
+          {
+            key: confirmed.key,
+            missing: ['gone'],
+            reserved: ['out', 'part-a', 'part-b'],
+          },
+        ],
         [
           [relationKey('internal_transfer', 'out', 'part-a'), 'rejected'],
           [relationKey('internal_transfer', 'out', 'part-b'), 'rejected'],
         ],
+      ],
+    )
+  })
+
+  it('treats a side as split even when one part kept the decided id', () => {
+    // Two observations formed one outflow `out`; a correction separates them
+    // and `out` keeps its id while `out-2` is new.
+    const pix = (id: string, accountId: string, amountCents: number) =>
+      ({
+        id,
+        accountId,
+        accountKind: 'checking',
+        bookedOn: '2026-09-10',
+        amountCents,
+        currency: 'BRL',
+        status: 'posted',
+        description:
+          amountCents < 0 ? 'Pix enviado Donald' : 'Pix recebido Donald',
+      }) satisfies MatchableEntry
+    const entries = [
+      pix('out', 'nubank', -50000),
+      pix('out-2', 'nubank', -50000),
+      pix('in', 'inter', 50000),
+      pix('in-2', 'btg', 50000),
+    ]
+    const ids = new Set(entries.map((entry) => entry.id))
+    const decided = stored('out', 'in', { outflowHolders: ['out', 'out-2'] })
+    const match = (decision: StoredDecision) => {
+      const followed = followDecisions([decision], ids)
+      return {
+        followed,
+        relations: matchRelations(
+          entries,
+          followed.decisions,
+          new Set(followed.split.flatMap((split) => split.reserved)),
+        ).relations.map((relation) => [relation.key, relation.status]),
+      }
+    }
+
+    // A rejection blocks every resulting pair: `out-2` is never offered `in` again.
+    const rejected = match({ ...decided, decision: 'rejected' })
+    assert.deepStrictEqual(
+      [...rejected.followed.decisions.keys()],
+      [
+        relationKey('internal_transfer', 'out', 'in'),
+        relationKey('internal_transfer', 'out-2', 'in'),
+      ],
+    )
+    assert.isFalse(
+      rejected.relations.some(
+        ([key]) => key === relationKey('internal_transfer', 'out-2', 'in'),
+      ),
+    )
+
+    // A confirmation is reported split and reserves every holder, so no part
+    // stays confirmed or auto-pairs elsewhere.
+    const confirmed = match(decided)
+    assert.deepStrictEqual(
+      [confirmed.followed.split, confirmed.relations],
+      [
+        [{ key: decided.key, missing: [], reserved: ['out', 'out-2', 'in'] }],
+        [],
       ],
     )
   })

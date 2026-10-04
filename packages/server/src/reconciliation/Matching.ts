@@ -39,10 +39,18 @@ export interface MatchedRelation {
   readonly reasons: ReadonlyArray<string>
 }
 
-/** A person's confirmation whose entry no longer exists; its partner stays reserved. */
+/**
+ * A person's confirmation that cannot hold its entries: one no longer exists
+ * (`entry_missing`), or another confirmation already holds one
+ * (`overlapping_confirmation`, after entries merged). The entries it can
+ * still hold stay reserved.
+ */
 export interface OrphanedDecision {
   readonly key: string
   readonly missing: ReadonlyArray<string>
+  readonly reason: 'entry_missing' | 'overlapping_confirmation'
+  /** The entries it still reserves. */
+  readonly reserved: ReadonlyArray<string>
 }
 
 export interface Matching {
@@ -143,6 +151,26 @@ const transferWords = new Set([
   'dez',
 ])
 
+// Words common to many names, so sharing one says nothing about who it is.
+const genericNameWords = new Set([
+  'internet',
+  'net',
+  'telecom',
+  'servico',
+  'servicos',
+  'comercio',
+  'loja',
+  'store',
+  'shop',
+  'digital',
+  'brasil',
+  'grupo',
+  'empresa',
+  'eireli',
+  'tecnologia',
+  'solucoes',
+])
+
 // Wording that says both sides belong to the same person.
 const ownAccountWording =
   /\b(mesma titularidade|mesmo titular|entre contas|conta propria|contas proprias)\b/
@@ -162,16 +190,34 @@ const counterparties = (
   new Set(
     [...meaningfulWords(description)].filter(
       (word) =>
-        !transferWords.has(word) && !/\d/.test(word) && !institutions.has(word),
+        !transferWords.has(word) &&
+        !genericNameWords.has(word) &&
+        !/\d/.test(word) &&
+        !institutions.has(word),
     ),
   )
 
 const intersects = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
   [...a].some((word) => b.has(word))
 
+const within = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
+  [...a].every((word) => b.has(word))
+
 /**
- * What the descriptions say about the other side of a transfer: a shared
- * counterparty (the person's own name on both), own-account wording, or the
+ * Whether two counterparty names are one party: every word of one appears in
+ * the other (`Donald` and `Donald Silveira`), `same`; no word in common,
+ * `different`; a shared word with others that disagree (`Maria Silva` and
+ * `Joao Silva`), `uncertain`.
+ */
+const compareNames = (a: ReadonlySet<string>, b: ReadonlySet<string>) => {
+  if (a.size === 0 || b.size === 0) return 'unnamed'
+  if (!intersects(a, b)) return 'different'
+  return within(a, b) || within(b, a) ? 'same' : 'uncertain'
+}
+
+/**
+ * What the descriptions say about the other side of a transfer: the same
+ * counterparty on both (the person's own name, see `compareNames`), own-account wording, or the
  * other account's institution named are evidence it is the person's own
  * money moving; two different counterparties contradict it.
  */
@@ -184,10 +230,10 @@ const counterpartEvidence = (
   const institutions = new Set([...outInstitution, ...inInstitution])
   const out = counterparties(outflow.description, institutions)
   const into = counterparties(inflow.description, institutions)
-  const shared = intersects(out, into)
-  const different = !shared && out.size > 0 && into.size > 0
+  const names = compareNames(out, into)
+  const different = names === 'different'
   const reasons: Array<string> = []
-  if (shared) reasons.push('same_counterparty')
+  if (names === 'same') reasons.push('same_counterparty')
   if (different) reasons.push('different_counterparties')
   if (
     [outflow, inflow].some((entry) =>
@@ -195,14 +241,18 @@ const counterpartEvidence = (
     )
   )
     reasons.push('own_account_wording')
-  const names = (entry: MatchableEntry, other: Set<string>, own: Set<string>) =>
+  const namesOther = (
+    entry: MatchableEntry,
+    other: Set<string>,
+    own: Set<string>,
+  ) =>
     intersects(
       meaningfulWords(entry.description),
       new Set([...other].filter((word) => !own.has(word))),
     )
   if (
-    names(outflow, inInstitution, outInstitution) ||
-    names(inflow, outInstitution, inInstitution)
+    namesOther(outflow, inInstitution, outInstitution) ||
+    namesOther(inflow, outInstitution, inInstitution)
   )
     reasons.push('names_other_account')
   return {
@@ -317,9 +367,11 @@ const evaluate = (
  *
  * A person's confirmation always holds its entries. If the facts changed so
  * the pair no longer adds up, it becomes a `conflict` for review; if an
- * entry disappeared, the decision is reported as orphaned and its partner
- * stays reserved instead of being paired again automatically. A rejection is
- * never suggested again.
+ * entry disappeared, or merged into one another confirmation already holds,
+ * the decision is reported as orphaned and its other entry stays reserved
+ * instead of being paired again automatically. Entries in `reserved` (held
+ * by a decision the person has yet to resolve) are never paired
+ * automatically either. A rejection is never suggested again.
  *
  * Remaining candidates are assigned per amount as a whole, maximizing how
  * many pairs are found, then their scores. Amount and dates alone only ever
@@ -333,6 +385,7 @@ const evaluate = (
 export const matchRelations = (
   entries: ReadonlyArray<MatchableEntry>,
   decisions: ReadonlyMap<string, Decision>,
+  reserved: ReadonlySet<string> = new Set(),
 ): Matching => {
   const byId = new Map(entries.map((entry) => [entry.id, entry]))
   const used = new Set<string>()
@@ -351,11 +404,25 @@ export const matchRelations = (
       orphaned.push({
         key,
         missing: [outflowId, inflowId].filter((id) => !byId.has(id)),
+        reason: 'entry_missing',
+        reserved: [outflowId, inflowId].filter((id) => byId.has(id)),
       })
       for (const id of [outflowId, inflowId]) used.add(id)
       continue
     }
-    if (used.has(outflowId) || used.has(inflowId)) continue
+    // Entries merged so two confirmations now claim one entry: neither is
+    // dropped silently, the later one waits for the person.
+    if (used.has(outflowId) || used.has(inflowId)) {
+      const reserved = [outflowId, inflowId].filter((id) => !used.has(id))
+      orphaned.push({
+        key,
+        missing: [],
+        reason: 'overlapping_confirmation',
+        reserved,
+      })
+      for (const id of reserved) used.add(id)
+      continue
+    }
     used.add(outflowId)
     used.add(inflowId)
     const valid = validPair(kind, outflow, inflow)
@@ -372,6 +439,8 @@ export const matchRelations = (
         : ['confirmed_by_person', 'facts_changed'],
     })
   }
+
+  for (const id of reserved) used.add(id)
 
   const rejectedEntries = new Set(
     [...decisions]
