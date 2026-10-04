@@ -1,4 +1,7 @@
-import { isCardPaymentDescription } from './card-payment'
+import {
+  isCardPaymentDescription,
+  isIdentifiedCardPaymentReceipt,
+} from './card-payment'
 import { minorUnitsToMajor } from './currency'
 import { normalizeDescription } from './finance'
 import { daysBetween } from './period'
@@ -12,6 +15,8 @@ export interface ReconciliationTransaction {
   accountId: string | null
   creditCardId: string | null
   counterpartyAccountId?: string | null
+  // Provider classification of the observed fact (Pluggy category), if any.
+  providerCategory?: string | null
   scopeType?: 'household' | 'person' | 'company_br' | 'company_us' | null
 }
 
@@ -298,7 +303,12 @@ export function buildReconciliationSuggestions(
     transfer: 4,
   }
   // Auto-confirm a bill payment only when neither side could pair with any
-  // other candidate; two cards with equal totals stay a manual decision.
+  // other candidate and the card side is an identified payment receipt; two
+  // cards with equal totals, refunds and unidentified credits stay a manual
+  // decision.
+  const byId = new Map(
+    transactions.map((transaction) => [transaction.id, transaction]),
+  )
   const cardPaymentUses = new Map<string, number>()
   for (const suggestion of suggestions) {
     if (suggestion.type !== 'card_payment') continue
@@ -311,7 +321,15 @@ export function buildReconciliationSuggestions(
   }
   for (const suggestion of suggestions) {
     if (suggestion.type !== 'card_payment') continue
+    const cardReceipt = suggestion.transactionIds
+      .map((transactionId) => byId.get(transactionId))
+      .find(
+        (transaction) =>
+          transaction?.creditCardId && transaction.amountCents > 0,
+      )
     if (
+      cardReceipt &&
+      isIdentifiedCardPaymentReceipt(cardReceipt) &&
       suggestion.transactionIds.every(
         (transactionId) => cardPaymentUses.get(transactionId) === 1,
       )

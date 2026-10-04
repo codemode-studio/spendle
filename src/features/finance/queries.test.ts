@@ -1,6 +1,7 @@
 import { QueryClient } from '@tanstack/react-query'
 import { describe, expect, it } from 'vitest'
 import { assistantQueryKeys } from '#/features/home/query-keys'
+import { investmentQueryKeys } from '#/features/investments/queries'
 import {
   financeQueryKeys,
   invalidateFinance,
@@ -23,6 +24,7 @@ const queries = {
   history: financeQueryKeys.strategyHistory(3),
   assistant: assistantQueryKeys.status(),
   analysis: assistantQueryKeys.latestAnalysis(''),
+  investments: investmentQueryKeys.snapshot(),
   unrelated: ['unrelated'],
 }
 const reads = [
@@ -40,6 +42,7 @@ const ledger = [
   'candidate',
   'history',
   'analysis',
+  'investments',
 ]
 const expected: Record<FinanceInvalidationScope, string[]> = {
   ledger,

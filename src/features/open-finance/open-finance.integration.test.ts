@@ -16,6 +16,7 @@ import {
   getInvestmentsSnapshot,
 } from '#/features/investments/investments.server'
 import { clearTransactionData } from '#/features/finance/import.server'
+import { refreshReconciliationSuggestions } from '#/features/finance/reconciliation-refresh.server'
 import { transactionFingerprint } from '#/features/finance/canonicalization.server'
 import { openTestDatabase } from '#/test/database'
 import type { TestDatabase } from '#/test/database'
@@ -1500,6 +1501,108 @@ describe('Open Finance history window', () => {
       vi.useRealTimers()
     }
   })
+
+  it.each([
+    ['a refund', 'Estorno loja', 'Shopping', 'suggested'],
+    [
+      'a Pluggy bill payment receipt',
+      'Pagamento efetuado',
+      'Credit card payment',
+      'confirmed',
+    ],
+  ])(
+    'auto-confirms a bill payment against %s only when the card credit is a payment',
+    async (_label, cardDescription, cardCategory, expectedStatus) => {
+      const gateway = new FakePluggyGateway()
+      gateway.accounts = [account(), account('CREDIT')]
+      gateway.transactions.set('provider-bank', [
+        providerTransaction({
+          id: 'bill-payment',
+          description: 'Pagamento fatura cartão principal',
+          amount: 1000,
+          category: 'Transfers',
+        }),
+      ])
+      gateway.transactions.set('provider-card', [
+        providerTransaction({
+          id: 'card-credit',
+          accountId: 'provider-card',
+          description: cardDescription,
+          type: 'CREDIT',
+          amount: -1000,
+          category: cardCategory,
+        }),
+      ])
+      await registeredConnection(database, gateway)
+      await mapPluggyAccount(
+        {
+          providerAccountId: 'provider-bank',
+          existingTarget: { type: 'account', id: database.ids.brlAccount },
+        },
+        gateway,
+        mappedAt,
+      )
+      await mapPluggyAccount(
+        {
+          providerAccountId: 'provider-card',
+          newTarget: {
+            type: 'card',
+            name: 'Outro cartão',
+            limitCents: 500_000,
+            closingDay: 20,
+            dueDay: 27,
+          },
+        },
+        gateway,
+        mappedAt,
+      )
+      const { db, schema } = database
+      const copied = await db
+        .select()
+        .from(schema.transactions)
+        .where(eq(schema.transactions.postedAt, '2026-09-10'))
+      const bank = copied.find((row) => row.amountCents === -100_000)
+      const card = copied.find(
+        (row) => row.creditCardId && row.amountCents === 100_000,
+      )
+      expect(bank).toBeDefined()
+      expect(card).toBeDefined()
+
+      await refreshReconciliationSuggestions()
+
+      const groups = await db
+        .select({
+          status: schema.reconciliationGroups.status,
+          type: schema.reconciliationGroups.type,
+          transactionId: schema.reconciliationLinks.transactionId,
+        })
+        .from(schema.reconciliationLinks)
+        .innerJoin(
+          schema.reconciliationGroups,
+          eq(
+            schema.reconciliationGroups.id,
+            schema.reconciliationLinks.groupId,
+          ),
+        )
+        .where(eq(schema.reconciliationLinks.transactionId, card!.id))
+      expect(groups).toEqual([
+        {
+          status: expectedStatus,
+          type: 'card_payment',
+          transactionId: card!.id,
+        },
+      ])
+      const [cardAfter] = await db
+        .select({ categoryId: schema.transactions.categoryId })
+        .from(schema.transactions)
+        .where(eq(schema.transactions.id, card!.id))
+      if (expectedStatus === 'suggested') {
+        expect(cardAfter.categoryId).toBe(card!.categoryId)
+      } else {
+        expect(cardAfter.categoryId).toBe('card_payment')
+      }
+    },
+  )
 
   it('starts a new card at the statement cycle containing the window start', async () => {
     const gateway = new FakePluggyGateway()

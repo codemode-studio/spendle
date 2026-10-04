@@ -190,11 +190,61 @@ describe('reconciliação', () => {
         amountCents: 100_000,
         accountId: null,
         creditCardId: 'card',
+        description: 'Pagamento recebido',
       },
     ])
     expect(suggestions[0]?.type).toBe('card_payment')
     expect(suggestions[0]?.autoConfirm).toBe(true)
   })
+
+  it('auto-confirma pagamento quando a Pluggy classifica o crédito do cartão como pagamento', () => {
+    const suggestions = buildReconciliationSuggestions([
+      { ...base, description: 'Pagamento de fatura' },
+      {
+        ...base,
+        id: 'two',
+        amountCents: 100_000,
+        accountId: null,
+        creditCardId: 'card',
+        description: 'Pagamento efetuado',
+        providerCategory: 'Credit card payment',
+      },
+    ])
+    expect(suggestions[0]?.type).toBe('card_payment')
+    expect(suggestions[0]?.autoConfirm).toBe(true)
+  })
+
+  it.each([
+    ['estorno', 'Estorno loja', null],
+    ['chargeback', 'Chargeback Loja Exemplo', null],
+    ['cashback', 'Cashback mensal', null],
+    ['crédito sem identificação', 'Crédito', null],
+    [
+      'estorno classificado como pagamento',
+      'Estorno pagamento',
+      'Credit card payment',
+    ],
+  ])(
+    'mantém sugerido quando o crédito do cartão é %s',
+    (_label, description, providerCategory) => {
+      const suggestions = buildReconciliationSuggestions([
+        { ...base, description: 'Pagamento fatura cartão principal' },
+        {
+          ...base,
+          id: 'refund',
+          amountCents: 100_000,
+          accountId: null,
+          creditCardId: 'other-card',
+          description,
+          providerCategory,
+        },
+      ])
+      expect(suggestions).toHaveLength(1)
+      expect(suggestions[0]?.type).toBe('card_payment')
+      expect(suggestions[0]?.autoConfirm).toBeUndefined()
+      expect(suggestions[0]?.confidence).toBeLessThan(100)
+    },
+  )
 
   it('reconhece variações bancárias de pagamento de fatura', () => {
     const suggestions = buildReconciliationSuggestions([

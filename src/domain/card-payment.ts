@@ -31,6 +31,35 @@ export function isReceivedCardPayment(input: {
   )
 }
 
+// Card credits that give money back for a purchase are never bill payments,
+// even when the provider files them under a payment category.
+const refundLikePattern =
+  /\b(?:estorno|estornad[ao]|reembolso|chargeback|cash\s*back|devolucao|cancelamento|cancelad[ao]|contestacao)\b/
+
+// Pluggy's "Credit card payment" category (and its Portuguese label).
+const providerCardPaymentPattern =
+  /\bcredit\s*card\s*payment\b|\bpagamento\s+(?:de\s+)?(?:cartao|fatura)\b/
+
+// Card side evidence strong enough to settle a bill automatically: the card
+// statement identifies the credit as a payment receipt, by wording or by the
+// provider category, and nothing about it reads like a refund.
+export function isIdentifiedCardPaymentReceipt(input: {
+  creditCardId: string | null
+  amountCents: number
+  description: string | null | undefined
+  providerCategory?: string | null
+}) {
+  if (!input.creditCardId || input.amountCents <= 0) return false
+  const normalized = normalizeDescription(input.description ?? '')
+  if (refundLikePattern.test(normalized)) return false
+  return (
+    isReceivedCardPayment(input) ||
+    providerCardPaymentPattern.test(
+      normalizeDescription(input.providerCategory ?? ''),
+    )
+  )
+}
+
 // Rows that never count as card spending: settled category or received payment.
 export function isCardPaymentRow(input: {
   creditCardId?: string | null

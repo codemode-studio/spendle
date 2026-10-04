@@ -5,6 +5,7 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query'
 import { getOnboardingStatusFn } from '#/features/home/onboarding.functions'
 
 import { assistantQueryKeys } from '#/features/home/query-keys'
+import { investmentQueryKeys } from '#/features/investments/queries'
 
 import {
   detectRecurrencesFn,
@@ -63,6 +64,7 @@ const financeInvalidationKeyFactories = {
   openFinance: financeQueryKeys.openFinance,
   assistant: assistantQueryKeys.status,
   assistantAnalysis: assistantQueryKeys.analyses,
+  investments: () => investmentQueryKeys.all,
 }
 
 type FinanceInvalidationFamily = keyof typeof financeInvalidationKeyFactories
@@ -72,12 +74,12 @@ type FinanceInvalidationFamily = keyof typeof financeInvalidationKeyFactories
  *
  * | Mutation paths | Group | Query families |
  * | --- | --- | --- |
- * | Account/card create or update; manual transaction; checkpoint; transaction category/AI categorization; reconciliation; recurrence, detection, match, or settlement; import stage, commit, reject, retry, correction, exclusion, link, or coverage; clear transaction data | `ledger` | snapshot, import review, recurrence detection, strategy history, recurrence link candidates |
+ * | Account/card create or update; manual transaction; checkpoint; transaction category/AI categorization; reconciliation; recurrence, detection, match, or settlement; import stage, commit, reject, retry, correction, exclusion, link, or coverage; clear transaction data | `ledger` | snapshot, import review, recurrence detection, strategy history, recurrence link candidates, card statement candidates, open finance, investments |
  * | Ownership scope create | `ownershipScope` | snapshot |
  * | Staged-transaction category (also learns into the knowledge base) | `stagedTransactionCategory` | import review, knowledge base |
  * | Knowledge base review, pattern edit or forget (review and pattern edit resync transactions); knowledge sync from Transações uses `ledger` | `knowledgeBase` | knowledge base + every ledger family |
  * | AI consent toggle (updateSettings may refresh reconciliation + recurrences) | `aiConsent` | assistant status + every ledger family |
- * | Strategy activation/settings, goal, or contribution (updateSettings may refresh reconciliation + recurrences) | `strategy` | every ledger family |
+ * | Strategy activation/settings, goal, or contribution (updateSettings may refresh reconciliation + recurrences) | `strategy` | every ledger family (investment positions show goals) |
  * | Budget close | `budgetClose` | snapshot, strategy history |
  */
 export const financeInvalidationGroups = {
@@ -90,6 +92,7 @@ export const financeInvalidationGroups = {
     'cardStatementCandidates',
     'assistantAnalysis',
     'openFinance',
+    'investments',
   ],
   ownershipScope: ['snapshot'],
   stagedTransactionCategory: ['importReview', 'knowledgeBase'],
@@ -102,6 +105,7 @@ export const financeInvalidationGroups = {
     'recurrenceLinkCandidates',
     'assistantAnalysis',
     'openFinance',
+    'investments',
   ],
   // `updateSettings` may run the reconciliation refresh (which also refreshes
   // recurrences), so both settings paths invalidate the ledger families too.
@@ -114,6 +118,7 @@ export const financeInvalidationGroups = {
     'strategyHistory',
     'recurrenceLinkCandidates',
     'openFinance',
+    'investments',
   ],
   strategy: [
     'assistantAnalysis',
@@ -122,6 +127,7 @@ export const financeInvalidationGroups = {
     'recurrenceDetection',
     'strategyHistory',
     'recurrenceLinkCandidates',
+    'investments',
   ],
   budgetClose: ['snapshot', 'strategyHistory', 'assistantAnalysis'],
 } as const satisfies Record<string, ReadonlyArray<FinanceInvalidationFamily>>

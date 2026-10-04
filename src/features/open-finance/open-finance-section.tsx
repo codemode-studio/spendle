@@ -57,6 +57,7 @@ import {
   resumePluggyConnectionFn,
   syncPluggyConnectionFn,
 } from './open-finance.functions'
+import { pluggyCorrectionMutationOptions } from './correction-mutation'
 import type { PluggyHistoryMonths } from './history-window'
 import type { getOpenFinanceSnapshot } from './open-finance.server'
 
@@ -488,15 +489,9 @@ export function OpenFinanceSection() {
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : 'Falha no webhook.'),
   })
-  const correctionMutation = useMutation({
-    mutationFn: resolveCorrection,
-    onSuccess: async () => {
-      toast.success('Correção revisada.')
-      await invalidate()
-    },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : 'Falha ao revisar.'),
-  })
+  const correctionMutation = useMutation(
+    pluggyCorrectionMutationOptions(queryClient, resolveCorrection),
+  )
 
   if (!data.configuration.enabled) {
     return (
