@@ -1,5 +1,6 @@
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 import { assert, describe, it } from '@effect/vitest'
+import * as Context from 'effect/Context'
 import * as Deferred from 'effect/Deferred'
 import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
@@ -194,6 +195,48 @@ describe('Reactor', () => {
       )
 
       assert.deepStrictEqual(yield* Ref.get(handled), ['Work2'])
+    }).pipe(Effect.provide(Database)),
+  )
+
+  it.effect('forgets a reactor whose layer closed', () =>
+    Effect.gen(function* () {
+      const handled = yield* Ref.make<ReadonlyArray<string>>([])
+      const spec = (label: string) => ({
+        name: 'projection',
+        types: ['A'],
+        handle: (event: StoredEvent) =>
+          Ref.update(handled, (all) => [...all, `${label}${event.sequence}`]),
+      })
+      // The registry and log outlive the first reactor, as on a hot restart.
+      yield* Effect.gen(function* () {
+        const context = Context.pick(
+          Reactor.Reactors,
+          EventLog,
+          SqlClient.SqlClient,
+        )(
+          yield* Effect.context<
+            Reactor.Reactors | EventLog | SqlClient.SqlClient
+          >(),
+        )
+        yield* Layer.build(Reactor.layer(spec('old'))).pipe(
+          Effect.provide(context),
+          Effect.scoped,
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* Layer.build(Reactor.layer(spec('new'))).pipe(
+              Effect.provide(context),
+            )
+            yield* append('A')
+            yield* (yield* Reactor.Reactors).drain
+          }),
+        )
+      }).pipe(
+        Effect.provide(
+          Reactor.Reactors.layer.pipe(Layer.provideMerge(EventLog.layer)),
+        ),
+      )
+      assert.deepStrictEqual(yield* Ref.get(handled), ['new1'])
     }).pipe(Effect.provide(Database)),
   )
 

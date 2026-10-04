@@ -7,6 +7,7 @@ import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
 import * as Ref from 'effect/Ref'
 import * as Schedule from 'effect/Schedule'
+import * as Scope from 'effect/Scope'
 import * as Schema from 'effect/Schema'
 import * as Semaphore from 'effect/Semaphore'
 import * as Stream from 'effect/Stream'
@@ -61,9 +62,10 @@ const retrySchedule = Schedule.min([
 export class Reactors extends Context.Service<
   Reactors,
   ReactorsShape & {
+    /** Adds a reactor's drain until the caller's scope closes. */
     readonly register: (
       drain: Effect.Effect<void, ReactorError>,
-    ) => Effect.Effect<void>
+    ) => Effect.Effect<void, never, Scope.Scope>
   }
 >()('@spendle/server/events/Reactor/Reactors') {
   static readonly layer = Layer.effect(
@@ -101,7 +103,12 @@ export class Reactors extends Context.Service<
         } while ((yield* latest) !== before)
       })
       return Reactors.of({
-        register: (each) => Ref.update(drains, (all) => [...all, each]),
+        register: (each) =>
+          Effect.acquireRelease(
+            Ref.update(drains, (all) => [...all, each]),
+            () =>
+              Ref.update(drains, (all) => all.filter((one) => one !== each)),
+          ),
         drain,
       })
     }),
