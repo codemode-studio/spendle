@@ -235,10 +235,38 @@ const make = Effect.gen(function* () {
         }),
       ),
     )
+    const storedEvidence = yield* findEvidence(accountId)
     const changed = !sameEntries(
       yield* findEntries(accountId),
-      yield* findEvidence(accountId),
+      storedEvidence,
       resolved,
+    )
+    // Entries that vanished because all their observations still present
+    // went into one entry. Identities left pointing at a vanished entry
+    // (observations withdrawn while it held them) follow it there, so
+    // whatever they identify keeps following the movement through merges.
+    const holderOf = new Map(
+      resolved.flatMap((entry) =>
+        entry.evidence.map(
+          (evidence) =>
+            [
+              evidenceKey(evidence.sourceId, evidence.externalId),
+              entry.id,
+            ] as const,
+        ),
+      ),
+    )
+    const resolvedIds = new Set(resolved.map((entry) => entry.id))
+    const successors = new Map<string, Set<string>>()
+    for (const row of storedEvidence) {
+      if (resolvedIds.has(row.entryId)) continue
+      const holder = holderOf.get(evidenceKey(row.sourceId, row.externalId))
+      const found = successors.get(row.entryId) ?? new Set<string>()
+      if (holder !== undefined) found.add(holder)
+      successors.set(row.entryId, found)
+    }
+    const mergedInto = [...successors].flatMap(([from, into]) =>
+      into.size === 1 ? [[from, [...into][0]!] as const] : [],
     )
     yield* sql.withTransaction(
       Effect.gen(function* () {
@@ -262,6 +290,12 @@ const make = Effect.gen(function* () {
                 ON CONFLICT (source_id, account_id, external_id) DO UPDATE SET entry_id = excluded.entry_id
               `
             }
+          }
+          for (const [from, into] of mergedInto) {
+            yield* sql`
+              UPDATE entry_identity SET entry_id = ${into}
+              WHERE account_id = ${accountId} AND entry_id = ${from}
+            `
           }
           yield* log.append([
             {

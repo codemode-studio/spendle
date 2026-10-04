@@ -164,34 +164,52 @@ const separateReports = Effect.gen(function* () {
 // on 10 Sep, a separate entry pairing with Nubank's. `decide` settles that
 // pair; then the first feed corrects its report so both merge into the older
 // entry, and the second withdraws the very observation the person decided on.
-const decidedThenWithdrawn = (decision: 'confirmed' | 'rejected') =>
+//
+// With `older`, a third feed first reports a credit on 25 Sep, too late to
+// pair, which it can later correct into the Pix too (`mergeOlder`).
+const decidedThenWithdrawn = (
+  decision: 'confirmed' | 'rejected',
+  older = false,
+) =>
   Effect.gen(function* () {
     const setup = yield* twoAccounts
     const observations = yield* Observations
-    const second = yield* observations.registerSource({
-      kind: 'manual',
-      externalRef: 'inter-feed-2',
-      label: 'Inter 2',
-    })
+    const feed = (externalRef: string, externalId: string) =>
+      Effect.gen(function* () {
+        const source = yield* observations.registerSource({
+          kind: 'manual',
+          externalRef,
+          label: externalRef,
+        })
+        return (
+          bookedOn: string,
+          description: string,
+          status: 'posted' | 'removed' = 'posted',
+        ) =>
+          Effect.andThen(
+            observations.recordTransactions({
+              sourceId: source.id,
+              accountId: setup.inter.id,
+              transactions: [
+                {
+                  externalId,
+                  bookedOn,
+                  amountCents: 50000,
+                  currency: 'BRL',
+                  description,
+                  status,
+                  raw: null,
+                },
+              ],
+            }),
+            drain,
+          )
+      })
+    const reportOlder = yield* feed('inter-feed-3', 'c1')
+    if (older) yield* reportOlder('2026-09-25', 'Ted recebido')
+    const reportB = yield* feed('inter-feed-2', 'b1')
     const reportSecond = (status: 'posted' | 'removed') =>
-      Effect.andThen(
-        observations.recordTransactions({
-          sourceId: second.id,
-          accountId: setup.inter.id,
-          transactions: [
-            {
-              externalId: 'b1',
-              bookedOn: '2026-09-10',
-              amountCents: 50000,
-              currency: 'BRL',
-              description: 'Pix recebido Donald',
-              status,
-              raw: null,
-            },
-          ],
-        }),
-        drain,
-      )
+      reportB('2026-09-10', 'Pix recebido Donald', status)
     yield* setup.report('a1', '2026-09-14', 'Deposito')
     yield* reportSecond('posted')
     const [transfer] = yield* setup.reconciliation.relations
@@ -202,10 +220,20 @@ const decidedThenWithdrawn = (decision: 'confirmed' | 'rejected') =>
     yield* reportSecond('removed')
     const remaining = yield* setup.interEntries
     assert.deepStrictEqual(
-      remaining.map((entry) => entry.id),
+      remaining
+        .filter((entry) => entry.bookedOn === '2026-09-10')
+        .map((entry) => entry.id),
       [merged!.id],
     )
-    return { ...setup, transfer: transfer!, merged: merged! }
+    assert.strictEqual(remaining.length, older ? 2 : 1)
+    const mergeOlder = Effect.gen(function* () {
+      yield* reportOlder('2026-09-10', 'Pix recebido Donald')
+      const entries = yield* setup.interEntries
+      assert.strictEqual(entries.length, 1)
+      assert.notStrictEqual(entries[0]!.id, merged!.id)
+      return entries[0]!
+    })
+    return { ...setup, transfer: transfer!, merged: merged!, mergeOlder }
   })
 
 // A fuller Nubank statement shows another R$ 500,00 sent to Donald on 10 Sep.
@@ -382,6 +410,40 @@ describe('Reconciliation', () => {
     () =>
       Effect.gen(function* () {
         const { reconciliation } = yield* decidedThenWithdrawn('rejected')
+        assert.deepStrictEqual(yield* reconciliation.relations, [])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'keeps a confirmation past a withdrawn observation through a later merge',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, nubank, nubankEntry, mergeOlder } =
+          yield* decidedThenWithdrawn('confirmed', true)
+        const older = yield* mergeOlder
+        yield* anotherDebit(nubank.id)
+        assert.deepStrictEqual(
+          (yield* reconciliation.relations).map((relation) => [
+            relation.outflowEntryId,
+            relation.inflowEntryId,
+            relation.status,
+            relation.origin,
+          ]),
+          [[nubankEntry, older.id, 'confirmed', 'person']],
+        )
+        assert.deepStrictEqual(yield* reconciliation.orphanedDecisions, [])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'keeps a rejection past a withdrawn observation through a later merge',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, mergeOlder } = yield* decidedThenWithdrawn(
+          'rejected',
+          true,
+        )
+        yield* mergeOlder
         assert.deepStrictEqual(yield* reconciliation.relations, [])
       }).pipe(Effect.provide(openFinanceTest())),
   )

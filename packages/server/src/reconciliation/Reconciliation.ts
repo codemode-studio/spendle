@@ -154,8 +154,9 @@ const make = Effect.gen(function* () {
     execute: () => sql`SELECT key, decision, revision FROM relation_decisions`,
   })
   // The entries now holding the observations each decided side had. An
-  // observation withdrawn since points to the entry it last belonged to, if
-  // that entry still exists, so the decision keeps the side it can still hold.
+  // observation withdrawn since points to the entry it last belonged to, or
+  // the one that entry merged into later (see `Entries.resolveAccount`), so
+  // the decision keeps the side it can still hold.
   const findHolders = SqlSchema.findAll({
     Request: Schema.Void,
     Result: Schema.Struct({

@@ -272,6 +272,57 @@ describe('matchRelations', () => {
     )
   })
 
+  it('reads alphanumeric issuers and payees as names, and codes as no one', () => {
+    const pay = (description: string, card: MatchableEntry) =>
+      relations([
+        entry('pay', 'itau', -50000, { description, institution: 'Itaú' }),
+        card,
+      ]).flatMap((relation) => [relation.reasons.at(-1), relation.status])
+    const nubank = entry('nu', 'card-nu', 50000, {
+      description: 'Pagamento recebido',
+      institution: 'Nubank',
+    })
+    const c6 = entry('c6', 'card-c6', 50000, {
+      description: 'Pagamento recebido',
+      institution: 'C6 Bank',
+    })
+    assert.deepStrictEqual(
+      [
+        pay('Pagamento fatura C6BANK', nubank),
+        pay('Pagamento fatura Nubank C6BANK', nubank),
+        pay('Pagamento fatura 99PAY', nubank),
+        pay('Pagamento fatura C6BANK', c6),
+        pay('Pagamento fatura NU PAGAMENTOS', nubank),
+        pay('Pagamento fatura Nubank E12345678202609101234abcdef0', nubank),
+        pay('Pagamento fatura Nubank final XXXX1234 10SET', nubank),
+      ],
+      [
+        ['names_other_payee', 'suggested'],
+        ['names_other_payee', 'suggested'],
+        ['names_other_payee', 'suggested'],
+        ['names_card_institution', 'confirmed'],
+        ['names_card_institution', 'confirmed'],
+        ['names_card_institution', 'confirmed'],
+        ['names_card_institution', 'confirmed'],
+      ],
+    )
+    const transfer = relations([
+      entry('out', 'itau', -50000, {
+        description: 'Pix enviado C6BANK Banco Nubank',
+        institution: 'Itaú',
+      }),
+      entry('in', 'nubank', 50000, {
+        description: 'Pix recebido',
+        institution: 'Nubank',
+      }),
+    ])
+    assert.deepStrictEqual(
+      transfer.map((relation) => relation.status),
+      ['suggested'],
+    )
+    assert.isTrue(transfer[0]!.reasons.includes('names_third_party'))
+  })
+
   it('pairs a card payment up to a week apart, either way, and no further', () => {
     const pay = (bookedOn: string) =>
       relations([

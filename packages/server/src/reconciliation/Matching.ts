@@ -194,19 +194,39 @@ const genericNameWords = new Set([
 const ownAccountWording =
   /\b(mesma titularidade|mesmo titular|entre contas|conta propria|contas proprias)\b/
 
+const months = 'jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez'
+
+// Words whose shape marks them as a reference rather than a name: a run of
+// four or more digits (ids, agencies, masked card endings such as
+// `xxxx1234`), more digits than letters (`nf123`, `e2e` ids), a day glued to
+// a month (`10set`, `10set26`), or a card mask (`xxxx`).
+const code = new RegExp(
+  `^(?:.*\\d{4}.*|\\d{1,2}(?:${months})\\d{0,4}|x{3,}\\d*)$`,
+)
+const isCode = (word: string) => {
+  if (code.test(word)) return true
+  const digits = word.replace(/\D/g, '').length
+  return word.length > 2 && digits >= word.length - digits
+}
+
+// A bank name glued to its `bank` suffix names the same bank as its words
+// apart: `C6BANK` is `C6 Bank`, `Nubank` is `Nu Pagamentos`.
+const unglue = (word: string) =>
+  word.length > 5 && word.endsWith('bank') ? word.slice(0, -4) : word
+
 /**
  * Words of a text that can name a party, short names and alphanumeric ones
- * (`nu`, `c6`, `bb`) included: not bank or transfer wording, not numbers or
- * codes.
+ * (`nu`, `c6`, `99pay`) included: not bank or transfer wording, not numbers
+ * or codes. A name it does not recognize still names someone.
  */
 const nameWords = (text: string) =>
   new Set(
-    [...descriptionWords(text)].filter(
-      (word) =>
-        !transferWords.has(word) &&
-        /[a-z]/.test(word) &&
-        (!/\d/.test(word) || word.length <= 4),
-    ),
+    [...descriptionWords(text)]
+      .filter(
+        (word) =>
+          !transferWords.has(word) && /[a-z]/.test(word) && !isCode(word),
+      )
+      .map(unglue),
   )
 
 const institutionWords = (entry: MatchableEntry) =>
