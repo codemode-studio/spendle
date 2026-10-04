@@ -697,10 +697,7 @@ describe('ordem de alocação dos recebimentos', () => {
     // account, so the posted R$ 200 receipt still pays July.
     const isPosted = (id: string) => id !== 'future-debit'
     const ledger = buildCardStatementLedger({
-      statements: [
-        julyAugust[0],
-        { ...julyAugust[1], amountCents: 100_000 },
-      ],
+      statements: [julyAugust[0], { ...julyAugust[1], amountCents: 100_000 }],
       transactions: [receipt('posted', '2026-07-25', 20_000)],
       accountPayments: [
         {
@@ -731,10 +728,7 @@ describe('ordem de alocação dos recebimentos', () => {
   it('conta o débito vinculado à mão quando o recebimento dele já foi lançado', () => {
     const isPosted = (id: string) => id !== 'future-debit'
     const ledger = buildCardStatementLedger({
-      statements: [
-        julyAugust[0],
-        { ...julyAugust[1], amountCents: 100_000 },
-      ],
+      statements: [julyAugust[0], { ...julyAugust[1], amountCents: 100_000 }],
       transactions: [
         receipt('pair', '2026-07-24', 100_000),
         receipt('advance', '2026-07-25', 20_000),
@@ -758,5 +752,76 @@ describe('ordem de alocação dos recebimentos', () => {
     expect(
       ledger.map((entry) => statementCashSettlement(entry, isPosted).paidCents),
     ).toEqual([100_000, 20_000])
+  })
+})
+
+describe('evidência de vínculos parciais futuros', () => {
+  const receipt = (id: string, postedAt: string, amountCents: number) => ({
+    id,
+    postedAt,
+    amountCents,
+    description: 'Pagamento recebido',
+    categoryId: 'card_payment',
+  })
+  const debit = (id: string, postedAt: string) => ({
+    id,
+    postedAt,
+    amountCents: -50_000,
+    description: 'Débito genérico',
+    categoryId: 'card_payment',
+  })
+
+  it('um recebimento sustenta só um vínculo parcial', () => {
+    // On Jul 26, two R$ 500 partial links to debits dated Jul 27 and 28. Only
+    // the R$ 500 receipt of Jul 24 backs one of them; the R$ 200 of Jul 25
+    // still pays July, which owes R$ 300 more.
+    const isPosted = (id: string) => !id.startsWith('future-')
+    const ledger = buildCardStatementLedger({
+      statements: [
+        {
+          closingDate: '2026-07-20',
+          dueDate: '2026-07-27',
+          amountCents: 100_000,
+        },
+        {
+          closingDate: '2026-08-20',
+          dueDate: '2026-08-27',
+          amountCents: 100_000,
+        },
+      ],
+      transactions: [
+        receipt('pair', '2026-07-24', 50_000),
+        receipt('advance', '2026-07-25', 20_000),
+      ],
+      accountPayments: [
+        debit('future-first', '2026-07-27'),
+        debit('future-second', '2026-07-28'),
+      ],
+      reconciliations: [],
+      manualLinks: [
+        {
+          id: 'first',
+          dueDate: '2026-07-27',
+          transactionId: 'future-first',
+          partial: true,
+        },
+        {
+          id: 'second',
+          dueDate: '2026-07-27',
+          transactionId: 'future-second',
+          partial: true,
+        },
+      ],
+      isPosted,
+      today: '2026-07-26',
+    })
+    expect(ledger[1].payments).toEqual([])
+    expect(
+      ledger.map((entry) => statementCashSettlement(entry, isPosted).paidCents),
+    ).toEqual([70_000, 0])
+    const evidence = ledger[0].payments
+      .filter((p) => p.kind === 'manual')
+      .map((p) => p.evidenceIds)
+    expect(evidence.flat()).toEqual(['pair'])
   })
 })

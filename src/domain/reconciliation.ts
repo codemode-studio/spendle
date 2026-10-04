@@ -18,6 +18,8 @@ export interface ReconciliationTransaction {
   // Provider classification of the observed fact (Pluggy category), if any.
   providerCategory?: string | null
   scopeType?: 'household' | 'person' | 'company_br' | 'company_us' | null
+  /** Card a person linked this bank debit to as its bill payment, if any. */
+  linkedCardId?: string | null
 }
 
 export interface ReconciliationSuggestion {
@@ -191,6 +193,20 @@ function isCardPaymentPair(
   )
 }
 
+// A person who linked a bank debit to a card's bill has decided what it
+// paid: it pairs only as that card's bill payment, with a credit on that card.
+function respectsManualCardLink(
+  type: ReconciliationSuggestion['type'],
+  left: ReconciliationTransaction,
+  right: ReconciliationTransaction,
+) {
+  if (!left.linkedCardId && !right.linkedCardId) return true
+  if (type !== 'card_payment') return false
+  const sides = cardPaymentSides(left, right)
+  if (!sides || sides.receipt.linkedCardId) return false
+  return sides.receipt.creditCardId === sides.debit.linkedCardId
+}
+
 function cardPaymentReceipt(
   left: ReconciliationTransaction,
   right: ReconciliationTransaction,
@@ -212,6 +228,7 @@ export function isAutomaticMatchStillValid(
   const leftSign = Math.sign(left.amountCents)
   const rightSign = Math.sign(right.amountCents)
   if (!leftSign || !rightSign || leftSign === rightSign) return false
+  if (!respectsManualCardLink(type, left, right)) return false
   const days = daysBetween(left.postedAt, right.postedAt, {
     inclusive: false,
     absolute: true,
@@ -296,6 +313,16 @@ export function buildReconciliationSuggestions(
         left,
         right,
       )
+
+      // A debit linked by hand only pairs as that card's bill payment.
+      if (
+        (left.linkedCardId || right.linkedCardId) &&
+        !(
+          isCardPaymentPair(left, right, days) &&
+          respectsManualCardLink('card_payment', left, right)
+        )
+      )
+        continue
 
       if (isLearnedAccountPair(left, right, days)) {
         suggestions.push({

@@ -9,6 +9,7 @@ import { shiftDays } from '#/domain/period'
 import {
   currentPositionMovement,
   hasOwnValuation,
+  isPositionMovementPosted,
   positionCurrentAmountMinor,
   reserveProgressCents,
 } from '#/domain/investment-position'
@@ -936,7 +937,14 @@ async function createFinanceReader(view: 'full' | 'configuration' = 'full') {
                   positionCurrentAmountMinor(
                     position,
                     investmentMovements
-                      .filter((movement) => movement.positionId === position.id)
+                      .filter(
+                        (movement) =>
+                          movement.positionId === position.id &&
+                          isPositionMovementPosted(
+                            transactionById.get(movement.transactionId),
+                            referenceDate,
+                          ),
+                      )
                       .map((movement) => ({
                         ...movement,
                         postedAt:

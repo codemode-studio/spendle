@@ -9,6 +9,7 @@ import { allocationAmount, calculateConservativeBase } from '#/domain/finance'
 import {
   currentPositionMovement,
   hasOwnValuation,
+  isPositionMovementPosted,
   positionCurrentAmountMinor,
   reserveProgressCents,
 } from '#/domain/investment-position'
@@ -141,13 +142,22 @@ export async function getInvestmentsSnapshot(
     ),
   )
 
+  const today = new Date().toISOString().slice(0, 10)
   const items = positions
     .filter((position) => position.active)
     .map((position) => {
       const positionMovements = movements.filter(
         (movement) => movement.positionId === position.id,
       )
-      const netMovementMinor = positionMovements.reduce(
+      // Values count only movements posted by today; every classified
+      // movement is still listed.
+      const postedMovements = positionMovements.filter((movement) =>
+        isPositionMovementPosted(
+          transactionById.get(movement.transactionId),
+          today,
+        ),
+      )
+      const netMovementMinor = postedMovements.reduce(
         (sum, movement) =>
           sum +
           (movement.kind === 'contribution'
@@ -157,7 +167,7 @@ export async function getInvestmentsSnapshot(
       )
       const currentAmountMinor = positionCurrentAmountMinor(
         position,
-        positionMovements.map((movement) => ({
+        postedMovements.map((movement) => ({
           ...movement,
           postedAt:
             transactionById.get(movement.transactionId)?.postedAt ?? null,
@@ -165,7 +175,7 @@ export async function getInvestmentsSnapshot(
       )
       const contributionAmountMinor =
         position.initialAmountMinor + netMovementMinor
-      const contributedBaseCents = positionMovements.reduce<number | null>(
+      const contributedBaseCents = postedMovements.reduce<number | null>(
         (sum, movement) => {
           if (sum === null || movement.baseAmountCents === null) return null
           return (

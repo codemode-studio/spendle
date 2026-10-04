@@ -76,6 +76,23 @@ export function reserveProgressCents(input: {
 }
 
 /**
+ * Whether a movement counts toward the position's value on `referenceDate`:
+ * its transaction is confirmed and posted by then. A future or pending
+ * contribution keeps its classification and counts once it posts. A
+ * movement whose transaction is unknown keeps its recorded amount.
+ */
+export function isPositionMovementPosted(
+  transaction: { status: string; postedAt: string } | null | undefined,
+  referenceDate: string,
+) {
+  return (
+    !transaction ||
+    (transaction.status === 'confirmed' &&
+      transaction.postedAt <= referenceDate)
+  )
+}
+
+/**
  * A movement records the person's choice of position; its amount, base value
  * and direction follow the transaction it points to, so an accepted
  * correction of that transaction revalues the position.

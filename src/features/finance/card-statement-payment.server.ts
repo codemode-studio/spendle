@@ -6,6 +6,7 @@ import * as schema from '#/db/schema'
 import { isSettlementCategory } from '#/domain/card-payment'
 import { formatInstrumentName } from '#/domain/finance'
 import { assertIsoDate, daysBetween } from '#/domain/period'
+import { refreshReconciliationAfterCommit } from './reconciliation-refresh.server'
 
 // The person decides which bank debit paid a statement. The link is a record;
 // the ledger on the Cartões page reads it as the strongest evidence.
@@ -200,6 +201,8 @@ export async function linkCardStatementPayment(input: {
         .run()
     }
   })
+  // The person's link outranks automatic matches of this debit.
+  await refreshReconciliationAfterCommit()
   return { id }
 }
 
@@ -230,5 +233,7 @@ export async function unlinkCardStatementPayment(input: { id: string }) {
         .run()
     }
   })
+  // Without the link the debit may pair again under the automatic rules.
+  await refreshReconciliationAfterCommit()
   return { id: input.id }
 }

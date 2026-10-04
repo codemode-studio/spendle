@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest'
 
 import { openTestDatabase } from '#/test/database'
 import type { TestDatabase } from '#/test/database'
@@ -330,5 +338,93 @@ describe('primeira posição da reserva com progresso registrado', () => {
       asOf: '2026-09-20',
     })
     expect(await reserve()).toEqual({ investments: 435_000, planning: 435_000 })
+  })
+})
+
+describe('aporte com data futura', () => {
+  let database: TestDatabase | undefined
+
+  afterEach(() => {
+    database?.close()
+    vi.useRealTimers()
+  })
+
+  it('só conta na carteira e na reserva depois de lançado', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-25T12:00:00Z'))
+    database = await openTestDatabase()
+    await database.db.insert(database.schema.accounts).values({
+      id: 'broker',
+      ownershipScopeId: database.ids.personScope,
+      institutionId: database.ids.institution,
+      name: 'Corretora',
+      kind: 'investment',
+      purpose: 'investment',
+      currency: 'BRL',
+    })
+    await database.db.insert(database.schema.investmentGoals).values({
+      id: 'reserve-goal',
+      name: 'Reserva de emergência',
+      type: 'emergency_reserve',
+      targetCents: 50_000,
+      currentCents: 0,
+      priority: 1,
+    })
+    await database.db.insert(database.schema.transactions).values({
+      id: 'future-contribution',
+      accountId: 'broker',
+      fingerprint: 'future-contribution',
+      postedAt: '2026-09-30',
+      description: 'Aporte',
+      normalizedDescription: 'aporte',
+      amountCents: 50_000,
+      baseAmountCents: 50_000,
+      currency: 'BRL',
+      status: 'confirmed',
+    })
+    const { positionId } = await classifyInvestmentTransaction({
+      transactionId: 'future-contribution',
+      newPosition: {
+        name: 'Tesouro Selic',
+        assetClassId: 'fixed-income',
+        goalId: 'reserve-goal',
+      },
+    })
+    const view = async () => {
+      const investments = await getInvestmentsSnapshot(quotes)
+      const position = investments.positions.find(
+        (item) => item.id === positionId,
+      )!
+      const { reserve } = (await getPlanningSnapshot()).dashboard
+      return {
+        position: position.currentAmountMinor,
+        invested: position.contributionAmountMinor,
+        movements: position.movements.length,
+        total: investments.summary.totalCents,
+        reserve: investments.summary.reserveCurrentCents,
+        planning: reserve.currentCents,
+        complete: reserve.complete,
+      }
+    }
+    expect(await view()).toEqual({
+      position: 0,
+      invested: 0,
+      movements: 1,
+      total: 0,
+      reserve: 0,
+      planning: 0,
+      complete: false,
+    })
+
+    vi.setSystemTime(new Date('2026-09-30T12:00:00Z'))
+    expect(await view()).toEqual({
+      position: 50_000,
+      invested: 50_000,
+      movements: 1,
+      total: 50_000,
+      reserve: 50_000,
+      planning: 50_000,
+      complete: true,
+    })
   })
 })

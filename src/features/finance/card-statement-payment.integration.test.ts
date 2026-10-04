@@ -733,7 +733,11 @@ describe('alocação de recebimentos na projeção de caixa', () => {
     })
   }
 
-  async function cardReceipt(id: string, postedAt: string, amountCents: number) {
+  async function cardReceipt(
+    id: string,
+    postedAt: string,
+    amountCents: number,
+  ) {
     await database!.db.insert(schema.transactions).values({
       id,
       creditCardId: database!.ids.card,
@@ -930,5 +934,139 @@ describe('pagamento de fatura entre dois cartões', () => {
     expect(await groupsOfPurchase()).toEqual([])
     expect(await categoryOf()).toBe('groceries')
     expect(await statementCents()).toBe(17_300)
+  })
+})
+
+describe('vínculo manual e conciliação automática de outro cartão', () => {
+  let database: TestDatabase | undefined
+
+  afterEach(() => {
+    database?.close()
+    vi.useRealTimers()
+  })
+
+  // Two cards closing on the 20th and due on the 27th, each with a R$ 300
+  // bill; on Sep 25 card B reports a R$ 300 receipt on Sep 24.
+  async function twoCards() {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-25T12:00:00Z'))
+    database = await openTestDatabase()
+    const db = database
+    await db.db
+      .update(schema.creditCards)
+      .set({ closingDay: 20, dueDay: 27 })
+      .where(eq(schema.creditCards.id, db.ids.card))
+    const cardB = await createCreditCard({
+      name: 'Cartão B',
+      institutionName: 'Banco Exemplo',
+      ownershipScopeId: db.ids.personScope,
+      currency: 'BRL',
+      limitCents: 500_000,
+      closingDay: 20,
+      dueDay: 27,
+    })
+    for (const cardId of [db.ids.card, cardB.id])
+      await createManualTransaction({
+        targetType: 'card',
+        targetId: cardId,
+        postedAt: '2026-09-05',
+        description: 'Compra no cartão',
+        direction: 'outflow',
+        amountCents: 30_000,
+        categoryId: 'groceries',
+      })
+    const createReceiptB = () =>
+      createManualTransaction({
+        targetType: 'card',
+        targetId: cardB.id,
+        postedAt: '2026-09-24',
+        description: 'Pagamento recebido',
+        direction: 'inflow',
+        amountCents: 30_000,
+        categoryId: 'card_payment',
+      })
+    const createDebit = () =>
+      createManualTransaction({
+        targetType: 'account',
+        targetId: db.ids.brlAccount,
+        postedAt: '2026-09-24',
+        description: 'Pagamento fatura cartão',
+        direction: 'outflow',
+        amountCents: 30_000,
+        categoryId: 'card_payment',
+      })
+    const groupsOf = async (transactionId: string) =>
+      db.db
+        .select({ id: schema.reconciliationLinks.groupId })
+        .from(schema.reconciliationLinks)
+        .where(eq(schema.reconciliationLinks.transactionId, transactionId))
+    const paymentsOf = async (cardId: string) =>
+      (await getFinanceSnapshot()).cards
+        .find((card) => card.id === cardId)!
+        .statements.find((row) => row.dueDate === '2026-09-27')!
+        .payments.map((payment) => [payment.transactionId, payment.kind])
+    const categoryOf = async (transactionId: string) =>
+      (
+        await db.db
+          .select({ categoryId: schema.transactions.categoryId })
+          .from(schema.transactions)
+          .where(eq(schema.transactions.id, transactionId))
+      )[0].categoryId
+    return {
+      db,
+      cardB,
+      createReceiptB,
+      createDebit,
+      groupsOf,
+      paymentsOf,
+      categoryOf,
+    }
+  }
+
+  it('desfaz a conciliação automática que contradiz o vínculo da pessoa', async () => {
+    const {
+      db,
+      cardB,
+      createReceiptB,
+      createDebit,
+      groupsOf,
+      paymentsOf,
+      categoryOf,
+    } = await twoCards()
+    await createReceiptB()
+    const debit = await createDebit()
+    // Before the person decides, the unique pair is confirmed automatically.
+    expect(await groupsOf(debit.id)).toHaveLength(1)
+
+    await linkCardStatementPayment({
+      creditCardId: db.ids.card,
+      dueDate: '2026-09-27',
+      transactionId: debit.id,
+    })
+    expect(await groupsOf(debit.id)).toEqual([])
+    await refreshReconciliationSuggestions()
+    expect(await groupsOf(debit.id)).toEqual([])
+    expect(await categoryOf(debit.id)).toBe('card_payment')
+    expect(await paymentsOf(db.ids.card)).toEqual([[debit.id, 'manual']])
+    expect(
+      (await paymentsOf(cardB.id)).map(([transactionId]) => transactionId),
+    ).not.toContain(debit.id)
+  })
+
+  it('não concilia o débito vinculado à mão com o recebimento de outro cartão', async () => {
+    const { db, cardB, createReceiptB, createDebit, groupsOf, paymentsOf } =
+      await twoCards()
+    const debit = await createDebit()
+    await linkCardStatementPayment({
+      creditCardId: db.ids.card,
+      dueDate: '2026-09-27',
+      transactionId: debit.id,
+    })
+    await createReceiptB()
+    expect(await groupsOf(debit.id)).toEqual([])
+    expect(await paymentsOf(db.ids.card)).toEqual([[debit.id, 'manual']])
+    expect(
+      (await paymentsOf(cardB.id)).map(([transactionId]) => transactionId),
+    ).not.toContain(debit.id)
   })
 })

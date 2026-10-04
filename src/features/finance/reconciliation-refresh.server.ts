@@ -26,6 +26,7 @@ export async function refreshReconciliationSuggestions() {
     groups,
     settingsRows,
     providerCategory,
+    manualCardLinks,
   ] = await Promise.all([
     db.select().from(schema.transactions),
     db.select().from(schema.accounts),
@@ -35,7 +36,17 @@ export async function refreshReconciliationSuggestions() {
     db.select().from(schema.reconciliationGroups),
     db.select().from(schema.appSettings).limit(1),
     readCurrentProviderCategories(),
+    db
+      .select({
+        transactionId: schema.cardStatementPayments.transactionId,
+        creditCardId: schema.cardStatementPayments.creditCardId,
+      })
+      .from(schema.cardStatementPayments),
   ])
+  // A bank debit a person linked to a card's bill pairs only with that card.
+  const linkedCardById = new Map(
+    manualCardLinks.map((link) => [link.transactionId, link.creditCardId]),
+  )
   const transactionStatusById = new Map(
     transactionRows.map((transaction) => [transaction.id, transaction.status]),
   )
@@ -113,6 +124,7 @@ export async function refreshReconciliationSuggestions() {
     return {
       ...transaction,
       providerCategory: providerCategory.get(transaction.id) ?? null,
+      linkedCardId: linkedCardById.get(transaction.id) ?? null,
       scopeType: ownershipScopeId
         ? (scopeType.get(ownershipScopeId) ?? null)
         : null,
@@ -120,9 +132,10 @@ export async function refreshReconciliationSuggestions() {
   })
 
   // Automatic confirmations are a projection of the current facts: when a
-  // correction or a later fact means the pair no longer passes the automatic
-  // rule, the match is dissolved and its rows go back to the candidate pool.
-  // Confirmations made by a person are never revisited here.
+  // correction, a later fact or a person's bill payment link means the pair
+  // no longer passes the automatic rule, the match is dissolved and its rows
+  // go back to the candidate pool. Confirmations made by a person are never
+  // revisited here.
   const contextualById = new Map(
     contextualTransactions.map((transaction) => [transaction.id, transaction]),
   )
@@ -142,6 +155,8 @@ export async function refreshReconciliationSuggestions() {
     for (const { group, links } of dissolved) {
       for (const link of links) {
         if (!stillMatchCategory(group.type, link.transactionId)) continue
+        // A debit linked by hand keeps the category its link assigned.
+        if (linkedCardById.has(link.transactionId)) continue
         const transaction = contextualById.get(link.transactionId)!
         // A settlement category was the rule's own classification of the old
         // facts; classify the current facts again instead of restoring it.

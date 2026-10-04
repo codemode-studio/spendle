@@ -186,28 +186,9 @@ export function buildCardStatementLedger(input: {
       ...(manualEvidence.get(paymentId) ?? []),
       receiptId,
     ])
-  // A hand-linked bank debit with no card_payment group is still paired with
-  // the card's own "Pagamento recebido" for it: the receipt of the same
-  // amount, in the statement the link settles, within the payment window.
-  // Each debit pairs with at most one receipt; other receipts still count.
   const unpairedManual = manualLinks.filter(
     ({ payment }) => !groupByTransaction.has(payment.id),
   )
-  const pairWithManualLink = (
-    receipt: LedgerCardTransaction,
-    entry: StatementLedgerEntry,
-  ) => {
-    const index = unpairedManual.findIndex(
-      ({ entry: linked, payment }) =>
-        linked === entry &&
-        -payment.amountCents === receipt.amountCents &&
-        distance(payment.postedAt, receipt.postedAt) <= INFERRED_WINDOW_DAYS,
-    )
-    if (index === -1) return false
-    addManualEvidence(unpairedManual[index].payment.id, receipt.id)
-    unpairedManual.splice(index, 1)
-    return true
-  }
 
   const receipts: LedgerCardTransaction[] = []
   for (const transaction of input.transactions) {
@@ -229,21 +210,49 @@ export function buildCardStatementLedger(input: {
   }
   receipts.sort((a, b) => a.postedAt.localeCompare(b.postedAt))
 
+  const neighbours = (transaction: LedgerCardTransaction) => {
+    const home = statements.findIndex(
+      (s) => transaction.postedAt <= s.closingDate,
+    )
+    const current = home === -1 ? undefined : entries[home]
+    const previousIndex = (home === -1 ? entries.length : home) - 1
+    const previous = previousIndex >= 0 ? entries[previousIndex] : undefined
+    return { current, previous }
+  }
+  // A hand-linked bank debit with no card_payment group is still paired with
+  // the card's own "Pagamento recebido" for it: the receipt of the same
+  // amount, within the payment window, posted where it could settle the
+  // linked statement. The pairing is one-to-one and resolved once, oldest
+  // receipt first, before anything is placed: a receipt backs a single link,
+  // and every later step (posted test, placement, evidence) reads it.
+  const manualPairByReceipt = new Map<string, (typeof manualLinks)[number]>()
+  const pairedManualIds = new Set<string>()
+  for (const receipt of receipts) {
+    if (groupByTransaction.has(receipt.id)) continue
+    const { current, previous } = neighbours(receipt)
+    const linked = unpairedManual.find(
+      ({ entry, payment }) =>
+        !pairedManualIds.has(payment.id) &&
+        (entry === previous || entry === current) &&
+        -payment.amountCents === receipt.amountCents &&
+        distance(payment.postedAt, receipt.postedAt) <= INFERRED_WINDOW_DAYS,
+    )
+    if (!linked) continue
+    manualPairByReceipt.set(receipt.id, linked)
+    pairedManualIds.add(linked.payment.id)
+  }
+
   // A hand-linked debit has left the account when it or the card's receipt
   // for it has posted, the same test as `statementCashSettlement`: the
-  // receipt in its bill payment group, or with no group the card receipt of
-  // the same amount within the payment window.
+  // receipt in its bill payment group, or with no group the receipt paired
+  // with it above.
   const manualLinkPosted = (payment: LedgerAccountPayment) =>
     isPosted(payment.id) ||
     receipts.some((receipt) => {
       if (!isPosted(receipt.id)) return false
       const group = groupByTransaction.get(receipt.id)
       if (group) return group.transactionIds.includes(payment.id)
-      return (
-        !groupByTransaction.has(payment.id) &&
-        receipt.amountCents === -payment.amountCents &&
-        distance(payment.postedAt, receipt.postedAt) <= INFERRED_WINDOW_DAYS
-      )
+      return manualPairByReceipt.get(receipt.id)?.payment.id === payment.id
     })
   // Settled so far by the person's links, before any receipt is placed. A
   // link whose payment has not posted yet is still shown on its bill but does
@@ -277,26 +286,11 @@ export function buildCardStatementLedger(input: {
   // bill still open takes it, and whatever it leaves pays the current cycle.
   // A receipt before the due date of a bill outside the ledger (the one
   // closed before the copied history starts) paid that bill.
-  const neighbours = (transaction: LedgerCardTransaction) => {
-    const home = statements.findIndex(
-      (s) => transaction.postedAt <= s.closingDate,
-    )
-    const current = home === -1 ? undefined : entries[home]
-    const previousIndex = (home === -1 ? entries.length : home) - 1
-    const previous = previousIndex >= 0 ? entries[previousIndex] : undefined
-    return { current, previous }
-  }
   const placements = (
     transaction: LedgerCardTransaction,
   ): Array<{ entry: StatementLedgerEntry; amountCents: number }> => {
     const { current, previous } = neighbours(transaction)
-    const linked = unpairedManual.find(
-      ({ entry, payment }) =>
-        (entry === previous || entry === current) &&
-        -payment.amountCents === transaction.amountCents &&
-        distance(payment.postedAt, transaction.postedAt) <=
-          INFERRED_WINDOW_DAYS,
-    )
+    const linked = manualPairByReceipt.get(transaction.id)
     const group = groupByTransaction.get(transaction.id)
     const handLinked = group?.transactionIds
       .map((id) => manualLinks.find(({ payment }) => payment.id === id))
@@ -374,7 +368,11 @@ export function buildCardStatementLedger(input: {
             linkId: null,
             amountCents: transaction.amountCents,
           })
-      } else if (!group && pairWithManualLink(transaction, entry)) {
+      } else if (!group && manualPairByReceipt.has(transaction.id)) {
+        addManualEvidence(
+          manualPairByReceipt.get(transaction.id)!.payment.id,
+          transaction.id,
+        )
         continue
       } else {
         entry.payments.push({
@@ -448,11 +446,7 @@ export function buildCardStatementLedger(input: {
       const { current, previous } = neighbours(receipt)
       if (current !== entry && previous !== entry) return false
       // The card side of a debit the person linked by hand stays with it.
-      return !unpairedManual.some(
-        ({ payment: linked }) =>
-          -linked.amountCents === receipt.amountCents &&
-          distance(linked.postedAt, receipt.postedAt) <= INFERRED_WINDOW_DAYS,
-      )
+      return !manualPairByReceipt.has(receipt.id)
     })
     if (evidence) pairedReceiptIds.add(evidence.id)
     const evidenceIds = evidence ? [evidence.id] : []

@@ -508,3 +508,55 @@ describe('revalidação de correspondências automáticas', () => {
     ).toBe(false)
   })
 })
+
+describe('débito vinculado à mão a uma fatura', () => {
+  const debit = {
+    ...base,
+    id: 'debit',
+    amountCents: -30_000,
+    postedAt: '2026-09-24',
+    description: 'Pagamento fatura cartão',
+    linkedCardId: 'card-a',
+  }
+  const receipt = (id: string, creditCardId: string) => ({
+    ...base,
+    id,
+    amountCents: 30_000,
+    accountId: null,
+    creditCardId,
+    postedAt: '2026-09-24',
+    description: 'Pagamento recebido',
+  })
+
+  it('só forma par com o recebimento do cartão vinculado', () => {
+    expect(
+      buildReconciliationSuggestions([debit, receipt('b', 'card-b')]),
+    ).toEqual([])
+    expect(
+      isAutomaticMatchStillValid('card_payment', debit, receipt('b', 'card-b')),
+    ).toBe(false)
+    expect(
+      buildReconciliationSuggestions([debit, receipt('a', 'card-a')]),
+    ).toEqual([
+      expect.objectContaining({
+        type: 'card_payment',
+        transactionIds: ['debit', 'a'],
+        autoConfirm: true,
+      }),
+    ])
+    expect(
+      isAutomaticMatchStillValid('card_payment', debit, receipt('a', 'card-a')),
+    ).toBe(true)
+  })
+
+  it('não vira transferência com um crédito bancário', () => {
+    const bankCredit = {
+      ...base,
+      id: 'bank-credit',
+      accountId: 'savings',
+      amountCents: 30_000,
+      postedAt: '2026-09-24',
+    }
+    expect(buildReconciliationSuggestions([debit, bankCredit])).toEqual([])
+  })
+})
