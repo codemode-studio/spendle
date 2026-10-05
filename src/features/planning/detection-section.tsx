@@ -150,7 +150,7 @@ function DetectedRecurrenceCard({
     amountCents > 0
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border p-panel">
+    <div className="flex min-w-0 flex-col gap-3 rounded-lg border p-panel">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <Input

@@ -112,7 +112,7 @@ function RecurrencesSection({
       ? item.participantLabel || item.name
       : item.name
     return (
-      <div key={item.id} className="grid gap-3 bg-card p-4">
+      <div key={item.id} className="grid gap-3 bg-card p-4 [&>*]:min-w-0">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">

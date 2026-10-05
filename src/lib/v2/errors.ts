@@ -62,6 +62,29 @@ const reasonMessages: Record<string, string | undefined> = {
   pluggy_not_configured:
     'Open Finance desligado: configure PLUGGY_CLIENT_ID e PLUGGY_CLIENT_SECRET no servidor.',
   database_unavailable: 'O banco de dados está indisponível. Tente de novo.',
+  month_closed:
+    'O mês já está fechado: o plano dele não muda. Ajuste o plano no próximo mês.',
+  closing_blocked: 'Resolva as pendências do mês antes de fechá-lo.',
+  invalid_allocation: 'Os percentuais precisam somar 100%.',
+  strategy_not_found: 'Estratégia não encontrada. Recarregue a página.',
+  goal_not_found: 'Meta não encontrada. Recarregue a página.',
+  recurrence_not_found: 'Recorrência não encontrada. Recarregue a página.',
+  occurrence_not_found: 'Ocorrência não encontrada. Recarregue a página.',
+  match_not_found: 'Essa correspondência mudou. Recarregue a página.',
+  occurrence_resolved: 'Essa ocorrência já foi resolvida.',
+  recurrence_paused: 'Retome a recorrência antes de vincular pagamentos.',
+  entry_not_linkable:
+    'Esse lançamento não pode ser vinculado: confira se está confirmado, na mesma moeda e direção, e se não é transferência.',
+  single_payment:
+    'Essa recorrência aceita um pagamento por período. Para somar vários, use envelope.',
+  nothing_linked: 'Vincule pelo menos um lançamento antes de concluir.',
+  has_confirmed_links:
+    'Desvincule os pagamentos confirmados antes de excluir a recorrência.',
+  destination_required: 'Escolha a conta ou o cartão do destino fixo.',
+  assistant_not_configured:
+    'Assistente desligado: configure OPENROUTER_API_KEY e OPENROUTER_MODEL no servidor.',
+  assistant_unavailable: 'O assistente não respondeu. Tente de novo.',
+  invalid_report: 'A análise não fechou com os gastos. Tente de novo.',
   v2_unreachable:
     'O servidor da API não respondeu. Inicie `pnpm --filter @spendle/server dev` e tente de novo.',
 }

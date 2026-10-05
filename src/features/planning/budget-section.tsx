@@ -136,7 +136,10 @@ function BudgetSection({
     essentialCents === null || !Number.isInteger(months)
       ? null
       : essentialCents * months
+  // A closed month keeps its plan; changes wait for the next month.
+  const frozen = data.month.closed
   const valid =
+    !frozen &&
     incomeCents !== null &&
     incomeCents >= 0 &&
     totalBps === 10_000 &&
@@ -168,6 +171,12 @@ function BudgetSection({
       }
     >
       <form id="plan-form" onSubmit={submit} className="grid gap-6">
+        {frozen && (
+          <p className="rounded-lg border bg-muted/40 px-3 py-2 text-sm">
+            {formatMonth(data.month.month, { capitalize: true })} está fechado:
+            o plano dele fica como foi. Ajustes valem a partir do próximo mês.
+          </p>
+        )}
         <Field className="max-w-sm">
           <FieldLabel htmlFor="plan-income">
             Renda mensal de referência
