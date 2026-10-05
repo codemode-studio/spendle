@@ -12,14 +12,16 @@ import { EventLog } from '../events/EventLog.ts'
 import * as Reactor from '../events/Reactor.ts'
 import { entriesResolved } from '../ledger/Entries.ts'
 import { followDecisions } from './Decisions.ts'
-import { matchRelations, parseRelationKey, relationKey } from './Matching.ts'
+import { parseRelationKey, relationKey } from './Keys.ts'
+import { matchRelations } from './Matching.ts'
 import type { Decision, MatchedRelation } from './Matching.ts'
+import { validRefund } from './Refunds.ts'
 
 export const relationsChanged = 'RelationsChanged'
 
 export class Relation extends Schema.Class<Relation>('Relation')({
   key: Schema.String,
-  kind: Schema.Literals(['internal_transfer', 'card_payment']),
+  kind: Schema.Literals(['internal_transfer', 'card_payment', 'refund']),
   outflowEntryId: Schema.String,
   inflowEntryId: Schema.String,
   status: Schema.Literals(['suggested', 'confirmed', 'conflict']),
@@ -36,6 +38,7 @@ export class ReconciliationError extends Schema.TaggedError<ReconciliationError>
       'entry_not_found',
       'not_a_pair',
       'already_linked',
+      'exceeds_purchase',
       'link_not_applied',
     ]),
     detail: Schema.optional(Schema.String),
@@ -78,6 +81,7 @@ const EntryRow = Schema.Struct({
   description: Schema.String,
   institution: Schema.String,
   ownerName: Schema.String,
+  operationTypes: Schema.fromJsonString(Schema.Array(Schema.String)),
 })
 
 // An entry with what each of its sources currently reports: the latest
@@ -89,7 +93,7 @@ const MatchableRow = Schema.Struct({
 
 const RelationRow = Schema.Struct({
   key: Schema.String,
-  kind: Schema.Literals(['internal_transfer', 'card_payment']),
+  kind: Schema.Literals(['internal_transfer', 'card_payment', 'refund']),
   outflowEntryId: Schema.String,
   inflowEntryId: Schema.String,
   status: Schema.Literals(['suggested', 'confirmed', 'conflict']),
@@ -135,6 +139,19 @@ const make = Effect.gen(function* () {
   const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     lock.withPermit(effect).pipe(Effect.withSpan('Reconciliation.serialize'))
 
+  // What the current version of each observation of the entry says its
+  // provider operation was; sources may disagree, so every one is kept.
+  const operationTypes = sql.literal(`(
+    SELECT json_group_array(DISTINCT json_extract(t.raw, '$.operationType'))
+    FROM entry_evidence v JOIN transaction_observations t
+      ON t.source_id = v.source_id AND t.account_id = v.account_id AND t.external_id = v.external_id
+    WHERE v.entry_id = e.id AND json_type(t.raw, '$.operationType') = 'text'
+      AND t.version = (
+        SELECT max(version) FROM transaction_observations l
+        WHERE l.source_id = t.source_id AND l.account_id = t.account_id
+          AND l.external_id = t.external_id
+      ))`)
+
   const findEntries = SqlSchema.findAll({
     Request: Schema.Void,
     Result: MatchableRow,
@@ -152,7 +169,8 @@ const make = Effect.gen(function* () {
               WHERE l.source_id = t.source_id AND l.account_id = t.account_id
                 AND l.external_id = t.external_id
             )
-        ) AS observedDescriptions
+        ) AS observedDescriptions,
+        ${operationTypes} AS operationTypes
       FROM ledger_entries e JOIN accounts a ON a.id = e.account_id
       JOIN institutions i ON i.id = a.institution_id JOIN owners o ON o.id = a.owner_id
       WHERE a.archived_at IS NULL
@@ -164,7 +182,7 @@ const make = Effect.gen(function* () {
     execute: (id) => sql`
       SELECT e.id, e.account_id AS accountId, a.kind AS accountKind, e.booked_on AS bookedOn,
         e.amount_cents AS amountCents, e.currency, e.status, e.description, i.name AS institution,
-        o.name AS ownerName
+        o.name AS ownerName, ${operationTypes} AS operationTypes
       FROM ledger_entries e JOIN accounts a ON a.id = e.account_id
       JOIN institutions i ON i.id = a.institution_id JOIN owners o ON o.id = a.owner_id WHERE e.id = ${id}
     `,
@@ -407,7 +425,10 @@ const make = Effect.gen(function* () {
 
   /**
    * The person pairs two entries the matcher missed: an outflow and an
-   * inflow of the same amount on different accounts.
+   * inflow of the same amount on different accounts (a transfer or card
+   * payment), or a purchase and a later credit on the same account that
+   * gives back part or all of it (a refund). A purchase may take several
+   * refunds, never more than its amount.
    */
   const link = Effect.fn('Reconciliation.link')(
     (input: {
@@ -434,39 +455,75 @@ const make = Effect.gen(function* () {
         reason: 'entry_not_found',
         detail: input.inflowEntryId,
       })
-    const out = outflow.value
-    const into = inflow.value
-    if (
-      out.amountCents >= 0 ||
-      into.amountCents !== -out.amountCents ||
-      out.currency !== into.currency ||
-      out.accountId === into.accountId ||
-      out.accountKind === 'credit_card'
-    ) {
+    const out = { ...outflow.value, descriptions: [outflow.value.description] }
+    const into = { ...inflow.value, descriptions: [inflow.value.description] }
+    const refund = out.accountId === into.accountId && validRefund(out, into)
+    const pair =
+      out.amountCents < 0 &&
+      into.amountCents === -out.amountCents &&
+      out.currency === into.currency &&
+      out.accountId !== into.accountId &&
+      out.accountKind !== 'credit_card'
+    if (!refund && !pair) {
       return yield* new ReconciliationError({ reason: 'not_a_pair' })
     }
-    // A link never silently loses to an earlier confirmation of either entry.
-    const held = (yield* relations).find(
-      (relation) =>
-        relation.origin === 'person' &&
-        [relation.outflowEntryId, relation.inflowEntryId].some(
-          (id) => id === out.id || id === into.id,
-        ),
+    const kind = refund
+      ? 'refund'
+      : into.accountKind === 'credit_card'
+        ? 'card_payment'
+        : 'internal_transfer'
+    // A link never silently loses to an earlier confirmation of either entry;
+    // only refunds may share their purchase.
+    const held = (yield* relations).filter(
+      (relation) => relation.origin === 'person',
     )
-    if (held)
+    const taken = held.find(
+      (relation) =>
+        relation.inflowEntryId === out.id ||
+        relation.inflowEntryId === into.id ||
+        relation.outflowEntryId === into.id ||
+        (relation.outflowEntryId === out.id &&
+          (kind !== 'refund' || relation.kind !== 'refund')),
+    )
+    if (taken)
       return yield* new ReconciliationError({
         reason: 'already_linked',
-        detail: held.key,
+        detail: taken.key,
       })
-    const kind =
-      into.accountKind === 'credit_card' ? 'card_payment' : 'internal_transfer'
+    if (kind === 'refund') {
+      const earlier = held.filter(
+        (relation) =>
+          relation.kind === 'refund' &&
+          relation.status === 'confirmed' &&
+          relation.outflowEntryId === out.id,
+      )
+      let refunded = into.amountCents
+      for (const relation of earlier) {
+        const credit = yield* findEntry(relation.inflowEntryId)
+        if (Option.isSome(credit)) refunded += credit.value.amountCents
+      }
+      if (refunded > -out.amountCents)
+        return yield* new ReconciliationError({
+          reason: 'exceeds_purchase',
+          detail: `${refunded} of ${-out.amountCents}`,
+        })
+    }
     const key = relationKey(kind, out.id, into.id)
     // The link supersedes orphaned confirmations that reserve either entry,
     // and must show up as the person's relation, or nothing is stored.
+    // Refunds share their purchase: a refund never supersedes another refund
+    // only for holding the same purchase.
     yield* sql.withTransaction(
       Effect.gen(function* () {
         for (const orphan of yield* orphanedDecisions) {
-          if (orphan.reserved.some((id) => id === out.id || id === into.id))
+          const shared = orphan.reserved.filter(
+            (id) => id === out.id || id === into.id,
+          )
+          const sharesPurchase =
+            kind === 'refund' &&
+            parseRelationKey(orphan.key).kind === 'refund' &&
+            shared.every((id) => id === out.id)
+          if (shared.length > 0 && !sharesPurchase)
             yield* write(orphan.key, 'rejected')
         }
         yield* writeDecision(key, 'confirmed')
@@ -498,10 +555,10 @@ export class Reconciliation extends Context.Service<
  * Re-matches relations whenever an account's entries change, the account
  * itself (a new kind turns a transfer into a card payment, or invalidates a
  * confirmation), or an observation: matching reads every source's latest
- * description, so a correction that leaves entries alone (a secondary source
- * now naming a third party) still changes relations. A rebuild reads current
- * state, so one that runs before the entries resolve is followed by another
- * on their `EntriesResolved`.
+ * description and operation type, so a correction that leaves entries alone
+ * (a secondary source now naming a third party) still changes relations. A
+ * rebuild reads current state, so one that runs before the entries resolve
+ * is followed by another on their `EntriesResolved`.
  */
 export const reactor = Reactor.layer({
   name: 'reconciliation',
@@ -513,3 +570,13 @@ export const reactor = Reactor.layer({
       yield* reconciliation.rebuild()
     }),
 })
+
+/**
+ * Rebuilds relations when the server starts, so a matcher change applies to
+ * the whole history without waiting for new entries.
+ */
+export const startup = Layer.effectDiscard(
+  Effect.gen(function* () {
+    yield* (yield* Reconciliation).rebuild()
+  }),
+)

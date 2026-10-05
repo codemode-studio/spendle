@@ -1,7 +1,8 @@
 import { assert, describe, it } from '@effect/vitest'
 
 import { addDays } from '../domain/LocalDate.ts'
-import { matchRelations, relationKey } from './Matching.ts'
+import { relationKey } from './Keys.ts'
+import { matchRelations } from './Matching.ts'
 import type { Decision, MatchableEntry } from './Matching.ts'
 
 const entry = (
@@ -1177,8 +1178,8 @@ describe('matchRelations', () => {
   it('never pairs within an account or from a card', () => {
     assert.deepStrictEqual(
       summary([
-        entry('a', 'nubank', -100),
-        entry('b', 'nubank', 100),
+        entry('a', 'nubank', -100, { description: 'Pix enviado' }),
+        entry('b', 'nubank', 100, { description: 'Pix recebido' }),
         entry('c', 'card-nu', -200),
         entry('d', 'inter', 200),
       ]),

@@ -1,5 +1,6 @@
-import { parseRelationKey, relationKey } from './Matching.ts'
-import type { Decision, RelationKind } from './Matching.ts'
+import { parseRelationKey, relationKey } from './Keys.ts'
+import type { RelationKind } from './Keys.ts'
+import type { Decision } from './Matching.ts'
 
 /** A person's decision as stored, with where its entries' observations are now. */
 export interface StoredDecision {

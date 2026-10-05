@@ -54,6 +54,7 @@ const CoreLive = Layer.mergeAll(
 const OpenFinanceLive = Layer.mergeAll(
   Entries.reactor,
   Reconciliation.reactor,
+  Reconciliation.startup,
   SyncReactor.layer,
   Webhook.reactor,
   Webhook.registration,

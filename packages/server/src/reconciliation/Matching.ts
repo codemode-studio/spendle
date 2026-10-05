@@ -2,8 +2,17 @@ import { assign } from '../domain/Assignment.ts'
 import { dayNumber, daysBetween } from '../domain/LocalDate.ts'
 import { foldDescription } from '../imports/Statement.ts'
 import { descriptionWords } from '../ledger/Resolution.ts'
+import {
+  autoConfirmScore,
+  parseRelationKey,
+  relationKey,
+  rivalMargin,
+} from './Keys.ts'
+import type { RelationKind } from './Keys.ts'
+import { matchRefunds, validRefund } from './Refunds.ts'
 
-export type RelationKind = 'internal_transfer' | 'card_payment'
+/** Kinds that pair two different accounts. */
+type PairKind = Exclude<RelationKind, 'refund'>
 
 /** An entry as the matcher sees it. */
 export interface MatchableEntry {
@@ -28,6 +37,11 @@ export interface MatchableEntry {
   readonly institution?: string
   /** Who owns the account: a name both sides share is evidence only when it is theirs. */
   readonly ownerName?: string
+  /**
+   * The operation types (Pluggy's `operationType`) the current version of
+   * each of its observations reports; sources may disagree.
+   */
+  readonly operationTypes?: ReadonlyArray<string>
 }
 
 export type Decision = 'confirmed' | 'rejected'
@@ -68,23 +82,7 @@ export interface Matching {
   readonly orphaned: ReadonlyArray<OrphanedDecision>
 }
 
-export const relationKey = (
-  kind: RelationKind,
-  outflowId: string,
-  inflowId: string,
-) => `${kind}:${outflowId}+${inflowId}`
-
-export const parseRelationKey = (key: string) => {
-  const [kind = '', pair = ''] = key.split(':')
-  const [outflowId = '', inflowId = ''] = pair.split('+')
-  return { kind, outflowId, inflowId }
-}
-
-/** Auto-confirm needs this score and no rival within the margin. */
-export const autoConfirmScore = 80
-export const rivalMargin = 10
-
-const hints: Record<RelationKind, RegExp> = {
+const hints: Record<PairKind, RegExp> = {
   internal_transfer:
     /\b(pix|transf|transferencia|ted|doc|tev|aplicacao|aplic|resgate|investimento|envio|enviad[oa]|recebid[oa]|deposito|mesma titularidade)\b/,
   card_payment: /\b(fatura|pagamento|pgto|pag|cartao|card)\b/,
@@ -93,7 +91,7 @@ const hints: Record<RelationKind, RegExp> = {
 // Wording that says the movement is something else: income on the receiving
 // side, a purchase on the paying side, a refund or cashback on a card.
 const contradictions: Record<
-  RelationKind,
+  PairKind,
   { readonly outflow: RegExp; readonly inflow: RegExp }
 > = {
   internal_transfer: {
@@ -781,7 +779,7 @@ export const cardPaymentWindowDays = 7
 const maxWindowDays = cardPaymentWindowDays
 
 const windowDays = (
-  kind: RelationKind,
+  kind: PairKind,
   outflow: MatchableEntry,
   inflow: MatchableEntry,
 ) => {
@@ -793,7 +791,7 @@ const windowDays = (
 const kindFor = (
   outflow: MatchableEntry,
   inflow: MatchableEntry,
-): RelationKind | null => {
+): PairKind | null => {
   if (outflow.accountId === inflow.accountId) return null
   if (outflow.accountKind === 'credit_card') return null
   return inflow.accountKind === 'credit_card'
@@ -813,7 +811,7 @@ const validPair = (
   kindFor(outflow, inflow) === kind
 
 interface Candidate {
-  readonly kind: RelationKind
+  readonly kind: PairKind
   readonly outflow: MatchableEntry
   readonly inflow: MatchableEntry
   readonly days: number
@@ -827,7 +825,7 @@ interface Candidate {
 }
 
 const evaluate = (
-  kind: RelationKind,
+  kind: PairKind,
   outflow: MatchableEntry,
   inflow: MatchableEntry,
   days: number,
@@ -909,7 +907,9 @@ const cardEvidence = (outflow: MatchableEntry, card: MatchableEntry) => {
  * Pairs outflows with inflows of the same amount and currency between the
  * person's own accounts: transfers between bank accounts (3 days, 5 for
  * TED/DOC and investments), and payments from a bank account to a card
- * (7 days). Each entry joins at most one relation.
+ * (7 days). Then credits are paired with the purchases they give back
+ * (see `matchRefunds`). Each entry joins at most one relation, except that
+ * a purchase may take several refunds up to its amount.
  *
  * A person's confirmation always holds its entries. If the facts changed so
  * the pair no longer adds up, it becomes a `conflict` for review; if an
@@ -935,16 +935,25 @@ export const matchRelations = (
   reserved: ReadonlySet<string> = new Set(),
 ): Matching => {
   const byId = new Map(entries.map((entry) => [entry.id, entry]))
+  // Entries in a relation; a refunded purchase may still take more refunds.
   const used = new Set<string>()
+  const refundedCents = new Map<string, number>()
   const relations: Array<MatchedRelation> = []
   const orphaned: Array<OrphanedDecision> = []
 
+  // Every kind of confirmation is applied before any automatic matching, so
+  // no automatic pair can take an entry the person already placed.
   for (const [key, decision] of [...decisions].sort(([a], [b]) =>
     a.localeCompare(b),
   )) {
     if (decision !== 'confirmed') continue
     const { kind, outflowId, inflowId } = parseRelationKey(key)
-    if (kind !== 'internal_transfer' && kind !== 'card_payment') continue
+    if (
+      kind !== 'internal_transfer' &&
+      kind !== 'card_payment' &&
+      kind !== 'refund'
+    )
+      continue
     const outflow = byId.get(outflowId)
     const inflow = byId.get(inflowId)
     if (!outflow || !inflow) {
@@ -952,15 +961,38 @@ export const matchRelations = (
         key,
         missing: [outflowId, inflowId].filter((id) => !byId.has(id)),
         reason: 'entry_missing',
-        reserved: [outflowId, inflowId].filter((id) => byId.has(id)),
+        // A refund's purchase stays open to the person's other refunds.
+        reserved: (kind === 'refund'
+          ? [inflowId]
+          : [outflowId, inflowId]
+        ).filter((id) => byId.has(id)),
       })
-      for (const id of [outflowId, inflowId]) used.add(id)
+      if (kind === 'refund') {
+        // The surviving side stays out of automatic matching; a purchase
+        // keeps taking the person's other refunds.
+        used.add(inflowId)
+        refundedCents.set(outflowId, refundedCents.get(outflowId) ?? 0)
+      } else {
+        for (const id of [outflowId, inflowId]) used.add(id)
+      }
       continue
     }
     // Entries merged so two confirmations now claim one entry: neither is
-    // dropped silently, the later one waits for the person.
-    if (used.has(outflowId) || used.has(inflowId)) {
-      const reserved = [outflowId, inflowId].filter((id) => !used.has(id))
+    // dropped silently, the later one waits for the person. Refunds may
+    // share their purchase; nothing else may.
+    const claimed =
+      kind === 'refund'
+        ? used.has(outflowId) || used.has(inflowId)
+        : used.has(outflowId) ||
+          used.has(inflowId) ||
+          refundedCents.has(outflowId)
+    if (claimed) {
+      const reserved =
+        kind === 'refund'
+          ? [inflowId].filter((id) => !used.has(id))
+          : [outflowId, inflowId].filter(
+              (id) => !used.has(id) && !refundedCents.has(id),
+            )
       orphaned.push({
         key,
         missing: [],
@@ -970,9 +1002,19 @@ export const matchRelations = (
       for (const id of reserved) used.add(id)
       continue
     }
-    used.add(outflowId)
-    used.add(inflowId)
-    const valid = validPair(kind, outflow, inflow)
+    let valid: boolean
+    if (kind === 'refund') {
+      const refunded = refundedCents.get(outflowId) ?? 0
+      valid =
+        validRefund(outflow, inflow) &&
+        refunded + inflow.amountCents <= -outflow.amountCents
+      used.add(inflowId)
+      refundedCents.set(outflowId, refunded + (valid ? inflow.amountCents : 0))
+    } else {
+      used.add(outflowId)
+      used.add(inflowId)
+      valid = validPair(kind, outflow, inflow)
+    }
     relations.push({
       key,
       kind,
@@ -988,6 +1030,9 @@ export const matchRelations = (
   }
 
   for (const id of reserved) used.add(id)
+
+  // Entries of automatic suggestions, by the index of their relation.
+  const suggested = new Map<string, number>()
 
   const rejectedEntries = new Set(
     [...decisions]
@@ -1024,7 +1069,12 @@ export const matchRelations = (
 
   const candidatesByGroup = new Map<string, Array<Candidate>>()
   for (const outflow of entries) {
-    if (outflow.amountCents >= 0 || used.has(outflow.id)) continue
+    if (
+      outflow.amountCents >= 0 ||
+      used.has(outflow.id) ||
+      refundedCents.has(outflow.id)
+    )
+      continue
     const group = `${outflow.currency}:${-outflow.amountCents}`
     for (const inflow of reachable(outflow, group)) {
       const kind = kindFor(outflow, inflow)
@@ -1132,6 +1182,14 @@ export const matchRelations = (
         posted &&
         unambiguous &&
         !contested
+      // A suggestion holds its entries only until a stronger refund wants one.
+      if (confident) {
+        used.add(outflow.id)
+        used.add(candidate.inflow.id)
+      } else {
+        suggested.set(outflow.id, relations.length)
+        suggested.set(candidate.inflow.id, relations.length)
+      }
       relations.push({
         key: relationKey(candidate.kind, outflow.id, candidate.inflow.id),
         kind: candidate.kind,
@@ -1149,8 +1207,37 @@ export const matchRelations = (
       })
     })
   }
+  // Refunds and suggested pairs compete for the same entries: a refund that
+  // is confirmed, or scores higher, replaces the suggestions it collides
+  // with. One that loses takes nothing, not even part of its purchase.
+  const dropped = new Set<number>()
+  const refunds = matchRefunds(
+    entries,
+    decisions,
+    used,
+    refundedCents,
+    rejectedEntries,
+    (refund) => {
+      const rivals = [refund.outflowId, refund.inflowId]
+        .map((id) => suggested.get(id))
+        .filter(
+          (index): index is number =>
+            index !== undefined && !dropped.has(index),
+        )
+      const wins = rivals.every(
+        (index) =>
+          refund.status === 'confirmed' ||
+          refund.score > relations[index]!.score,
+      )
+      if (wins) for (const index of rivals) dropped.add(index)
+      return wins
+    },
+  )
+  relations.push(...refunds)
   return {
-    relations: relations.sort((a, b) => a.key.localeCompare(b.key)),
+    relations: relations
+      .filter((_, index) => !dropped.has(index))
+      .sort((a, b) => a.key.localeCompare(b.key)),
     orphaned,
   }
 }

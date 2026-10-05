@@ -992,4 +992,501 @@ describe('Reconciliation', () => {
       )
     }).pipe(Effect.provide(openFinanceTest())),
   )
+
+  it.effect('links a card refund to the purchase it gives back', () =>
+    Effect.gen(function* () {
+      const { reconciliation, card } = yield* setup
+      yield* (yield* Imports).importFile({
+        accountId: card.id,
+        fileName: 'cartao-2.ofx',
+        bytes: ofx(
+          line('c2', '20260916', '-250.00', 'Amazon Marketplace') +
+            line('c3', '20260925', '250.00', 'Estorno Amazon Marketplace'),
+          'CCSTMTRS',
+        ),
+      })
+      yield* drain
+      const refunds = (yield* reconciliation.relations).filter(
+        (relation) => relation.kind === 'refund',
+      )
+      assert.deepStrictEqual(
+        refunds.map((relation) => [
+          relation.status,
+          relation.reasons.includes('refund_wording'),
+        ]),
+        [['confirmed', true]],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'does not confirm a refund against another shop of the same business',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, card, entryId } = yield* setup
+        yield* (yield* Imports).importFile({
+          accountId: card.id,
+          fileName: 'cartao-bom-preco.ofx',
+          bytes: ofx(
+            line('b1', '20260910', '-50.00', 'Acougue Bom Preco') +
+              line('b2', '20260911', '-250.00', 'Supermercado Bom Preco') +
+              line('b3', '20260915', '50.00', 'Estorno Supermercado Bom Preco'),
+            'CCSTMTRS',
+          ),
+        })
+        yield* drain
+        const supermarket = yield* entryId(card.id, -25000)
+        const refunds = (yield* reconciliation.relations).filter(
+          (relation) => relation.kind === 'refund',
+        )
+        assert.deepStrictEqual(
+          refunds.map((relation) => [relation.outflowEntryId, relation.status]),
+          [[supermarket, 'suggested']],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'does not confirm a refund from another trade under a shared umbrella word, but does from the same trade',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, card, entryId } = yield* setup
+        yield* (yield* Imports).importFile({
+          accountId: card.id,
+          fileName: 'cartao-umbrella.ofx',
+          bytes: ofx(
+            line('u1', '20260910', '-50.00', 'Auto Pecas Avenida') +
+              line('u2', '20260911', '-250.00', 'Auto Oficina Avenida') +
+              line('u3', '20260915', '50.00', 'Estorno Auto Oficina Avenida') +
+              line('u4', '20260910', '-60.00', 'Petshop Bicho Feliz') +
+              line('u5', '20260911', '-300.00', 'Pet Clinica Bicho Feliz') +
+              line(
+                'u6',
+                '20260915',
+                '60.00',
+                'Estorno Pet Clinica Bicho Feliz',
+              ) +
+              line('u7', '20260910', '-70.00', 'Pet Shop Primavera') +
+              line('u8', '20260915', '70.00', 'Estorno Pet Clinica Primavera') +
+              line('u9', '20260910', '-80.00', 'Auto Pecas Horizonte Azul') +
+              line(
+                'u10',
+                '20260915',
+                '80.00',
+                'Estorno Autopecas Horizonte Azul',
+              ) +
+              line('u11', '20260910', '-90.00', 'Auto Posto Ipiranga') +
+              line('u12', '20260915', '90.00', 'Estorno Posto Ipiranga'),
+            'CCSTMTRS',
+          ),
+        })
+        yield* drain
+        const refunds = (yield* reconciliation.relations).filter(
+          (relation) => relation.kind === 'refund',
+        )
+        const statusOf = (purchaseCents: number) =>
+          Effect.map(entryId(card.id, purchaseCents), (id) =>
+            refunds
+              .filter(
+                (relation) =>
+                  relation.outflowEntryId === id &&
+                  relation.status === 'confirmed',
+              )
+              .map((relation) => relation.status),
+          )
+        assert.deepStrictEqual(
+          [
+            yield* statusOf(-5000),
+            yield* statusOf(-25000),
+            yield* statusOf(-6000),
+            yield* statusOf(-30000),
+            yield* statusOf(-7000),
+            yield* statusOf(-8000),
+            yield* statusOf(-9000),
+          ],
+          [[], [], [], [], [], ['confirmed'], ['confirmed']],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'does not confirm a refund from another trade named in the plural or in words it does not know',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, card, entryId } = yield* setup
+        yield* (yield* Imports).importFile({
+          accountId: card.id,
+          fileName: 'cartao-trades.ofx',
+          bytes: ofx(
+            line('t1', '20260910', '-50.00', 'Acougues Bom Preco') +
+              line(
+                't2',
+                '20260915',
+                '50.00',
+                'Estorno Supermercado Bom Preco',
+              ) +
+              line('t3', '20260910', '-160.00', 'Postos Avenida') +
+              line('t4', '20260915', '160.00', 'Estorno Restaurante Avenida') +
+              line('t5', '20260910', '-270.00', 'Hoteis Atlantico') +
+              line('t6', '20260915', '270.00', 'Estorno Pousada Atlantico') +
+              line('t7', '20260910', '-380.00', 'Quitanda Primavera') +
+              line('t8', '20260915', '380.00', 'Estorno Mercado Primavera') +
+              line('t9', '20260910', '-490.00', 'Drogarias Raia') +
+              line('t10', '20260915', '490.00', 'Estorno Drogaria Raia'),
+            'CCSTMTRS',
+          ),
+        })
+        yield* drain
+        const refunds = (yield* reconciliation.relations).filter(
+          (relation) => relation.kind === 'refund',
+        )
+        const statusOf = (purchaseCents: number) =>
+          Effect.map(entryId(card.id, purchaseCents), (id) =>
+            refunds
+              .filter((relation) => relation.outflowEntryId === id)
+              .map((relation) => relation.status),
+          )
+        assert.deepStrictEqual(
+          [
+            yield* statusOf(-5000),
+            yield* statusOf(-16000),
+            yield* statusOf(-27000),
+            yield* statusOf(-38000),
+            yield* statusOf(-49000),
+          ],
+          [
+            ['suggested'],
+            ['suggested'],
+            ['suggested'],
+            ['suggested'],
+            ['confirmed'],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'links several refunds of one purchase, refuses one beyond it, and keeps them against later debits',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, nubank, card, entryId } = yield* setup
+        const imports = yield* Imports
+        yield* imports.importFile({
+          accountId: card.id,
+          fileName: 'cartao-pedido.ofx',
+          bytes: ofx(
+            line('p1', '20260916', '-250.00', 'Loja Online') +
+              line('p2', '20260920', '50.00', 'Credito') +
+              line('p3', '20260922', '200.00', 'Credito ajuste') +
+              line('p4', '20260923', '10.00', 'Credito'),
+            'CCSTMTRS',
+          ),
+        })
+        yield* drain
+        const order = yield* entryId(card.id, -25000)
+        const keys = []
+        for (const amount of [5000, 20000]) {
+          keys.push(
+            yield* reconciliation.link({
+              outflowEntryId: order,
+              inflowEntryId: yield* entryId(card.id, amount),
+            }),
+          )
+        }
+        const beyond = yield* reconciliation
+          .link({
+            outflowEntryId: order,
+            inflowEntryId: yield* entryId(card.id, 1000),
+          })
+          .pipe(Effect.flip)
+
+        // A bank debit of the same amount arrives later; the refund holds.
+        yield* imports.importFile({
+          accountId: nubank.id,
+          fileName: 'nubank-2.ofx',
+          bytes: ofx(line('n4', '20260922', '-200.00', 'Pagamento fatura')),
+        })
+        yield* drain
+        const relations = yield* reconciliation.relations
+        assert.deepStrictEqual(
+          [
+            beyond._tag === 'ReconciliationError' && beyond.reason,
+            keys.map(
+              (key) =>
+                relations.find((relation) => relation.key === key)?.status,
+            ),
+          ],
+          ['exceeds_purchase', ['confirmed', 'confirmed']],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  // A purchase and a same-merchant credit on the card, reported by `source`.
+  const cardCredit = Effect.gen(function* () {
+    const { reconciliation, card } = yield* setup
+    const observations = yield* Observations
+    const register = (ref: string) =>
+      observations.registerSource({
+        kind: 'open_finance',
+        externalRef: ref,
+        label: ref,
+      })
+    const report = (
+      sourceId: string,
+      externalId: string,
+      amountCents: number,
+      bookedOn: string,
+      raw: Record<string, string>,
+    ) =>
+      Effect.andThen(
+        observations.recordTransactions({
+          sourceId,
+          accountId: card.id,
+          transactions: [
+            {
+              externalId,
+              bookedOn,
+              amountCents,
+              currency: 'BRL',
+              description: 'Amazon Marketplace',
+              status: 'posted',
+              raw,
+            },
+          ],
+        }),
+        drain,
+      )
+    const source = yield* register('feed')
+    yield* report(source.id, 'order', -25000, '2026-09-16', {})
+    const refunds = Effect.map(reconciliation.relations, (relations) =>
+      relations
+        .filter((relation) => relation.kind === 'refund')
+        .map((relation) => relation.status),
+    )
+    return { reconciliation, source, register, report, refunds }
+  })
+
+  // Amazon purchases on the card, then a credit the feed calls an ESTORNO;
+  // what each purchase's refund relations are.
+  const estornoAgainst = (
+    purchasesCents: ReadonlyArray<number>,
+    description: string,
+  ) =>
+    Effect.gen(function* () {
+      const { reconciliation, card } = yield* setup
+      const observations = yield* Observations
+      const source = yield* observations.registerSource({
+        kind: 'open_finance',
+        externalRef: 'amazon-feed',
+        label: 'Amazon feed',
+      })
+      yield* observations.recordTransactions({
+        sourceId: source.id,
+        accountId: card.id,
+        transactions: [
+          ...purchasesCents.map((amountCents, index) => ({
+            externalId: `order-${index}`,
+            bookedOn: '2026-09-16',
+            amountCents,
+            currency: 'BRL',
+            description: 'Amazon Marketplace',
+            status: 'posted' as const,
+            raw: null,
+          })),
+          {
+            externalId: 'credit',
+            bookedOn: '2026-09-25',
+            amountCents: 5000,
+            currency: 'BRL',
+            description,
+            status: 'posted' as const,
+            raw: { operationType: 'ESTORNO' },
+          },
+        ],
+      })
+      yield* drain
+      const found = yield* (yield* Entries).entries(card.id)
+      const amountOf = (id: string) =>
+        found.find((entry) => entry.id === id)?.amountCents
+      return (yield* reconciliation.relations)
+        .filter((relation) => relation.kind === 'refund')
+        .map((relation) => [amountOf(relation.outflowEntryId), relation.status])
+    })
+
+  for (const description of [
+    'Estorno parcial Amazon Marketplace',
+    'Devolucao parcial Amazon Marketplace',
+    'Estorno parc Amazon Marketplace',
+  ])
+    it.effect(
+      `keeps "${description}" suggested while a larger purchase of the shop could be its order`,
+      () =>
+        Effect.gen(function* () {
+          assert.deepStrictEqual(
+            (yield* estornoAgainst([-5000, -25000], description)).map(
+              ([, status]) => status,
+            ),
+            ['suggested'],
+          )
+        }).pipe(Effect.provide(openFinanceTest())),
+    )
+
+  it.effect('confirms a partial refund of the only order it can return', () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(
+        yield* estornoAgainst([-25000], 'Estorno parcial Amazon Marketplace'),
+        [[-25000, 'confirmed']],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect('confirms a whole refund against the purchase of its amount', () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(
+        yield* estornoAgainst([-5000, -25000], 'Estorno Amazon Marketplace'),
+        [[-5000, 'confirmed']],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect('drops a refund once a credit is corrected to cashback', () =>
+    Effect.gen(function* () {
+      const { source, report, refunds } = yield* cardCredit
+      yield* report(source.id, 'credit', 25000, '2026-09-25', {})
+      const before = yield* refunds
+      // Only the operation changes: entries stay the same.
+      yield* report(source.id, 'credit', 25000, '2026-09-25', {
+        operationType: 'CASHBACK',
+      })
+      assert.deepStrictEqual([before, yield* refunds], [['confirmed'], []])
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'drops a refund once its credit is called anything but a refund',
+    () =>
+      Effect.gen(function* () {
+        const { source, report, refunds } = yield* cardCredit
+        const credit = (operationType: string) =>
+          Effect.andThen(
+            report(source.id, 'credit', 25000, '2026-09-25', { operationType }),
+            refunds,
+          )
+        assert.deepStrictEqual(
+          [
+            yield* credit('ESTORNO'),
+            yield* credit('PAGAMENTO_FATURA'),
+            yield* credit('CHARGEBACK'),
+            yield* credit('OPERACOES_CREDITO_CONTRATADAS_CARTAO'),
+          ],
+          [['confirmed'], [], ['confirmed'], []],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'reads the current operation of each source, and doubts a credit any source calls cashback',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, source, register, report, refunds } =
+          yield* cardCredit
+        yield* report(source.id, 'credit', 25000, '2026-09-25', {
+          operationType: 'ESTORNO',
+        })
+        yield* report(source.id, 'credit', 25000, '2026-09-25', {
+          operationType: 'CASHBACK',
+        })
+        yield* reconciliation.rebuild()
+        const corrected = yield* refunds
+
+        yield* report(source.id, 'credit', 25000, '2026-09-25', {
+          operationType: 'ESTORNO',
+        })
+        const other = yield* register('other-feed')
+        yield* report(other.id, 'credit', 25000, '2026-09-25', {
+          operationType: 'CASHBACK',
+        })
+        yield* reconciliation.rebuild()
+        assert.deepStrictEqual([corrected, yield* refunds], [[], []])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'keeps a refund whose credit vanished when another refund of the purchase is linked',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, card } = yield* setup
+        const observations = yield* Observations
+        const entries = yield* Entries
+        const source = yield* observations.registerSource({
+          kind: 'manual',
+          externalRef: 'card-feed',
+          label: 'Card',
+        })
+        const report = (
+          externalId: string,
+          bookedOn: string,
+          amountCents: number,
+          description: string,
+          status: 'posted' | 'removed' = 'posted',
+        ) =>
+          Effect.andThen(
+            observations.recordTransactions({
+              sourceId: source.id,
+              accountId: card.id,
+              transactions: [
+                {
+                  externalId,
+                  bookedOn,
+                  amountCents,
+                  currency: 'BRL',
+                  description,
+                  status,
+                  raw: null,
+                },
+              ],
+            }),
+            drain,
+          )
+        const entryId = (amountCents: number) =>
+          Effect.map(
+            entries.entries(card.id),
+            (found) =>
+              found.find((entry) => entry.amountCents === amountCents)!.id,
+          )
+        yield* report('order', '2026-09-16', -25000, 'Loja Online')
+        yield* report('first', '2026-09-20', 5000, 'Credito')
+        const order = yield* entryId(-25000)
+        const first = yield* reconciliation.link({
+          outflowEntryId: order,
+          inflowEntryId: yield* entryId(5000),
+        })
+        yield* report('first', '2026-09-20', 5000, 'Credito', 'removed')
+        yield* report('second', '2026-09-22', 20000, 'Credito ajuste')
+        const second = yield* reconciliation.link({
+          outflowEntryId: order,
+          inflowEntryId: yield* entryId(20000),
+        })
+        const orphans = (yield* reconciliation.orphanedDecisions).map(
+          (orphan) => [orphan.key, orphan.reason, orphan.reserved],
+        )
+
+        // The credit returns: its confirmation still holds.
+        yield* report('first', '2026-09-20', 5000, 'Credito')
+        const statuses = (yield* reconciliation.relations)
+          .filter((relation) => relation.kind === 'refund')
+          .map((relation) => [relation.status, relation.origin])
+        assert.deepStrictEqual(
+          [orphans, statuses, first !== second],
+          [
+            [[first, 'entry_missing', []]],
+            [
+              ['confirmed', 'person'],
+              ['confirmed', 'person'],
+            ],
+            true,
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
 })

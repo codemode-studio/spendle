@@ -1,13 +1,20 @@
 import { assert, describe, it } from '@effect/vitest'
 import * as DateTime from 'effect/DateTime'
 import * as Effect from 'effect/Effect'
+import type * as Schema from 'effect/Schema'
 import * as TestClock from 'effect/testing/TestClock'
 
 import { Imports } from '../imports/Imports.ts'
 import { Accounts, CardTerms } from '../ledger/Accounts.ts'
 import { Observations } from '../ledger/Observations.ts'
 import { syntheticPdf } from '../testing/SyntheticPdf.ts'
-import { drain, openFinanceTest } from '../testing/FakePluggy.ts'
+import {
+  card as pluggyCard,
+  connect,
+  drain,
+  openFinanceTest,
+  tx,
+} from '../testing/FakePluggy.ts'
 import { Cards } from './Cards.ts'
 import type { CardCycle } from './Cards.ts'
 import { Reconciliation } from './Reconciliation.ts'
@@ -220,6 +227,44 @@ const paidByDebit = (memo: string) =>
     return result.cycles[0]?.paidCents
   }).pipe(Effect.provide(openFinanceTest()))
 
+// Records card lines as one open-finance source reports them, with each
+// line's raw payload.
+const recordCardLines = (
+  accountId: string,
+  lines: ReadonlyArray<
+    readonly [
+      bookedOn: string,
+      amountCents: number,
+      description: string,
+      raw: Schema.Json,
+    ]
+  >,
+) =>
+  Effect.gen(function* () {
+    const observations = yield* Observations
+    const source = yield* observations.registerSource({
+      kind: 'open_finance',
+      externalRef: 'card-feed',
+      label: 'card-feed',
+    })
+    yield* observations.recordTransactions({
+      sourceId: source.id,
+      accountId,
+      transactions: lines.map(
+        ([bookedOn, amountCents, description, raw], index) => ({
+          externalId: `line-${index}`,
+          bookedOn,
+          amountCents,
+          currency: 'BRL',
+          description,
+          status: 'posted' as const,
+          raw,
+        }),
+      ),
+    })
+    yield* drain
+  })
+
 describe('Cards', () => {
   it.effect(
     'infers a bank-only payment only from bill wording that names this card',
@@ -411,6 +456,633 @@ describe('Cards', () => {
       )
     }).pipe(Effect.provide(openFinanceTest())),
   )
+  it.effect('projects what instalment purchases still owe', () =>
+    Effect.gen(function* () {
+      const { cards, card } = yield* setup
+      yield* (yield* Imports).importFile({
+        accountId: card.id,
+        fileName: 'cartao-parcelas.ofx',
+        bytes: ofx(
+          'CCSTMTRS',
+          line('p1', '20260715', '-300.00', 'Magazine Luiza PARC 01/03') +
+            line('p2', '20260815', '-300.00', 'Magazine Luiza PARC 02/03'),
+        ),
+      })
+      yield* drain
+      const plans = yield* cards.installments(card.id)
+      assert.deepStrictEqual(
+        plans.map((plan) => [plan.total, plan.seen, plan.remainingCents]),
+        [[3, [1, 2], -30000]],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'reads instalments and the purchase total from Pluggy card metadata',
+    () =>
+      Effect.gen(function* () {
+        const { openFinance } = yield* connect({
+          accounts: [pluggyCard],
+          transactions: {
+            'provider-card': [1, 2].map((number) =>
+              tx(`apple-${number}`, `2026-0${7 + number}-20`, {
+                accountId: 'provider-card',
+                amount: 33.33,
+                description: 'Apple Store',
+                creditCardMetadata: {
+                  installmentNumber: number,
+                  totalInstallments: 3,
+                  totalAmount: 100,
+                  purchaseDate: '2026-07-20T12:00:00.000Z',
+                },
+              }),
+            ),
+          },
+        })
+        const account = yield* openFinance.linkAccount({
+          providerAccountId: 'provider-card',
+          target: {
+            kind: 'credit_card',
+            purpose: 'operating',
+            card: new CardTerms({
+              closingDay: 3,
+              dueDay: 10,
+              limitCents: null,
+              lastFour: '1889',
+            }),
+          },
+          historyMonths: 3,
+        })
+        yield* drain
+        const plans = yield* (yield* Cards).installments(account.id)
+        assert.deepStrictEqual(
+          plans.map((plan) => [
+            plan.total,
+            plan.remaining,
+            plan.remainingCents,
+          ]),
+          [[3, 1, -3334]],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect('combines instalment details different sources report', () =>
+    Effect.gen(function* () {
+      const { cards, card } = yield* setup
+      const observations = yield* Observations
+      const record = (
+        ref: string,
+        installment: (number: number) => Record<string, number>,
+      ) =>
+        Effect.gen(function* () {
+          const source = yield* observations.registerSource({
+            kind: 'open_finance',
+            externalRef: ref,
+            label: ref,
+          })
+          yield* observations.recordTransactions({
+            sourceId: source.id,
+            accountId: card.id,
+            transactions: [1, 2].map((number) => ({
+              externalId: `${ref}-${number}`,
+              bookedOn: `2026-0${6 + number}-20`,
+              amountCents: -3333,
+              currency: 'BRL',
+              description: 'Apple Store',
+              status: 'posted' as const,
+              raw: { installment: installment(number) },
+            })),
+          })
+        })
+      yield* record('numbers', (number) => ({ number, total: 3 }))
+      yield* record('totals', (number) => ({
+        number,
+        total: 3,
+        totalAmount: 100,
+      }))
+      yield* drain
+      const plans = yield* cards.installments(card.id)
+      assert.deepStrictEqual(
+        plans.map((plan) => [plan.seen, plan.remainingCents]),
+        [[[1, 2], -3334]],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect('gives two same-day purchases at one store their own plans', () =>
+    Effect.gen(function* () {
+      const { cards, card } = yield* setup
+      const observations = yield* Observations
+      const source = yield* observations.registerSource({
+        kind: 'open_finance',
+        externalRef: 'feed',
+        label: 'feed',
+      })
+      yield* observations.recordTransactions({
+        sourceId: source.id,
+        accountId: card.id,
+        transactions: [-3000, -9000].map((amountCents) => ({
+          externalId: `apple${amountCents}`,
+          bookedOn: '2026-08-15',
+          amountCents,
+          currency: 'BRL',
+          description: 'Apple Store',
+          status: 'posted' as const,
+          raw: { installment: { number: 1, total: 3 } },
+        })),
+      })
+      yield* drain
+      const plans = yield* cards.installments(card.id)
+      assert.deepStrictEqual(
+        [
+          plans.map((plan) => plan.remainingCents).sort((a, b) => a - b),
+          new Set(plans.map((plan) => plan.key)).size,
+        ],
+        [[-18000, -6000], 2],
+      )
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'leaves a purchase total unknown once any two sources disagree on it',
+    () =>
+      Effect.gen(function* () {
+        const { cards, card } = yield* setup
+        const observations = yield* Observations
+        for (const [ref, totalAmount] of [
+          ['first', 100],
+          ['second', 120],
+          ['third', 120],
+        ] as const) {
+          const source = yield* observations.registerSource({
+            kind: 'open_finance',
+            externalRef: ref,
+            label: ref,
+          })
+          yield* observations.recordTransactions({
+            sourceId: source.id,
+            accountId: card.id,
+            transactions: [1, 2].map((number) => ({
+              externalId: `${ref}-${number}`,
+              bookedOn: `2026-0${6 + number}-20`,
+              amountCents: -3333,
+              currency: 'BRL',
+              description: 'Apple Store',
+              status: 'posted' as const,
+              raw: { installment: { number, total: 3, totalAmount } },
+            })),
+          })
+          yield* drain
+        }
+        const plans = yield* cards.installments(card.id)
+        assert.deepStrictEqual(
+          plans.map((plan) => [plan.seen, plan.remainingCents]),
+          [[[1, 2], -3333]],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'keeps a purchase total unknown when sources disagree on one instalment and another reports one of them',
+    () =>
+      Effect.gen(function* () {
+        const { cards, card } = yield* setup
+        const observations = yield* Observations
+        const record = (
+          ref: string,
+          reports: ReadonlyArray<readonly [number, number]>,
+        ) =>
+          Effect.gen(function* () {
+            const source = yield* observations.registerSource({
+              kind: 'open_finance',
+              externalRef: ref,
+              label: ref,
+            })
+            yield* observations.recordTransactions({
+              sourceId: source.id,
+              accountId: card.id,
+              transactions: reports.map(([number, totalAmount]) => ({
+                externalId: `${ref}-${number}`,
+                bookedOn: `2026-0${6 + number}-20`,
+                amountCents: -3333,
+                currency: 'BRL',
+                description: 'Apple Store',
+                status: 'posted' as const,
+                raw: { installment: { number, total: 3, totalAmount } },
+              })),
+            })
+            yield* drain
+          })
+        yield* record('first', [[1, 100]])
+        yield* record('second', [
+          [1, 120],
+          [2, 120],
+        ])
+        const plans = yield* cards.installments(card.id)
+        assert.deepStrictEqual(
+          plans.map((plan) => [plan.seen, plan.remainingCents]),
+          [[[1, 2], -3333]],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'projects a pending instalment purchase, and counts it once after it posts',
+    () =>
+      Effect.gen(function* () {
+        const { cards, card } = yield* setup
+        const observations = yield* Observations
+        const source = yield* observations.registerSource({
+          kind: 'open_finance',
+          externalRef: 'card-feed',
+          label: 'card-feed',
+        })
+        const report = (status: 'pending' | 'posted') =>
+          Effect.andThen(
+            observations.recordTransactions({
+              sourceId: source.id,
+              accountId: card.id,
+              transactions: [
+                {
+                  externalId: 'tv',
+                  bookedOn: '2026-08-15',
+                  amountCents: -10000,
+                  currency: 'BRL',
+                  description: 'Fast Shop',
+                  status,
+                  raw: { installment: { number: 1, total: 12 } },
+                },
+              ],
+            }),
+            drain,
+          )
+        const projection = Effect.map(cards.installments(card.id), (plans) =>
+          plans.map((plan) => [
+            plan.seen,
+            plan.pending,
+            plan.entryIds.length,
+            plan.remainingCents,
+          ]),
+        )
+        yield* report('pending')
+        const pending = yield* projection
+        yield* report('posted')
+        assert.deepStrictEqual(
+          [pending, yield* projection],
+          [[[[1], [1], 1, -110000]], [[[1], [], 1, -110000]]],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  // Two R$ 300,00 purchases in three instalments on 4 October, one with the
+  // purchase total and one without, on a card closing on the 3rd: each
+  // report gives the instalments' numbers, dates and statuses. What
+  // `Cards.installments` projects on `now` after each report.
+  const instalmentsReported = (
+    now: string,
+    reports: ReadonlyArray<
+      ReadonlyArray<readonly [number, string, 'pending' | 'posted']>
+    >,
+  ) =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(
+        DateTime.toEpochMillis(DateTime.makeUnsafe(`${now}T15:00:00Z`)),
+      )
+      const accounts = yield* Accounts
+      const owner = yield* accounts.createOwner({ name: 'Eu', kind: 'person' })
+      const card = yield* accounts.open({
+        ownerId: owner.id,
+        institutionName: 'Nubank',
+        purpose: 'operating',
+        currency: 'BRL',
+        name: 'Cartão',
+        kind: 'credit_card',
+        card: new CardTerms({
+          closingDay: 3,
+          dueDay: 10,
+          limitCents: null,
+          lastFour: null,
+        }),
+      })
+      const observations = yield* Observations
+      const source = yield* observations.registerSource({
+        kind: 'open_finance',
+        externalRef: 'card-feed',
+        label: 'card-feed',
+      })
+      const purchases = [
+        ['apple', 'Apple Store', { totalAmount: 300 }],
+        ['fast', 'Fast Shop', {}],
+      ] as const
+      const projections = []
+      for (const lines of reports) {
+        yield* observations.recordTransactions({
+          sourceId: source.id,
+          accountId: card.id,
+          transactions: purchases.flatMap(([id, description, extra]) =>
+            lines.map(([number, bookedOn, status]) => ({
+              externalId: `${id}-${number}`,
+              bookedOn,
+              amountCents: -10000,
+              currency: 'BRL',
+              description,
+              status,
+              raw: {
+                installment: {
+                  number,
+                  total: 3,
+                  purchaseDate: '2026-10-04',
+                  ...extra,
+                },
+              },
+            })),
+          ),
+        })
+        yield* drain
+        const plans = yield* (yield* Cards).installments(card.id)
+        projections.push(
+          plans.map((plan) => [
+            plan.description,
+            plan.seen,
+            plan.pending,
+            plan.scheduled,
+            plan.entryIds.length,
+            plan.remaining,
+            plan.remainingCents,
+          ]),
+        )
+      }
+      return projections
+    })
+
+  it.effect(
+    'keeps future-dated instalments in what remains, not in what was billed',
+    () =>
+      Effect.gen(function* () {
+        // On 4 October the open bill closes on 3 November; a refresh brings
+        // the later instalments, dated on their own bills.
+        assert.deepStrictEqual(
+          yield* instalmentsReported('2026-10-04', [
+            [[1, '2026-10-04', 'pending']],
+            [
+              [1, '2026-10-04', 'pending'],
+              [2, '2026-11-04', 'pending'],
+              [3, '2026-12-04', 'pending'],
+            ],
+          ]),
+          [
+            [
+              ['Apple Store', [1], [1], [], 1, 2, -20000],
+              ['Fast Shop', [1], [1], [], 1, 2, -20000],
+            ],
+            [
+              ['Apple Store', [1], [1], [2, 3], 3, 2, -20000],
+              ['Fast Shop', [1], [1], [2, 3], 3, 2, -20000],
+            ],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'bills a future-dated instalment once its own bill is open, counting it once',
+    () =>
+      Effect.gen(function* () {
+        // On 10 November the open bill closes on 3 December and holds the
+        // second instalment.
+        const pending = [
+          [1, '2026-10-04', 'posted'],
+          [2, '2026-11-04', 'pending'],
+          [3, '2026-12-04', 'pending'],
+        ] as const
+        const posted = [
+          [1, '2026-10-04', 'posted'],
+          [2, '2026-11-04', 'posted'],
+          [3, '2026-12-04', 'pending'],
+        ] as const
+        assert.deepStrictEqual(
+          yield* instalmentsReported('2026-11-10', [pending, posted]),
+          [
+            [
+              ['Apple Store', [1, 2], [2], [3], 3, 1, -10000],
+              ['Fast Shop', [1, 2], [2], [3], 3, 1, -10000],
+            ],
+            [
+              ['Apple Store', [1, 2], [], [3], 3, 1, -10000],
+              ['Fast Shop', [1, 2], [], [3], 3, 1, -10000],
+            ],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'takes a purchase total from a source that reports nothing else, and doubts it when another disagrees',
+    () =>
+      Effect.gen(function* () {
+        const { cards, card } = yield* setup
+        const observations = yield* Observations
+        const record = (
+          ref: string,
+          description: string,
+          installment: (number: number) => Record<string, number>,
+        ) =>
+          Effect.gen(function* () {
+            const source = yield* observations.registerSource({
+              kind: 'open_finance',
+              externalRef: ref,
+              label: ref,
+            })
+            yield* observations.recordTransactions({
+              sourceId: source.id,
+              accountId: card.id,
+              transactions: [1, 2].map((number) => ({
+                externalId: `${ref}-${number}`,
+                bookedOn: `2026-0${6 + number}-20`,
+                amountCents: -3333,
+                currency: 'BRL',
+                description,
+                status: 'posted' as const,
+                raw: { installment: installment(number) },
+              })),
+            })
+          })
+        yield* record('apple-numbers', 'Apple Store', (number) => ({
+          number,
+          total: 3,
+        }))
+        yield* record('apple-total', 'Apple Store', () => ({
+          totalAmount: 100,
+        }))
+        yield* record('dell-numbers', 'Dell Online', (number) => ({
+          number,
+          total: 3,
+          totalAmount: 100,
+        }))
+        yield* record('dell-total', 'Dell Online', () => ({
+          totalAmount: 120,
+        }))
+        yield* drain
+        const plans = yield* cards.installments(card.id)
+        assert.deepStrictEqual(
+          plans.map((plan) => [plan.description, plan.remainingCents]),
+          [
+            ['Apple Store', -3334],
+            ['Dell Online', -3333],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'joins description-only instalments to the first one Pluggy dated on the purchase',
+    () =>
+      Effect.gen(function* () {
+        const { cards, card } = yield* setup
+        yield* recordCardLines(card.id, [
+          [
+            '2026-05-04',
+            -10000,
+            'Apple Store PARC 01/04',
+            { installment: { number: 1, total: 4 } },
+          ],
+          ['2026-07-10', -10000, 'Apple Store PARC 02/04', null],
+          ['2026-08-10', -10000, 'Apple Store PARC 03/04', null],
+        ])
+        const plans = yield* cards.installments(card.id)
+        assert.deepStrictEqual(
+          plans.map((plan) => [plan.seen, plan.remainingCents]),
+          [[[1, 2, 3], -10000]],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'leaves a purchase total unknown when its instalments disagree on it',
+    () =>
+      Effect.gen(function* () {
+        const { cards, card } = yield* setup
+        const metadata = (number: number, totalAmount: number) => ({
+          installment: {
+            number,
+            total: 3,
+            totalAmount,
+            purchaseDate: '2026-06-15T12:00:00.000Z',
+          },
+        })
+        yield* recordCardLines(card.id, [
+          ['2026-06-20', -3333, 'Apple Store', metadata(1, 100)],
+          ['2026-07-20', -3333, 'Apple Store', metadata(2, 120)],
+          ['2026-06-20', -3333, 'Dell Online', metadata(1, 120)],
+          ['2026-07-20', -3333, 'Dell Online', metadata(2, 100)],
+        ])
+        const plans = yield* cards.installments(card.id)
+        assert.deepStrictEqual(
+          plans.map((plan) => [plan.description, plan.remainingCents]),
+          [
+            ['Apple Store', -3333],
+            ['Dell Online', -3333],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'takes the purchase total from metadata when only the description numbers the instalments',
+    () =>
+      Effect.gen(function* () {
+        const { cards, card } = yield* setup
+        const metadata = {
+          installment: {
+            totalAmount: 100,
+            purchaseDate: '2026-07-01T12:00:00.000Z',
+          },
+        }
+        yield* recordCardLines(card.id, [
+          ['2026-06-15', -3333, 'Loja PARC 01/03', metadata],
+          ['2026-07-15', -3333, 'Loja PARC 02/03', metadata],
+          // Date-like suffixes on nearby days stay ordinary purchases.
+          ['2026-08-03', -10000, 'Padaria 03/10', metadata],
+          ['2026-08-04', -10000, 'Padaria 04/10', metadata],
+        ])
+        const plans = yield* cards.installments(card.id)
+        assert.deepStrictEqual(
+          plans.map((plan) => [plan.description, plan.remainingCents]),
+          [['Loja PARC 02/03', -3334]],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'reads instalments from the description when a payload has no metadata',
+    () =>
+      Effect.gen(function* () {
+        const { cards, card } = yield* setup
+        const observations = yield* Observations
+        const source = yield* observations.registerSource({
+          kind: 'open_finance',
+          externalRef: 'bare',
+          label: 'bare',
+        })
+        yield* observations.recordTransactions({
+          sourceId: source.id,
+          accountId: card.id,
+          transactions: [
+            [1, null],
+            [2, 'not an object'],
+            [3, { installment: { number: 'two' } }],
+          ].map(([number, raw]) => ({
+            externalId: `bare-${number}`,
+            bookedOn: `2026-0${5 + (number as number)}-15`,
+            amountCents: -30000,
+            currency: 'BRL',
+            description: `Magazine Luiza PARC 0${number}/04`,
+            status: 'posted' as const,
+            raw: raw as Schema.Json,
+          })),
+        })
+        yield* drain
+        const plans = yield* cards.installments(card.id)
+        assert.deepStrictEqual(
+          plans.map((plan) => [plan.total, plan.seen, plan.remainingCents]),
+          [[4, [1, 2, 3], -30000]],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect('never pairs a credit Pluggy calls cashback as a refund', () =>
+    Effect.gen(function* () {
+      const { card } = yield* setup
+      const observations = yield* Observations
+      const source = yield* observations.registerSource({
+        kind: 'open_finance',
+        externalRef: 'cashback',
+        label: 'cashback',
+      })
+      yield* observations.recordTransactions({
+        sourceId: source.id,
+        accountId: card.id,
+        transactions: [
+          ['order', '2026-08-01', -1000, {}],
+          ['credit', '2026-08-05', 1000, { operationType: 'CASHBACK' }],
+        ].map(([externalId, bookedOn, amountCents, raw]) => ({
+          externalId: externalId as string,
+          bookedOn: bookedOn as string,
+          amountCents: amountCents as number,
+          currency: 'BRL',
+          description: 'Amazon Marketplace',
+          status: 'posted' as const,
+          raw: raw as Record<string, string>,
+        })),
+      })
+      yield* drain
+      const refunds = (yield* (yield* Reconciliation).relations).filter(
+        (relation) => relation.kind === 'refund',
+      )
+      assert.deepStrictEqual(refunds, [])
+    }).pipe(Effect.provide(openFinanceTest())),
+  )
+
   it.effect('refuses an account that is not a card', () =>
     Effect.gen(function* () {
       const { cards, bank } = yield* setup
