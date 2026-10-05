@@ -723,6 +723,53 @@ describe('matchRelations', () => {
     )
   })
 
+  it('never reads a bank name beside a person’s name as the bank', () => {
+    const transfer = (outflow: string, inflow: string) =>
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: outflow,
+          institution: 'Nubank',
+          ownerName: 'Carlos Silva',
+        }),
+        entry('in', 'santander', 50000, {
+          description: inflow,
+          institution: 'Banco Santander (Brasil) S.A.',
+          ownerName: 'Carlos Silva',
+        }),
+      ]).flatMap((relation) => [relation.status])
+    const card = relations([
+      entry('pay', 'nubank', -50000, {
+        description: 'Pagamento fatura Santander',
+        institution: 'Nubank',
+        ownerName: 'Carlos Silva',
+      }),
+      entry('sa', 'card-sa', 50000, {
+        description: 'Pagamento recebido de Carlos Santander',
+        institution: 'Banco Santander (Brasil) S.A.',
+        ownerName: 'Carlos Silva',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    assert.deepStrictEqual(
+      [
+        transfer('Pix enviado Carlos Santander', 'Pix recebido Carlos Silva'),
+        transfer(
+          'Pix enviado Carlos Santander',
+          'Pix recebido Carlos Santander',
+        ),
+        card,
+        transfer('Pix enviado Santander', 'Pix recebido'),
+        transfer('Pix enviado Carlos Silva Banco Santander', 'Pix recebido'),
+      ],
+      [
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['confirmed'],
+        ['confirmed'],
+      ],
+    )
+  })
+
   it('confirms only when every word of every description is understood', () => {
     const transfer = (
       outflow: string,

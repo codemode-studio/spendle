@@ -450,28 +450,30 @@ const bankReference = (
     return length
   }
   const word = words[at]!
-  return Math.max(
-    0,
-    ...institutions.map((core) => {
-      if (core.length === 0) return 0
-      if (word === 'banco' || word === 'bco') {
-        const glued = words[at + 1]
-        if (
-          glued !== undefined &&
-          unglue(glued) !== glued &&
-          unglue(glued) === core[0]
-        )
-          return 2
-        const length = prefix(at + 1, core)
-        return length > 0 ? 1 + length : 0
-      }
-      if (unglue(word) !== word && unglue(word) === core[0]) return 1
-      const length = prefix(at, core)
-      if (length === 0) return 0
-      if (words[at + length] === 'bank') return length + 1
-      return bankWords.has(word) ? length : 0
-    }),
-  )
+  const lengths = institutions.map((core) => {
+    if (core.length === 0) return 0
+    if (word === 'banco' || word === 'bco') {
+      const glued = words[at + 1]
+      if (
+        glued !== undefined &&
+        unglue(glued) !== glued &&
+        unglue(glued) === core[0]
+      )
+        return 2
+      const length = prefix(at + 1, core)
+      return length > 0 ? 1 + length : 0
+    }
+    if (unglue(word) !== word && unglue(word) === core[0]) return 1
+    const length = prefix(at, core)
+    if (length === 0) return 0
+    if (words[at + length] === 'bank') return length + 1
+    // A bare bank name (`santander`) carries no bank context: marked
+    // negative so a description that also names a person rejects it.
+    return bankWords.has(word) ? -length : 0
+  })
+  // A reference with bank context wins over a bare one.
+  const contextual = Math.max(0, ...lengths)
+  return contextual > 0 ? contextual : Math.min(0, ...lengths)
 }
 
 /**
@@ -500,12 +502,14 @@ const read = (description: string, vocabulary: Vocabulary) => {
     at++
   const named = new Set<string>()
   let bank = false
+  let bare = false
   while (at < words.length) {
     const word = words[at]!
     const reference = bankReference(words, at, vocabulary.institutions)
-    if (reference > 0) {
+    if (reference !== 0) {
       bank = true
-      at += reference
+      bare ||= reference < 0
+      at += Math.abs(reference)
       if (words[at] === 'sa') at++
       continue
     }
@@ -536,6 +540,9 @@ const read = (description: string, vocabulary: Vocabulary) => {
   const proven = vocabulary.owners.every(
     (owner) => owner.first !== null && named.has(owner.first),
   )
+  // Beside a person's name a bare bank word may be their surname
+  // (`Carlos Santander`): without `banco` it is not a bank reference.
+  if (bare && named.size > 0) return { understood: false, bank }
   return { understood: named.size === 0 || proven, bank }
 }
 
