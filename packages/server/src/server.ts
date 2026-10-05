@@ -13,6 +13,7 @@ import { EventLog } from './events/EventLog.ts'
 import * as Reactor from './events/Reactor.ts'
 import { Imports } from './imports/Imports.ts'
 import { Accounts } from './ledger/Accounts.ts'
+import * as Entries from './ledger/Entries.ts'
 import { Observations } from './ledger/Observations.ts'
 import { OpenFinance } from './openfinance/OpenFinance.ts'
 import { PluggyClient } from './openfinance/PluggyClient.ts'
@@ -35,7 +36,11 @@ const HttpServerLive = Layer.unwrap(
 )
 
 // Services every feature builds on. Feature reactors are added beside the routes.
-const CoreLive = Layer.mergeAll(Reactor.Reactors.layer, Imports.layer).pipe(
+const CoreLive = Layer.mergeAll(
+  Reactor.Reactors.layer,
+  Imports.layer,
+  Entries.Entries.layer,
+).pipe(
   Layer.provideMerge(Observations.layer),
   Layer.provideMerge(Accounts.layer),
   Layer.provideMerge(EventLog.layer),
@@ -43,6 +48,7 @@ const CoreLive = Layer.mergeAll(Reactor.Reactors.layer, Imports.layer).pipe(
 )
 
 const OpenFinanceLive = Layer.mergeAll(
+  Entries.reactor,
   SyncReactor.layer,
   Webhook.reactor,
   Webhook.registration,

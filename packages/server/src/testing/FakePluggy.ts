@@ -8,6 +8,8 @@ import * as Ref from 'effect/Ref'
 import * as TestClock from 'effect/testing/TestClock'
 
 import * as Reactor from '../events/Reactor.ts'
+import { Imports } from '../imports/Imports.ts'
+import * as Entries from '../ledger/Entries.ts'
 import { Accounts } from '../ledger/Accounts.ts'
 import { OpenFinance } from '../openfinance/OpenFinance.ts'
 import type {
@@ -216,7 +218,7 @@ export const openFinanceManualTest = (
     }),
   )
 
-/** Open Finance over the in-memory ledger, a fake Pluggy, and the sync and webhook reactors. */
+/** Open Finance, file imports and entries over the in-memory ledger and a fake Pluggy, with their reactors. */
 export const openFinanceTest = (
   webhook: Option.Option<WebhookSettings> = Option.none(),
 ) =>
@@ -230,7 +232,14 @@ export const openFinanceTest = (
         webhooks: [],
         connectTokens: [],
       })
-      return Layer.mergeAll(SyncReactor.layer, Webhook.reactor).pipe(
+      return Layer.mergeAll(
+        SyncReactor.layer,
+        Webhook.reactor,
+        Entries.reactor,
+      ).pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(Entries.Entries.layer, Imports.layer),
+        ),
         Layer.provideMerge(OpenFinance.layer),
         Layer.provideMerge(Reactor.Reactors.layer),
         Layer.provideMerge(Layer.succeed(PluggyClient, makeFake(state))),
