@@ -28,6 +28,7 @@ import * as SyncReactor from './openfinance/SyncReactor.ts'
 import * as Webhook from './openfinance/Webhook.ts'
 import { WebhookConfig } from './openfinance/WebhookConfig.ts'
 import * as Sqlite from './persistence/Sqlite.ts'
+import * as V1Import from './v1import/V1Import.ts'
 
 const HttpServerLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -70,6 +71,8 @@ const OpenFinanceLive = Layer.mergeAll(
   SyncReactor.layer,
   Webhook.reactor,
   Webhook.registration,
+  // Decisions `migrate-v1` brought over apply as their movements arrive.
+  V1Import.reactor.pipe(Layer.provide(V1Import.V1Import.layer)),
 ).pipe(
   Layer.provideMerge(OpenFinance.layer),
   Layer.provideMerge(
