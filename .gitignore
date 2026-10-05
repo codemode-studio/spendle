@@ -20,3 +20,5 @@ __unconfig*
 todos.json
 
 .qa/
+
+.repos/

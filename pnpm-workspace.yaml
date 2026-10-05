@@ -1,5 +1,15 @@
+packages:
+  - packages/*
+
 allowBuilds:
   better-sqlite3: true
   esbuild: true
   lightningcss: true
   unrs-resolver: false
+
+catalog:
+  '@effect/language-service': 0.87.3
+  '@effect/platform-node': 4.0.0
+  '@effect/sql-sqlite-node': 4.0.0
+  '@effect/vitest': 4.0.0
+  effect: 4.0.0

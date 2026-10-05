@@ -8,6 +8,19 @@
 - `knowledge_base` learns only from explicit human decisions (category chosen in review or in the transaction list, recurrence confirmed or approved). Never write to it from heuristics, implicit history, automatic matches or AI. When adding a new human decision path, route it through `knowledge-base.server.ts`. Data migrations may use the SQL functions `normalize_description`, `merchant_signature` and `knowledge_pattern` registered in `connection.server.ts`; they are unavailable to `drizzle-kit migrate`. Knowledge prefixes are never created automatically; only the person or an approved migration list creates them. Reapplying the base to existing transactions goes through `knowledge-sync.server.ts` (entry-scoped after a base edit, full sync only from the Transações button with preview).
 - Scope UI types to the read model they need. Invalidation of financial reads includes configuration, planning, categories and paginated transactions; optimistic category edits must also cover cached transaction pages.
 
+## Backend V2 (`packages/server`)
+
+The v2 backend is a fresh Effect 4 server with its own SQLite database (`data/v2/`). It replaces the v1 server code under `src/` incrementally; see [ADR 003](plans/adrs/003-backend-v2-effect.md). Until cutover, v1 rules above still govern `src/`.
+
+- Run `pnpm sync:effect-docs` once, then read `.repos/effect/LLMS.md` before writing Effect code. `.repos/` holds read-only references matching the pinned version; prefer their patterns over invented ones, never import from them, and resync when bumping `effect`.
+- Effect 4 stable ships SQL, HTTP and testing as `effect/sql`, `effect/http`, `effect/http-api` and `effect/testing`. Older `effect/unstable/*` examples (including T3 Code's) need translating.
+- Import modules by namespace: `import * as Effect from 'effect/Effect'`. Services are `class X extends Context.Service<X, Shape>()('@spendle/server/<path>/X')` with a static `layer`; implement methods with `Effect.fn('X.method')`. Errors are `Schema.TaggedError` with the context needed to act on them.
+- Use `Clock`/`DateTime`, `Random`, `HttpClient`, `FileSystem` and `Path` services instead of globals or Node built-ins, and `Schema` instead of `JSON.parse` or hand-written guards. `pnpm --filter @spendle/server typecheck` runs the Effect diagnostics that enforce this.
+- Persistence uses `SqlClient` with tagged-template queries and `SqlSchema` decoding. Migrations are statically imported in `src/persistence/Migrations.ts`, append-only, and never edited after merge.
+- Facts observed from banks and files are immutable; human decisions are durable; everything else is a projection that can be rebuilt from those two. A matcher or categorizer improvement must be able to rerun over history.
+- Tests use `@effect/vitest` (`it.effect`, `layer`) with `Sqlite.layerMemory`, not mocked repositories. Async flows expose a drain or receipt to wait on; a test that needs a sleep or timeout is wrong. Backend behavior changes ship with focused tests for that behavior, testing outcomes rather than mirroring the implementation.
+- Complexity belongs at adapter boundaries (Pluggy, file parsers, AI). Matching and categorization policy stays pure and testable without I/O.
+
 ## UI e UX autoexplicativas
 
 - Em cada área, componente e estado, a pessoa deve reconhecer o que está vendo, o que pode fazer e o resultado da ação pela hierarquia visual, posição, ícones, gráficos e feedback.
