@@ -373,11 +373,12 @@ const make = Effect.gen(function* () {
       dueOn: Schema.NullOr(Schema.String),
       netOfPayments: Schema.BooleanFromBit,
       floorsAtZero: Schema.BooleanFromBit,
+      advanceCents: Schema.NullOr(Schema.Int),
     }),
     execute: (accountId) => sql`
       SELECT f.period_start AS startsOn, b.as_of AS closingOn, b.balance_cents AS cents,
         f.due_on AS dueOn, f.charges_only = 0 AS netOfPayments,
-        f.floors_at_zero AS floorsAtZero
+        f.floors_at_zero AS floorsAtZero, f.advance_cents AS advanceCents
       FROM balance_observations b
       JOIN import_files f ON f.source_id = b.source_id AND f.account_id = b.account_id
       WHERE b.account_id = ${accountId} AND b.kind = 'statement'

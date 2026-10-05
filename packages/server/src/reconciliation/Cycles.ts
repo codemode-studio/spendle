@@ -126,6 +126,11 @@ export interface IssuedStatement {
    * much credit is left. Otherwise `cents` is a signed balance.
    */
   readonly floorsAtZero: boolean
+  /**
+   * What a balance statement prints as paid in advance of its own charges,
+   * when it prints it. Its printed payments beyond this paid earlier bills.
+   */
+  readonly advanceCents: number | null
 }
 
 export type CycleStatus = 'open' | 'due' | 'paid' | 'partially_paid' | 'overdue'
@@ -372,11 +377,12 @@ const schedule = (input: {
  *
  * A balance statement's printed payments paid the debt from before it
  * first; only what its balance shows beyond that, as less owed than its own
- * entries, is an advance. That advance is what the entries exceed the
- * balance by, whatever debt the balance carries, so the rest of the printed
- * payments is treated like a charges-only statement's. An amount due
- * printed as zero does not tell how far below zero the balance went, so its
- * printed payments are all taken as advance.
+ * entries, is an advance. That advance is what the statement prints as
+ * paid in advance, or else what the entries exceed the balance by, whatever
+ * debt the balance carries, so the rest of the printed payments is treated
+ * like a charges-only statement's. An amount due printed as zero does not
+ * tell how far below zero the balance went, so without a printed advance
+ * its printed payments are all taken as advance.
  *
  * With `asOf`, allocation stops at that date: only cycles closed before it
  * are settled, so credit that reached the card later is not spent.
@@ -492,14 +498,17 @@ const allocate = (
       a.entryId.localeCompare(b.entryId),
   )
   // The part of each printed payment that paid debt from before its
-  // statement. A balance statement shows as paid in advance only what its
-  // entries exceed it by; its earliest printed payments paid the earlier debt.
+  // statement. A balance statement shows as paid in advance what it prints
+  // as such, else what its entries exceed it by; its other printed payments
+  // paid the earlier debt.
   const advance = statements.map((statement, index) =>
     statement === undefined || !statement.netOfPayments
       ? 0
-      : statement.floorsAtZero && statement.cents === 0
-        ? Infinity
-        : Math.max(0, -(scheduled[index]! + totals[index]!)),
+      : statement.advanceCents !== null
+        ? statement.advanceCents
+        : statement.floorsAtZero && statement.cents === 0
+          ? Infinity
+          : Math.max(0, -(scheduled[index]! + totals[index]!)),
   )
   const prior = new Map<CyclePayment, number>()
   for (const payment of ordered) {
