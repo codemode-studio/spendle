@@ -184,7 +184,9 @@ const make = Effect.gen(function* () {
         coalesce((SELECT sum(c.amount_cents) FROM goal_contributions c WHERE c.goal_id = g.id), 0)
           AS contributedCents,
         g.target_date AS targetDate
-      FROM goals g ORDER BY g.created_at, g.id
+      -- Creation order; goals created in the same instant keep insertion
+      -- order (their ids are random within it).
+      FROM goals g ORDER BY g.created_at, g.rowid
     `,
   })
 

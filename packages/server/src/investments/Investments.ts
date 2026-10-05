@@ -113,7 +113,7 @@ const make = Effect.gen(function* () {
       JOIN institutions i ON i.id = a.institution_id
       JOIN investment_asset_classes c ON c.id = p.asset_class_id
       WHERE p.archived_at IS NULL
-      ORDER BY p.created_at, p.id
+      ORDER BY p.created_at, p.rowid
     `,
   })
   const findPosition = SqlSchema.findOneOption({
@@ -155,7 +155,7 @@ const make = Effect.gen(function* () {
       SELECT a.id, a.name, i.name AS institutionName, a.currency, a.kind, a.purpose,
         (a.archived_at IS NOT NULL) AS archived
       FROM accounts a JOIN institutions i ON i.id = a.institution_id
-      ORDER BY a.created_at, a.id
+      ORDER BY a.created_at, a.rowid
     `,
   })
   const findClasses = SqlSchema.findAll({

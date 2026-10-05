@@ -220,7 +220,7 @@ const make = Effect.gen(function* () {
         schedule_anchor AS scheduleAnchor, date_tolerance_days AS dateToleranceDays,
         amount_tolerance_bps AS amountToleranceBps, auto_match AS autoMatch,
         minimum_confirmations AS minimumConfirmations, active
-      FROM recurrences ORDER BY created_at, id
+      FROM recurrences ORDER BY created_at, rowid
     `,
   })
   const findAliases = SqlSchema.findAll({
