@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   Menu,
   PiggyBank,
+  PlugZap,
   Settings,
   Tags,
   Upload,
@@ -56,6 +57,12 @@ const managementNavigation = [
     search: { tab: 'cartoes' },
     label: 'Cartões',
     icon: CreditCard,
+  },
+  {
+    to: '/configuracoes',
+    search: { tab: 'open-finance' },
+    label: 'Open Finance',
+    icon: PlugZap,
   },
   {
     to: '/configuracoes',

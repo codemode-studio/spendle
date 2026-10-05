@@ -39,7 +39,13 @@ import {
 import { createOwnerFn } from '#/features/v2/accounts.functions'
 import { ownerKindLabels } from '#/features/v2/accounts'
 import type { Owner } from '#/features/v2/accounts'
-import { accountsOptions, ownersOptions } from '#/features/v2/queries'
+import {
+  accountsOptions,
+  connectSettingsOptions,
+  connectionsOptions,
+  ownersOptions,
+} from '#/features/v2/queries'
+import { OpenFinanceSection } from '#/features/finance/open-finance-section'
 import { errorMessage } from '#/lib/v2/errors'
 
 import { PlanningSettings } from '#/features/planning/planning-settings'
@@ -48,6 +54,7 @@ const settingsTabs = [
   'geral',
   'contas',
   'cartoes',
+  'open-finance',
   'recorrencias',
   'orcamento',
   'conhecimento',
@@ -56,6 +63,7 @@ const settingsLabels = {
   geral: 'Geral',
   contas: 'Contas',
   cartoes: 'Cartões',
+  'open-finance': 'Open Finance',
   recorrencias: 'Recorrências',
   orcamento: 'Orçamento e metas',
   conhecimento: 'Conhecimento',
@@ -84,8 +92,14 @@ export const Route = createFileRoute('/configuracoes')({
         ? context.queryClient.ensureQueryData(configurationOptions())
         : null,
       context.queryClient.ensureQueryData(ownersOptions()),
-      deps.tab === 'contas'
+      deps.tab === 'contas' || deps.tab === 'open-finance'
         ? context.queryClient.ensureQueryData(accountsOptions(true))
+        : null,
+      deps.tab === 'open-finance'
+        ? Promise.all([
+            context.queryClient.ensureQueryData(connectionsOptions()),
+            context.queryClient.ensureQueryData(connectSettingsOptions()),
+          ])
         : null,
       deps.tab === 'orcamento' || deps.tab === 'recorrencias'
         ? context.queryClient.ensureQueryData(planningOptions())
@@ -159,6 +173,9 @@ function SettingsPage() {
         </TabsContent>
         <TabsContent value="cartoes">
           <CardsSection />
+        </TabsContent>
+        <TabsContent value="open-finance">
+          <OpenFinanceSection />
         </TabsContent>
         <TabsContent value="recorrencias">
           <PlanningSettings activeSection="recurrences" />

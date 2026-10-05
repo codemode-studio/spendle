@@ -52,14 +52,12 @@ describe('import destination identification', () => {
       .update(schema.accounts)
       .set({ externalId: '987654' })
       .where(eq(schema.accounts.id, qaIds.brlAccount))
-    await database.db
-      .insert(schema.creditCardInstruments)
-      .values({
-        id: 'virtual',
-        creditCardId: qaIds.card,
-        lastFour: '5678',
-        kind: 'virtual',
-      })
+    await database.db.insert(schema.creditCardInstruments).values({
+      id: 'virtual',
+      creditCardId: qaIds.card,
+      lastFour: '5678',
+      kind: 'virtual',
+    })
     const form = new FormData()
     form.append(
       'files',

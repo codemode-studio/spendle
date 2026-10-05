@@ -9,6 +9,11 @@ import {
   listAccountsFn,
   listOwnersFn,
 } from './accounts.functions'
+import {
+  connectSettingsFn,
+  listConnectionsFn,
+  providerAccountsFn,
+} from './open-finance.functions'
 
 /**
  * V2 reads live under `['finance', 'read', …]`, so every invalidation group
@@ -26,6 +31,18 @@ export const v2QueryKeys = {
     ] as const,
   balanceProof: (accountId: string) =>
     [...financeQueryKeys.all, 'read', 'balance-proof', accountId] as const,
+  connections: () =>
+    [...financeQueryKeys.all, 'read', 'open-finance', 'connections'] as const,
+  providerAccounts: (connectionId: string) =>
+    [
+      ...financeQueryKeys.all,
+      'read',
+      'open-finance',
+      'provider-accounts',
+      connectionId,
+    ] as const,
+  connectSettings: () =>
+    [...financeQueryKeys.all, 'open-finance', 'connect-settings'] as const,
 }
 
 export const ownersOptions = () =>
@@ -49,6 +66,27 @@ export const balanceProofOptions = (accountId?: string) =>
       ? () => balanceProofFn({ data: { accountId } })
       : skipToken,
     staleTime: 15_000,
+  })
+
+export const connectionsOptions = () =>
+  queryOptions({
+    queryKey: v2QueryKeys.connections(),
+    queryFn: () => listConnectionsFn(),
+    staleTime: 15_000,
+  })
+
+export const providerAccountsOptions = (connectionId: string) =>
+  queryOptions({
+    queryKey: v2QueryKeys.providerAccounts(connectionId),
+    queryFn: () => providerAccountsFn({ data: { connectionId } }),
+    staleTime: 15_000,
+  })
+
+export const connectSettingsOptions = () =>
+  queryOptions({
+    queryKey: v2QueryKeys.connectSettings(),
+    queryFn: () => connectSettingsFn(),
+    staleTime: Infinity,
   })
 
 /**

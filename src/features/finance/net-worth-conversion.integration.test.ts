@@ -165,8 +165,7 @@ describe('patrimônio em moeda-base', () => {
       .update(schema.transactions)
       .set({ baseAmountCents: -100_000, exchangeRateMicros: 5_000_000 })
       .where(eq(schema.transactions.id, 'pending-usd-august'))
-    const historicalBaseWithoutCurrentRate =
-      await getFinanceSnapshot('2026-08')
+    const historicalBaseWithoutCurrentRate = await getFinanceSnapshot('2026-08')
     expect(
       historicalBaseWithoutCurrentRate.dashboard.budgetProjected.essential,
     ).toBe(0)

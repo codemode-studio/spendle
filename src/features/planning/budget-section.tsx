@@ -563,10 +563,5 @@ function GoalDialog({
   )
 }
 
-export {
-  BudgetSection,
-  ClosingSection,
-  GoalDialog,
-  GoalsSection,
-}
+export { BudgetSection, ClosingSection, GoalDialog, GoalsSection }
 export type { Allocation }

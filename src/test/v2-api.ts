@@ -6,8 +6,14 @@ import * as Scope from 'effect/Scope'
 import * as HttpServer from 'effect/http/HttpServer'
 import * as NetAddress from 'effect/net/NetAddress'
 
+import * as Ref from 'effect/Ref'
+
 import * as Reactor from '../../packages/server/src/events/Reactor.ts'
 import { apiTest } from '../../packages/server/src/testing/ApiTest.ts'
+import { FakePluggyState } from '../../packages/server/src/testing/FakePluggy.ts'
+import type { FakePluggyData } from '../../packages/server/src/testing/FakePluggy.ts'
+
+export { bank, card, tx } from '../../packages/server/src/testing/FakePluggy.ts'
 
 /**
  * A real V2 API served in this process on a random local port, with an
@@ -33,6 +39,16 @@ export async function startV2Api() {
         Effect.provideContext(
           Effect.gen(function* () {
             yield* (yield* Reactor.Reactors).drain
+          }),
+          context,
+        ),
+      ),
+    /** Changes what the fake Pluggy answers, as Pluggy's own state would change. */
+    pluggy: (update: (current: FakePluggyData) => FakePluggyData) =>
+      Effect.runPromise(
+        Effect.provideContext(
+          Effect.gen(function* () {
+            yield* Ref.update(yield* FakePluggyState, update)
           }),
           context,
         ),

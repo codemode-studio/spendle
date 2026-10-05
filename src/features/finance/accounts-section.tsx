@@ -235,7 +235,19 @@ export function AccountsSection() {
           <EmptyState
             icon={Building2}
             title="Cadastre sua primeira conta"
-            description="Adicione a conta para importar extratos."
+            description="Adicione a conta aqui ou conecte o banco pelo Open Finance."
+            action={
+              <Button
+                variant="outline"
+                nativeButton={false}
+                render={
+                  <Link to="/configuracoes" search={{ tab: 'open-finance' }} />
+                }
+              >
+                <Plug data-icon="inline-start" />
+                Conectar banco
+              </Button>
+            }
           />
         </Panel>
       )}
