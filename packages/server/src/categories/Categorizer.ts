@@ -16,15 +16,11 @@ import { relationsChanged } from '../reconciliation/Reconciliation.ts'
 import { categoryChanged, uncategorized } from './Categories.ts'
 import { Classifier } from './Classifier.ts'
 import type { ClassifyItem } from './Classifier.ts'
+import { categoryDescriptions } from './Descriptions.ts'
 import { followCategoryDecisions } from './FollowDecisions.ts'
 import { categoryStoreChanged, KnowledgeStore } from './KnowledgeStore.ts'
 import { knowledgeKey } from './Patterns.ts'
-import {
-  categorize,
-  MODEL_APPLY_THRESHOLD,
-  MODEL_SUGGEST_FLOOR,
-  POLICY_VERSION,
-} from './Policy.ts'
+import { categorize, MODEL_SUGGEST_FLOOR, POLICY_VERSION } from './Policy.ts'
 import type { Inference, PolicyInput } from './Policy.ts'
 import type { PatternRow, StoreEdit } from './Store.ts'
 
@@ -360,7 +356,7 @@ const make = Effect.gen(function* () {
         ? {
             version: classifier.modelVersion.value,
             answers: yield* modelAnswers(classifier.modelVersion.value),
-            applyThreshold: MODEL_APPLY_THRESHOLD,
+            applyThreshold: classifier.applyThreshold,
             suggestFloor: MODEL_SUGGEST_FLOOR,
           }
         : undefined,
@@ -730,6 +726,7 @@ const make = Effect.gen(function* () {
             id: category.id,
             name: names.get(category.id) ?? category.id,
             bucket: category.bucket,
+            description: categoryDescriptions[category.id],
           })),
         )
         .pipe(
@@ -864,13 +861,20 @@ export const modelReactor = Reactor.layer({
 /**
  * Rebuilds every inference when the server starts under a policy version
  * other than the one they were computed with, so a categorizer change
- * applies to the whole history without waiting for new entries.
+ * applies to the whole history without waiting for new entries. With the
+ * model enabled it always rebuilds: its version or `applyThreshold` may
+ * have changed, and a rebuild that changes nothing emits nothing.
  */
 export const startup = Layer.effectDiscard(
   Effect.gen(function* () {
     const categorizer = yield* Categorizer
     const stored = yield* categorizer.storedPolicyVersion
-    if (Option.isNone(stored) || stored.value !== POLICY_VERSION)
+    const modelEnabled = Option.isSome((yield* Classifier).modelVersion)
+    if (
+      modelEnabled ||
+      Option.isNone(stored) ||
+      stored.value !== POLICY_VERSION
+    )
       yield* categorizer.rebuild()
   }),
 )
