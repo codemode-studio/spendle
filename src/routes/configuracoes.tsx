@@ -1,10 +1,4 @@
-import {
-  AlertTriangle,
-  Building2,
-  Plus,
-  ShieldCheck,
-  Trash2,
-} from 'lucide-react'
+import { Building2, Plus, ShieldCheck } from 'lucide-react'
 import {
   useMutation,
   useQueryClient,
@@ -17,18 +11,6 @@ import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { Page, PageHeader, Panel, StatusBadge } from '#/components/ui'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogMedia,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '#/components/ui/alert-dialog'
 import { Button } from '#/components/ui/button'
 import {
   Dialog,
@@ -47,17 +29,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import { AccountsSection } from '#/features/finance/accounts-section'
 import { CardsSection } from '#/features/finance/cards-section'
 import { KnowledgeBaseSection } from '#/features/finance/knowledge-base-section'
-import {
-  clearTransactionDataFn,
-  createOwnershipScopeFn,
-  updateSettingsFn,
-} from '#/features/finance/finance.functions'
+import { updateSettingsFn } from '#/features/finance/finance.functions'
 import {
   configurationOptions,
   invalidateFinance,
   knowledgeBaseOptions,
   planningOptions,
 } from '#/features/finance/queries'
+import { createOwnerFn } from '#/features/v2/accounts.functions'
+import { ownerKindLabels } from '#/features/v2/accounts'
+import type { Owner } from '#/features/v2/accounts'
+import { accountsOptions, ownersOptions } from '#/features/v2/queries'
+import { errorMessage } from '#/lib/v2/errors'
 
 import { PlanningSettings } from '#/features/planning/planning-settings'
 
@@ -97,7 +80,13 @@ export const Route = createFileRoute('/configuracoes')({
   loaderDeps: ({ search }) => ({ tab: resolveTab(search.tab) }),
   loader: ({ context, deps }) =>
     Promise.all([
-      context.queryClient.ensureQueryData(configurationOptions()),
+      deps.tab === 'geral' || deps.tab === 'cartoes'
+        ? context.queryClient.ensureQueryData(configurationOptions())
+        : null,
+      context.queryClient.ensureQueryData(ownersOptions()),
+      deps.tab === 'contas'
+        ? context.queryClient.ensureQueryData(accountsOptions(true))
+        : null,
       deps.tab === 'orcamento' || deps.tab === 'recorrencias'
         ? context.queryClient.ensureQueryData(planningOptions())
         : null,
@@ -187,25 +176,21 @@ function SettingsPage() {
 
 function GeneralSettings() {
   const { data } = useSuspenseQuery(configurationOptions())
+  const { data: owners } = useSuspenseQuery(ownersOptions())
   const queryClient = useQueryClient()
-  const createScope = useServerFn(createOwnershipScopeFn)
+  const createOwner = useServerFn(createOwnerFn)
   const updateSettings = useServerFn(updateSettingsFn)
-  const clearTransactionData = useServerFn(clearTransactionDataFn)
-  const [scopeDialogOpen, setScopeDialogOpen] = useState(false)
-  const [clearDialogOpen, setClearDialogOpen] = useState(false)
-  const [clearConfirmation, setClearConfirmation] = useState('')
+  const [ownerDialogOpen, setOwnerDialogOpen] = useState(false)
 
-  const scopeMutation = useMutation({
-    mutationFn: createScope,
-    onSuccess: () => {
-      toast.success('Pessoa ou empresa adicionada.')
-      setScopeDialogOpen(false)
+  const ownerMutation = useMutation({
+    mutationFn: createOwner,
+    onSuccess: (owner) => {
+      toast.success(`${owner.name} adicionado.`)
+      setOwnerDialogOpen(false)
       void invalidateFinance(queryClient, 'ownershipScope')
     },
     onError: (error) =>
-      toast.error(
-        error instanceof Error ? error.message : 'Não foi possível adicionar.',
-      ),
+      toast.error(errorMessage(error, 'Não foi possível adicionar.')),
   })
   const settingsMutation = useMutation({
     mutationFn: updateSettings,
@@ -218,29 +203,14 @@ function GeneralSettings() {
         error instanceof Error ? error.message : 'Não foi possível salvar.',
       ),
   })
-  const clearMutation = useMutation({
-    mutationFn: clearTransactionData,
-    onSuccess: (result) => {
-      toast.success(
-        `${result.transactionCount} transações e ${result.importCount} importações removidas.`,
-      )
-      setClearConfirmation('')
-      setClearDialogOpen(false)
-      void invalidateFinance(queryClient, 'ledger')
-    },
-    onError: (error) =>
-      toast.error(
-        error instanceof Error ? error.message : 'Não foi possível limpar.',
-      ),
-  })
 
-  function submitScope(event: React.FormEvent<HTMLFormElement>) {
+  function submitOwner(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    scopeMutation.mutate({
+    ownerMutation.mutate({
       data: {
-        name: String(form.get('name')),
-        type: String(form.get('type')) as 'household' | 'person' | 'company_br',
+        name: String(form.get('name')).trim(),
+        kind: String(form.get('kind')) as Owner['kind'],
       },
     })
   }
@@ -268,35 +238,35 @@ function GeneralSettings() {
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => setScopeDialogOpen(true)}
+              onClick={() => setOwnerDialogOpen(true)}
             >
               <Plus data-icon="inline-start" />
               Adicionar
             </Button>
           }
         >
-          <div className="divide-y overflow-hidden rounded-lg border">
-            {data.scopes.map((scope) => (
-              <div
-                key={scope.id}
-                className="flex items-center justify-between gap-3 px-3 py-3"
-              >
-                <div className="flex min-w-0 items-center gap-2.5">
-                  <Building2 className="size-4 shrink-0 text-muted-foreground" />
-                  <span className="truncate text-sm font-medium">
-                    {scope.name}
-                  </span>
+          {owners.length ? (
+            <div className="divide-y overflow-hidden rounded-lg border">
+              {owners.map((owner) => (
+                <div
+                  key={owner.id}
+                  className="flex items-center justify-between gap-3 px-3 py-3"
+                >
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <Building2 className="size-4 shrink-0 text-muted-foreground" />
+                    <span className="truncate text-sm font-medium">
+                      {owner.name}
+                    </span>
+                  </div>
+                  <StatusBadge>{ownerKindLabels[owner.kind]}</StatusBadge>
                 </div>
-                <StatusBadge>
-                  {scope.type === 'household'
-                    ? 'Família'
-                    : scope.type === 'person'
-                      ? 'Pessoa'
-                      : 'PJ Brasil'}
-                </StatusBadge>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Adicione a família ou a pessoa titular antes de cadastrar contas.
+            </p>
+          )}
         </Panel>
 
         <Panel
@@ -330,85 +300,9 @@ function GeneralSettings() {
         </Panel>
       </div>
 
-      <Panel title="Dados locais">
-        <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-col gap-1">
-            <strong className="text-sm">Limpar transações e importações</strong>
-            <p className="max-w-2xl text-sm text-muted-foreground">
-              Remove lançamentos, extratos, lotes, conciliações e meses
-              fechados. Contas, cartões, metas, recorrências, conhecimento e
-              preferências permanecem.
-            </p>
-          </div>
-          <AlertDialog
-            open={clearDialogOpen}
-            onOpenChange={(open) => {
-              setClearDialogOpen(open)
-              if (!open) setClearConfirmation('')
-            }}
-          >
-            <AlertDialogTrigger render={<Button variant="destructive" />}>
-              <Trash2 data-icon="inline-start" />
-              Limpar transações
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogMedia>
-                  <AlertTriangle />
-                </AlertDialogMedia>
-                <AlertDialogTitle>
-                  Apagar todos os lançamentos?
-                </AlertDialogTitle>
-                <AlertDialogDescription>
-                  Esta ação não pode ser desfeita pelo aplicativo. Digite{' '}
-                  <strong>APAGAR</strong> para confirmar.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <Field
-                data-invalid={
-                  clearConfirmation.length > 0 && clearConfirmation !== 'APAGAR'
-                }
-              >
-                <FieldLabel htmlFor="clear-transactions-confirmation">
-                  Confirmação
-                </FieldLabel>
-                <Input
-                  id="clear-transactions-confirmation"
-                  value={clearConfirmation}
-                  onChange={(event) => setClearConfirmation(event.target.value)}
-                  placeholder="APAGAR"
-                  autoComplete="off"
-                  aria-invalid={
-                    clearConfirmation.length > 0 &&
-                    clearConfirmation !== 'APAGAR'
-                  }
-                />
-              </Field>
-              <AlertDialogFooter>
-                <AlertDialogCancel disabled={clearMutation.isPending}>
-                  Cancelar
-                </AlertDialogCancel>
-                <AlertDialogAction
-                  variant="destructive"
-                  disabled={
-                    clearConfirmation !== 'APAGAR' || clearMutation.isPending
-                  }
-                  onClick={() =>
-                    clearMutation.mutate({ data: { confirmation: 'APAGAR' } })
-                  }
-                >
-                  <Trash2 data-icon="inline-start" />
-                  {clearMutation.isPending ? 'Limpando…' : 'Apagar tudo'}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </div>
-      </Panel>
-
-      <Dialog open={scopeDialogOpen} onOpenChange={setScopeDialogOpen}>
+      <Dialog open={ownerDialogOpen} onOpenChange={setOwnerDialogOpen}>
         <DialogContent>
-          <form onSubmit={submitScope} className="grid gap-4">
+          <form onSubmit={submitOwner} className="grid gap-4">
             <DialogHeader>
               <DialogTitle>Adicionar pessoa ou empresa</DialogTitle>
               <DialogDescription>
@@ -417,9 +311,9 @@ function GeneralSettings() {
             </DialogHeader>
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="scope-name">Nome</FieldLabel>
+                <FieldLabel htmlFor="owner-name">Nome</FieldLabel>
                 <Input
-                  id="scope-name"
+                  id="owner-name"
                   name="name"
                   placeholder="Nome ou razão social"
                   required
@@ -427,11 +321,14 @@ function GeneralSettings() {
                 />
               </Field>
               <Field>
-                <FieldLabel htmlFor="scope-type">Tipo</FieldLabel>
-                <NativeSelect id="scope-type" name="type" className="w-full">
+                <FieldLabel htmlFor="owner-kind">Tipo</FieldLabel>
+                <NativeSelect id="owner-kind" name="kind" className="w-full">
                   <NativeSelectOption value="person">Pessoa</NativeSelectOption>
-                  <NativeSelectOption value="company_br">
-                    Empresa brasileira
+                  <NativeSelectOption value="household">
+                    Família
+                  </NativeSelectOption>
+                  <NativeSelectOption value="company">
+                    Empresa
                   </NativeSelectOption>
                 </NativeSelect>
               </Field>
@@ -440,9 +337,9 @@ function GeneralSettings() {
               <DialogClose render={<Button type="button" variant="outline" />}>
                 Cancelar
               </DialogClose>
-              <Button type="submit" disabled={scopeMutation.isPending}>
+              <Button type="submit" disabled={ownerMutation.isPending}>
                 <Plus data-icon="inline-start" />
-                {scopeMutation.isPending ? 'Adicionando…' : 'Adicionar'}
+                {ownerMutation.isPending ? 'Adicionando…' : 'Adicionar'}
               </Button>
             </DialogFooter>
           </form>

@@ -107,7 +107,8 @@ export const tx = (
   ...fields,
 })
 
-const makeFake = (state: Ref.Ref<FakePluggyData>) =>
+/** A Pluggy client over `state`, for tests and the QA server. */
+export const makeFake = (state: Ref.Ref<FakePluggyData>) =>
   PluggyClient.of({
     createConnectToken: (input) =>
       Ref.update(state, (current) => ({

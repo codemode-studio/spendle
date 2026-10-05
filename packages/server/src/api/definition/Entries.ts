@@ -67,6 +67,15 @@ export const EntryFilters = Schema.Struct({
   ),
   /** Words in the description, case-insensitive. */
   text: Schema.optional(Schema.String),
+  /** `inflow` keeps credits, `outflow` debits. */
+  direction: Schema.optional(Schema.Literals(['inflow', 'outflow'])),
+  /** Bounds on the absolute amount, in centavos, both inclusive. */
+  minAmountCents: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  ),
+  maxAmountCents: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  ),
   limit: Schema.optional(
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 })),
   ),

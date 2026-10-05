@@ -95,6 +95,9 @@ if (command === 'inspect') {
   mkdirSync(root, { recursive: true })
   const directory = mkdtempSync(join(root, 'run-'))
   const url = `http://127.0.0.1:${port}`
+  // The V2 API runs beside the app, in memory, with synthetic data and a fake Pluggy.
+  const apiPort = port + 1200
+  const apiUrl = `http://127.0.0.1:${apiPort}`
   const month = new Date().toISOString().slice(0, 7)
   const date = `${month}-01`
   const connection = openDatabase(join(directory, 'finance.db'))
@@ -149,6 +152,18 @@ if (command === 'inspect') {
     `OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECURITY:NONE\nENCODING:USASCII\nCHARSET:1252\nCOMPRESSION:NONE\nOLDFILEUID:NONE\nNEWFILEUID:NONE\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><CURDEF>BRL</CURDEF><BANKTRANLIST><DTSTART>${month.replace('-', '')}01</DTSTART><DTEND>${month.replace('-', '')}02</DTEND><STMTTRN><TRNTYPE>CREDIT</TRNTYPE><DTPOSTED>${month.replace('-', '')}01120000[-3:BRT]</DTPOSTED><TRNAMT>1000.00</TRNAMT><FITID>qa-income-${suffix}</FITID><NAME>Receita QA</NAME></STMTTRN><STMTTRN><TRNTYPE>DEBIT</TRNTYPE><DTPOSTED>${month.replace('-', '')}02120000[-3:BRT]</DTPOSTED><TRNAMT>-100.00</TRNAMT><FITID>qa-expense-${suffix}</FITID><NAME>Mercado QA</NAME></STMTTRN></BANKTRANLIST><LEDGERBAL><BALAMT>${closing}</BALAMT><DTASOF>${month.replace('-', '')}02</DTASOF></LEDGERBAL></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>`
   writeFileSync(join(directory, 'balanced.ofx'), ofx('900.00', 'balanced'))
   writeFileSync(join(directory, 'unbalanced.ofx'), ofx('999.00', 'unbalanced'))
+  // 121 expenses of R$ 1,00 on the first day of the month, for V2 pagination checks.
+  const compact = month.replace('-', '')
+  writeFileSync(
+    join(directory, 'volume-121.ofx'),
+    `OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECURITY:NONE\nENCODING:USASCII\nCHARSET:1252\nCOMPRESSION:NONE\nOLDFILEUID:NONE\nNEWFILEUID:NONE\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><CURDEF>BRL</CURDEF><BANKTRANLIST><DTSTART>${compact}01</DTSTART><DTEND>${compact}01</DTEND>${Array.from(
+      { length: 121 },
+      (_, index) =>
+        `<STMTTRN><TRNTYPE>DEBIT</TRNTYPE><DTPOSTED>${compact}01120000[-3:BRT]</DTPOSTED><TRNAMT>-1.00</TRNAMT><FITID>qa-volume-${index}</FITID><NAME>Despesa QA ${index}</NAME></STMTTRN>`,
+    ).join(
+      '',
+    )}</BANKTRANLIST><LEDGERBAL><BALAMT>-121.00</BALAMT><DTASOF>${compact}01</DTASOF></LEDGERBAL></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>`,
+  )
   writeFileSync(
     join(directory, 'run.json'),
     JSON.stringify(
@@ -161,6 +176,7 @@ if (command === 'inspect') {
     JSON.stringify(
       {
         url,
+        apiUrl,
         directory,
         database: join(directory, 'finance.db'),
         uploads: join(directory, 'imports'),
@@ -172,6 +188,17 @@ if (command === 'inspect') {
     ),
   )
   const log = createWriteStream(join(directory, 'server.log'))
+  const apiLog = createWriteStream(join(directory, 'server-v2.log'))
+  const api = spawn(
+    process.execPath,
+    [resolve('packages/server/src/testing/QaServer.ts')],
+    {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, SPENDLE_SERVER_PORT: String(apiPort) },
+    },
+  )
+  api.stdout.pipe(apiLog)
+  api.stderr.pipe(apiLog)
   const child = spawn(
     process.execPath,
     [
@@ -188,6 +215,10 @@ if (command === 'inspect') {
       env: {
         ...process.env,
         DATABASE_URL: join(directory, 'finance.db'),
+        SPENDLE_API_URL: apiUrl,
+        SPENDLE_API_TOKEN: '',
+        // The fake Pluggy issues fake tokens: open the simulated widget instead.
+        SPENDLE_PLUGGY_CONNECT: 'simulated',
         FINANCAS_QA: '1',
         FINANCAS_DEBUG: '1',
         OPENROUTER_API_KEY: '',
@@ -204,8 +235,12 @@ if (command === 'inspect') {
     log.write(chunk)
   })
   for (const signal of ['SIGINT', 'SIGTERM'] as const)
-    process.on(signal, () => child.kill(signal))
+    process.on(signal, () => {
+      child.kill(signal)
+      api.kill(signal)
+    })
   child.on('exit', (code) => {
+    api.kill('SIGTERM')
     log.end()
     process.exitCode = code ?? 0
   })
