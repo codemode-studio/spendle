@@ -398,8 +398,7 @@ function AccountStatus({ account }: { account: AccountView }) {
       ) : null}
       {proof.isSuccess && !intervals.length && account.lastCheckpoint ? (
         <StatusBadge>
-          Saldo de {formatDate(account.lastCheckpoint.asOf)} ainda sem extrato
-          anterior para conferir
+          Primeiro saldo: {formatDate(account.lastCheckpoint.asOf)}
         </StatusBadge>
       ) : null}
       {proof.isSuccess && !account.lastCheckpoint ? (
