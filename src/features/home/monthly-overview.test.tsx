@@ -327,7 +327,7 @@ describe('monthly overview', () => {
         el.textContent.replace(/\s/g, ' '),
       ),
     ).toEqual(['Agendado', 'R$ 120,00', 'Estimado pelo histórico', 'R$ 550,00'])
-    const categories = screen.getByRole('list', {
+    const categories = await screen.findByRole('list', {
       name: /Categorias estimadas/,
     })
     await waitFor(() =>
@@ -339,29 +339,32 @@ describe('monthly overview', () => {
     )
   })
 
-  it('says which exchange rate the totals used and which currency stays out', async () => {
-    fetchHistory.mockResolvedValue([closedAugust])
-    mount(
-      month('2026-09', {
-        forecasting: true,
+  it('says which exchange rate a past month used and which currency stayed out', async () => {
+    fetchHistory.mockResolvedValue([
+      {
+        ...closedAugust,
         exchange: {
           rates: [
             {
               currency: 'USD',
               rateMicros: 5_223_800,
-              date: '2026-09-18',
+              date: '2026-08-31',
               source: 'PTAX',
             },
           ],
           missing: ['EUR'],
         },
-      }),
+      },
+    ])
+    mount()
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Agosto de 2026:/ }),
     )
     expect(
-      await screen.findByText(
-        /USD em reais · USD 1 = R\$\s5,2238 \(PTAX, 18 de set\)/,
+      screen.getByText(
+        /USD em reais: USD 1 = R\$\s5,2238 \(PTAX, 31 de ago\)/,
       ),
     ).toBeTruthy()
-    expect(screen.getByText('EUR sem cotação, fora dos totais')).toBeTruthy()
+    expect(screen.getByText(/EUR sem cotação, fora dos totais/)).toBeTruthy()
   })
 })

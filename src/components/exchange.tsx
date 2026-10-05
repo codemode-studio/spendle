@@ -65,22 +65,21 @@ export function ExchangeNote({
 }) {
   if (exchange.rates.length === 0 && exchange.missing.length === 0) return null
   return (
-    <p
-      className={cn(
-        'flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground',
-        className,
-      )}
-    >
-      <ArrowLeftRight className="size-3.5 shrink-0" aria-hidden="true" />
-      {exchange.rates.map((rate) => (
+    <p className={cn('text-xs text-muted-foreground', className)}>
+      <ArrowLeftRight
+        className="mr-1 inline size-3.5 align-[-3px]"
+        aria-hidden="true"
+      />
+      {exchange.rates.map((rate, index) => (
         <span key={rate.currency}>
-          {rate.currency} em reais ·{' '}
-          {formatRate(rate.currency, rate.rateMicros)} ({rate.source},{' '}
-          {formatShortDate(rate.date)})
+          {index > 0 && ' · '}
+          {rate.currency} em reais: {formatRate(rate.currency, rate.rateMicros)}{' '}
+          ({rate.source}, {formatShortDate(rate.date)})
         </span>
       ))}
       {exchange.missing.length > 0 && (
         <span className="text-warning">
+          {exchange.rates.length > 0 && ' · '}
           {exchange.missing.join(', ')} sem cotação, fora dos totais
         </span>
       )}

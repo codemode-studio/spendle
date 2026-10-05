@@ -287,7 +287,10 @@ export function MonthlyOverview({
                     </div>
                   ))}
                 </dl>
-                <ExchangeNote exchange={selected.exchange} />
+                {/* The current month's rates already show beside today's cash. */}
+                {selected.month !== current.month && (
+                  <ExchangeNote exchange={selected.exchange} />
+                )}
                 {flow.forecasting && (
                   <section
                     className="border-t pt-4"
@@ -476,7 +479,8 @@ function PayableBreakdown({
   if (historyCents === 0 || remainingCents <= 0) return null
   const scheduledCents = Math.max(0, remainingCents - historyCents)
   const nameOf = (id: string | null) =>
-    categories.data?.find((category) => category.id === id)?.name ?? 'Categoria'
+    categories.data?.find((category) => category.id === id)?.name ??
+    'Outra categoria'
   return (
     <div className="mt-4 flex flex-col gap-3">
       <div
@@ -514,19 +518,21 @@ function PayableBreakdown({
           </dd>
         </div>
       </dl>
-      <ul
-        aria-label="Categorias estimadas pela mediana dos últimos 3 meses"
-        className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground"
-      >
-        {estimates.map((line) => (
-          <li key={line.id}>
-            {nameOf(line.categoryId)}{' '}
-            <span className="tabular-nums">
-              {formatCurrency(line.estimatedCents)}
-            </span>
-          </li>
-        ))}
-      </ul>
+      {categories.data && (
+        <ul
+          aria-label="Categorias estimadas pela mediana dos últimos 3 meses"
+          className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground"
+        >
+          {estimates.map((line) => (
+            <li key={line.id}>
+              {nameOf(line.categoryId)}{' '}
+              <span className="tabular-nums">
+                {formatCurrency(line.estimatedCents)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
