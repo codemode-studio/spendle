@@ -25,7 +25,12 @@ import {
   Sparkline,
   StackedMonthly,
 } from '#/features/categories/monthly-chart'
-import { categoryTransactionsOptions } from '#/features/finance/queries'
+import { CategoryReviewQueue } from '#/features/categories/review-queue'
+import {
+  categoriesOptions,
+  categoryLedgerOptions,
+  categoryReviewOptions,
+} from '#/features/v2/queries'
 import { cn } from '#/lib/utils'
 
 const PERIODS = {
@@ -47,12 +52,16 @@ const searchSchema = z.object({
 export const Route = createFileRoute('/categorias')({
   validateSearch: searchSchema,
   loader: ({ context }) =>
-    context.queryClient.ensureQueryData(categoryTransactionsOptions()),
+    Promise.all([
+      context.queryClient.ensureQueryData(categoryLedgerOptions()),
+      context.queryClient.ensureQueryData(categoryReviewOptions()),
+      context.queryClient.ensureQueryData(categoriesOptions()),
+    ]),
   component: CategoriesPage,
 })
 
 function CategoriesPage() {
-  const { data } = useSuspenseQuery(categoryTransactionsOptions())
+  const { data } = useSuspenseQuery(categoryLedgerOptions())
   const { periodo = '30d' } = Route.useSearch()
   const navigate = Route.useNavigate()
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -98,6 +107,8 @@ function CategoriesPage() {
           />
         }
       />
+
+      <CategoryReviewQueue />
 
       <Panel className="mb-4">
         <div className="flex flex-wrap items-end justify-between gap-4">

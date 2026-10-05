@@ -8,7 +8,6 @@ import { assistantQueryKeys } from '#/features/home/query-keys'
 import {
   detectRecurrencesFn,
   getFinanceSnapshotFn,
-  getCategoryTransactionsFn,
   getConfigurationSnapshotFn,
   getPlanningSnapshotFn,
   getKnowledgeBaseFn,
@@ -183,13 +182,6 @@ export const planningOptions = () =>
   queryOptions({
     queryKey: [...financeQueryKeys.all, 'read', 'planning'],
     queryFn: () => getPlanningSnapshotFn(),
-    staleTime: 15_000,
-  })
-
-export const categoryTransactionsOptions = () =>
-  queryOptions({
-    queryKey: [...financeQueryKeys.all, 'read', 'categories'],
-    queryFn: () => getCategoryTransactionsFn(),
     staleTime: 15_000,
   })
 

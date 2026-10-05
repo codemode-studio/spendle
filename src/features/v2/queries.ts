@@ -12,7 +12,7 @@ import {
   listOwnersFn,
 } from './accounts.functions'
 import { cardOverviewFn, cycleEntriesFn } from './cards.functions'
-import { listCategoriesFn } from './categories.functions'
+import { categoryLedgerFn, listCategoriesFn } from './categories.functions'
 import { listImportsFn } from './imports.functions'
 import {
   categoryReviewFn,
@@ -103,6 +103,8 @@ export const v2QueryKeys = {
       closingOn,
     ] as const,
   imports: () => [...financeQueryKeys.all, 'read', 'imports'] as const,
+  categoryLedger: () =>
+    [...financeQueryKeys.all, 'read', 'categories'] as const,
   connectSettings: () =>
     [...financeQueryKeys.all, 'open-finance', 'connect-settings'] as const,
 }
@@ -226,6 +228,14 @@ export const importsOptions = () =>
   queryOptions({
     queryKey: v2QueryKeys.imports(),
     queryFn: () => listImportsFn({ data: {} }),
+    staleTime: 15_000,
+  })
+
+/** Same key as the V1 category analysis, which the ledger invalidations cover. */
+export const categoryLedgerOptions = () =>
+  queryOptions({
+    queryKey: v2QueryKeys.categoryLedger(),
+    queryFn: () => categoryLedgerFn(),
     staleTime: 15_000,
   })
 

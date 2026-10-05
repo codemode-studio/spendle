@@ -9,7 +9,6 @@ import {
 } from './finance.server'
 import {
   getFinanceSnapshot,
-  getCategoryTransactions,
   getConfigurationSnapshot,
   getPlanningSnapshot,
   getStrategyHistory,
@@ -295,7 +294,3 @@ export const getConfigurationSnapshotFn = createServerFn({
 export const getPlanningSnapshotFn = createServerFn({ method: 'GET' }).handler(
   () => getPlanningSnapshot(),
 )
-
-export const getCategoryTransactionsFn = createServerFn({
-  method: 'GET',
-}).handler(() => getCategoryTransactions())
