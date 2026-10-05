@@ -283,6 +283,7 @@ const institutionNoise = new Set([
   'multiplo',
   'sociedade',
   'cooperativa',
+  'cooperativo',
 ])
 
 const institutionWords = (entry: MatchableEntry) =>
@@ -312,41 +313,48 @@ const statusWords = new Set([
   'realizada',
 ])
 
-// The parts of an opening phrase (see `read`).
-const rails = new Set([
-  'pix',
-  'transferencia',
-  'transf',
-  'pagamento',
-  'pgto',
-  'pagto',
-  'deposito',
-  'envio',
-  'recebimento',
-])
-const directions = new Set([
-  'enviado',
-  'enviada',
-  'recebido',
-  'recebida',
-  'transferido',
-  'transferida',
-  'efetuado',
-  'efetuada',
-  'agendado',
-  'agendada',
-])
-const pixKeys = new Set([
-  'chave',
-  'aleatoria',
-  'evp',
-  'qr',
-  'qrcode',
-  'code',
-  'celular',
-  'telefone',
-  'email',
-])
+// Complete opening phrases (see `read`).
+const openings: ReadonlyArray<ReadonlyArray<string>> = [
+  ...['pix', 'transferencia', 'transf', 'ted', 'doc', 'tev'].flatMap((rail) => [
+    [rail],
+    ...[
+      'enviado',
+      'enviada',
+      'recebido',
+      'recebida',
+      'agendado',
+      'agendada',
+      'transferido',
+      'transferida',
+    ].map((direction) => [rail, direction]),
+  ]),
+  ['pix', 'transferencia'],
+  ['pix', 'transferencia', 'enviada'],
+  ['pix', 'transferencia', 'recebida'],
+  ['envio', 'pix'],
+  ['recebimento', 'pix'],
+  ['deposito'],
+  ['deposito', 'recebido'],
+  ...['pagamento', 'pgto', 'pagto'].flatMap((rail) => [
+    [rail],
+    [rail, 'recebido'],
+    [rail, 'efetuado'],
+    [rail, 'enviado'],
+  ]),
+]
+
+// Pix key kinds, only when labelled as a key.
+const pixKeyClauses: ReadonlyArray<ReadonlyArray<string>> = [
+  ['chave', 'aleatoria'],
+  ['chave', 'evp'],
+  ['chave', 'celular'],
+  ['chave', 'telefone'],
+  ['chave', 'email'],
+  ['chave', 'cpf'],
+  ['chave', 'cnpj'],
+  ['qr', 'code'],
+  ['qrcode'],
+]
 
 // Words that introduce the other side of a movement.
 const prepositions = new Set([
@@ -363,9 +371,6 @@ const prepositions = new Set([
 ])
 
 const cardBill = new Set(['fatura', 'cartao', 'cartoes', 'credito'])
-
-// Rails that are also first names: a rail only as a description's first word.
-const railNames = new Set(['ted', 'doc', 'tev'])
 
 // Wording that says both sides belong to the same person, longest first.
 const ownAccountPhrases = [
@@ -475,12 +480,13 @@ const bankReference = (
         unglue(glued) === core[0]
       )
         return 2
-      const length = prefix(at + 1, core)
-      return length > 0 ? 1 + length : 0
+      // The whole core, never a shared start (`Banco Cooperativo` names
+      // neither Sicredi nor Sicoob).
+      return prefix(at + 1, core) === core.length ? 1 + core.length : 0
     }
     if (unglue(word) !== word && unglue(word) === core[0]) return 1
     const length = prefix(at, core)
-    if (length === 0) return 0
+    if (length !== core.length) return 0
     if (words[at + length] === 'bank') return length + 1
     // A bare bank name (`santander`) carries no bank context: marked
     // negative so a description that also names a person rejects it.
@@ -508,37 +514,29 @@ const read = (description: string, vocabulary: Vocabulary) => {
       phrase.every((part, index) => words[at + index] === part),
     )
   let at = 0
-  if (railNames.has(words[0] ?? '')) at++
-  // Bill wording (`fatura`, `cartao de credito`) may only open a card leg;
-  // anywhere else it may be part of a name (`Joao Cartoes`), and on a
-  // receipt that also names someone it may be their trade name.
-  // Once a preposition introduces the other side (`para`, `de`), only bill
-  // wording on a card leg (and how it ends, `efetuado`) may still follow:
-  // anything else is the counterparty (`para Deposito Joao Paulo`) and goes
-  // to the identity check.
-  // A bounded opening phrase, each part at most once and in order: a rail
-  // (`pix`, `pagamento`, at most two words), a direction (`enviado`), a Pix
-  // key kind (`chave aleatoria`), on a card leg its bill wording and how it
-  // ends (`fatura efetuado`), then one preposition (`para`, `de`). Whatever
-  // follows the phrase (`Pix enviado - Deposito Joao Paulo`) is the
-  // counterparty and goes to the identity check.
-  let billWording = false
-  const ahead = (set: ReadonlySet<string>, limit: number) => {
-    let taken = 0
-    while (
-      taken < limit &&
-      at < words.length &&
-      ownAccount(at) === undefined &&
-      set.has(words[at]!)
-    ) {
-      at++
-      taken++
-    }
-    return taken
+  // A complete opening phrase from a closed list (`Pix enviado`, `Pagamento
+  // recebido`, `Transferencia`), the longest that matches; a Pix key kind
+  // only when labelled (`chave aleatoria`); on a card leg its bill wording
+  // and how it ends (`de fatura efetuado`); then one preposition. Whatever
+  // follows (`Pix - Deposito Joao Paulo`, `Pix enviado - Celular Joao`) is
+  // the counterparty and goes to the identity check.
+  const phrase = (candidates: ReadonlyArray<ReadonlyArray<string>>) => {
+    const found = candidates
+      .filter((candidate) =>
+        candidate.every((part, index) => words[at + index] === part),
+      )
+      .reduce(
+        (longest, candidate) =>
+          candidate.length > longest.length ? candidate : longest,
+        [] as ReadonlyArray<string>,
+      )
+    at += found.length
+    return found.length > 0
   }
-  ahead(rails, 2)
-  ahead(directions, 1)
-  ahead(pixKeys, 2)
+  const pix = words[0] === 'pix'
+  phrase(openings)
+  if (pix) phrase(pixKeyClauses)
+  let billWording = false
   if (vocabulary.side !== 'transfer') {
     // Bill wording, with `de` only between or before its words
     // (`de fatura`, `cartao de credito`).
@@ -550,9 +548,9 @@ const read = (description: string, vocabulary: Vocabulary) => {
       } else if (word === 'de' && cardBill.has(words[at + 1] ?? '')) at++
       else break
     }
-    if (billWording) ahead(statusWords, 1)
+    if (billWording && statusWords.has(words[at] ?? '')) at++
   }
-  ahead(prepositions, 1)
+  if (prepositions.has(words[at] ?? '') && ownAccount(at) === undefined) at++
   const named = new Set<string>()
   let bank = false
   let bare = false

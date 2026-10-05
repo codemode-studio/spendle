@@ -863,6 +863,57 @@ describe('matchRelations', () => {
     )
   })
 
+  it('reads only complete opening phrases and labelled Pix keys', () => {
+    const pair = (outflow: string, inflow: string) =>
+      relations([
+        entry('out', 'inter', -50000, {
+          description: outflow,
+          institution: 'Banco Inter',
+          ownerName: 'Joao Paulo Silva',
+        }),
+        entry('in', 'nubank', 50000, {
+          description: inflow,
+          institution: 'Nubank',
+          ownerName: 'Joao Paulo Silva',
+        }),
+      ]).flatMap((relation) => [relation.status])
+    const card = relations([
+      entry('pay', 'inter', -50000, {
+        description: 'Pagamento fatura Nubank',
+        institution: 'Banco Inter',
+        ownerName: 'Joao Paulo Silva',
+      }),
+      entry('nu', 'card-nu', 50000, {
+        description: 'Pagamento recebido - Celular João Paulo',
+        institution: 'Nubank',
+        ownerName: 'Joao Paulo Silva',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    assert.deepStrictEqual(
+      [
+        pair('Pix - Depósito João Paulo', 'Pix recebido Joao Paulo Silva'),
+        pair('Pix enviado - Celular João Paulo', 'Pix recebido Banco Nubank'),
+        card,
+        pair('Pix enviado Joao Paulo', 'Pix recebido Joao Paulo Silva'),
+      ],
+      [['suggested'], ['suggested'], ['suggested'], ['confirmed']],
+    )
+  })
+
+  it('never names a card issuer by a start its name shares with another', () => {
+    const result = relations([
+      entry('pay', 'inter', -50000, {
+        description: 'Pagamento fatura Banco Cooperativo',
+        institution: 'Banco Inter',
+      }),
+      entry('sicredi', 'card-sicredi', 50000, {
+        description: 'Pagamento recebido',
+        institution: 'Banco Cooperativo Sicredi S.A.',
+      }),
+    ]).flatMap((relation) => [relation.status, relation.reasons.at(-1)])
+    assert.deepStrictEqual(result, ['suggested', 'names_other_payee'])
+  })
+
   it('confirms only when every word of every description is understood', () => {
     const transfer = (
       outflow: string,
