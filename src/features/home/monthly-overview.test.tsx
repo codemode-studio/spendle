@@ -361,9 +361,7 @@ describe('monthly overview', () => {
       await screen.findByRole('button', { name: /Agosto de 2026:/ }),
     )
     expect(
-      screen.getByText(
-        /USD em reais: USD 1 = R\$\s5,2238 \(PTAX, 31 de ago\)/,
-      ),
+      screen.getByText(/USD em reais: USD 1 = R\$\s5,2238 \(PTAX, 31 de ago\)/),
     ).toBeTruthy()
     expect(screen.getByText(/EUR sem cotação, fora dos totais/)).toBeTruthy()
   })
