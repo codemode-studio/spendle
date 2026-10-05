@@ -10,6 +10,7 @@ import * as TestClock from 'effect/testing/TestClock'
 import * as Reactor from '../events/Reactor.ts'
 import { Imports } from '../imports/Imports.ts'
 import * as Entries from '../ledger/Entries.ts'
+import * as Reconciliation from '../reconciliation/Reconciliation.ts'
 import { Accounts } from '../ledger/Accounts.ts'
 import { OpenFinance } from '../openfinance/OpenFinance.ts'
 import type {
@@ -236,9 +237,14 @@ export const openFinanceTest = (
         SyncReactor.layer,
         Webhook.reactor,
         Entries.reactor,
+        Reconciliation.reactor,
       ).pipe(
         Layer.provideMerge(
-          Layer.mergeAll(Entries.Entries.layer, Imports.layer),
+          Layer.mergeAll(
+            Entries.Entries.layer,
+            Imports.layer,
+            Reconciliation.Reconciliation.layer,
+          ),
         ),
         Layer.provideMerge(OpenFinance.layer),
         Layer.provideMerge(Reactor.Reactors.layer),

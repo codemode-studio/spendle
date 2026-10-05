@@ -1,0 +1,1331 @@
+import { assert, describe, it } from '@effect/vitest'
+
+import { addDays } from '../domain/LocalDate.ts'
+import { matchRelations, relationKey } from './Matching.ts'
+import type { Decision, MatchableEntry } from './Matching.ts'
+
+const entry = (
+  id: string,
+  accountId: string,
+  amountCents: number,
+  fields: Partial<MatchableEntry> = {},
+): MatchableEntry => {
+  const description = fields.description ?? 'Movimento'
+  return {
+    id,
+    accountId,
+    accountKind: accountId.startsWith('card') ? 'credit_card' : 'checking',
+    bookedOn: '2026-09-10',
+    amountCents,
+    currency: 'BRL',
+    status: 'posted',
+    ownerName: 'Donald Silveira',
+    ...fields,
+    description,
+    descriptions: fields.descriptions ?? [description],
+  }
+}
+
+const relations = (
+  entries: ReadonlyArray<MatchableEntry>,
+  decisions = new Map<string, Decision>(),
+) => matchRelations(entries, decisions).relations
+
+const summary = (
+  entries: ReadonlyArray<MatchableEntry>,
+  decisions = new Map<string, Decision>(),
+) =>
+  relations(entries, decisions).map((relation) => [
+    relation.kind,
+    relation.outflowId,
+    relation.inflowId,
+    relation.status,
+  ])
+
+describe('matchRelations', () => {
+  it('confirms a same-day Pix both sides describe as a transfer', () => {
+    assert.deepStrictEqual(
+      relations([
+        entry('out', 'nubank', -50000, { description: 'Pix enviado Donald' }),
+        entry('in', 'inter', 50000, { description: 'Pix recebido Donald' }),
+      ]).map((relation) => [relation.kind, relation.status, relation.score]),
+      [['internal_transfer', 'confirmed', 100]],
+    )
+  })
+
+  it('only suggests a transfer whose descriptions name different people or no one', () => {
+    const different = relations([
+      entry('out', 'nubank', -50000, { description: 'Pix enviado Maria' }),
+      entry('in', 'inter', 50000, { description: 'Pix recebido Joao' }),
+    ])
+    const generic = relations([
+      entry('out', 'nubank', -50000, { description: 'Pix enviado' }),
+      entry('in', 'inter', 50000, { description: 'Pix recebido' }),
+    ])
+    assert.deepStrictEqual(
+      [...different, ...generic].map((relation) => relation.status),
+      ['suggested', 'suggested'],
+    )
+    assert.isTrue(different[0]!.reasons.includes('different_counterparties'))
+  })
+
+  it('only suggests a transfer whose names merely share a surname or a generic word', () => {
+    const pair = (outflow: string, inflow: string) =>
+      relations([
+        entry('out', 'nubank', -50000, { description: outflow }),
+        entry('in', 'inter', 50000, { description: inflow }),
+      ]).map((relation) => relation.status)
+    assert.deepStrictEqual(
+      [
+        pair('Pix enviado Maria Silva', 'Pix recebido Joao Silva'),
+        pair('Pix enviado Internet Fibra', 'Pix recebido Internet Veloz'),
+        pair('Pix enviado Donald Silveira', 'Pix recebido Donald'),
+      ],
+      [['suggested'], ['suggested'], ['confirmed']],
+    )
+  })
+
+  it('only suggests a transfer whose names disagree, whatever bank or wording it names', () => {
+    const pair = (outflow: string, inflow: string) =>
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: outflow,
+          institution: 'Nubank',
+        }),
+        entry('in', 'inter', 50000, {
+          description: inflow,
+          institution: 'Banco Inter',
+        }),
+      ]).map((relation) => relation.status)
+    assert.deepStrictEqual(
+      [
+        pair('Pix enviado Maria Silva Banco Inter', 'Pix recebido Joao Silva'),
+        pair('Pix enviado Maria Banco Inter', 'Pix recebido Joao'),
+        pair(
+          'Transferencia mesma titularidade Maria Silva',
+          'Pix recebido Joao Silva',
+        ),
+      ],
+      [['suggested'], ['suggested'], ['suggested']],
+    )
+  })
+
+  it("only suggests a transfer whose shared name is not the owner's", () => {
+    const pair = (
+      outflow: string,
+      inflow: string,
+      ownerName?: string,
+      institutions = false,
+    ) =>
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: outflow,
+          ...(ownerName === undefined ? {} : { ownerName }),
+          ...(institutions ? { institution: 'Nubank' } : {}),
+        }),
+        entry('in', 'inter', 50000, {
+          description: inflow,
+          ...(ownerName === undefined ? {} : { ownerName }),
+          ...(institutions ? { institution: 'Banco Inter' } : {}),
+        }),
+      ]).flatMap((relation) => [relation.status, relation.reasons.at(-1)])
+    assert.deepStrictEqual(
+      [
+        pair('Pix enviado Maria Silva', 'Pix recebido Maria Silva'),
+        pair('Pix enviado Donald', 'Pix recebido Donald', 'Maria Silva'),
+        pair('Pix enviado Donald', 'Pix recebido Donald', ''),
+        pair(
+          'Pix enviado Maria Silva Banco Inter',
+          'Pix recebido',
+          undefined,
+          true,
+        ),
+        pair('Pix enviado Donald', 'Pix recebido Donald'),
+        pair(
+          'Pix enviado Joao Silva Junior',
+          'Pix recebido Joao Silva Junior',
+          'Joao Silva',
+        ),
+        pair('Pix enviado Joao Silva Neto', 'Pix recebido Joao', 'Joao Silva'),
+        pair('Pix enviado Joao Silva', 'Pix recebido Joao Silva', 'Joao Silva'),
+        pair(
+          'Pix enviado Joao Silva Banco Inter',
+          'Pix recebido Carlos Silva',
+          'Joao Carlos da Silva',
+          true,
+        ),
+        pair(
+          'Pix enviado Silva Comercio Ltda',
+          'Pix recebido Joao Silva',
+          'Joao Silva',
+        ),
+        pair('Pix enviado Silva ME', 'Pix recebido Silva', 'Joao Silva'),
+        pair('Pix enviado Silva Ltda', 'Pix recebido Joao Silva', 'Joao Silva'),
+        pair(
+          'Pix enviado Joao Silva Ltda',
+          'Pix recebido Joao Silva',
+          'Joao Silva',
+        ),
+        pair('Pix enviado Silva S.A.', 'Pix recebido Joao Silva', 'Joao Silva'),
+        pair('Pix enviado Silva S/A', 'Pix recebido Joao Silva', 'Joao Silva'),
+        pair('Pix enviado Silva SA', 'Pix recebido Joao Silva', 'Joao Silva'),
+        pair('Pix enviado Silva S-A', 'Pix recebido Joao Silva', 'Joao Silva'),
+        pair(
+          'Pix enviado Silva S.A. Banco Inter',
+          'Pix recebido Joao Silva',
+          'Joao Silva',
+          true,
+        ),
+        pair(
+          'Pix enviado Silva Online',
+          'Pix recebido Joao Silva',
+          'Joao Silva',
+        ),
+        pair(
+          'Pix enviado Joao Silva Nacional',
+          'Pix recebido Joao Silva',
+          'Joao Silva',
+        ),
+        pair(
+          'Pix enviado chave aleatoria Joao Silva',
+          'Pix recebido Joao Silva',
+          'Joao Silva',
+        ),
+        pair('Pix enviado Banco Inter S.A.', 'Pix recebido', undefined, true),
+      ],
+      [
+        ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'names_other_account'],
+        ['confirmed', 'same_counterparty'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
+        ['confirmed', 'same_counterparty'],
+        ['suggested', 'names_other_account'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'names_other_account'],
+        ['suggested', 'same_third_party'],
+        ['suggested', 'same_third_party'],
+        ['confirmed', 'same_counterparty'],
+        ['confirmed', 'names_other_account'],
+      ],
+    )
+  })
+
+  it('confirms a transfer that names the other account or own-account wording', () => {
+    const named = relations([
+      entry('out', 'nubank', -50000, {
+        description: 'Pix enviado Banco Inter',
+        institution: 'Nubank',
+      }),
+      entry('in', 'inter', 50000, {
+        description: 'Pix recebido',
+        institution: 'Banco Inter',
+      }),
+    ])
+    const own = relations([
+      entry('out', 'nubank', -50000, {
+        description: 'Transferencia mesma titularidade',
+      }),
+      entry('in', 'inter', 50000, { description: 'Pix recebido' }),
+    ])
+    assert.deepStrictEqual(
+      [...named, ...own].map((relation) => [
+        relation.status,
+        relation.reasons.at(-1),
+      ]),
+      [
+        ['confirmed', 'names_other_account'],
+        ['confirmed', 'own_account_wording'],
+      ],
+    )
+  })
+
+  it('confirms a card payment that lands on the card a few days later', () => {
+    assert.deepStrictEqual(
+      summary([
+        entry('pay', 'nubank', -150000, {
+          description: 'PAGAMENTO FATURA NUBANK',
+        }),
+        entry('credit', 'card-nu', 150000, {
+          bookedOn: '2026-09-13',
+          description: 'Pagamento recebido',
+          institution: 'Nubank',
+        }),
+      ]),
+      [['card_payment', 'pay', 'credit', 'confirmed']],
+    )
+  })
+
+  it('confirms a card payment only when the bank side says it pays this card', () => {
+    const pay = (description: string, ...cards: Array<MatchableEntry>) =>
+      relations([
+        entry('pay', 'itau', -150000, { description, institution: 'Itaú' }),
+        ...cards,
+      ]).map((relation) => [relation.inflowId, relation.status])
+    const nubank = entry('nu', 'card-nu', 150000, {
+      description: 'Pagamento recebido',
+      institution: 'Nubank',
+    })
+    // Three days later: the Nubank card outscores it by more than the margin.
+    const itau = entry('it', 'card-itau', 150000, {
+      bookedOn: '2026-09-13',
+      description: 'Pagamento recebido',
+      institution: 'Itaú',
+    })
+    assert.deepStrictEqual(
+      [
+        // Another payee, another issuer, or no word about a card.
+        pay('Pagamento boleto Escola ABC', nubank),
+        pay('Pagamento fatura Escola ABC', nubank),
+        pay('Pagamento fatura Itau', nubank),
+        pay('Pagamento', nubank),
+        // The only card, named or not; one of two cards when it is named.
+        pay('Pagamento fatura', nubank),
+        pay('Pgto fatura cartao Nubank', nubank),
+        pay('Pagamento fatura', nubank, itau),
+        pay('Pagamento fatura Nubank', nubank, itau),
+      ],
+      [
+        [['nu', 'suggested']],
+        [['nu', 'suggested']],
+        [['nu', 'suggested']],
+        [['nu', 'suggested']],
+        [['nu', 'confirmed']],
+        [['nu', 'confirmed']],
+        [['nu', 'suggested']],
+        [['nu', 'confirmed']],
+      ],
+    )
+  })
+
+  it('never confirms a card payment that names another or an unknown issuer', () => {
+    const pay = (description: string, card: MatchableEntry) =>
+      relations([
+        entry('pay', 'inter', -150000, {
+          description,
+          institution: 'Banco Inter',
+        }),
+        card,
+      ]).flatMap((relation) => [relation.reasons.at(-1), relation.status])
+    const itau = entry('it', 'card-itau', 150000, {
+      description: 'Pagamento recebido',
+      institution: 'Itaú',
+    })
+    const nubank = entry('nu', 'card-nu', 150000, {
+      description: 'Pagamento recebido',
+      institution: 'Nubank',
+    })
+    const c6 = entry('c6', 'card-c6', 150000, {
+      description: 'Pagamento recebido',
+      institution: 'C6 Bank',
+    })
+    assert.deepStrictEqual(
+      [
+        pay('Pagamento fatura NU PAGAMENTOS', itau),
+        pay('Pagamento fatura C6 BANK', itau),
+        pay('Pagamento fatura Itau via Nubank', nubank),
+        pay('Pagamento fatura C6 BANK', c6),
+      ],
+      [
+        ['names_other_payee', 'suggested'],
+        ['names_other_payee', 'suggested'],
+        ['names_other_payee', 'suggested'],
+        ['names_card_institution', 'confirmed'],
+      ],
+    )
+  })
+
+  it('never confirms a card payment whose card side names a third-party payer', () => {
+    const pay = (receipt: string) =>
+      relations([
+        entry('pay', 'inter', -50000, {
+          description: 'Pagamento fatura Nubank',
+          institution: 'Banco Inter',
+          ownerName: 'Joao Silva',
+        }),
+        entry('nu', 'card-nu', 50000, {
+          description: receipt,
+          institution: 'Nubank',
+          ownerName: 'Joao Silva',
+        }),
+      ]).flatMap((relation) => [relation.reasons.at(-1), relation.status])
+    assert.deepStrictEqual(
+      [
+        pay('Pagamento recebido de Maria Souza'),
+        pay('Pagamento recebido de Joao Silva'),
+        pay('Pagamento de fatura efetuado'),
+        pay('Pagamento recebido de Silva S.A.'),
+        pay('Pagamento recebido de Silva SA'),
+        pay('Pagamento recebido de Silva S/A'),
+        pay('Pagamento recebido de Silva S-A'),
+        pay('Pagamento recebido de Silva Ltda'),
+        pay('Pagamento recebido de Joao Silva ME'),
+        pay('Pagamento recebido Nubank S.A.'),
+      ],
+      [
+        ['names_third_party_payer', 'suggested'],
+        ['names_card_institution', 'confirmed'],
+        ['names_card_institution', 'confirmed'],
+        ['names_third_party_payer', 'suggested'],
+        ['names_third_party_payer', 'suggested'],
+        ['names_third_party_payer', 'suggested'],
+        ['names_third_party_payer', 'suggested'],
+        ['names_third_party_payer', 'suggested'],
+        ['names_third_party_payer', 'suggested'],
+        ['names_card_institution', 'confirmed'],
+      ],
+    )
+  })
+
+  it('keeps a pair suggested when any source of either side names a third party or contradicts it', () => {
+    const card = (descriptions: ReadonlyArray<string>) =>
+      relations([
+        entry('pay', 'inter', -50000, {
+          description: 'Pagamento fatura Nubank',
+          institution: 'Banco Inter',
+        }),
+        entry('nu', 'card-nu', 50000, {
+          description: descriptions[0]!,
+          descriptions,
+          institution: 'Nubank',
+        }),
+      ]).flatMap((relation) => [
+        relation.reasons.includes('conflicting_description')
+          ? 'conflicting_description'
+          : relation.reasons.at(-1),
+        relation.status,
+      ])
+    const transfer = (
+      outflow: ReadonlyArray<string>,
+      inflow: ReadonlyArray<string>,
+    ) =>
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: outflow[0]!,
+          descriptions: outflow,
+        }),
+        entry('in', 'inter', 50000, {
+          description: inflow[0]!,
+          descriptions: inflow,
+        }),
+      ]).map((relation) => relation.status)
+    assert.deepStrictEqual(
+      [
+        card(['Pagamento recebido', 'Pagamento recebido de Maria Souza']),
+        card(['Pagamento recebido de Maria Souza', 'Pagamento recebido']),
+        card(['Pagamento recebido', 'Pagamento recebido de Silva S.A.']),
+        card(['Pagamento recebido', 'Estorno']),
+        card(['Pagamento recebido', 'Pagamento de fatura efetuado']),
+      ],
+      [
+        ['names_third_party_payer', 'suggested'],
+        ['names_third_party_payer', 'suggested'],
+        ['names_third_party_payer', 'suggested'],
+        ['conflicting_description', 'suggested'],
+        ['names_card_institution', 'confirmed'],
+      ],
+    )
+    assert.deepStrictEqual(
+      [
+        transfer(
+          ['Pix enviado Donald'],
+          ['Pix recebido Donald', 'Pix recebido Maria Souza'],
+        ),
+        transfer(
+          ['Pix enviado Donald', 'Pix enviado Silva Comercio Ltda'],
+          ['Pix recebido Donald'],
+        ),
+        transfer(['Pix enviado Donald'], ['Pix recebido Donald', 'Estorno']),
+        transfer(
+          ['Pix enviado', 'Transferencia mesma titularidade'],
+          ['Pix recebido'],
+        ),
+        transfer(
+          ['Pix enviado Donald'],
+          ['Pix recebido Donald', 'Pix recebido'],
+        ),
+      ],
+      [
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['confirmed'],
+        ['confirmed'],
+      ],
+    )
+  })
+
+  it('compares counterparties source by source, so one agreeing source never hides another that disagrees', () => {
+    // Joao Carlos da Silva owns both accounts.
+    const transfer = (
+      outflow: ReadonlyArray<string>,
+      inflow: ReadonlyArray<string>,
+    ) =>
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: outflow[0]!,
+          descriptions: outflow,
+          ownerName: 'Joao Carlos da Silva',
+          institution: 'Nubank',
+        }),
+        entry('in', 'inter', 50000, {
+          description: inflow[0]!,
+          descriptions: inflow,
+          ownerName: 'Joao Carlos da Silva',
+          institution: 'Banco Inter',
+        }),
+      ]).flatMap((relation) => [
+        relation.status,
+        relation.reasons.find((reason) => reason.endsWith('counterparties')) ??
+          relation.reasons.find((reason) => reason.endsWith('counterparty')),
+      ])
+    assert.deepStrictEqual(
+      [
+        transfer(
+          ['Pix enviado Joao Silva Banco Nubank'],
+          ['Pix recebido Carlos Silva'],
+        ),
+        transfer(
+          [
+            'Pix enviado Joao Silva Banco Nubank',
+            'Pix enviado Joao Carlos da Silva Banco Nubank',
+          ],
+          ['Pix recebido Carlos Silva'],
+        ),
+        transfer(
+          [
+            'Pix enviado Joao Carlos da Silva Banco Nubank',
+            'Pix enviado Joao Silva Banco Nubank',
+          ],
+          ['Pix recebido Carlos Silva'],
+        ),
+        transfer(
+          ['Pix enviado Joao Silva'],
+          ['Pix recebido Carlos Silva', 'Pix recebido Joao Carlos da Silva'],
+        ),
+        transfer(
+          ['Pix enviado Joao', 'Pix enviado Carlos'],
+          ['Pix recebido Joao'],
+        ),
+        transfer(
+          ['Pix enviado Joao Silva', 'Pix enviado Joao Carlos da Silva'],
+          ['Pix recebido Joao Silva'],
+        ),
+        transfer(
+          ['Pix enviado Joao Silva', 'Pix enviado'],
+          ['Pix recebido Joao Silva'],
+        ),
+      ],
+      [
+        ['suggested', 'uncertain_counterparties'],
+        ['suggested', 'uncertain_counterparties'],
+        ['suggested', 'uncertain_counterparties'],
+        ['suggested', 'uncertain_counterparties'],
+        ['suggested', 'uncertain_counterparties'],
+        ['confirmed', 'same_counterparty'],
+        ['confirmed', 'same_counterparty'],
+      ],
+    )
+  })
+
+  it('never takes Banco do Brasil for another bank that has Brasil in its name', () => {
+    const santander = (description: string, kind: 'card' | 'bank') =>
+      relations([
+        entry('pay', 'inter', -150000, {
+          description,
+          institution: 'Banco Inter',
+        }),
+        entry('sa', kind === 'card' ? 'card-sa' : 'santander', 150000, {
+          description: kind === 'card' ? 'Pagamento recebido' : 'Pix recebido',
+          institution: 'Banco Santander (Brasil) S.A.',
+        }),
+      ]).flatMap((relation) => [relation.status])
+    const bb = relations([
+      entry('pay', 'inter', -150000, {
+        description: 'Pagamento fatura Banco do Brasil',
+        institution: 'Banco Inter',
+      }),
+      entry('bb', 'card-bb', 150000, {
+        description: 'Pagamento recebido',
+        institution: 'Banco do Brasil S.A.',
+      }),
+    ]).flatMap((relation) => [relation.status, relation.reasons.at(-1)])
+    assert.deepStrictEqual(
+      [
+        santander('Pagamento fatura Banco do Brasil', 'card'),
+        santander('Pix enviado Banco do Brasil', 'bank'),
+        bb,
+      ],
+      [['suggested'], ['suggested'], ['confirmed', 'names_card_institution']],
+    )
+  })
+
+  it('never confirms a card payment naming an issuer the shared filters drop', () => {
+    const pay = (description: string) =>
+      relations([
+        entry('pay', 'inter', -50000, {
+          description,
+          institution: 'Banco Inter',
+        }),
+        entry('nu', 'card-nu', 50000, {
+          description: 'Pagamento recebido',
+          institution: 'Nubank',
+        }),
+      ]).flatMap((relation) => [relation.status, relation.reasons.at(-1)])
+    assert.deepStrictEqual(
+      [pay('Pagamento fatura Banco Master'), pay('Pagamento fatura Nubank')],
+      [
+        ['suggested', 'names_other_payee'],
+        ['confirmed', 'names_card_institution'],
+      ],
+    )
+  })
+
+  it('reads Banco do Brasil and its S.A. as the institution in a transfer', () => {
+    const transfer = relations([
+      entry('out', 'inter', -50000, {
+        description: 'Pix enviado Banco do Brasil S.A.',
+        institution: 'Banco Inter',
+      }),
+      entry('in', 'bb', 50000, {
+        description: 'Pix recebido',
+        institution: 'Banco do Brasil S.A.',
+      }),
+    ]).flatMap((relation) => [relation.status, relation.reasons.at(-1)])
+    assert.deepStrictEqual(transfer, ['confirmed', 'names_other_account'])
+  })
+
+  it('keeps a pair suggested when an issuer or payee name is unfamiliar or alphanumeric', () => {
+    const card = relations([
+      entry('pay', 'inter', -50000, {
+        description: 'Pagamento fatura Banco Brasil',
+        institution: 'Banco Inter',
+      }),
+      entry('nu', 'card-nu', 50000, {
+        description: 'Pagamento recebido',
+        institution: 'Nubank',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    const transfer = relations([
+      entry('out', 'inter', -50000, {
+        description: 'Pix enviado 88i Banco Inter',
+        institution: 'Nubank',
+        ownerName: 'Joao Silva',
+      }),
+      entry('in', 'bank-inter', 50000, {
+        description: 'Pix recebido Joao Silva',
+        institution: 'Banco Inter',
+        ownerName: 'Joao Silva',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    const initials = relations([
+      entry('pay', 'inter', -50000, {
+        description: 'Pagamento fatura C&A',
+        institution: 'Banco Inter',
+      }),
+      entry('nu', 'card-nu', 50000, {
+        description: 'Pagamento recebido',
+        institution: 'Nubank',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    const joined = (name: string) =>
+      relations([
+        entry('out', 'itau', -50000, {
+          description: `Pix enviado ${name} Banco Inter`,
+          institution: 'Itaú',
+          ownerName: 'Donald Silveira',
+        }),
+        entry('in', 'bank-inter', 50000, {
+          description: 'Pix recebido Donald',
+          institution: 'Banco Inter',
+          ownerName: 'Donald Silveira',
+        }),
+      ]).flatMap((relation) => [relation.status])
+    assert.deepStrictEqual(
+      [
+        card,
+        transfer,
+        initials,
+        joined('D&A'),
+        joined('E&M'),
+        joined('O&S'),
+        joined('TEC2000'),
+      ],
+      [
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+      ],
+    )
+  })
+
+  it('needs the owner’s first name: a surname or initial alone is someone else', () => {
+    const pair = (outflow: string, inflow: string) =>
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: outflow,
+          ownerName: 'Joao Silva',
+        }),
+        entry('in', 'inter', 50000, {
+          description: inflow,
+          ownerName: 'Joao Silva',
+        }),
+      ]).flatMap((relation) => [relation.status])
+    const card = (receipt: string) =>
+      relations([
+        entry('pay', 'inter', -50000, {
+          description: 'Pagamento fatura Nubank',
+          institution: 'Banco Inter',
+          ownerName: 'Joao Silva',
+        }),
+        entry('nu', 'card-nu', 50000, {
+          description: receipt,
+          institution: 'Nubank',
+          ownerName: 'Joao Silva',
+        }),
+      ]).flatMap((relation) => [relation.status])
+    assert.deepStrictEqual(
+      [
+        pair('Pix enviado Jan Silva', 'Pix recebido Joao Silva'),
+        pair('Pix enviado para A. Silva', 'Pix recebido de Joao Silva'),
+        pair('Pix enviado para E. Silva', 'Pix recebido de Joao Silva'),
+        pair('Ted Silva', 'Pix recebido de Joao Silva'),
+        pair('Pix enviado Silva', 'Pix recebido Joao Silva'),
+        card('Pagamento recebido de A. Silva'),
+        pair('Pix enviado Joao Silva', 'Pix recebido Joao Silva'),
+        pair('Pix enviado Joao', 'Pix recebido de Joao Silva'),
+        card('Pagamento recebido de Joao Silva'),
+      ],
+      [
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['confirmed'],
+        ['confirmed'],
+        ['confirmed'],
+      ],
+    )
+  })
+
+  it('never reads a bank name beside a person’s name as the bank', () => {
+    const transfer = (outflow: string, inflow: string) =>
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: outflow,
+          institution: 'Nubank',
+          ownerName: 'Carlos Silva',
+        }),
+        entry('in', 'santander', 50000, {
+          description: inflow,
+          institution: 'Banco Santander (Brasil) S.A.',
+          ownerName: 'Carlos Silva',
+        }),
+      ]).flatMap((relation) => [relation.status])
+    const card = relations([
+      entry('pay', 'nubank', -50000, {
+        description: 'Pagamento fatura Santander',
+        institution: 'Nubank',
+        ownerName: 'Carlos Silva',
+      }),
+      entry('sa', 'card-sa', 50000, {
+        description: 'Pagamento recebido de Carlos Santander',
+        institution: 'Banco Santander (Brasil) S.A.',
+        ownerName: 'Carlos Silva',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    assert.deepStrictEqual(
+      [
+        transfer('Pix enviado Carlos Santander', 'Pix recebido Carlos Silva'),
+        transfer(
+          'Pix enviado Carlos Santander',
+          'Pix recebido Carlos Santander',
+        ),
+        card,
+        transfer('Pix enviado Santander', 'Pix recebido'),
+        transfer('Pix enviado Carlos Silva Banco Santander', 'Pix recebido'),
+      ],
+      [
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['confirmed'],
+        ['confirmed'],
+      ],
+    )
+  })
+
+  it('never reads bill wording inside a name as wording', () => {
+    const transfer = relations([
+      entry('out', 'nubank', -50000, {
+        description: 'Pix enviado Credito Joao',
+        ownerName: 'Joao Silva',
+      }),
+      entry('in', 'inter', 50000, {
+        description: 'Pix recebido Joao Silva',
+        ownerName: 'Joao Silva',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    const card = (paying: string, receipt: string) =>
+      relations([
+        entry('pay', 'inter', -50000, {
+          description: paying,
+          institution: 'Banco Inter',
+          ownerName: 'Joao Silva',
+        }),
+        entry('nu', 'card-nu', 50000, {
+          description: receipt,
+          institution: 'Nubank',
+          ownerName: 'Joao Silva',
+        }),
+      ]).flatMap((relation) => [relation.status])
+    assert.deepStrictEqual(
+      [
+        transfer,
+        card('Pagamento fatura Nubank', 'Pagamento recebido de Joao Cartoes'),
+        card('Pagamento fatura Nubank', 'Pagamento recebido Credito Joao'),
+        card('Pagamento fatura Credito Joao', 'Pagamento recebido'),
+        card('Pagamento fatura cartao de credito Nubank', 'Pagamento recebido'),
+      ],
+      [
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['confirmed'],
+      ],
+    )
+  })
+
+  it('reads the words after the opening phrase as the counterparty', () => {
+    const transfer = relations([
+      entry('out', 'nubank', -50000, {
+        description: 'Pix enviado para Deposito Joao Paulo',
+        ownerName: 'Joao Paulo Silva',
+      }),
+      entry('in', 'inter', 50000, {
+        description: 'Pix recebido Joao Paulo Silva',
+        ownerName: 'Joao Paulo Silva',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    const card = relations([
+      entry('pay', 'inter', -50000, {
+        description: 'Pagamento fatura Nubank',
+        institution: 'Banco Inter',
+        ownerName: 'Joao Paulo Silva',
+      }),
+      entry('nu', 'card-nu', 50000, {
+        description: 'Pagamento recebido de Deposito Joao Paulo',
+        institution: 'Nubank',
+        ownerName: 'Joao Paulo Silva',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    const plain = relations([
+      entry('out', 'nubank', -50000, {
+        description: 'Pix enviado - Depósito João Paulo',
+        ownerName: 'Joao Paulo Silva',
+      }),
+      entry('in', 'inter', 50000, {
+        description: 'Pix recebido Joao Paulo Silva',
+        ownerName: 'Joao Paulo Silva',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    const plainCard = relations([
+      entry('pay', 'inter', -50000, {
+        description: 'Pagamento fatura Nubank',
+        institution: 'Banco Inter',
+        ownerName: 'Joao Paulo Silva',
+      }),
+      entry('nu', 'card-nu', 50000, {
+        description: 'Pagamento recebido - Depósito João Paulo',
+        institution: 'Nubank',
+        ownerName: 'Joao Paulo Silva',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    assert.deepStrictEqual(
+      [transfer, card, plain, plainCard],
+      [['suggested'], ['suggested'], ['suggested'], ['suggested']],
+    )
+  })
+
+  it('reads only complete opening phrases and labelled Pix keys', () => {
+    const pair = (outflow: string, inflow: string) =>
+      relations([
+        entry('out', 'inter', -50000, {
+          description: outflow,
+          institution: 'Banco Inter',
+          ownerName: 'Joao Paulo Silva',
+        }),
+        entry('in', 'nubank', 50000, {
+          description: inflow,
+          institution: 'Nubank',
+          ownerName: 'Joao Paulo Silva',
+        }),
+      ]).flatMap((relation) => [relation.status])
+    const card = relations([
+      entry('pay', 'inter', -50000, {
+        description: 'Pagamento fatura Nubank',
+        institution: 'Banco Inter',
+        ownerName: 'Joao Paulo Silva',
+      }),
+      entry('nu', 'card-nu', 50000, {
+        description: 'Pagamento recebido - Celular João Paulo',
+        institution: 'Nubank',
+        ownerName: 'Joao Paulo Silva',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    assert.deepStrictEqual(
+      [
+        pair('Pix - Depósito João Paulo', 'Pix recebido Joao Paulo Silva'),
+        pair('Pix enviado - Celular João Paulo', 'Pix recebido Banco Nubank'),
+        card,
+        pair('Pix enviado Joao Paulo', 'Pix recebido Joao Paulo Silva'),
+      ],
+      [['suggested'], ['suggested'], ['suggested'], ['confirmed']],
+    )
+  })
+
+  it('never names a card issuer by a start its name shares with another', () => {
+    const result = relations([
+      entry('pay', 'inter', -50000, {
+        description: 'Pagamento fatura Banco Cooperativo',
+        institution: 'Banco Inter',
+      }),
+      entry('sicredi', 'card-sicredi', 50000, {
+        description: 'Pagamento recebido',
+        institution: 'Banco Cooperativo Sicredi S.A.',
+      }),
+    ]).flatMap((relation) => [relation.status, relation.reasons.at(-1)])
+    assert.deepStrictEqual(result, ['suggested', 'names_other_payee'])
+  })
+
+  it('confirms only when every word of every description is understood', () => {
+    const transfer = (
+      outflow: string,
+      inflow: string,
+      fields: Partial<MatchableEntry> = {},
+      inInstitution = 'Banco Inter',
+    ) =>
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: outflow,
+          institution: 'Nubank',
+          ...fields,
+        }),
+        entry('in', 'inter', 50000, {
+          description: inflow,
+          institution: inInstitution,
+          ...fields,
+        }),
+      ]).flatMap((relation) => [relation.status])
+    const card = (
+      payment: string,
+      receipt: string,
+      fields: Partial<MatchableEntry> = {},
+      issuer = 'Nubank',
+    ) =>
+      relations([
+        entry('pay', 'inter', -50000, {
+          description: payment,
+          institution: 'Banco Inter',
+          ...fields,
+        }),
+        entry('nu', 'card-nu', 50000, {
+          description: receipt,
+          institution: issuer,
+          ...fields,
+        }),
+      ]).flatMap((relation) => [relation.status])
+    const joao = { ownerName: 'Joao Silva' }
+    const ted = { ownerName: 'Ted Silva' }
+    const suggested = [
+      // An undotted middle initial is someone's initial.
+      transfer('Pix enviado Joao A Silva', 'Pix recebido Joao Silva', joao),
+      card(
+        'Pagamento fatura Nubank',
+        'Pagamento recebido de Joao A Silva',
+        joao,
+      ),
+      // A bank's name beside a person's is part of their name.
+      transfer(
+        'Pix enviado Joao Safra',
+        'Pix recebido',
+        joao,
+        'Banco Safra S.A.',
+      ),
+      card(
+        'Pagamento fatura Banco Safra',
+        'Pagamento recebido de Joao Safra',
+        joao,
+        'Banco Safra S.A.',
+      ),
+      // A movement word past the leading phrase is a name.
+      transfer('Pix enviado Ted Banco Inter', 'Pix recebido'),
+      card('Pagamento fatura Nubank', 'Pagamento recebido de Ted'),
+      // A surname alone never proves the owner, even with an unusual first name.
+      transfer('Pix enviado Silva', 'Pix recebido Silva', ted),
+      // An unknown issuer never reads as no one.
+      card('Pagamento fatura Pag Bank', 'Pagamento recebido'),
+    ]
+    const confirmed = [
+      transfer('Pix enviado Joao Silva', 'Pix recebido Joao Silva', joao),
+      transfer('Pix enviado Ted Silva', 'Pix recebido Ted Silva', ted),
+      transfer('Pix enviado Banco Inter', 'Pix recebido'),
+      transfer('Transferencia mesma titularidade', 'Pix recebido'),
+      transfer('Pix enviado conta propria', 'Pix recebido'),
+      card('Pagamento fatura Nubank', 'Pagamento recebido'),
+    ]
+    assert.deepStrictEqual(
+      [...suggested, ...confirmed],
+      [
+        ...suggested.map(() => ['suggested']),
+        ...confirmed.map(() => ['confirmed']),
+      ],
+    )
+    assert.isTrue(
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: 'Pix enviado Ted Banco Inter',
+          institution: 'Nubank',
+        }),
+        entry('in', 'inter', 50000, {
+          description: 'Pix recebido',
+          institution: 'Banco Inter',
+        }),
+      ])[0]!.reasons.includes('unrecognized_words'),
+    )
+  })
+
+  it('reads alphanumeric issuers and payees as names, and codes as no one', () => {
+    const pay = (description: string, card: MatchableEntry) =>
+      relations([
+        entry('pay', 'itau', -50000, { description, institution: 'Itaú' }),
+        card,
+      ]).flatMap((relation) => [relation.reasons.at(-1), relation.status])
+    const nubank = entry('nu', 'card-nu', 50000, {
+      description: 'Pagamento recebido',
+      institution: 'Nubank',
+    })
+    const c6 = entry('c6', 'card-c6', 50000, {
+      description: 'Pagamento recebido',
+      institution: 'C6 Bank',
+    })
+    assert.deepStrictEqual(
+      [
+        pay('Pagamento fatura C6BANK', nubank),
+        pay('Pagamento fatura Nubank C6BANK', nubank),
+        pay('Pagamento fatura 99PAY', nubank),
+        pay('Pagamento fatura C6BANK', c6),
+        pay('Pagamento fatura NU PAGAMENTOS', nubank),
+        pay('Pagamento fatura Nubank E12345678202609101234abcdef0', nubank),
+        pay('Pagamento fatura Nubank final XXXX1234 10SET', nubank),
+      ],
+      [
+        ['names_other_payee', 'suggested'],
+        ['names_other_payee', 'suggested'],
+        ['names_other_payee', 'suggested'],
+        ['names_card_institution', 'confirmed'],
+        ['names_card_institution', 'confirmed'],
+        ['names_card_institution', 'confirmed'],
+        ['names_card_institution', 'confirmed'],
+      ],
+    )
+    const transfer = relations([
+      entry('out', 'itau', -50000, {
+        description: 'Pix enviado C6BANK Banco Nubank',
+        institution: 'Itaú',
+      }),
+      entry('in', 'nubank', 50000, {
+        description: 'Pix recebido',
+        institution: 'Nubank',
+      }),
+    ])
+    assert.deepStrictEqual(
+      transfer.map((relation) => relation.status),
+      ['suggested'],
+    )
+    assert.isTrue(transfer[0]!.reasons.includes('names_third_party'))
+  })
+
+  it('pairs a card payment up to a week apart, either way, and no further', () => {
+    const pay = (bookedOn: string) =>
+      relations([
+        entry('pay', 'nubank', -150000, {
+          description: 'Pagamento fatura Nubank',
+        }),
+        entry('credit', 'card-nu', 150000, {
+          bookedOn,
+          description: 'Pagamento recebido',
+          institution: 'Nubank',
+        }),
+      ]).length
+    assert.deepStrictEqual(
+      ['2026-09-03', '2026-09-17', '2026-09-02', '2026-09-18'].map(pay),
+      [1, 1, 0, 0],
+    )
+  })
+
+  it('never confirms a pair the descriptions contradict or do not describe', () => {
+    const contradicted = relations([
+      entry('pix', 'nubank', -50000, { description: 'Pix enviado Maria' }),
+      entry('salary', 'inter', 50000, { description: 'SALARIO EMPRESA' }),
+    ])
+    const undescribed = relations([
+      entry('a', 'nubank', -50000),
+      entry('b', 'inter', 50000),
+    ])
+    assert.deepStrictEqual(
+      [...contradicted, ...undescribed].map((relation) => relation.status),
+      ['suggested', 'suggested'],
+    )
+    assert.isTrue(contradicted[0]!.reasons.includes('conflicting_description'))
+  })
+
+  it('keeps currencies apart and only suggests pending movements', () => {
+    assert.deepStrictEqual(
+      summary([
+        entry('brl', 'nubank', -50000, { description: 'Pix enviado' }),
+        entry('usd', 'inter', 50000, {
+          description: 'Pix recebido',
+          currency: 'USD',
+        }),
+      ]),
+      [],
+    )
+    const pending = relations([
+      entry('out', 'nubank', -50000, {
+        description: 'Pix enviado',
+        status: 'pending',
+      }),
+      entry('in', 'inter', 50000, { description: 'Pix recebido' }),
+    ])
+    assert.deepStrictEqual(
+      [pending[0]?.status, pending[0]?.reasons.includes('pending')],
+      ['suggested', true],
+    )
+  })
+
+  it('only suggests a pair when another account could be the other side', () => {
+    const result = relations([
+      entry('out', 'nubank', -10000, { description: 'Pix enviado' }),
+      entry('in-a', 'inter', 10000, { description: 'Pix recebido' }),
+      entry('in-b', 'btg', 10000, { description: 'Pix recebido' }),
+    ])
+    assert.deepStrictEqual(
+      result.map((relation) => [
+        relation.status,
+        relation.reasons.includes('ambiguous'),
+      ]),
+      [['suggested', true]],
+    )
+  })
+
+  it('finds every pair a batch allows instead of the first good-looking one', () => {
+    // Greedy would pair 10→10 and strand 7 and 13; two pairs are possible.
+    const result = relations([
+      entry('out-7', 'nubank', -10000, {
+        bookedOn: '2026-09-07',
+        description: 'Pix',
+      }),
+      entry('out-10', 'nubank', -10000, {
+        bookedOn: '2026-09-10',
+        description: 'Pix',
+      }),
+      entry('in-10', 'inter', 10000, {
+        bookedOn: '2026-09-10',
+        description: 'Pix',
+      }),
+      entry('in-13', 'inter', 10000, {
+        bookedOn: '2026-09-13',
+        description: 'Pix',
+      }),
+    ])
+    assert.strictEqual(result.length, 2)
+  })
+
+  it('gives TED and investment movements a longer window', () => {
+    assert.deepStrictEqual(
+      summary([
+        entry('out', 'nubank', -10000, {
+          bookedOn: '2026-09-04',
+          description: 'TED enviada',
+        }),
+        entry('in', 'inter', 10000, {
+          bookedOn: '2026-09-08',
+          description: 'TED recebida',
+        }),
+      ]).length,
+      1,
+    )
+  })
+
+  it('never pairs within an account or from a card', () => {
+    assert.deepStrictEqual(
+      summary([
+        entry('a', 'nubank', -100),
+        entry('b', 'nubank', 100),
+        entry('c', 'card-nu', -200),
+        entry('d', 'inter', 200),
+      ]),
+      [],
+    )
+  })
+
+  it('never suggests a rejected pair again and does not auto-confirm the next one', () => {
+    const entries = [
+      entry('out', 'nubank', -10000, { description: 'Pix enviado' }),
+      entry('in-a', 'inter', 10000, { description: 'Pix recebido' }),
+      entry('in-b', 'btg', 10000, {
+        bookedOn: '2026-09-11',
+        description: 'Pix recebido',
+      }),
+    ]
+    const rejected = new Map<string, Decision>([
+      [relationKey('internal_transfer', 'out', 'in-a'), 'rejected'],
+    ])
+    assert.deepStrictEqual(summary(entries, rejected), [
+      ['internal_transfer', 'out', 'in-b', 'suggested'],
+    ])
+  })
+
+  it('keeps a confirmed pair, and flags it when the facts no longer add up', () => {
+    const key = relationKey('internal_transfer', 'out', 'in')
+    const confirmed = new Map<string, Decision>([[key, 'confirmed']])
+    const far = relations(
+      [
+        entry('out', 'nubank', -10000, { bookedOn: '2026-09-01' }),
+        entry('in', 'inter', 10000, { bookedOn: '2026-09-20' }),
+      ],
+      confirmed,
+    )
+    const corrected = relations(
+      [entry('out', 'nubank', -12000), entry('in', 'inter', 10000)],
+      confirmed,
+    )
+    assert.deepStrictEqual(
+      [...far, ...corrected].map((relation) => [
+        relation.status,
+        relation.origin,
+      ]),
+      [
+        ['confirmed', 'person'],
+        ['conflict', 'person'],
+      ],
+    )
+  })
+
+  it('reports a confirmation whose entry vanished and keeps its partner reserved', () => {
+    const key = relationKey('internal_transfer', 'gone', 'in')
+    const result = matchRelations(
+      [
+        entry('in', 'inter', 10000, { description: 'Pix recebido' }),
+        entry('other', 'nubank', -10000, { description: 'Pix enviado' }),
+      ],
+      new Map([[key, 'confirmed']]),
+    )
+    assert.deepStrictEqual(
+      [result.relations, result.orphaned],
+      [
+        [],
+        [
+          {
+            key,
+            missing: ['gone'],
+            reason: 'entry_missing',
+            reserved: ['in'],
+          },
+        ],
+      ],
+    )
+  })
+
+  it('reports a confirmation whose entry another confirmation already holds', () => {
+    // Two confirmed transfers whose outflows merged into `out`.
+    const first = relationKey('internal_transfer', 'out', 'in-a')
+    const second = relationKey('internal_transfer', 'out', 'in-b')
+    const result = matchRelations(
+      [
+        entry('out', 'nubank', -10000, { description: 'Pix enviado Donald' }),
+        entry('in-a', 'inter', 10000, { description: 'Pix recebido Donald' }),
+        entry('in-b', 'btg', 10000, { description: 'Pix recebido Donald' }),
+        entry('other', 'nubank', -10000, {
+          description: 'Pix enviado Donald',
+        }),
+      ],
+      new Map<string, Decision>([
+        [first, 'confirmed'],
+        [second, 'confirmed'],
+      ]),
+    )
+    assert.deepStrictEqual(
+      [
+        result.relations.map((relation) => [relation.key, relation.origin]),
+        result.orphaned,
+      ],
+      [
+        [[first, 'person']],
+        [
+          {
+            key: second,
+            missing: [],
+            reason: 'overlapping_confirmation',
+            reserved: ['in-b'],
+          },
+        ],
+      ],
+    )
+  })
+
+  it('assigns entries that share no candidate apart from each other', () => {
+    // Many same-amount transfers, each far from the next: every pair is found.
+    const day = (index: number) => addDays('2020-01-01', index * 10)
+    const entries = Array.from({ length: 300 }, (_, index) => [
+      entry(`out-${index}`, 'nubank', -10000, {
+        bookedOn: day(index),
+        description: 'Pix enviado Donald',
+      }),
+      entry(`in-${index}`, 'inter', 10000, {
+        bookedOn: day(index),
+        description: 'Pix recebido Donald',
+      }),
+    ]).flat()
+    const result = relations(entries)
+    assert.isTrue(
+      result.length === 300 &&
+        result.every(
+          (relation) =>
+            relation.outflowId.slice(4) === relation.inflowId.slice(3) &&
+            relation.status === 'confirmed',
+        ),
+    )
+  })
+
+  it('pairs each entry at most once', () => {
+    const result = relations([
+      entry('out-1', 'nubank', -10000),
+      entry('out-2', 'nubank', -10000),
+      entry('in-1', 'inter', 10000),
+      entry('in-2', 'inter', 10000),
+    ])
+    const legs = result.flatMap((relation) => [
+      relation.outflowId,
+      relation.inflowId,
+    ])
+    assert.deepStrictEqual([result.length, new Set(legs).size], [2, 4])
+  })
+})

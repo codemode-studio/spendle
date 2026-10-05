@@ -14,6 +14,7 @@ import * as Reactor from './events/Reactor.ts'
 import { Imports } from './imports/Imports.ts'
 import { Accounts } from './ledger/Accounts.ts'
 import * as Entries from './ledger/Entries.ts'
+import * as Reconciliation from './reconciliation/Reconciliation.ts'
 import { Observations } from './ledger/Observations.ts'
 import { OpenFinance } from './openfinance/OpenFinance.ts'
 import { PluggyClient } from './openfinance/PluggyClient.ts'
@@ -40,6 +41,7 @@ const CoreLive = Layer.mergeAll(
   Reactor.Reactors.layer,
   Imports.layer,
   Entries.Entries.layer,
+  Reconciliation.Reconciliation.layer,
 ).pipe(
   Layer.provideMerge(Observations.layer),
   Layer.provideMerge(Accounts.layer),
@@ -49,6 +51,7 @@ const CoreLive = Layer.mergeAll(
 
 const OpenFinanceLive = Layer.mergeAll(
   Entries.reactor,
+  Reconciliation.reactor,
   SyncReactor.layer,
   Webhook.reactor,
   Webhook.registration,
