@@ -302,10 +302,13 @@ const nameWords = (text: string) =>
 // stopword `da`. A corporation suffix (`S.A.`, `S/A`, `S-A`) reads as `sa`,
 // left to the corporation check.
 const joinInitials = (text: string) =>
-  text.replace(/\b[a-z0-9](?:[&.\/'-][a-z0-9])+\b\.?/g, (run) => {
-    const letters = run.replace(/[^a-z0-9]/g, '')
-    return letters === 'sa' ? 'sa' : `_${letters}_`
-  })
+  text
+    .replace(/\b[a-z0-9](?:[&.\/'-][a-z0-9])+\b\.?/g, (run) => {
+      const letters = run.replace(/[^a-z0-9]/g, '')
+      return letters === 'sa' ? 'sa' : `_${letters}_`
+    })
+    // A lone letter with a period is an initial (`A. Silva`), never an article.
+    .replace(/(^|[^a-z0-9_])([a-z])\./g, '$1_$2_')
 
 // One-letter words that are grammar, not names: every other letter may be an
 // initial that identifies someone.
@@ -374,6 +377,30 @@ const institutionWords = (entry: MatchableEntry) =>
     ),
   )
 
+/** An account owner's name words and their first name. */
+interface Owner {
+  readonly words: ReadonlySet<string>
+  readonly first: string | null
+}
+
+const ownerOf = (name: string, institutions: ReadonlySet<string>): Owner => {
+  const words = counterparties(name, institutions)
+  const first =
+    foldDescription(name)
+      .split(/[^a-z0-9]+/)
+      .find((word) => words.has(word)) ?? null
+  return { words, first }
+}
+
+/**
+ * Whether a description's words name the owner: all of them belong to the
+ * owner's name and they include the first name. A surname alone (`Silva`,
+ * `A. Silva`, `Ted Silva` once filters strip a word) is shared by relatives
+ * and strangers, so it never proves the owner.
+ */
+const namesOwner = (words: ReadonlySet<string>, owner: Owner) =>
+  owner.first !== null && words.has(owner.first) && within(words, owner.words)
+
 /**
  * Whether a description may name someone other than the owner: a word that
  * could identify a party and is not within every owner's name (`Donald`
@@ -385,14 +412,11 @@ const institutionWords = (entry: MatchableEntry) =>
  */
 const namesThirdParty = (
   description: string,
-  owners: ReadonlyArray<ReadonlySet<string>>,
+  owners: ReadonlyArray<Owner>,
   institutions: ReadonlySet<string>,
 ) => {
   const words = identityWords(description, institutions)
-  if (
-    words.size > 0 &&
-    !owners.every((owner) => owner.size > 0 && within(words, owner))
-  )
+  if (words.size > 0 && !owners.every((owner) => namesOwner(words, owner)))
     return true
   // Read from the folded text itself (shared word filters drop `ltda`), with
   // multi-word bank names aliased like the institutions they are compared to.
@@ -479,7 +503,7 @@ const counterpartEvidence = (
   )
   const different = compared === 'different'
   const owners = [outflow, inflow].map((entry) =>
-    counterparties(entry.ownerName ?? '', institutions),
+    ownerOf(entry.ownerName ?? '', institutions),
   )
   const thirdParty = [outflow, inflow].some((entry) =>
     descriptionsOf(entry).some((text) =>
@@ -672,7 +696,7 @@ const cardEvidence = (outflow: MatchableEntry, card: MatchableEntry) => {
     ...institutionWords(outflow),
     ...institutionWords(card),
   ])
-  const owner = counterparties(card.ownerName ?? '', institutions)
+  const owner = ownerOf(card.ownerName ?? '', institutions)
   const thirdPartyPayer = descriptionsOf(card).some((text) =>
     namesThirdParty(text, [owner], institutions),
   )

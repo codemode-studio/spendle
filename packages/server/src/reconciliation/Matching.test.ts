@@ -672,7 +672,7 @@ describe('matchRelations', () => {
     )
   })
 
-  it('reads a month abbreviation as a possible name', () => {
+  it('needs the owner’s first name: a surname or initial alone is someone else', () => {
     const pair = (outflow: string, inflow: string) =>
       relations([
         entry('out', 'nubank', -50000, {
@@ -684,12 +684,42 @@ describe('matchRelations', () => {
           ownerName: 'Joao Silva',
         }),
       ]).flatMap((relation) => [relation.status])
+    const card = (receipt: string) =>
+      relations([
+        entry('pay', 'inter', -50000, {
+          description: 'Pagamento fatura Nubank',
+          institution: 'Banco Inter',
+          ownerName: 'Joao Silva',
+        }),
+        entry('nu', 'card-nu', 50000, {
+          description: receipt,
+          institution: 'Nubank',
+          ownerName: 'Joao Silva',
+        }),
+      ]).flatMap((relation) => [relation.status])
     assert.deepStrictEqual(
       [
         pair('Pix enviado Jan Silva', 'Pix recebido Joao Silva'),
+        pair('Pix enviado para A. Silva', 'Pix recebido de Joao Silva'),
+        pair('Pix enviado para E. Silva', 'Pix recebido de Joao Silva'),
+        pair('Ted Silva', 'Pix recebido de Joao Silva'),
+        pair('Pix enviado Silva', 'Pix recebido Joao Silva'),
+        card('Pagamento recebido de A. Silva'),
         pair('Pix enviado Joao Silva', 'Pix recebido Joao Silva'),
+        pair('Pix enviado Joao', 'Pix recebido de Joao Silva'),
+        card('Pagamento recebido de Joao Silva'),
       ],
-      [['suggested'], ['confirmed']],
+      [
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['confirmed'],
+        ['confirmed'],
+        ['confirmed'],
+      ],
     )
   })
 
