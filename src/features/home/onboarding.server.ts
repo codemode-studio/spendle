@@ -1,48 +1,14 @@
-import { and, count, eq, isNull, or } from 'drizzle-orm'
-import { db, ensureDatabase } from '#/db/index.server'
-import { accounts, creditCards, recurrences, transactions } from '#/db/schema'
+import * as Effect from 'effect/Effect'
+import { eq } from 'drizzle-orm'
 
-/** Small setup read for the persistent sidebar; never loads ledger rows. */
-export async function getOnboardingStatus() {
+import { db, ensureDatabase } from '#/db/index.server'
+import { recurrences } from '#/db/schema'
+import type { V2Client } from '#/lib/v2/client.server'
+
+/** Recurrences still live in V1: whether any is active. */
+export async function hasActiveRecurrences() {
   await ensureDatabase()
-  const hasAccount = Boolean(
-    db
-      .select({ id: accounts.id })
-      .from(accounts)
-      .where(eq(accounts.active, true))
-      .limit(1)
-      .get(),
-  )
-  const hasCard = Boolean(
-    db
-      .select({ id: creditCards.id })
-      .from(creditCards)
-      .where(eq(creditCards.active, true))
-      .limit(1)
-      .get(),
-  )
-  const hasTransactions = Boolean(
-    db
-      .select({ id: transactions.id })
-      .from(transactions)
-      .where(eq(transactions.status, 'confirmed'))
-      .limit(1)
-      .get(),
-  )
-  const uncategorizedCount = db
-    .select({ value: count() })
-    .from(transactions)
-    .where(
-      and(
-        eq(transactions.status, 'confirmed'),
-        or(
-          isNull(transactions.categoryId),
-          eq(transactions.categoryId, 'uncategorized'),
-        ),
-      ),
-    )
-    .get()!.value
-  const hasRecurrences = Boolean(
+  return Boolean(
     db
       .select({ id: recurrences.id })
       .from(recurrences)
@@ -50,11 +16,31 @@ export async function getOnboardingStatus() {
       .limit(1)
       .get(),
   )
-  return {
-    accounts: hasAccount || hasCard,
-    transactions: hasTransactions,
-    categories: hasTransactions && uncategorizedCount === 0,
-    recurrences: hasRecurrences,
-    uncategorizedCount,
-  }
+}
+
+/**
+ * The ledger steps of the setup, from V2: an active account or card, any
+ * entry, and no entry left without a category or waiting for review.
+ * Counts only; never loads entries.
+ */
+export function ledgerSetup(client: V2Client) {
+  const count = (query: Parameters<V2Client['entries']['list']>[0]['query']) =>
+    client.entries
+      .list({ query: { ...query, limit: 1 } })
+      .pipe(Effect.map((page) => page.total))
+  return Effect.all({
+    accounts: client.accounts
+      .list({ query: {} })
+      .pipe(Effect.map((accounts) => accounts.length > 0)),
+    entries: count({}),
+    uncategorized: count({ categoryStatus: 'none' }),
+    review: count({ categoryStatus: 'review' }),
+  }).pipe(
+    Effect.map(({ accounts, entries, uncategorized, review }) => ({
+      accounts,
+      transactions: entries > 0,
+      categories: entries > 0 && uncategorized + review === 0,
+      uncategorizedCount: uncategorized + review,
+    })),
+  )
 }

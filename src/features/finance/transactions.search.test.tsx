@@ -21,12 +21,21 @@ it('validates URL values and preserves centavo precision and legacy category lin
   const state = load(
     '?page=3&category=uncategorized&direction=invalid&minAmount=1.500%2C51',
   )
-  expect(transactionSearchToFilters(state)).toMatchObject({
+  expect(transactionSearchToFilters(state)).toEqual({
     page: 2,
-    category: 'all',
-    onlyUncategorized: true,
-    direction: 'all',
-    minCents: 150051,
+    categoryStatus: 'none',
+    minAmountCents: 150051,
+  })
+  expect(
+    transactionSearchToFilters(
+      load('?category=review&direction=out&target=acc-1&search=%20pao%20'),
+    ),
+  ).toEqual({
+    page: 0,
+    categoryStatus: 'review',
+    direction: 'outflow',
+    accountId: 'acc-1',
+    text: 'pao',
   })
   expect(load(`?search=${'x'.repeat(250)}`).search).toHaveLength(200)
   expect(load('?dateFrom=2026-02-29&dateTo=invalid')).toMatchObject({
@@ -35,5 +44,5 @@ it('validates URL values and preserves centavo precision and legacy category lin
   })
   expect(
     transactionSearchToFilters(load('?dateFrom=2026-08-05&dateTo=2026-08-21')),
-  ).toMatchObject({ dateFrom: '2026-08-05', dateTo: '2026-08-21' })
+  ).toMatchObject({ from: '2026-08-05', to: '2026-08-21' })
 })

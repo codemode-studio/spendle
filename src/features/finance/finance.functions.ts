@@ -1,25 +1,17 @@
 import { identifyImportFiles } from './import-identification.server'
-import { getTransactionsPage } from './transactions.server'
-import { transactionFiltersSchema } from './transactions.filters'
 import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
 
 import { currencySchema } from '#/domain/currency'
 
 import {
-  categorizeUncategorizedTransactionsWithAi,
-  createAccount,
-  updateAccount,
   createManualBalanceCheckpoint,
   createManualTransaction,
   createCreditCard,
   createInstallment,
-  createOwnershipScope,
   setReconciliationStatus,
   updateCreditCard,
   updateStagedTransactionCategory,
-  updateTransactionCategory,
-  updateTransactionNote,
 } from './finance.server'
 import {
   getFinanceSnapshot,
@@ -41,7 +33,6 @@ import {
   updateSettings,
 } from './planning.server'
 import {
-  clearTransactionData,
   commitImport,
   confirmImportCoverage,
   rejectImport,
@@ -55,8 +46,6 @@ import {
   getKnowledgeBaseSnapshot,
 } from './knowledge-base.server'
 import {
-  applyKnowledgeSync,
-  planKnowledgeSync,
   reviewKnowledgeCategoryAndSync,
   updateKnowledgePatternAndSync,
 } from './knowledge-sync.server'
@@ -106,34 +95,6 @@ export const getImportReviewSnapshotFn = createServerFn({
 export const retryImportFinalizationFn = createServerFn({ method: 'POST' })
   .validator(z.object({ importId: z.string().min(1) }))
   .handler(({ data }) => retryImportFinalization(data.importId))
-
-export const createOwnershipScopeFn = createServerFn({ method: 'POST' })
-  .validator(
-    z.object({
-      name: z.string().trim().min(2).max(80),
-      type: z.enum(['household', 'person', 'company_br']),
-    }),
-  )
-  .handler(({ data }) => createOwnershipScope(data))
-
-const accountInputSchema = z.object({
-  name: z.string().trim().min(2).max(80),
-  institutionName: z.string().trim().min(2).max(80),
-  ownershipScopeId: z.string().min(1),
-  kind: z.enum(['checking', 'savings', 'cash', 'investment']),
-  purpose: z.enum(['operating', 'reserve', 'investment']),
-  currency: currencySchema,
-})
-
-export const createAccountFn = createServerFn({ method: 'POST' })
-  .validator(
-    accountInputSchema.extend({ initialBalanceCents: z.number().int() }),
-  )
-  .handler(({ data }) => createAccount(data))
-
-export const updateAccountFn = createServerFn({ method: 'POST' })
-  .validator(accountInputSchema.extend({ id: z.string().min(1) }))
-  .handler(({ data }) => updateAccount(data))
 
 export const createManualBalanceCheckpointFn = createServerFn({
   method: 'POST',
@@ -264,35 +225,6 @@ export const addGoalContributionFn = createServerFn({ method: 'POST' })
     }),
   )
   .handler(({ data }) => addGoalContribution(data))
-
-export const updateTransactionCategoryFn = createServerFn({ method: 'POST' })
-  .validator(
-    z.object({
-      transactionId: z.string().min(1),
-      categoryId: z.string().min(1),
-      saveRule: z.boolean(),
-      counterpartyAccountId: z.string().min(1).nullable().optional(),
-    }),
-  )
-  .handler(({ data }) => updateTransactionCategory(data))
-
-export const updateTransactionNoteFn = createServerFn({ method: 'POST' })
-  .validator(
-    z.object({
-      transactionId: z.string().min(1),
-      note: z.string().trim().max(320).nullable(),
-    }),
-  )
-  .handler(({ data }) =>
-    updateTransactionNote({
-      ...data,
-      note: data.note || null,
-    }),
-  )
-
-export const categorizeUncategorizedTransactionsWithAiFn = createServerFn({
-  method: 'POST',
-}).handler(() => categorizeUncategorizedTransactionsWithAi())
 
 export const updateStagedTransactionCategoryFn = createServerFn({
   method: 'POST',
@@ -484,10 +416,6 @@ export const closeCurrentBudgetFn = createServerFn({ method: 'POST' }).handler(
   () => closeCurrentBudget(),
 )
 
-export const clearTransactionDataFn = createServerFn({ method: 'POST' })
-  .validator(z.object({ confirmation: z.literal('APAGAR') }))
-  .handler(() => clearTransactionData())
-
 export const detectRecurrencesFn = createServerFn({ method: 'GET' }).handler(
   () => detectRecurrenceCandidates(),
 )
@@ -537,14 +465,6 @@ export const updateKnowledgePatternFn = createServerFn({ method: 'POST' })
   )
   .handler(({ data }) => updateKnowledgePatternAndSync(data))
 
-export const previewKnowledgeSyncFn = createServerFn({ method: 'GET' }).handler(
-  () => planKnowledgeSync(),
-)
-
-export const applyKnowledgeSyncFn = createServerFn({ method: 'POST' }).handler(
-  () => applyKnowledgeSync(),
-)
-
 export const forgetKnowledgeEntryFn = createServerFn({ method: 'POST' })
   .validator(z.object({ id: z.string().min(1) }))
   .handler(({ data }) => forgetKnowledgeEntry(data))
@@ -559,10 +479,6 @@ export const getConfigurationSnapshotFn = createServerFn({
 export const getPlanningSnapshotFn = createServerFn({ method: 'GET' }).handler(
   () => getPlanningSnapshot(),
 )
-
-export const getTransactionsPageFn = createServerFn({ method: 'GET' })
-  .validator(transactionFiltersSchema)
-  .handler(({ data }) => getTransactionsPage(data))
 
 export const getCategoryTransactionsFn = createServerFn({
   method: 'GET',

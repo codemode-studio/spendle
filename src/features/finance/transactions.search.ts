@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { toMinorUnits } from '#/domain/currency'
+import type { EntryPageQuery } from '#/features/v2/entries.functions'
 
 export const transactionSearchDefaults = {
   search: '',
@@ -44,19 +45,36 @@ export function parseAmountInput(text: string): number | null {
   }
 }
 
+/**
+ * The URL state as the V2 entries query. `category` is a category id, or
+ * `review` / `uncategorized` for the entries waiting on a decision. URL pages
+ * start at one; API pages start at zero.
+ */
 export function transactionSearchToFilters(
   search: z.infer<typeof transactionSearchSchema>,
-) {
+): EntryPageQuery {
+  const minAmountCents = parseAmountInput(search.minAmount)
+  const maxAmountCents = parseAmountInput(search.maxAmount)
+  const text = search.search.trim()
   return {
-    search: search.search,
-    target: search.target,
-    category: search.category === 'uncategorized' ? 'all' : search.category,
-    onlyUncategorized: search.category === 'uncategorized',
-    direction: search.direction,
-    minCents: parseAmountInput(search.minAmount),
-    maxCents: parseAmountInput(search.maxAmount),
-    dateFrom: search.dateFrom || null,
-    dateTo: search.dateTo || null,
+    ...(text ? { text } : {}),
+    ...(search.target !== 'all' ? { accountId: search.target } : {}),
+    ...(search.category === 'uncategorized'
+      ? { categoryStatus: 'none' as const }
+      : search.category === 'review'
+        ? { categoryStatus: 'review' as const }
+        : search.category !== 'all'
+          ? { categoryId: search.category }
+          : {}),
+    ...(search.direction === 'in'
+      ? { direction: 'inflow' as const }
+      : search.direction === 'out'
+        ? { direction: 'outflow' as const }
+        : {}),
+    ...(minAmountCents !== null ? { minAmountCents } : {}),
+    ...(maxAmountCents !== null ? { maxAmountCents } : {}),
+    ...(search.dateFrom ? { from: search.dateFrom } : {}),
+    ...(search.dateTo ? { to: search.dateTo } : {}),
     page: search.page - 1,
   }
 }

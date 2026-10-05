@@ -1,6 +1,15 @@
 import { createServerFn } from '@tanstack/react-start'
-import { getOnboardingStatus } from './onboarding.server'
+
+import { v2 } from '#/lib/v2/client.server'
+
+import { hasActiveRecurrences, ledgerSetup } from './onboarding.server'
 
 export const getOnboardingStatusFn = createServerFn({ method: 'GET' }).handler(
-  () => getOnboardingStatus(),
+  async () => {
+    const [ledger, recurrences] = await Promise.all([
+      v2(ledgerSetup),
+      hasActiveRecurrences(),
+    ])
+    return { ...ledger, recurrences }
+  },
 )
