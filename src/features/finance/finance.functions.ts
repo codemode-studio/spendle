@@ -1,4 +1,3 @@
-import { identifyImportFiles } from './import-identification.server'
 import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
 
@@ -7,7 +6,6 @@ import { currencySchema } from '#/domain/currency'
 import {
   createManualBalanceCheckpoint,
   createManualTransaction,
-  updateStagedTransactionCategory,
 } from './finance.server'
 import {
   getFinanceSnapshot,
@@ -17,26 +15,12 @@ import {
   getStrategyHistory,
 } from './finance-snapshot.server'
 import {
-  linkStatementObservation,
-  resolveStatementExclusion,
-  resolveTransactionCorrection,
-} from './import-resolution.server'
-import {
   activateStrategy,
   addGoalContribution,
   closeCurrentBudget,
   saveGoal,
   updateSettings,
 } from './planning.server'
-import {
-  commitImport,
-  confirmImportCoverage,
-  rejectImport,
-  replaceConflictingCheckpoint,
-  retryImportFinalization,
-  stageImportFormData,
-} from './import.server'
-import { getImportReviewSnapshot } from './import-review-read.server'
 import {
   forgetKnowledgeEntry,
   getKnowledgeBaseSnapshot,
@@ -79,14 +63,6 @@ export const getFinanceSnapshotFn = createServerFn({ method: 'GET' })
   )
   .handler(({ data }) => getFinanceSnapshot(data.month))
 
-export const getImportReviewSnapshotFn = createServerFn({
-  method: 'GET',
-}).handler(() => getImportReviewSnapshot())
-
-export const retryImportFinalizationFn = createServerFn({ method: 'POST' })
-  .validator(z.object({ importId: z.string().min(1) }))
-  .handler(({ data }) => retryImportFinalization(data.importId))
-
 export const createManualBalanceCheckpointFn = createServerFn({
   method: 'POST',
 })
@@ -119,34 +95,6 @@ export const createManualTransactionFn = createServerFn({ method: 'POST' })
     }),
   )
   .handler(({ data }) => serverInput(() => createManualTransaction(data)))
-
-export const resolveTransactionCorrectionFn = createServerFn({ method: 'POST' })
-  .validator(
-    z.object({
-      correctionId: z.string().min(1),
-      action: z.enum(['accept', 'reject']),
-    }),
-  )
-  .handler(({ data }) => resolveTransactionCorrection(data))
-
-export const linkStatementObservationFn = createServerFn({ method: 'POST' })
-  .validator(
-    z.object({
-      stagedTransactionId: z.string().min(1),
-      transactionId: z.string().min(1),
-    }),
-  )
-  .handler(({ data }) => linkStatementObservation(data))
-
-export const resolveStatementExclusionFn = createServerFn({ method: 'POST' })
-  .validator(
-    z.object({
-      importId: z.string().min(1),
-      transactionId: z.string().min(1),
-      action: z.enum(['exclude', 'restore']),
-    }),
-  )
-  .handler(({ data }) => resolveStatementExclusion(data))
 
 export const updateSettingsFn = createServerFn({ method: 'POST' })
   .validator(
@@ -194,18 +142,6 @@ export const addGoalContributionFn = createServerFn({ method: 'POST' })
     }),
   )
   .handler(({ data }) => addGoalContribution(data))
-
-export const updateStagedTransactionCategoryFn = createServerFn({
-  method: 'POST',
-})
-  .validator(
-    z.object({
-      stagedTransactionId: z.string().min(1),
-      categoryId: z.string().min(1),
-      counterpartyAccountId: z.string().min(1).nullable().optional(),
-    }),
-  )
-  .handler(({ data }) => updateStagedTransactionCategory(data))
 
 const recurrenceInputSchema = z.object({
   name: z.string().trim().min(2).max(100),
@@ -291,43 +227,6 @@ export const completeRecurrenceOccurrenceFn = createServerFn({
 })
   .validator(z.object({ occurrenceId: z.string().min(1) }))
   .handler(({ data }) => completeRecurrenceOccurrence(data.occurrenceId))
-
-export const identifyImportFilesFn = createServerFn({ method: 'POST' })
-  .validator((data: FormData) => data)
-  .handler(({ data }) => identifyImportFiles(data))
-
-export const stageImportFn = createServerFn({ method: 'POST' })
-  .validator((data: FormData) => data)
-  .handler(({ data }) => serverInput(() => stageImportFormData(data)))
-
-export const commitImportFn = createServerFn({ method: 'POST' })
-  .validator(
-    z.object({
-      importId: z.string().min(1),
-      manualReviewConfirmed: z.boolean().default(false),
-    }),
-  )
-  .handler(({ data }) =>
-    commitImport(data.importId, data.manualReviewConfirmed),
-  )
-
-export const rejectImportFn = createServerFn({ method: 'POST' })
-  .validator(z.object({ importId: z.string().min(1) }))
-  .handler(({ data }) => rejectImport(data.importId))
-
-export const replaceConflictingCheckpointFn = createServerFn({ method: 'POST' })
-  .validator(z.object({ importId: z.string().min(1) }))
-  .handler(({ data }) => replaceConflictingCheckpoint(data.importId))
-
-export const confirmImportCoverageFn = createServerFn({ method: 'POST' })
-  .validator(
-    z.object({
-      importId: z.string().min(1),
-      periodStart: isoDateSchema,
-      periodEnd: isoDateSchema,
-    }),
-  )
-  .handler(({ data }) => serverInput(() => confirmImportCoverage(data)))
 
 export const closeCurrentBudgetFn = createServerFn({ method: 'POST' }).handler(
   () => closeCurrentBudget(),

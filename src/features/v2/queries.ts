@@ -13,6 +13,7 @@ import {
 } from './accounts.functions'
 import { cardOverviewFn, cycleEntriesFn } from './cards.functions'
 import { listCategoriesFn } from './categories.functions'
+import { listImportsFn } from './imports.functions'
 import {
   categoryReviewFn,
   entriesPageFn,
@@ -101,6 +102,7 @@ export const v2QueryKeys = {
       'cycle',
       closingOn,
     ] as const,
+  imports: () => [...financeQueryKeys.all, 'read', 'imports'] as const,
   connectSettings: () =>
     [...financeQueryKeys.all, 'open-finance', 'connect-settings'] as const,
 }
@@ -217,6 +219,13 @@ export const cycleEntriesOptions = (
     queryKey: v2QueryKeys.cycleEntries(accountId, cycle.closingOn),
     queryFn: () =>
       cycleEntriesFn({ data: { accountId, entryIds: cycle.entryIds } }),
+    staleTime: 15_000,
+  })
+
+export const importsOptions = () =>
+  queryOptions({
+    queryKey: v2QueryKeys.imports(),
+    queryFn: () => listImportsFn({ data: {} }),
     staleTime: 15_000,
   })
 

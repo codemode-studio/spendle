@@ -384,7 +384,7 @@ function AccountStatus({ account }: { account: AccountView }) {
         <StatusBadge
           key={`${gap.from}-${gap.to}`}
           tone="warning"
-          render={<Link to="/importar" search={{ view: 'upload' }} />}
+          render={<Link to="/importar" search={{ account: account.id }} />}
         >
           Diferença de{' '}
           {formatCurrency(Math.abs(gap.differenceCents), account.currency)}{' '}

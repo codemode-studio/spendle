@@ -11,7 +11,6 @@ import {
   getCategoryTransactionsFn,
   getConfigurationSnapshotFn,
   getPlanningSnapshotFn,
-  getImportReviewSnapshotFn,
   getKnowledgeBaseFn,
   getStrategyHistoryFn,
   listLinkCandidatesFn,
@@ -141,13 +140,6 @@ export const financeSnapshotOptions = (month?: string) =>
   queryOptions({
     queryKey: financeQueryKeys.snapshot(month),
     queryFn: () => getFinanceSnapshotFn({ data: { month } }),
-    staleTime: 15_000,
-  })
-
-export const importReviewOptions = () =>
-  queryOptions({
-    queryKey: financeQueryKeys.importReview(),
-    queryFn: () => getImportReviewSnapshotFn(),
     staleTime: 15_000,
   })
 
