@@ -398,21 +398,6 @@ export async function updateTransactionCategory(input: {
   return { success: true }
 }
 
-export async function updateTransactionNote(input: {
-  transactionId: string
-  note: string | null
-}) {
-  await ensureDatabase()
-  const updated = await db
-    .update(schema.transactions)
-    .set({ notes: input.note })
-    .where(eq(schema.transactions.id, input.transactionId))
-    .returning({ id: schema.transactions.id })
-
-  if (!updated[0]) throw new Error('Transação não encontrada.')
-  return { id: input.transactionId, note: input.note }
-}
-
 export async function categorizeUncategorizedTransactionsWithAi() {
   await ensureDatabase()
   const settings = await db.select().from(schema.appSettings).limit(1)

@@ -4,10 +4,13 @@ import {
   Check,
   Layers,
   Link2,
+  PencilLine,
+  Plus,
   ReceiptText,
   Search,
   SlidersHorizontal,
   Sparkles,
+  StickyNote,
   X,
 } from 'lucide-react'
 import {
@@ -35,6 +38,8 @@ import {
   StatusBadge,
 } from '#/components/ui'
 import { CategorySelect } from '#/components/category-select'
+import { ManualTransactionDialog } from '#/components/manual-transaction-dialog'
+import type { ManualTransactionDraft } from '#/components/manual-transaction-dialog'
 import { SegmentedControl } from '#/components/segmented-control'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
@@ -45,6 +50,7 @@ import {
   PopoverTrigger,
 } from '#/components/ui/popover'
 import { Input } from '#/components/ui/input'
+import { Spinner } from '#/components/ui/spinner'
 import {
   NativeSelect,
   NativeSelectOptGroup,
@@ -83,6 +89,7 @@ import {
   correctCategoryFn,
   decideCategoryFn,
 } from '#/features/v2/entries.functions'
+import { setEntryNoteFn } from '#/features/v2/manual.functions'
 import {
   accountsOptions,
   categoriesOptions,
@@ -91,6 +98,7 @@ import {
   invalidateAfterReactors,
   orphanedDecisionsOptions,
   patchEntryCategory,
+  patchEntryNote,
   relationsOptions,
 } from '#/features/v2/queries'
 import { useIsMobile } from '#/hooks/use-mobile'
@@ -121,7 +129,10 @@ function TransactionsPage() {
   const decideCategory = useServerFn(decideCategoryFn)
   const correctCategory = useServerFn(correctCategoryFn)
   const confirmCategory = useServerFn(confirmCategoryFn)
+  const setEntryNote = useServerFn(setEntryNoteFn)
   const [linking, setLinking] = useState<Entry | null>(null)
+  const [newOpen, setNewOpen] = useState(false)
+  const [editing, setEditing] = useState<ManualTransactionDraft | null>(null)
   const urlState = Route.useSearch()
   const navigate = Route.useNavigate()
   const setUrlState = (
@@ -260,6 +271,20 @@ function TransactionsPage() {
     },
   })
 
+  const noteMutation = useMutation({
+    mutationFn: (input: { entryId: string; note: string | null }) =>
+      setEntryNote({ data: input }),
+    onMutate: async (variables) => ({
+      rollback: await patchEntryNote(queryClient, variables),
+    }),
+    onSuccess: () => void invalidate(),
+    onError: (error, _variables, context) => {
+      context?.rollback()
+      toast.error(errorMessage(error, 'Não foi possível salvar a nota.'))
+    },
+  })
+  const typable = accounts.filter((account) => !account.archived)
+
   const categoryGroups = useMemo(
     () => groupCategoryOptions(assignable),
     [assignable],
@@ -325,17 +350,30 @@ function TransactionsPage() {
             ? `${counts.total} lançamentos`
             : 'Nenhum lançamento registrado ainda.'
         }
+        actions={
+          <Button onClick={() => setNewOpen(true)} disabled={!typable.length}>
+            <Plus data-icon="inline-start" />
+            Nova transação
+          </Button>
+        }
       />
       {!hasTransactions ? (
         <Panel>
           <EmptyState
             icon={ReceiptText}
             title="Nenhuma transação ainda"
-            description="Importe um extrato ou conecte o banco pelo Open Finance para ver os lançamentos aqui."
+            description="Importe um extrato, conecte o banco pelo Open Finance ou registre um lançamento à mão."
             action={
               <div className="flex flex-wrap justify-center gap-2">
                 <Button nativeButton={false} render={<Link to="/importar" />}>
                   Importar extrato
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={!typable.length}
+                  onClick={() => setNewOpen(true)}
+                >
+                  Nova transação
                 </Button>
                 <Button
                   variant="outline"
@@ -473,7 +511,7 @@ function TransactionsPage() {
                         { replace: true },
                       )
                     }
-                    placeholder="Buscar descrição…"
+                    placeholder="Buscar descrição ou nota…"
                     className="pl-8 md:pl-8"
                     aria-label="Buscar transações"
                     maxLength={200}
@@ -687,6 +725,76 @@ function TransactionsPage() {
                           }
                         />
                       )
+                      // Note, correction and link: in the title row on wider
+                      // screens, beside the category on phones.
+                      const rowActions = (
+                        <>
+                          <EntryNoteEditor
+                            note={entry.note}
+                            description={entry.description}
+                            pending={
+                              noteMutation.isPending &&
+                              noteMutation.variables.entryId === entry.id
+                            }
+                            onSave={(note) =>
+                              noteMutation.mutate({
+                                entryId: entry.id,
+                                note,
+                              })
+                            }
+                          />
+                          {entry.manualId ? (
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    className="shrink-0 text-muted-foreground"
+                                    aria-label={`Corrigir ${displayDescription(entry.description)}, digitado por você`}
+                                    onClick={() =>
+                                      setEditing({
+                                        externalId: entry.manualId!,
+                                        accountId: entry.accountId,
+                                        bookedOn: entry.bookedOn,
+                                        amountCents: entry.amountCents,
+                                        description: entry.description,
+                                      })
+                                    }
+                                  />
+                                }
+                              >
+                                <PencilLine />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                Digitado por você · corrigir ou excluir
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : null}
+                          {entry.category?.excludedFromSpending ? null : (
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    className="shrink-0 text-muted-foreground"
+                                    aria-label={`Vincular ${displayDescription(entry.description)} a outro lançamento`}
+                                    onClick={() => setLinking(entry)}
+                                  />
+                                }
+                              >
+                                <Link2 />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                Vincular transferência, fatura ou estorno
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
+                        </>
+                      )
                       return (
                         <TableRow key={entry.id}>
                           <TableCell className="w-full max-w-0 font-medium sm:w-auto sm:max-w-none">
@@ -718,34 +826,26 @@ function TransactionsPage() {
                                   </TooltipContent>
                                 </Tooltip>
                               ) : null}
-                              {entry.category?.excludedFromSpending ? null : (
-                                <Tooltip>
-                                  <TooltipTrigger
-                                    render={
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon-xs"
-                                        className="shrink-0 text-muted-foreground"
-                                        aria-label={`Vincular ${displayDescription(entry.description)} a outro lançamento`}
-                                        onClick={() => setLinking(entry)}
-                                      />
-                                    }
-                                  >
-                                    <Link2 />
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    Vincular transferência, fatura ou estorno
-                                  </TooltipContent>
-                                </Tooltip>
-                              )}
+                              <span className="hidden shrink-0 items-center sm:flex">
+                                {rowActions}
+                              </span>
                             </div>
+                            {entry.note ? (
+                              <p className="mt-0.5 truncate text-xs font-normal text-muted-foreground">
+                                {entry.note}
+                              </p>
+                            ) : null}
                             <div className="mt-1 font-normal sm:hidden">
                               {categoryCell}
                             </div>
-                            <p className="mt-0.5 truncate text-xs font-normal text-muted-foreground md:hidden">
-                              {formatInstrumentName(account?.name ?? '—')}
-                            </p>
+                            <div className="mt-0.5 flex items-center gap-1 text-xs font-normal text-muted-foreground md:hidden">
+                              <span className="min-w-0 truncate">
+                                {formatInstrumentName(account?.name ?? '—')}
+                              </span>
+                              <span className="ml-auto flex shrink-0 items-center sm:hidden">
+                                {rowActions}
+                              </span>
+                            </div>
                           </TableCell>
                           <TableCell className="hidden truncate text-muted-foreground md:table-cell">
                             {formatInstrumentName(account?.name ?? '—')}
@@ -815,6 +915,25 @@ function TransactionsPage() {
       )}
       <ReconciliationReview />
       <LinkEntryDialog entry={linking} onClose={() => setLinking(null)} />
+      <ManualTransactionDialog
+        accounts={typable}
+        categories={assignable}
+        open={newOpen}
+        onOpenChange={setNewOpen}
+        trigger={null}
+        defaultAccountId={target !== 'all' ? target : undefined}
+      />
+      {editing ? (
+        <ManualTransactionDialog
+          key={editing.externalId}
+          accounts={accounts}
+          categories={assignable}
+          open
+          onOpenChange={(open) => !open && setEditing(null)}
+          trigger={null}
+          editing={editing}
+        />
+      ) : null}
     </Page>
   )
 }
@@ -904,4 +1023,94 @@ function displayDescription(text: string) {
       /(^|[\s(/-])([a-zà-ú])/g,
       (_, prefix, letter: string) => `${prefix}${letter.toUpperCase()}`,
     )
+}
+
+/** The person's note on an entry: shown under the description, edited in place. */
+function EntryNoteEditor({
+  note,
+  description,
+  pending,
+  onSave,
+}: {
+  note: string | null
+  description: string
+  pending: boolean
+  onSave: (note: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState(note ?? '')
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) setDraft(note ?? '')
+        setOpen(nextOpen)
+      }}
+    >
+      <PopoverTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className={cn(
+              'shrink-0 text-muted-foreground',
+              note && 'text-foreground',
+            )}
+            aria-label={`${note ? 'Editar' : 'Adicionar'} nota para ${displayDescription(description)}`}
+          />
+        }
+      >
+        <StickyNote />
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 gap-3 p-3">
+        <form
+          className="flex flex-col gap-3"
+          onSubmit={(event) => {
+            event.preventDefault()
+            const next = draft.trim() || null
+            if (next !== note) onSave(next)
+            setOpen(false)
+          }}
+        >
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium">Nota</span>
+            <Input
+              autoFocus
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder="Ex.: jantar de aniversário"
+              maxLength={500}
+              aria-label="Nota do lançamento"
+            />
+          </label>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {draft.length}/500
+            </span>
+            <div className="flex gap-2">
+              {note ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={pending}
+                  onClick={() => {
+                    onSave(null)
+                    setOpen(false)
+                  }}
+                >
+                  Apagar
+                </Button>
+              ) : null}
+              <Button type="submit" size="sm" disabled={pending}>
+                {pending ? <Spinner data-icon="inline-start" /> : null}
+                Salvar
+              </Button>
+            </div>
+          </div>
+        </form>
+      </PopoverContent>
+    </Popover>
+  )
 }
