@@ -10,6 +10,8 @@ import {
   InvalidAccount,
   OwnerNotFound,
 } from '../ledger/Accounts.ts'
+import { ManualEntryError } from '../ledger/Manual.ts'
+import { NotesError } from '../ledger/Notes.ts'
 import { CurrencyMismatch, InvalidReport } from '../ledger/Observations.ts'
 import { OpenFinanceError } from '../openfinance/OpenFinance.ts'
 import { PluggyError } from '../openfinance/PluggyClient.ts'
@@ -92,6 +94,22 @@ const store: Record<KnowledgeStoreError['reason'], Status> = {
   category_not_assignable: Rejected,
 }
 
+const manual: Record<ManualEntryError['reason'], Status> = {
+  invalid_input: InvalidRequest,
+  manual_transaction_not_found: NotFound,
+  checkpoint_not_found: NotFound,
+  not_a_manual_checkpoint: Rejected,
+  checkpoint_on_card: Rejected,
+  account_archived: Conflict,
+}
+
+const notes: Record<NotesError['reason'], Status> = {
+  entry_not_found: NotFound,
+  note_too_long: InvalidRequest,
+}
+
+const isManualEntryError = Schema.is(ManualEntryError)
+const isNotesError = Schema.is(NotesError)
 const isAccountNotFound = Schema.is(AccountNotFound)
 const isCardsError = Schema.is(CardsError)
 const isCategoriesError = Schema.is(CategoriesError)
@@ -158,6 +176,9 @@ const known = (error: unknown): EndpointError | undefined => {
       error.reason,
       error.entryId ?? error.categoryId,
     )
+  if (isManualEntryError(error))
+    return byReason(manual, error.reason, error.detail)
+  if (isNotesError(error)) return byReason(notes, error.reason, error.entryId)
   if (isKnowledgeStoreError(error))
     return byReason(store, error.reason, error.patternId ?? error.categoryId)
   return undefined

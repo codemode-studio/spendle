@@ -7,6 +7,7 @@ import * as SqlClient from 'effect/sql/SqlClient'
 import * as SqlSchema from 'effect/sql/SqlSchema'
 
 import type { Account } from '../ledger/Accounts.ts'
+import { entryNotes } from '../ledger/Notes.ts'
 import { AccountLink, Balance } from './definition/Accounts.ts'
 import type { AccountView } from './definition/Accounts.ts'
 import {
@@ -41,6 +42,8 @@ const EntryRow = Schema.Struct({
   origin: Schema.NullOr(InferenceOrigin),
   confidence: Schema.NullOr(Schema.Number),
   excludedFromSpending: Schema.NullOr(Schema.BooleanFromBit),
+  note: Schema.NullOr(Schema.String),
+  manualId: Schema.NullOr(Schema.String),
 })
 
 const toEntry = (row: typeof EntryRow.Type): Entry => ({
@@ -62,6 +65,8 @@ const toEntry = (row: typeof EntryRow.Type): Entry => ({
           confidence: row.confidence ?? 0,
           excludedFromSpending: row.excludedFromSpending ?? false,
         },
+  note: row.note,
+  manualId: row.manualId,
 })
 
 const RelationRow = Schema.Struct({
@@ -117,6 +122,8 @@ const make = Effect.gen(function* () {
           )
           AND COALESCE((SELECT i.withdrawn FROM open_finance_checkpoint_invalidations i
             WHERE i.balance_observation_id = b.id ORDER BY i.rowid DESC LIMIT 1), 0) = 0
+          AND COALESCE((SELECT w.withdrawn FROM manual_checkpoint_withdrawals w
+            WHERE w.balance_observation_id = b.id ORDER BY w.rowid DESC LIMIT 1), 0) = 0
       ),
       ranked AS (
         SELECT *, ROW_NUMBER() OVER (
@@ -186,12 +193,20 @@ const make = Effect.gen(function* () {
   const accountView = (account: Account) =>
     Effect.map(accountViews([account]), (views) => views[0]!)
 
+  // Entries with their category inference and the person's note.
+  const entrySource = sql`
+    ledger_entries e
+    LEFT JOIN category_inferences c ON c.entry_id = e.id
+    LEFT JOIN (${entryNotes(sql)}) n ON n.entry_id = e.id
+  `
   const entryColumns = sql`
     e.id, e.account_id AS accountId, e.booked_on AS bookedOn, e.amount_cents AS amountCents,
     e.currency, e.description, e.status,
     (SELECT count(*) FROM entry_evidence v WHERE v.entry_id = e.id) AS sources,
     c.category_id AS categoryId, c.status AS categoryStatus, c.origin,
-    c.confidence, c.excluded_from_spending AS excludedFromSpending
+    c.confidence, c.excluded_from_spending AS excludedFromSpending, n.note,
+    (SELECT m.external_id FROM entry_evidence m JOIN sources ms ON ms.id = m.source_id
+      WHERE m.entry_id = e.id AND ms.kind = 'manual' ORDER BY m.external_id LIMIT 1) AS manualId
   `
 
   /**
@@ -229,7 +244,8 @@ const make = Effect.gen(function* () {
       ...(filters.text === undefined || filters.text.trim() === ''
         ? []
         : [
-            sql`e.description LIKE ${likePattern(filters.text.trim())} ESCAPE '\\'`,
+            sql`(e.description LIKE ${likePattern(filters.text.trim())} ESCAPE '\\'
+              OR n.note LIKE ${likePattern(filters.text.trim())} ESCAPE '\\')`,
           ]),
       ...(filters.direction === undefined
         ? []
@@ -246,8 +262,7 @@ const make = Effect.gen(function* () {
     const after = cursor.value
     const page = yield* sql`
       SELECT ${entryColumns}
-      FROM ledger_entries e
-      LEFT JOIN category_inferences c ON c.entry_id = e.id
+      FROM ${entrySource}
       WHERE ${sql.and([
         ...clauses,
         ...(after === undefined
@@ -261,8 +276,7 @@ const make = Effect.gen(function* () {
     `.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(EntryRow))))
     const counted = yield* sql<{ total: number }>`
       SELECT count(*) AS total
-      FROM ledger_entries e
-      LEFT JOIN category_inferences c ON c.entry_id = e.id
+      FROM ${entrySource}
       WHERE ${sql.and(clauses)}
     `
     const entries = page.slice(0, limit).map(toEntry)
@@ -280,8 +294,7 @@ const make = Effect.gen(function* () {
     Result: EntryRow,
     execute: (id) => sql`
       SELECT ${entryColumns}
-      FROM ledger_entries e
-      LEFT JOIN category_inferences c ON c.entry_id = e.id
+      FROM ${entrySource}
       WHERE e.id = ${id}
     `,
   })
@@ -353,8 +366,7 @@ const make = Effect.gen(function* () {
     if (ids.length === 0) return new Map<string, Entry>()
     const rows = yield* sql`
       SELECT ${entryColumns}
-      FROM ledger_entries e
-      LEFT JOIN category_inferences c ON c.entry_id = e.id
+      FROM ${entrySource}
       WHERE ${sql.in('e.id', [...new Set(ids)])}
     `.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(EntryRow))))
     return new Map(rows.map((row) => [row.id, toEntry(row)]))

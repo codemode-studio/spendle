@@ -39,11 +39,22 @@ export interface CheckpointConflict {
   }>
 }
 
+/** A balance the proof checks against: one per day, the latest standing report. */
+export interface ProofCheckpoint {
+  /** The balance observation; a `manual` one can be withdrawn by the person. */
+  readonly id: string
+  readonly asOf: string
+  readonly balanceCents: number
+  readonly sourceId: string
+  readonly sourceKind: 'open_finance' | 'file' | 'manual'
+}
+
 export type BalanceProof =
   | {
       readonly supported: true
       readonly intervals: ReadonlyArray<BalanceInterval>
       readonly conflicts: ReadonlyArray<CheckpointConflict>
+      readonly checkpoints: ReadonlyArray<ProofCheckpoint>
     }
   /** Card balances follow statement cycles, proven in the reconciliation phase. */
   | { readonly supported: false; readonly reason: 'credit_card' }
@@ -64,7 +75,9 @@ const ObservedRow = Schema.Struct({
 })
 
 const CheckpointRow = Schema.Struct({
+  id: Schema.String,
   sourceId: Schema.String,
+  sourceKind: Schema.Literals(['open_finance', 'file', 'manual']),
   asOf: Schema.String,
   balanceCents: Schema.Int,
   received: Schema.Int,
@@ -184,14 +197,19 @@ const make = Effect.gen(function* () {
     Request: Schema.String,
     Result: CheckpointRow,
     execute: (accountId) => sql`
-      SELECT b.source_id AS sourceId, b.as_of AS asOf, b.balance_cents AS balanceCents,
-        b.rowid AS received,
-        -- The latest withdrawal or reinstatement of the report decides.
+      SELECT b.id, b.source_id AS sourceId, s.kind AS sourceKind, b.as_of AS asOf,
+        b.balance_cents AS balanceCents, b.rowid AS received,
+        -- The latest withdrawal or reinstatement of the report decides: by a
+        -- later Open Finance read, or by the person for a balance they informed.
         COALESCE((
           SELECT i.withdrawn FROM open_finance_checkpoint_invalidations i
           WHERE i.balance_observation_id = b.id ORDER BY i.rowid DESC LIMIT 1
+        ), 0) + COALESCE((
+          SELECT w.withdrawn FROM manual_checkpoint_withdrawals w
+          WHERE w.balance_observation_id = b.id ORDER BY w.rowid DESC LIMIT 1
         ), 0) AS invalidated
       FROM balance_observations b
+      JOIN sources s ON s.id = b.source_id
       WHERE b.account_id = ${accountId} AND b.kind IN ('booked', 'statement')
       ORDER BY b.as_of, b.rowid
     `,
@@ -345,6 +363,7 @@ const make = Effect.gen(function* () {
       byDay.set(row.asOf, day)
     }
     const checkpoints: Array<Checkpoint> = []
+    const standing: Array<ProofCheckpoint> = []
     const conflicts: Array<CheckpointConflict> = []
     for (const [asOf, bySource] of byDay) {
       // A source whose latest report of the day was withdrawn (its day
@@ -369,6 +388,13 @@ const make = Effect.gen(function* () {
         balanceCents: latest.balanceCents,
         sourceId: latest.sourceId,
       })
+      standing.push({
+        id: latest.id,
+        asOf,
+        balanceCents: latest.balanceCents,
+        sourceId: latest.sourceId,
+        sourceKind: latest.sourceKind,
+      })
     }
     const evidence = yield* findEvidence(accountId)
     const evidenceOf = new Map<string, Array<typeof EvidenceRow.Type>>()
@@ -387,6 +413,7 @@ const make = Effect.gen(function* () {
       supported: true,
       intervals: proveBalances(stored, checkpoints),
       conflicts,
+      checkpoints: standing.sort((a, b) => a.asOf.localeCompare(b.asOf)),
     } satisfies BalanceProof
   })
 

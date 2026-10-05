@@ -9,6 +9,7 @@ import Relations from './Migrations/0006_relations.ts'
 import RefundRelations from './Migrations/0007_refund_relations.ts'
 import Categories from './Migrations/0008_categories.ts'
 import V1Import from './Migrations/0009_v1_import.ts'
+import InvestmentsManual from './Migrations/0011_investments_manual.ts'
 
 // Keys are `<id>_<name>`; each migration runs once, in id order. Import every
 // migration statically so the server never depends on files beside the bundle.
@@ -23,6 +24,7 @@ export const migrations = {
   '0007_refund_relations': RefundRelations,
   '0008_categories': Categories,
   '0009_v1_import': V1Import,
+  '0011_investments_manual': InvestmentsManual,
 }
 
 export const runMigrations = SqliteMigrator.run({

@@ -21,6 +21,8 @@ import * as Reactor from '../events/Reactor.ts'
 import { Imports } from '../imports/Imports.ts'
 import { Accounts } from '../ledger/Accounts.ts'
 import * as Entries from '../ledger/Entries.ts'
+import { ManualEntries } from '../ledger/Manual.ts'
+import { Notes } from '../ledger/Notes.ts'
 import { OpenFinance } from '../openfinance/OpenFinance.ts'
 import type {
   PluggyAccount,
@@ -209,7 +211,9 @@ const Services = Layer.mergeAll(
   Reconciliation.reactor,
   Categorizer.reactor,
   Categorizer.modelReactor,
+  ManualEntries.layer,
 ).pipe(
+  Layer.provideMerge(Notes.layer),
   Layer.provideMerge(Categorizer.Categorizer.layer),
   Layer.provideMerge(KnowledgeStore.layer),
   Layer.provideMerge(Categories.layer),
