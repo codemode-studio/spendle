@@ -622,14 +622,16 @@ function TransactionsPage() {
             )}
           </div>
           {data.entries.length ? (
-            <Table className="table-fixed">
+            <Table className="sm:table-fixed">
               <TableHeader>
                 <TableRow>
                   <TableHead>Descrição</TableHead>
                   <TableHead className="hidden w-44 md:table-cell">
                     Origem
                   </TableHead>
-                  <TableHead className="w-44 sm:w-72">Categoria</TableHead>
+                  <TableHead className="hidden w-72 sm:table-cell">
+                    Categoria
+                  </TableHead>
                   <TableHead className="w-28 text-right sm:w-36">
                     Valor
                   </TableHead>
@@ -653,9 +655,41 @@ function TransactionsPage() {
                     </TableRow>
                     {items.map((entry) => {
                       const account = accountById.get(entry.accountId)
+                      const categoryCell = (
+                        <EntryCategoryCell
+                          entry={entry}
+                          categories={assignable}
+                          category={
+                            entry.category?.categoryId
+                              ? categoryById.get(entry.category.categoryId)
+                              : undefined
+                          }
+                          pending={
+                            categoryMutation.isPending &&
+                            categoryMutation.variables.entry.id === entry.id
+                          }
+                          onChoose={(categoryId) =>
+                            categoryMutation.mutate({
+                              entry,
+                              categoryId,
+                              action:
+                                entry.category?.status === 'review'
+                                  ? 'correct'
+                                  : 'decide',
+                            })
+                          }
+                          onConfirm={(categoryId) =>
+                            categoryMutation.mutate({
+                              entry,
+                              categoryId,
+                              action: 'confirm',
+                            })
+                          }
+                        />
+                      )
                       return (
                         <TableRow key={entry.id}>
-                          <TableCell className="font-medium">
+                          <TableCell className="w-full max-w-0 font-medium sm:w-auto sm:max-w-none">
                             <div className="flex min-w-0 items-center gap-2">
                               <span className="truncate">
                                 {displayDescription(entry.description)}
@@ -706,6 +740,9 @@ function TransactionsPage() {
                                 </Tooltip>
                               )}
                             </div>
+                            <div className="mt-1 font-normal sm:hidden">
+                              {categoryCell}
+                            </div>
                             <p className="mt-0.5 truncate text-xs font-normal text-muted-foreground md:hidden">
                               {formatInstrumentName(account?.name ?? '—')}
                             </p>
@@ -713,37 +750,8 @@ function TransactionsPage() {
                           <TableCell className="hidden truncate text-muted-foreground md:table-cell">
                             {formatInstrumentName(account?.name ?? '—')}
                           </TableCell>
-                          <TableCell>
-                            <EntryCategoryCell
-                              entry={entry}
-                              categories={assignable}
-                              category={
-                                entry.category?.categoryId
-                                  ? categoryById.get(entry.category.categoryId)
-                                  : undefined
-                              }
-                              pending={
-                                categoryMutation.isPending &&
-                                categoryMutation.variables.entry.id === entry.id
-                              }
-                              onChoose={(categoryId) =>
-                                categoryMutation.mutate({
-                                  entry,
-                                  categoryId,
-                                  action:
-                                    entry.category?.status === 'review'
-                                      ? 'correct'
-                                      : 'decide',
-                                })
-                              }
-                              onConfirm={(categoryId) =>
-                                categoryMutation.mutate({
-                                  entry,
-                                  categoryId,
-                                  action: 'confirm',
-                                })
-                              }
-                            />
+                          <TableCell className="hidden sm:table-cell">
+                            {categoryCell}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
                             <span
