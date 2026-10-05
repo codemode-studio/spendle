@@ -448,9 +448,15 @@ const make = Effect.gen(function* () {
         })
         continue
       }
-      const opened = yield* accounts.open(planned.input)
-      if (planned.archived) yield* accounts.setArchived(opened.id, true)
-      yield* remember(kind, item.id, opened.id)
+      // The account and its mapping commit together, so an interrupted run
+      // never opens the same account twice.
+      yield* sql.withTransaction(
+        Effect.gen(function* () {
+          const opened = yield* accounts.open(planned.input)
+          if (planned.archived) yield* accounts.setArchived(opened.id, true)
+          yield* remember(kind, item.id, opened.id)
+        }),
+      )
       counts.migrated++
     }
     return counts
@@ -471,11 +477,15 @@ const make = Effect.gen(function* () {
         owners.already++
         continue
       }
-      const created = yield* accounts.createOwner({
-        name: owner.name.trim() || 'Titular',
-        kind: ownerKind(owner.type),
-      })
-      yield* remember('owner', owner.id, created.id)
+      yield* sql.withTransaction(
+        Effect.gen(function* () {
+          const created = yield* accounts.createOwner({
+            name: owner.name.trim() || 'Titular',
+            kind: ownerKind(owner.type),
+          })
+          yield* remember('owner', owner.id, created.id)
+        }),
+      )
       owners.migrated++
     }
     const ownerIds = yield* mapped('owner')
