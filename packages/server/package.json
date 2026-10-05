@@ -12,7 +12,8 @@
     "qa": "node src/testing/QaServer.ts",
     "typecheck": "tsc --noEmit && effect-language-service diagnostics --project tsconfig.json --strict --format text",
     "test": "vitest run",
-    "verify": "pnpm typecheck && pnpm test"
+    "verify": "pnpm typecheck && pnpm test",
+    "eval:categories": "node --env-file-if-exists=../../.env.local src/evals/EvalCategories.ts"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",

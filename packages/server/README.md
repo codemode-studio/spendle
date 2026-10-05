@@ -18,8 +18,9 @@ pnpm --filter @spendle/server qa      # API em memória com dados sintéticos e 
 | `SPENDLE_API_TOKEN`                           | Token Bearer exigido em `/api/v2`; 32+ caracteres; opcional                                          |
 | `PLUGGY_CLIENT_ID`, `PLUGGY_CLIENT_SECRET`    | Credenciais da Pluggy; sem elas, o Open Finance fica inativo                                         |
 | `PLUGGY_WEBHOOK_URL`, `PLUGGY_WEBHOOK_SECRET` | Webhook; os dois juntos ou nenhum                                                                    |
-| `TYPESAFE_API_KEY`                            | Classificador por modelo; sem ela, o modelo nunca é chamado                                          |
-| `TYPESAFE_MODEL`, `TYPESAFE_API_URL`          | Modelo e endereço; padrão `jev-latest` em `api.typesafe.ai`                                          |
+| `TYPESAFE_API_KEY`                            | Classificador de categorias (Jev, da TypeSafe); sem ela, o modelo nunca é chamado                    |
+| `TYPESAFE_MODEL`, `TYPESAFE_API_URL`          | Modelo e endereço; padrão `jev-1.13.0` (versão fixa) em `api.typesafe.ai`                            |
+| `TYPESAFE_APPLY_THRESHOLD`                    | Probabilidade (0,5 a 1) a partir da qual a resposta do modelo é aplicada; vazio, tudo vai à revisão  |
 | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`      | Assistente (análise mensal e perguntas); sem os dois, desligado. Modelo no formato `provedor/modelo` |
 
 ## Webhook da Pluggy
@@ -117,7 +118,7 @@ Cada lançamento recebe uma inferência (`category_inferences`) recalculada a pa
 4. Estorno confirmado: herda a categoria da compra.
 5. Transferência ou pagamento de fatura sugerido: revisão.
 6. Padrão exato do estabelecimento (98), prefixo (92), categoria da Pluggy mapeada pela pessoa (90) ou mapa embutido (60, revisão).
-7. Resposta do modelo, sempre em revisão até ser avaliado.
+7. Resposta do modelo (Jev), em revisão; aplicada a partir de `TYPESAFE_APPLY_THRESHOLD`, escolhido com `pnpm --filter @spendle/server eval:categories` (veja [`evals/categories`](evals/categories/README.md)).
 
 Só decisões da pessoa e edições da base escrevem em `category_patterns`, sempre por `KnowledgeStore`. Respostas do modelo ficam em `model_classifications` e nunca viram padrão. Antes de gravar uma edição da base, `Categorizer.previewStoreEdit` mostra os lançamentos que mudariam. Ao mudar o resultado da política, incremente `POLICY_VERSION` em `src/categories/Policy.ts`: o servidor recalcula todo o histórico ao iniciar.
 

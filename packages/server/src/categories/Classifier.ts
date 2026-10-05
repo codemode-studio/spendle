@@ -12,7 +12,11 @@ import * as HttpClientRequest from 'effect/http/HttpClientRequest'
 import * as HttpClientResponse from 'effect/http/HttpClientResponse'
 
 import type { Direction } from './Patterns.ts'
-import { fitsDirection } from './Policy.ts'
+import {
+  fitsDirection,
+  MODEL_APPLY_THRESHOLD,
+  MODEL_SUGGEST_FLOOR,
+} from './Policy.ts'
 
 /** A merchant the store knows nothing about, as the model sees it. */
 export interface ClassifyItem {
@@ -28,6 +32,8 @@ export interface ClassifierCategory {
   readonly id: string
   readonly name: string
   readonly bucket: string
+  /** What the category covers, beside its name; see `Descriptions.ts`. */
+  readonly description?: string | undefined
 }
 
 /** The model's answer for one item: `null` when nothing fits. */
@@ -62,6 +68,11 @@ export class ClassifierError extends Schema.TaggedError<ClassifierError>()(
 export interface ClassifierShape {
   /** What answers are cached under; `None` when the model is disabled. */
   readonly modelVersion: Option.Option<string>
+  /**
+   * From this probability an answer is applied instead of sent to review;
+   * infinite (always review) unless `TYPESAFE_APPLY_THRESHOLD` is set.
+   */
+  readonly applyThreshold: number
   /** One answer per item, in order, choosing among the categories that fit its direction. */
   readonly classify: (
     items: ReadonlyArray<ClassifyItem>,
@@ -82,6 +93,24 @@ const SystemOneResponse = Schema.Struct({
 const noCategory = 'none:no_category_fits'
 /** Questions per request, to keep each one well within the API's limits. */
 const batchSize = 25
+/** Requests in flight at once, well below the API's rate limit. */
+const concurrency = 4
+/** One request answers in seconds; past this it counts as unavailable. */
+const requestTimeout = Duration.seconds(30)
+
+/** The Jev version the threshold is chosen for; see `evals/categories`. */
+export const defaultModel = 'jev-1.13.0'
+
+/**
+ * Raised only after `pnpm --filter @spendle/server eval:categories` shows
+ * answers at or above it right often enough; never below the suggest floor.
+ */
+const ApplyThreshold = Config.schema(
+  Schema.Finite.check(
+    Schema.isBetween({ minimum: MODEL_SUGGEST_FLOOR, maximum: 1 }),
+  ),
+  'TYPESAFE_APPLY_THRESHOLD',
+)
 
 const formatAmount = (amountCents: number) =>
   `R$ ${(Math.abs(amountCents) / 100).toFixed(2).replace('.', ',')}`
@@ -94,6 +123,7 @@ export class Classifier extends Context.Service<Classifier, ClassifierShape>()(
     Classifier,
     Classifier.of({
       modelVersion: Option.none(),
+      applyThreshold: MODEL_APPLY_THRESHOLD,
       classify: () => Effect.fail(new ClassifierError({ reason: 'disabled' })),
     }),
   )
@@ -106,6 +136,7 @@ export class Classifier extends Context.Service<Classifier, ClassifierShape>()(
     readonly apiKey: Redacted.Redacted
     readonly model: string
     readonly baseUrl: string
+    readonly applyThreshold?: number
   }) =>
     Effect.gen(function* () {
       const http = (yield* HttpClient.HttpClient).pipe(
@@ -121,7 +152,10 @@ export class Classifier extends Context.Service<Classifier, ClassifierShape>()(
           [noCategory]:
             'None of the listed categories fits this transaction, or the description says too little to tell.',
         }
-        for (const category of categories) criteria[category.id] = category.name
+        for (const category of categories)
+          criteria[category.id] = category.description
+            ? `${category.name}: ${category.description}`
+            : category.name
         const questions: Record<string, unknown> = {}
         items.forEach((_, index) => {
           questions[`t${index}`] = {
@@ -147,6 +181,7 @@ export class Classifier extends Context.Service<Classifier, ClassifierShape>()(
             questions,
           }),
           http.execute,
+          Effect.timeout(requestTimeout),
           Effect.mapError(
             (cause) => new ClassifierError({ reason: 'unavailable', cause }),
           ),
@@ -186,7 +221,13 @@ export class Classifier extends Context.Service<Classifier, ClassifierShape>()(
         items: ReadonlyArray<ClassifyItem>,
         categories: ReadonlyArray<ClassifierCategory>,
       ) {
-        const answers = new Map<number, Classification>()
+        const batches: Array<{
+          readonly indexed: ReadonlyArray<{
+            readonly item: ClassifyItem
+            readonly index: number
+          }>
+          readonly options: ReadonlyArray<ClassifierCategory>
+        }> = []
         for (const direction of ['expense', 'income'] as const) {
           const indexed = items
             .map((item, index) => ({ item, index }))
@@ -194,10 +235,17 @@ export class Classifier extends Context.Service<Classifier, ClassifierShape>()(
           const options = categories.filter((category) =>
             fitsDirection(category.bucket, direction),
           )
-          for (let start = 0; start < indexed.length; start += batchSize) {
-            const batch = indexed.slice(start, start + batchSize)
-            const result = yield* ask(
-              batch.map(({ item }) => item),
+          for (let start = 0; start < indexed.length; start += batchSize)
+            batches.push({
+              indexed: indexed.slice(start, start + batchSize),
+              options,
+            })
+        }
+        const results = yield* Effect.forEach(
+          batches,
+          ({ indexed, options }) =>
+            ask(
+              indexed.map(({ item }) => item),
               options,
             ).pipe(
               Effect.retry({
@@ -205,38 +253,54 @@ export class Classifier extends Context.Service<Classifier, ClassifierShape>()(
                 schedule: Schedule.exponential(Duration.seconds(1)),
                 times: 3,
               }),
-            )
-            batch.forEach(({ index }, position) =>
-              answers.set(index, result[position]!),
-            )
-          }
-        }
+            ),
+          { concurrency },
+        )
+        const answers = new Map<number, Classification>()
+        batches.forEach(({ indexed }, batch) =>
+          indexed.forEach(({ index }, position) =>
+            answers.set(index, results[batch]![position]!),
+          ),
+        )
         return items.map((_, index) => answers.get(index)!)
       })
 
       return Classifier.of({
         modelVersion: Option.some(`typesafe:${options.model}`),
+        applyThreshold: options.applyThreshold ?? MODEL_APPLY_THRESHOLD,
         classify,
       })
     })
 
   /**
    * Reads `TYPESAFE_API_KEY` (and optionally `TYPESAFE_MODEL`,
-   * `TYPESAFE_API_URL`); without a key the classifier is disabled.
+   * `TYPESAFE_API_URL`, `TYPESAFE_APPLY_THRESHOLD`); without a key the
+   * classifier is disabled. The model defaults to a pinned version: an
+   * alias such as `jev-latest` moves, and both the cached answers and the
+   * threshold chosen from the evaluation belong to one version.
    */
   static readonly layer = Layer.unwrap(
     Effect.gen(function* () {
       const apiKey = yield* Config.option(Config.Redacted('TYPESAFE_API_KEY'))
       if (Option.isNone(apiKey)) return Classifier.disabled
       const model = yield* Config.String('TYPESAFE_MODEL').pipe(
-        Config.withDefault('jev-latest'),
+        Config.withDefault(defaultModel),
       )
       const baseUrl = yield* Config.String('TYPESAFE_API_URL').pipe(
         Config.withDefault('https://api.typesafe.ai'),
       )
+      const applyThreshold = yield* Config.option(ApplyThreshold)
       return Layer.effect(
         Classifier,
-        Classifier.makeTypeSafe({ apiKey: apiKey.value, model, baseUrl }),
+        Classifier.makeTypeSafe({
+          apiKey: apiKey.value,
+          model,
+          baseUrl,
+          applyThreshold: Option.getOrElse(
+            applyThreshold,
+            () => MODEL_APPLY_THRESHOLD,
+          ),
+        }),
       )
     }),
   )

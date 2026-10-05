@@ -19,6 +19,7 @@ export class FakeClassifierCalls extends Context.Service<
  */
 export const fakeClassifier = (
   script: Readonly<Record<string, Classification>>,
+  options: { readonly applyThreshold?: number } = {},
 ) =>
   Layer.unwrap(
     Effect.gen(function* () {
@@ -29,6 +30,7 @@ export const fakeClassifier = (
           Classifier,
           Classifier.of({
             modelVersion: Option.some('fake-model'),
+            applyThreshold: options.applyThreshold ?? Number.POSITIVE_INFINITY,
             classify: (items) =>
               Ref.update(asked, (all) => [...all, ...items]).pipe(
                 Effect.as(

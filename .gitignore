@@ -22,3 +22,6 @@ todos.json
 .qa/
 
 .repos/
+
+# Local outputs of the category evaluation
+packages/server/evals/categories/results/

@@ -28,9 +28,10 @@ export const confidence = {
 } as const
 
 /**
- * A model answer is applied at this probability or above. Infinite until
- * the model is evaluated against the person's own decisions: until then
- * every answer goes to review.
+ * The default probability from which a model answer is applied: infinite,
+ * so every answer goes to review. `TYPESAFE_APPLY_THRESHOLD` raises it for
+ * one model version once `eval:categories` shows its confident answers are
+ * right often enough (see `evals/categories/README.md`).
  */
 export const MODEL_APPLY_THRESHOLD = Number.POSITIVE_INFINITY
 /** Model answers below this probability are dropped. */

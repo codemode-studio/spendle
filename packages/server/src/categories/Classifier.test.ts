@@ -206,7 +206,12 @@ describe('Classifier', () => {
             },
           ],
           [
-            { id: 'groceries', name: 'Mercado', bucket: 'essential' },
+            {
+              id: 'groceries',
+              name: 'Mercado',
+              bucket: 'essential',
+              description: 'Supermercado e padaria.',
+            },
             { id: 'salary', name: 'Renda familiar', bucket: 'income' },
           ],
         )
@@ -221,16 +226,141 @@ describe('Classifier', () => {
         const sent = yield* Effect.forEach(yield* Ref.get(bodies), (body) =>
           Schema.decodeUnknownEffect(SentRequest)(body),
         )
-        assert.deepStrictEqual(
-          sent.map((request) =>
-            Object.keys(Object.values(request.questions)[0]!.criteria),
-          ),
+        assert.sameDeepMembers(
+          sent.map((request) => Object.values(request.questions)[0]!.criteria),
           [
-            ['none:no_category_fits', 'groceries'],
-            ['none:no_category_fits', 'salary'],
+            {
+              'none:no_category_fits':
+                'None of the listed categories fits this transaction, or the description says too little to tell.',
+              groceries: 'Mercado: Supermercado e padaria.',
+            },
+            {
+              'none:no_category_fits':
+                'None of the listed categories fits this transaction, or the description says too little to tell.',
+              salary: 'Renda familiar',
+            },
           ],
         )
       }),
+  )
+
+  it.effect('reports a refused key as rejected without retrying', () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0)
+      const client = HttpClient.make((request) =>
+        Ref.update(calls, (n) => n + 1).pipe(
+          Effect.as(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response('{"detail":"invalid key"}', { status: 401 }),
+            ),
+          ),
+        ),
+      )
+      const classifier = yield* Classifier.makeTypeSafe({
+        apiKey: Redacted.make('bad-key'),
+        model: 'jev-latest',
+        baseUrl: 'https://typesafe.test',
+      }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient, client)))
+      const error = yield* Effect.flip(
+        classifier.classify(
+          [
+            {
+              pattern: 'loja',
+              direction: 'expense',
+              description: 'Loja',
+              amountCents: -1000,
+            },
+          ],
+          [{ id: 'groceries', name: 'Mercado', bucket: 'essential' }],
+        ),
+      )
+      assert.deepInclude(error, { reason: 'rejected', status: 401 })
+      assert.strictEqual(yield* Ref.get(calls), 1)
+    }),
+  )
+
+  const configured = (env: Record<string, string>) =>
+    Effect.gen(function* () {
+      const classifier = yield* Classifier
+      return {
+        modelVersion: classifier.modelVersion,
+        applyThreshold: classifier.applyThreshold,
+      }
+    }).pipe(
+      Effect.provide(
+        Classifier.layer.pipe(
+          Layer.provide(refuseCalls),
+          Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(env))),
+        ),
+      ),
+    )
+
+  it.effect(
+    'pins a Jev version and reviews every answer until a threshold is set',
+    () =>
+      Effect.gen(function* () {
+        assert.deepStrictEqual(yield* configured({ TYPESAFE_API_KEY: 'key' }), {
+          modelVersion: Option.some('typesafe:jev-1.13.0'),
+          applyThreshold: Number.POSITIVE_INFINITY,
+        })
+        assert.deepStrictEqual(
+          yield* configured({
+            TYPESAFE_API_KEY: 'key',
+            TYPESAFE_MODEL: 'jev-latest',
+            TYPESAFE_APPLY_THRESHOLD: '0.97',
+          }),
+          {
+            modelVersion: Option.some('typesafe:jev-latest'),
+            applyThreshold: 0.97,
+          },
+        )
+        // Below the suggest floor a threshold would apply answers the
+        // policy drops; refusing to start beats guessing.
+        const refused = yield* Effect.exit(
+          configured({
+            TYPESAFE_API_KEY: 'key',
+            TYPESAFE_APPLY_THRESHOLD: '0.3',
+          }),
+        )
+        assert.isTrue(refused._tag === 'Failure')
+      }),
+  )
+
+  it.effect(
+    'applies a model answer from the configured threshold, still without teaching the store',
+    () =>
+      Effect.gen(function* () {
+        const entryOf = yield* statement(
+          line('a', '20260901', '-12.00', 'Padaria Real') +
+            line('b', '20260902', '-30.00', 'Mercado Talvez'),
+        )
+        const categorizer = yield* Categorizer
+        assert.deepInclude(
+          yield* categorizer.explain(yield* entryOf('Padaria Real')),
+          { categoryId: 'groceries', origin: 'model', status: 'applied' },
+        )
+        assert.deepInclude(
+          yield* categorizer.explain(yield* entryOf('Mercado Talvez')),
+          { categoryId: 'groceries', origin: 'model', status: 'review' },
+        )
+        assert.deepStrictEqual(yield* (yield* KnowledgeStore).list, [])
+      }).pipe(
+        Effect.provide(
+          categoriesTestWith(
+            fakeClassifier(
+              {
+                'padaria real': { categoryId: 'groceries', probability: 0.97 },
+                'mercado talvez': {
+                  categoryId: 'groceries',
+                  probability: 0.7,
+                },
+              },
+              { applyThreshold: 0.95 },
+            ),
+          ),
+        ),
+      ),
   )
 })
 
