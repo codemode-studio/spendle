@@ -2,9 +2,7 @@ import * as Effect from 'effect/Effect'
 import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder'
 
 import { Accounts } from '../../ledger/Accounts.ts'
-import type { Account } from '../../ledger/Accounts.ts'
 import { SpendleApi } from '../definition/Api.ts'
-import type { AccountView } from '../definition/Accounts.ts'
 import { respond } from '../Failures.ts'
 import { ReadModel } from '../ReadModel.ts'
 
@@ -28,21 +26,8 @@ export const AccountsHandlers = HttpApiBuilder.group(
     const accounts = yield* Accounts
     const reads = yield* ReadModel
 
-    const views = Effect.fnUntraced(function* (list: ReadonlyArray<Account>) {
-      const state = yield* reads.accountState
-      return list.map((account): AccountView => {
-        const balances = state.balances(account.id)
-        return {
-          ...account,
-          balances,
-          lastCheckpoint:
-            balances.find((balance) => balance.kind === 'booked') ?? null,
-          link: state.link(account.id),
-        }
-      })
-    })
-    const view = (account: Account) =>
-      Effect.map(views([account]), (list) => list[0]!)
+    const views = reads.accountViews
+    const view = reads.accountView
 
     return handlers.handleAll({
       list: ({ query }) =>

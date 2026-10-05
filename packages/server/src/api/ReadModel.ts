@@ -5,7 +5,9 @@ import * as Schema from 'effect/Schema'
 import * as SqlClient from 'effect/sql/SqlClient'
 import * as SqlSchema from 'effect/sql/SqlSchema'
 
+import type { Account } from '../ledger/Accounts.ts'
 import { AccountLink, Balance } from './definition/Accounts.ts'
+import type { AccountView } from './definition/Accounts.ts'
 
 const BalanceRow = Schema.Struct({
   accountId: Schema.String,
@@ -88,7 +90,27 @@ const make = Effect.gen(function* () {
     }
   }).pipe(Effect.withSpan('ReadModel.accountState'))
 
-  return { accountState }
+  /** Accounts with their latest balances, last standing checkpoint and live link. */
+  const accountViews = Effect.fn('ReadModel.accountViews')(function* (
+    accounts: ReadonlyArray<Account>,
+  ) {
+    const state = yield* accountState
+    return accounts.map((account): AccountView => {
+      const balances = state.balances(account.id)
+      return {
+        ...account,
+        balances,
+        lastCheckpoint:
+          balances.find((balance) => balance.kind === 'booked') ?? null,
+        link: state.link(account.id),
+      }
+    })
+  })
+
+  const accountView = (account: Account) =>
+    Effect.map(accountViews([account]), (views) => views[0]!)
+
+  return { accountViews, accountView }
 })
 
 export class ReadModel extends Context.Service<

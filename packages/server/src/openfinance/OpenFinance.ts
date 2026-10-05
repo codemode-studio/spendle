@@ -16,6 +16,7 @@ import {
   AccountKind,
   AccountPurpose,
   CardTerms,
+  OwnerNotFound,
 } from '../ledger/Accounts.ts'
 import { Observations } from '../ledger/Observations.ts'
 import type {
@@ -319,6 +320,20 @@ const make = Effect.gen(function* () {
   const providerAccounts = Effect.fn('OpenFinance.providerAccounts')(
     (connectionId: string) => findProviderAccounts(connectionId),
   )
+  const findConnections = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Connection,
+    execute: () => sql`
+        SELECT id, owner_id AS ownerId, item_id AS itemId, source_id AS sourceId,
+          connector_name AS connectorName, status, provider_status AS providerStatus,
+          error_code AS errorCode, last_synced_at AS lastSyncedAt
+        FROM open_finance_connections ORDER BY created_at DESC, id DESC
+      `,
+  })
+  /** Every connection, newest first, disconnected ones included as history. */
+  const connections = findConnections(undefined).pipe(
+    Effect.withSpan('OpenFinance.connections'),
+  )
 
   // Writes what Pluggy answered only if the connection was not disconnected
   // meanwhile: an item/deleted or disconnect that landed while Pluggy
@@ -386,6 +401,9 @@ const make = Effect.gen(function* () {
 
   const createConnectToken = Effect.fn('OpenFinance.createConnectToken')(
     function* (input: { readonly ownerId: string }) {
+      const owner = yield* sql`SELECT 1 FROM owners WHERE id = ${input.ownerId}`
+      if (owner.length === 0)
+        return yield* new OwnerNotFound({ ownerId: input.ownerId })
       const connectionId = yield* crypto.randomUUIDv7
       const createdAt = yield* now
       yield* sql`
@@ -1018,6 +1036,39 @@ const make = Effect.gen(function* () {
     )
   })
 
+  /**
+   * The person stops copying a provider account into its ledger account.
+   * What was already copied stays as facts of that account; syncs of the
+   * provider account stop until it is linked again, to this or another
+   * ledger account. Waits for a running sync of it to finish.
+   */
+  const unlinkAccount = Effect.fn('OpenFinance.unlinkAccount')(
+    (providerAccountId: string) =>
+      lockFor(providerAccountId).withPermits(1)(
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const provider = yield* providerAccount(providerAccountId)
+            if (provider.accountId === null) return yield* fail('not_linked')
+            const owner = yield* connection(provider.connectionId)
+            if (owner.status === 'disconnected')
+              return yield* fail('connection_disconnected')
+            yield* sql`
+              UPDATE open_finance_accounts SET account_id = NULL, history_from = NULL,
+                linked_at = NULL, updated_at = ${yield* now}
+              WHERE provider_account_id = ${providerAccountId}
+            `
+            // Re-read bookkeeping belongs to the link that ends here.
+            yield* sql`
+              DELETE FROM open_finance_unresolved WHERE provider_account_id = ${providerAccountId}
+            `
+            yield* sql`
+              DELETE FROM open_finance_absent_pending WHERE provider_account_id = ${providerAccountId}
+            `
+          }),
+        ),
+      ),
+  )
+
   const syncAccount = Effect.fn('OpenFinance.syncAccount')(
     (providerAccountId: string) =>
       lockFor(providerAccountId).withPermits(1)(
@@ -1433,10 +1484,12 @@ const make = Effect.gen(function* () {
     registerItem,
     refreshConnection,
     linkAccount,
+    unlinkAccount,
     syncAccount,
     requestSync,
     disconnect,
     connection,
+    connections,
     providerAccounts,
     invalidatedCheckpoints,
   }
