@@ -1,0 +1,110 @@
+import * as Effect from 'effect/Effect'
+import * as SqlClient from 'effect/sql/SqlClient'
+
+export default Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  // One row per Pluggy item. Its id is the item's clientUserId, which is how a
+  // returning item is proven to belong to the connection that requested it.
+  yield* sql`
+    CREATE TABLE open_finance_connections (
+      id TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL REFERENCES owners (id),
+      item_id TEXT UNIQUE,
+      source_id TEXT REFERENCES sources (id),
+      connector_name TEXT,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'active', 'attention', 'disconnected')),
+      provider_status TEXT,
+      error_code TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_synced_at TEXT
+    )
+  `
+
+  // Accounts as Pluggy describes them. The provider's name and type stay here;
+  // a linked ledger account keeps the name and type the person chose. A
+  // disconnect sets `unlinked_at` and keeps `account_id` as history: the
+  // ledger account can then be linked again through a new connection.
+  yield* sql`
+    CREATE TABLE open_finance_accounts (
+      provider_account_id TEXT PRIMARY KEY,
+      connection_id TEXT NOT NULL REFERENCES open_finance_connections (id),
+      type TEXT NOT NULL CHECK (type IN ('BANK', 'CREDIT')),
+      subtype TEXT,
+      name TEXT NOT NULL,
+      last_four TEXT,
+      currency TEXT NOT NULL,
+      account_id TEXT REFERENCES accounts (id),
+      history_from TEXT,
+      linked_at TEXT,
+      unlinked_at TEXT,
+      updated_at TEXT NOT NULL
+    )
+  `
+  // A ledger account is fed by at most one live link at a time.
+  yield* sql`
+    CREATE UNIQUE INDEX open_finance_accounts_live_link
+    ON open_finance_accounts (account_id) WHERE unlinked_at IS NULL
+  `
+
+  // Transactions read without an amount in the account currency (a foreign
+  // purchase not yet converted). Syncs re-read back to the oldest one until
+  // it can be recorded or Pluggy has not reported it for a while: Pluggy may
+  // omit a transaction from one response and return it in the next.
+  yield* sql`
+    CREATE TABLE open_finance_unresolved (
+      provider_account_id TEXT NOT NULL REFERENCES open_finance_accounts (provider_account_id),
+      provider_transaction_id TEXT NOT NULL,
+      booked_on TEXT NOT NULL,
+      last_seen_on TEXT NOT NULL,
+      PRIMARY KEY (provider_account_id, provider_transaction_id)
+    )
+  `
+
+  // Pending transactions recorded as removed because a response omitted
+  // them. Pluggy may return such a transaction later, often posted, so syncs
+  // keep re-reading back to its day until it is seen again or a retention
+  // period from its removal passes. Its recorded status stays removed meanwhile.
+  yield* sql`
+    CREATE TABLE open_finance_absent_pending (
+      provider_account_id TEXT NOT NULL REFERENCES open_finance_accounts (provider_account_id),
+      provider_transaction_id TEXT NOT NULL,
+      booked_on TEXT NOT NULL,
+      removed_on TEXT NOT NULL,
+      PRIMARY KEY (provider_account_id, provider_transaction_id)
+    )
+  `
+
+  // Booked checkpoints inferred from running balances that a later read no
+  // longer supports: one of the day's stored posted transactions lacks a
+  // running balance in the latest read (omitted, unconvertible, or moved to
+  // or from the day), or its lines stopped agreeing on one closing balance.
+  // The balance observation
+  // stays immutable; rows here record that it was withdrawn, or reinstated
+  // when a later complete read confirms the same balance again. The latest
+  // row for an observation decides. Readers of booked checkpoints from an
+  // open_finance source must take the day's latest observation and treat the
+  // day as having no checkpoint when that observation is currently withdrawn
+  // (never falling back to an older one).
+  yield* sql`
+    CREATE TABLE open_finance_checkpoint_invalidations (
+      balance_observation_id TEXT NOT NULL REFERENCES balance_observations (id),
+      withdrawn INTEGER NOT NULL CHECK (withdrawn IN (0, 1)),
+      account_id TEXT NOT NULL REFERENCES accounts (id),
+      source_id TEXT NOT NULL REFERENCES sources (id),
+      as_of TEXT NOT NULL,
+      invalidated_at TEXT NOT NULL
+    )
+  `
+  yield* sql`
+    CREATE TRIGGER open_finance_checkpoint_invalidations_no_update
+    BEFORE UPDATE ON open_finance_checkpoint_invalidations
+    BEGIN SELECT RAISE(ABORT, 'checkpoint invalidations are immutable'); END
+  `
+  yield* sql`
+    CREATE TRIGGER open_finance_checkpoint_invalidations_no_delete
+    BEFORE DELETE ON open_finance_checkpoint_invalidations
+    BEGIN SELECT RAISE(ABORT, 'checkpoint invalidations are immutable'); END
+  `
+})

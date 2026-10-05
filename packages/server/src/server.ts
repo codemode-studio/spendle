@@ -1,6 +1,7 @@
 import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer'
 import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
+import * as FetchHttpClient from 'effect/http/FetchHttpClient'
 import * as HttpRouter from 'effect/http/HttpRouter'
 import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder'
 // NodeHttpServer adapts a Node server; there is no Effect equivalent to import instead.
@@ -12,6 +13,9 @@ import { EventLog } from './events/EventLog.ts'
 import * as Reactor from './events/Reactor.ts'
 import { Accounts } from './ledger/Accounts.ts'
 import { Observations } from './ledger/Observations.ts'
+import { OpenFinance } from './openfinance/OpenFinance.ts'
+import { PluggyClient } from './openfinance/PluggyClient.ts'
+import * as SyncReactor from './openfinance/SyncReactor.ts'
 import { Api } from './http/Api.ts'
 import { SystemHandlers } from './http/System.ts'
 import * as Sqlite from './persistence/Sqlite.ts'
@@ -37,7 +41,12 @@ const CoreLive = Layer.mergeAll(
   Layer.provideMerge(Sqlite.layer),
 )
 
-export const ServerLive = HttpRouter.serve(ApiRoutes).pipe(
-  Layer.provide(HttpServerLive),
-  Layer.provide(CoreLive),
+const OpenFinanceLive = SyncReactor.layer.pipe(
+  Layer.provideMerge(OpenFinance.layer),
+  Layer.provide(PluggyClient.layer.pipe(Layer.provide(FetchHttpClient.layer))),
 )
+
+export const ServerLive = Layer.mergeAll(
+  HttpRouter.serve(ApiRoutes),
+  OpenFinanceLive,
+).pipe(Layer.provide(HttpServerLive), Layer.provide(CoreLive))
