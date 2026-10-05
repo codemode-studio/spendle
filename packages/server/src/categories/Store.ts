@@ -371,3 +371,65 @@ export const applyEdit = (
     }
   }
 }
+
+/** A pattern V1's knowledge base learned from the person. */
+export interface ImportedPattern {
+  readonly id: string
+  readonly pattern: string
+  readonly matchMode: MatchMode
+  readonly direction: Direction
+  readonly categoryId: string
+  readonly signature: string
+  readonly sampleDescription: string
+  readonly confirmations: number
+  readonly corrections: number
+  readonly lastLearnedAt: string
+}
+
+export type ImportOutcome = 'added' | 'present' | 'taken' | 'invalid_pattern'
+
+/**
+ * Adds V1's patterns as they were, under their V1 ids, with `v1_import` as
+ * their source. A pattern already stored under the same id is `present`; one
+ * whose text, mode and direction V2 already holds is `taken`, because what
+ * the person taught V2 is newer than V1.
+ */
+export const importPatterns = (
+  rows: ReadonlyArray<PatternRow>,
+  imported: ReadonlyArray<ImportedPattern>,
+): {
+  readonly rows: ReadonlyArray<PatternRow>
+  readonly outcomes: ReadonlyArray<ImportOutcome>
+} => {
+  const next = [...rows]
+  const outcomes = imported.map((input): ImportOutcome => {
+    if (next.some((row) => row.id === input.id)) return 'present'
+    const pattern = normalizeKnowledgePattern(input.pattern)
+    const aggregatorPrefix =
+      input.matchMode === 'prefix' && knowledgeAggregators.has(pattern)
+    if (!aggregatorPrefix && !isValidKnowledgePattern(pattern))
+      return 'invalid_pattern'
+    if (
+      next.some((row) =>
+        sameKey(row, 'merchant', pattern, input.matchMode, input.direction),
+      )
+    )
+      return 'taken'
+    next.push({
+      id: input.id,
+      kind: 'merchant',
+      pattern,
+      matchMode: input.matchMode,
+      direction: input.direction,
+      categoryId: input.categoryId,
+      signature: input.signature,
+      sampleDescription: input.sampleDescription,
+      source: 'v1_import',
+      confirmations: Math.max(1, input.confirmations),
+      corrections: Math.max(0, input.corrections),
+      lastLearnedAt: input.lastLearnedAt,
+    })
+    return 'added'
+  })
+  return { rows: next, outcomes }
+}
