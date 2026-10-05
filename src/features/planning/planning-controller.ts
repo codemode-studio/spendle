@@ -4,8 +4,8 @@ import { useState } from 'react'
 import type * as React from 'react'
 import { toast } from 'sonner'
 
-import { parseCurrency, toMinorUnits as toCents } from '#/domain/currency'
-import { formatMonthLong as formatMonth } from '#/domain/period'
+import { parseCurrency, toMinorUnits as toCents } from '#/lib/currency'
+import { formatMonthLong as formatMonth } from '#/lib/period'
 import { invalidateFinance } from '#/features/finance/queries'
 import {
   closeMonthFn,

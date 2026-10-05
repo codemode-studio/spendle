@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { FamilyTransaction } from '#/domain/ledger'
+import type { FamilyTransaction } from '#/lib/ledger'
 
 import { buildHomeView } from './insights'
 

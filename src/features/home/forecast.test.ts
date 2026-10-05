@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { shiftDays } from '#/domain/period'
+import { shiftDays } from '#/lib/period'
 import type { CashProjection } from './cash-projection'
 import { simulateRecovery } from './forecast'
 

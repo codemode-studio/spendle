@@ -30,9 +30,9 @@ import {
 } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
 import { NativeSelect } from '#/components/ui/native-select'
-import { currencyOptions, formatCurrency } from '#/domain/currency'
-import { formatInstrumentName } from '#/domain/finance'
-import { formatShortDate as formatDate } from '#/domain/period'
+import { currencyOptions, formatCurrency } from '#/lib/currency'
+import { formatInstrumentName } from '#/lib/finance'
+import { formatShortDate as formatDate } from '#/lib/period'
 import { InstrumentCard } from '#/features/finance/instrument-card'
 import {
   archiveAccountFn,

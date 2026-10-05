@@ -27,9 +27,9 @@ import {
   currencyFractionDigits,
   formatCurrency,
   toMinorUnits,
-} from '#/domain/currency'
-import { formatInstrumentName } from '#/domain/finance'
-import { formatShortDate, todayIso } from '#/domain/period'
+} from '#/lib/currency'
+import { formatInstrumentName } from '#/lib/finance'
+import { formatShortDate, todayIso } from '#/lib/period'
 import type { AccountView } from '#/features/v2/accounts'
 import {
   recordCheckpointFn,

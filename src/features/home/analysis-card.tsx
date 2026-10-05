@@ -1,6 +1,6 @@
 import { ArrowDownRight, ChevronDown, TriangleAlert } from 'lucide-react'
 import type { MonthlyAnalysis } from '@spendle/server/api'
-import { formatCurrency } from '#/domain/currency'
+import { formatCurrency } from '#/lib/currency'
 
 export function AnalysisCard({ analysis }: { analysis: MonthlyAnalysis }) {
   const savingsCents = analysis.actions.reduce(

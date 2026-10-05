@@ -14,13 +14,13 @@ import {
   TableHeader,
   TableRow,
 } from '#/components/ui/table'
-import { formatCurrency } from '#/domain/currency'
-import { formatInstrumentName } from '#/domain/finance'
+import { formatCurrency } from '#/lib/currency'
+import { formatInstrumentName } from '#/lib/finance'
 import {
   formatMonthLong,
   formatMonthShort,
   formatShortDate as formatDate,
-} from '#/domain/period'
+} from '#/lib/period'
 import type { AccountView } from '#/features/v2/accounts'
 import { cycleStatusCopy } from '#/features/v2/cards'
 import { cardOverviewOptions, cycleEntriesOptions } from '#/features/v2/queries'

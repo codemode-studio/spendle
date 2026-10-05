@@ -68,9 +68,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '#/components/ui/tooltip'
-import { toMinorUnits } from '#/domain/currency'
-import { formatInstrumentName } from '#/domain/finance'
-import { formatLongDate } from '#/domain/period'
+import { toMinorUnits } from '#/lib/currency'
+import { formatInstrumentName } from '#/lib/finance'
+import { formatLongDate } from '#/lib/period'
 import { isCard } from '#/features/v2/accounts'
 import type { AccountView } from '#/features/v2/accounts'
 import {

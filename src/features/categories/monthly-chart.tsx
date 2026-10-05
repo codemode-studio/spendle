@@ -1,6 +1,6 @@
 import { useId, useState } from 'react'
 
-import { formatCurrency } from '#/domain/currency'
+import { formatCurrency } from '#/lib/currency'
 import { compactBRL, useContainerWidth } from '#/features/home/charts'
 import { cn } from '#/lib/utils'
 

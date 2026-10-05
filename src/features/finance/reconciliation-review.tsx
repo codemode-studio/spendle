@@ -31,9 +31,9 @@ import {
 } from '#/components/ui/dialog'
 import { Input } from '#/components/ui/input'
 import { Skeleton } from '#/components/ui/skeleton'
-import { formatCurrency } from '#/domain/currency'
-import { formatInstrumentName } from '#/domain/finance'
-import { formatShortDate } from '#/domain/period'
+import { formatCurrency } from '#/lib/currency'
+import { formatInstrumentName } from '#/lib/finance'
+import { formatShortDate } from '#/lib/period'
 import {
   decideRelationFn,
   linkEntriesFn,

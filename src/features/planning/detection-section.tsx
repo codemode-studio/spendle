@@ -13,9 +13,9 @@ import {
   formatCurrency,
   formatMinorUnitsForInput,
   toMinorUnits as toCents,
-} from '#/domain/currency'
-import { formatInstrumentName } from '#/domain/finance'
-import { formatShortDate as formatDate } from '#/domain/period'
+} from '#/lib/currency'
+import { formatInstrumentName } from '#/lib/finance'
+import { formatShortDate as formatDate } from '#/lib/period'
 import type { DetectedRecurrence } from '@spendle/server/api'
 
 import {

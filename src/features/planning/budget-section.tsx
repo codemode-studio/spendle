@@ -39,13 +39,13 @@ import {
   formatCurrency,
   formatMinorUnitsForInput,
   toMinorUnits as toCents,
-} from '#/domain/currency'
+} from '#/lib/currency'
 import {
   allocationAmount,
   percentFromBps,
   strategyPresets,
-} from '#/domain/finance'
-import { formatMonthLong as formatMonth } from '#/domain/period'
+} from '#/lib/finance'
+import { formatMonthLong as formatMonth } from '#/lib/period'
 import { transactionSearchDefaults } from '#/features/finance/transactions.search'
 import type { PlanningData } from './types'
 import { cn } from '#/lib/utils'

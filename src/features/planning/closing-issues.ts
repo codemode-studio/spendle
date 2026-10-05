@@ -1,6 +1,6 @@
 import type { IntegrityIssue, RecurrenceBook } from '@spendle/server/api'
 
-import { formatShortDate } from '#/domain/period'
+import { formatShortDate } from '#/lib/period'
 
 export type ClosingIssueDestination =
   | 'accounts'

@@ -1,4 +1,4 @@
-import { describeRecurrence } from '#/domain/recurrence-book'
+import { describeRecurrence } from '#/lib/recurrence'
 import type { RecurrenceBook } from '@spendle/server/api'
 
 type RecurrenceSnapshot = RecurrenceBook['recurrences'][number]

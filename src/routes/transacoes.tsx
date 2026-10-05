@@ -69,10 +69,10 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '#/components/ui/tooltip'
-import { groupCategoryOptions } from '#/domain/categories'
-import { formatCurrency } from '#/domain/currency'
-import { formatInstrumentName } from '#/domain/finance'
-import { formatDayLabel, formatLongDate, formatPeriod } from '#/domain/period'
+import { groupCategoryOptions } from '#/lib/categories'
+import { formatCurrency } from '#/lib/currency'
+import { formatInstrumentName } from '#/lib/finance'
+import { formatDayLabel, formatLongDate, formatPeriod } from '#/lib/period'
 import {
   parseAmountInput,
   transactionSearchDefaults,

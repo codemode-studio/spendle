@@ -9,8 +9,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '#/components/ui/select'
-import { groupCategoryOptions } from '#/domain/categories'
-import type { CategoryOption } from '#/domain/categories'
+import { groupCategoryOptions } from '#/lib/categories'
+import type { CategoryOption } from '#/lib/categories'
 import { cn } from '#/lib/utils'
 
 interface CategorySelectProps {

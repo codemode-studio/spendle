@@ -34,9 +34,9 @@ import {
   currencyFractionDigits,
   formatMinorUnitsForInput,
   toMinorUnits,
-} from '#/domain/currency'
-import { formatInstrumentName } from '#/domain/finance'
-import { todayIso } from '#/domain/period'
+} from '#/lib/currency'
+import { formatInstrumentName } from '#/lib/finance'
+import { todayIso } from '#/lib/period'
 import { isCard } from '#/features/v2/accounts'
 import type { AccountView } from '#/features/v2/accounts'
 import {

@@ -74,8 +74,8 @@ import {
   formatCurrency,
   formatMinorUnitsForInput,
   toMinorUnits,
-} from '#/domain/currency'
-import { formatShortDate, todayIso } from '#/domain/period'
+} from '#/lib/currency'
+import { formatShortDate, todayIso } from '#/lib/period'
 import {
   classifyMovementFn,
   recordValuationFn,
