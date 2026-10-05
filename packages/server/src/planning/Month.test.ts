@@ -1,5 +1,6 @@
 import { assert, describe, it } from '@effect/vitest'
 
+import { emptyRates, rateTable } from '../rates/Conversion.ts'
 import { buildMonth, projectCash } from './Month.ts'
 import type { MonthEntry, MonthFacts } from './Month.ts'
 import { buildBook } from './RecurrencePolicy.ts'
@@ -191,6 +192,7 @@ const facts = (overrides: Partial<MonthFacts> = {}): MonthFacts => {
       ['utilities', 'essential'],
       ['salary', 'income'],
     ]),
+    rates: emptyRates,
     ...overrides,
   }
 }
@@ -401,6 +403,325 @@ describe('cash forecast', () => {
         ],
         daily: Math.round((250_000 + 15_000 + 25_000 + 3_000) / 60),
       },
+    )
+  })
+})
+
+// A US$ checking account beside the reais ones; PTAX closes on 09-11 and 09-14.
+const usdRates = rateTable([
+  {
+    currency: 'USD',
+    date: '2026-09-11',
+    rateMicros: 5_000_000,
+    source: 'PTAX',
+  },
+  {
+    currency: 'USD',
+    date: '2026-09-14',
+    rateMicros: 5_500_000,
+    source: 'PTAX',
+  },
+])
+const withDollars = (overrides: Partial<MonthFacts> = {}) => {
+  const base = facts()
+  const streaming: RecurrenceRule = {
+    ...internet,
+    id: 'streaming',
+    name: 'Streaming',
+    accountId: 'dollars',
+    categoryId: 'utilities',
+    amountCents: 1_000,
+    currency: 'USD',
+    startsOn: '2026-09-28',
+    scheduleAnchor: '2026-09-28',
+  }
+  return facts({
+    accounts: [
+      ...base.accounts,
+      {
+        id: 'dollars',
+        name: 'Conta em dólar',
+        kind: 'checking',
+        purpose: 'operating',
+        currency: 'USD',
+        archived: false,
+        company: false,
+        card: null,
+      },
+      {
+        id: 'euros',
+        name: 'Conta em euro',
+        kind: 'checking',
+        purpose: 'operating',
+        currency: 'EUR',
+        archived: false,
+        company: false,
+        card: null,
+      },
+    ],
+    entries: [
+      ...base.entries,
+      // US$ 20.00 on Saturday the 12th: Friday's close, R$ 5.00.
+      entry(
+        'lunch',
+        'dollars',
+        '2026-09-12',
+        -2_000,
+        'restaurants',
+        'lifestyle',
+      ),
+      entry('freelance', 'dollars', '2026-09-14', 10_000, 'salary', 'income'),
+      entry(
+        'croissant',
+        'euros',
+        '2026-09-14',
+        -500,
+        'restaurants',
+        'lifestyle',
+      ),
+    ],
+    checkpoints: [
+      ...base.checkpoints,
+      { accountId: 'dollars', asOf: '2026-08-31', balanceCents: 100_000 },
+    ],
+    book: buildBook({
+      today: '2026-09-15',
+      rules: [internet, salary, streaming],
+      entries: [],
+      links: [],
+      occurrenceDecisions: [],
+    }),
+    rates: usdRates,
+    ...overrides,
+  })
+}
+
+describe('other currencies', () => {
+  it('counts dollars in reais at the rate of their date and marks them as converted', () => {
+    const month = buildMonth(withDollars(), '2026-09')
+    const lunch = month.family.lines.find((line) => line.id === 'lunch')!
+    const streaming = month.family.lines.find((line) =>
+      line.id.startsWith('streaming'),
+    )!
+    assert.deepStrictEqual(
+      {
+        lunch: [lunch.cents, lunch.converted],
+        streaming: [streaming.cents, streaming.converted?.rateDate],
+        income: month.incomeCents,
+        // US$ 1 000 − 20 + 100 at the 15th's rate (R$ 5.50) beside R$ 5 070.
+        cash: month.cashFlow.cashCents,
+        // Only the euro, without a rate, stays out.
+        issues: month.integrity.issues.filter(
+          (issue) => issue.code === 'other_currency',
+        ),
+        exchange: month.exchange,
+      },
+      {
+        lunch: [
+          10_000,
+          {
+            cents: 10_000,
+            currency: 'USD',
+            originalCents: 2_000,
+            rateMicros: 5_000_000,
+            rateDate: '2026-09-11',
+            source: 'PTAX',
+          },
+        ],
+        // US$ 10.00 due on the 28th, at the latest rate.
+        streaming: [5_500, '2026-09-14'],
+        // R$ 8 000 + US$ 100 at R$ 5.50
+        income: 855_000,
+        cash: 507_000 + 594_000,
+        issues: [{ code: 'other_currency', count: 1, blocksClosing: false }],
+        exchange: {
+          rates: [
+            {
+              currency: 'USD',
+              rateMicros: 5_500_000,
+              date: '2026-09-14',
+              source: 'PTAX',
+            },
+          ],
+          missing: ['EUR'],
+        },
+      },
+    )
+  })
+
+  it('projects dollar recurrences in reais in the cash forecast', () => {
+    const projection = projectCash(withDollars(), {
+      daysBack: 0,
+      daysAhead: 30,
+    })
+    const streaming = projection.scheduled.find((event) =>
+      event.id.startsWith('streaming'),
+    )!
+    assert.deepStrictEqual(
+      [
+        projection.startingCents,
+        streaming.amountCents,
+        streaming.converted?.originalCents,
+      ],
+      [507_000 + 594_000, -5_500, -1_000],
+    )
+  })
+})
+
+describe('history estimate', () => {
+  // Groceries R$ 600, R$ 900 and R$ 3 000 in June–August; delivery in August only.
+  const history = (overrides: Partial<MonthFacts> = {}) => {
+    const base = facts()
+    return facts({
+      entries: [
+        ...base.entries,
+        entry(
+          'g6',
+          'checking',
+          '2026-06-10',
+          -60_000,
+          'groceries',
+          'essential',
+        ),
+        entry(
+          'g7',
+          'checking',
+          '2026-07-10',
+          -90_000,
+          'groceries',
+          'essential',
+        ),
+        entry(
+          'g8',
+          'checking',
+          '2026-08-10',
+          -320_000,
+          'groceries',
+          'essential',
+        ),
+        // A refund nets against its month.
+        entry(
+          'g8-refund',
+          'checking',
+          '2026-08-12',
+          20_000,
+          'groceries',
+          'essential',
+        ),
+        entry('d8', 'checking', '2026-08-15', -40_000, 'delivery', 'lifestyle'),
+        // A transfer to the reserve is not spending.
+        entry('t7', 'checking', '2026-07-20', -50_000, 'transfer', 'excluded', {
+          excludedFromSpending: true,
+        }),
+        entry(
+          'g9',
+          'checking',
+          '2026-09-03',
+          -20_000,
+          'groceries',
+          'essential',
+        ),
+      ],
+      categoryBuckets: new Map([
+        ['utilities', 'essential'],
+        ['salary', 'income'],
+        ['groceries', 'essential'],
+        ['delivery', 'lifestyle'],
+      ]),
+      ...overrides,
+    })
+  }
+
+  it('estimates variable categories from the median of the last three months, prorated to the days left', () => {
+    const month = buildMonth(history(), '2026-09')
+    const estimates = month.family.lines.filter(
+      (line) => line.origin === 'history',
+    )
+    assert.deepStrictEqual(
+      {
+        estimates: estimates.map((line) => [
+          line.categoryId,
+          line.certainty,
+          line.cents,
+        ]),
+        historyEstimate: month.family.historyEstimateCents,
+        // Internet still scheduled plus the history estimate.
+        remaining: month.cashFlow.remainingExpenseCents,
+      },
+      {
+        // Median R$ 900, 15 of 30 days left: R$ 450, as the R$ 450 already
+        // spent (R$ 200 here, R$ 250 on the card bill due on the 14th) allows.
+        estimates: [['groceries', 'estimated', 45_000]],
+        historyEstimate: 45_000,
+        remaining: 12_000 + 45_000,
+      },
+    )
+  })
+
+  it('estimates a whole month ahead and nothing for a month already lived', () => {
+    const next = buildMonth(history(), '2026-10')
+    const lived = buildMonth(history(), '2026-08')
+    assert.deepStrictEqual(
+      [
+        next.family.lines
+          .filter((line) => line.origin === 'history')
+          .map((line) => [line.categoryId, line.cents]),
+        lived.family.historyEstimateCents,
+      ],
+      [[['groceries', 90_000]], 0],
+    )
+  })
+
+  it('leaves out what a recurrence already pays', () => {
+    const groceriesBox: RecurrenceRule = {
+      ...internet,
+      id: 'groceries-box',
+      name: 'Cesta',
+      categoryId: 'groceries',
+      amountCents: 90_000,
+      startsOn: '2026-06-10',
+      scheduleAnchor: '2026-06-10',
+      dateToleranceDays: 3,
+      amountToleranceBps: 0,
+    }
+    const base = history()
+    const book = buildBook({
+      today: '2026-09-15',
+      rules: [{ ...groceriesBox, autoMatch: false, active: false }],
+      entries: [
+        {
+          id: 'g7',
+          accountId: 'checking',
+          bookedOn: '2026-07-10',
+          amountCents: -90_000,
+          currency: 'BRL',
+          description: 'g7',
+          status: 'posted',
+          categoryId: 'groceries',
+          internal: false,
+          company: false,
+        },
+      ],
+      links: [
+        {
+          key: 'g7',
+          recurrenceId: 'groceries-box',
+          expectedDate: '2026-07-10',
+          entryId: 'g7',
+          decision: 'confirmed',
+          revision: 1,
+        },
+      ],
+      occurrenceDecisions: [],
+    })
+    const month = buildMonth({ ...base, book }, '2026-09')
+    assert.deepStrictEqual(
+      month.family.lines
+        .filter((line) => line.origin === 'history')
+        .map((line) => [line.categoryId, line.cents]),
+      // June R$ 600, July paid by the recurrence (0), August R$ 3 000: a
+      // median of R$ 600, of which R$ 450 is already spent.
+      [['groceries', 15_000]],
     )
   })
 })

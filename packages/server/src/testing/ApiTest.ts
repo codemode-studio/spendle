@@ -10,6 +10,7 @@ import { ApiConfig } from '../api/ApiConfig.ts'
 import { SpendleApi } from '../api/definition/Api.ts'
 import { ApiRoutes } from '../api/Routes.ts'
 import { planningTestWith } from './FakePluggy.ts'
+import type { FakeSeries } from './FakeRates.ts'
 import { AssistantModel } from '../planning/AssistantModel.ts'
 
 /**
@@ -20,6 +21,8 @@ export const apiTest = (
   options: {
     readonly token?: string
     readonly assistant?: Layer.Layer<AssistantModel>
+    /** What the fake exchange-rate source publishes. */
+    readonly rates?: FakeSeries
   } = {},
 ) =>
   HttpRouter.serve(ApiRoutes, {
@@ -28,7 +31,10 @@ export const apiTest = (
   }).pipe(
     Layer.provideMerge(ApiConfig.layerTest(options.token)),
     Layer.provideMerge(
-      planningTestWith(options.assistant ?? AssistantModel.disabled),
+      planningTestWith(
+        options.assistant ?? AssistantModel.disabled,
+        options.rates,
+      ),
     ),
     Layer.provideMerge(NodeHttpServer.layerTest),
   )

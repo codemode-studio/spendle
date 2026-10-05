@@ -33,6 +33,7 @@ import { LinkPaymentDialog } from './recurrence-dialogs'
 import { buildRecurrenceGroups } from './recurrence-groups'
 import type { RecurrenceDisplayRow } from './recurrence-groups'
 import { recurrenceStatusBadge } from './presentation'
+import { ConvertedAmount } from '#/components/exchange'
 
 type DisplayRow = RecurrenceDisplayRow
 
@@ -153,6 +154,7 @@ function RecurrencesSection({
             >
               {item.direction === 'expense' ? '−' : '+'}
               {formatCurrency(item.amountCents, item.currency)}
+              <ConvertedAmount converted={item.converted} />
             </strong>
             {item.active && openOccurrences.length > 0 && (
               <Tooltip>
