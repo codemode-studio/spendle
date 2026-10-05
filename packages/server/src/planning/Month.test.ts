@@ -186,6 +186,7 @@ const facts = (overrides: Partial<MonthFacts> = {}): MonthFacts => {
     ],
     budgets: [],
     goals: [],
+    reserveInvestedCents: null,
     categoryBuckets: new Map([
       ['utilities', 'essential'],
       ['salary', 'income'],
@@ -324,6 +325,47 @@ describe('month', () => {
       '2026-09',
     )
     assert.strictEqual(month.baseIncomeCents, 700_000)
+  })
+
+  it('measures the reserve by the investment positions marked as reserve', () => {
+    const goal = {
+      id: 'emergency',
+      type: 'emergency_reserve' as const,
+      targetCents: 600_000,
+      currentCents: 100_000,
+    }
+    const reserveOf = (reserveInvestedCents: number | null) => {
+      const { reserve, effectiveAllocation } = buildMonth(
+        facts({
+          goals: [goal],
+          reserveInvestedCents,
+          settings: {
+            monthlyIncomeTargetCents: 1_000_000,
+            reserveMonths: 6,
+            keepReserveContributions: false,
+          },
+        }),
+        '2026-09',
+      )
+      return [
+        reserve.currentCents,
+        reserve.complete,
+        reserve.redirected,
+        effectiveAllocation.reserve,
+      ]
+    }
+    assert.deepStrictEqual(
+      {
+        // No position marked yet: the goal's own amount stands in.
+        noPositions: reserveOf(null),
+        // The positions reach the target: the reserve share goes to investing.
+        invested: reserveOf(600_000),
+      },
+      {
+        noPositions: [100_000, false, false, 1_000],
+        invested: [600_000, true, true, 0],
+      },
+    )
   })
 })
 

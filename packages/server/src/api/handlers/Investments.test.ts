@@ -236,6 +236,36 @@ describe('investments API', () => {
       }).pipe(Effect.provide(apiTest())),
   )
 
+  it.effect(
+    'gives the plan the reserve the positions marked as reserve hold',
+    () =>
+      Effect.gen(function* () {
+        const { client, brokerage, typed } = yield* setup
+        const before = (yield* client.dashboard.month({ query: {} })).reserve
+        const aporte = yield* typed(
+          brokerage.id,
+          '2026-09-01',
+          250_000,
+          'Aporte',
+        )
+        yield* client.investments.classify({
+          payload: {
+            entryId: aporte.entryId!,
+            newPosition: {
+              name: 'Tesouro Selic',
+              assetClassId: 'fixed-income',
+              reserve: true,
+            },
+          },
+        })
+        const after = (yield* client.dashboard.month({ query: {} })).reserve
+        assert.deepStrictEqual(
+          [before.currentCents, after.currentCents],
+          [0, 250_000],
+        )
+      }).pipe(Effect.provide(apiTest())),
+  )
+
   it.effect('leaves a position without a quote out of the total in reais', () =>
     Effect.gen(function* () {
       const { client, open, typed } = yield* setup

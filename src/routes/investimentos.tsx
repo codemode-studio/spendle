@@ -6,6 +6,7 @@ import {
   accountsOptions,
   categoriesOptions,
   investmentsOptions,
+  monthOptions,
 } from '#/features/v2/queries'
 
 export const Route = createFileRoute('/investimentos')({
@@ -14,6 +15,8 @@ export const Route = createFileRoute('/investimentos')({
       context.queryClient.ensureQueryData(investmentsOptions()),
       context.queryClient.ensureQueryData(accountsOptions()),
       context.queryClient.ensureQueryData(categoriesOptions()),
+      // The plan's reserve target.
+      context.queryClient.ensureQueryData(monthOptions()),
     ]),
   component: InvestmentsRoute,
 })

@@ -8,7 +8,8 @@ import { Recurrences } from './Recurrences.ts'
 
 /**
  * Planning, recurrences, the dashboard and the assistant. Needs the ledger,
- * card cycles, the categorizer and an `AssistantModel`.
+ * card cycles, the categorizer, investments (for the reserve) and an
+ * `AssistantModel`.
  */
 export const PlanningServices = Assistant.layer.pipe(
   Layer.provideMerge(Dashboard.layer),

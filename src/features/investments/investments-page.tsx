@@ -3,12 +3,19 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
 import { Plus, Search, Target, Trash2, WalletCards } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
-import { EmptyState, Page, PageHeader, StatusBadge } from '#/components/ui'
+import {
+  EmptyState,
+  Page,
+  PageHeader,
+  ProgressBar,
+  StatusBadge,
+} from '#/components/ui'
 import { ManualTransactionDialog } from '#/components/manual-transaction-dialog'
 import {
   AlertDialog,
@@ -79,6 +86,7 @@ import {
   categoriesOptions,
   investmentsOptions,
   invalidateAfterReactors,
+  monthOptions,
 } from '#/features/v2/queries'
 import { errorMessage } from '#/lib/v2/errors'
 import { cn } from '#/lib/utils'
@@ -318,24 +326,78 @@ function PortfolioHeader({ data }: { data: InvestmentsSnapshot }) {
             </div>
           ) : null}
         </div>
-        <div className="flex items-start gap-3 rounded-2xl bg-muted/35 px-5 py-4 lg:min-w-64">
-          <Target className="mt-0.5 size-4 text-primary" aria-hidden="true" />
-          <div>
-            <p className="text-sm text-muted-foreground">
-              Reserva de emergência
-            </p>
-            <p className="text-xl font-semibold tabular-nums">
-              {formatCurrency(summary.reserveBrlCents)}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {summary.reservePositionCount > 0
-                ? `${summary.reservePositionCount} ${summary.reservePositionCount === 1 ? 'posição' : 'posições'} · ${share(summary.reserveBrlCents)}% da carteira`
-                : 'Marque uma posição como reserva ao criá-la'}
-            </p>
-          </div>
-        </div>
+        <ReserveProgress
+          currentCents={summary.reserveBrlCents}
+          positionCount={summary.reservePositionCount}
+          shareOfPortfolio={share(summary.reserveBrlCents)}
+        />
       </CardContent>
     </Card>
+  )
+}
+
+/**
+ * The emergency reserve the positions marked as reserve hold, against the
+ * target the plan sets (the goal's own target, or months of essentials).
+ */
+function ReserveProgress({
+  currentCents,
+  positionCount,
+  shareOfPortfolio,
+}: {
+  currentCents: number
+  positionCount: number
+  shareOfPortfolio: number
+}) {
+  const { data: month } = useSuspenseQuery(monthOptions())
+  const targetCents = month.reserve.targetCents
+  const percentage =
+    targetCents > 0
+      ? Math.min(100, Math.round((currentCents / targetCents) * 100))
+      : 0
+  const remaining = Math.max(0, targetCents - currentCents)
+  return (
+    <div className="flex items-start gap-3 rounded-2xl bg-muted/35 px-5 py-4 lg:w-80">
+      <Target
+        className="mt-0.5 size-4 shrink-0 text-primary"
+        aria-hidden="true"
+      />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm text-muted-foreground">Reserva de emergência</p>
+        <p className="text-xl font-semibold tabular-nums">
+          {formatCurrency(currentCents)}
+          {targetCents > 0 ? (
+            <span className="text-sm font-normal text-muted-foreground">
+              {' '}
+              de {formatCurrency(targetCents)}
+            </span>
+          ) : null}
+        </p>
+        {targetCents > 0 ? (
+          <div className="mt-2">
+            <ProgressBar value={currentCents} max={targetCents} />
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {percentage}%{' '}
+              {remaining > 0
+                ? `· faltam ${formatCurrency(remaining)}`
+                : '· meta atingida'}
+            </p>
+          </div>
+        ) : (
+          <Link
+            to="/planejamento"
+            className="mt-1 inline-block text-xs text-primary hover:underline"
+          >
+            Definir a meta da reserva
+          </Link>
+        )}
+        <p className="mt-1 text-xs text-muted-foreground">
+          {positionCount > 0
+            ? `${positionCount} ${positionCount === 1 ? 'posição' : 'posições'} · ${shareOfPortfolio}% da carteira`
+            : 'Marque uma posição como reserva ao criá-la'}
+        </p>
+      </div>
+    </div>
   )
 }
 

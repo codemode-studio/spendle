@@ -482,10 +482,15 @@ function GoalsSection({
       {data.state.goals.length ? (
         <div className="divide-y rounded-lg border">
           {data.state.goals.map((goal) => {
+            const reserve = goal.type === 'emergency_reserve'
             const target =
-              goal.type === 'emergency_reserve' && !goal.targetCents
+              reserve && !goal.targetCents
                 ? data.month.reserve.targetCents
                 : goal.targetCents
+            // The reserve is what the positions marked as reserve hold, when any are.
+            const current = reserve
+              ? data.month.reserve.currentCents
+              : goal.currentCents
             return (
               <div key={goal.id} className="p-4">
                 <div className="mb-3 flex items-start justify-between gap-3">
@@ -499,9 +504,9 @@ function GoalsSection({
                   </div>
                   <Target className="size-4 text-primary" />
                 </div>
-                <ProgressBar value={goal.currentCents} max={target} />
+                <ProgressBar value={current} max={target} />
                 <div className="mt-2 flex justify-between text-xs text-muted-foreground">
-                  <span>{formatCurrency(goal.currentCents)}</span>
+                  <span>{formatCurrency(current)}</span>
                   <span>{formatCurrency(target)}</span>
                 </div>
               </div>

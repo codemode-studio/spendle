@@ -31,12 +31,12 @@ export const MigrationLive = Layer.mergeAll(
   V1Import.layer,
   V1PlanningImport.layer,
 ).pipe(
-  Layer.provideMerge(Layer.mergeAll(ManualEntries.layer, Investments.layer)),
-  // The migration never shows values, so it needs no quotes.
-  Layer.provideMerge(Layer.mergeAll(Notes.layer, Quotes.fixed({}))),
   Layer.provideMerge(
     PlanningServices.pipe(Layer.provideMerge(AssistantModel.disabled)),
   ),
+  Layer.provideMerge(Layer.mergeAll(ManualEntries.layer, Investments.layer)),
+  // The migration never shows values, so it needs no quotes.
+  Layer.provideMerge(Layer.mergeAll(Notes.layer, Quotes.fixed({}))),
   Layer.provideMerge(
     Layer.mergeAll(
       Categorizer.layer,
