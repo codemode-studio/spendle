@@ -3,11 +3,12 @@ import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
 import * as FetchHttpClient from 'effect/http/FetchHttpClient'
 import * as HttpRouter from 'effect/http/HttpRouter'
-import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder'
 // NodeHttpServer adapts a Node server; there is no Effect equivalent to import instead.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createServer } from 'node:http'
 
+import { ApiConfig } from './api/ApiConfig.ts'
+import { ApiRoutes } from './api/Routes.ts'
 import { Categories } from './categories/Categories.ts'
 import * as Categorizer from './categories/Categorizer.ts'
 import { Classifier } from './categories/Classifier.ts'
@@ -26,18 +27,12 @@ import { PluggyClient } from './openfinance/PluggyClient.ts'
 import * as SyncReactor from './openfinance/SyncReactor.ts'
 import * as Webhook from './openfinance/Webhook.ts'
 import { WebhookConfig } from './openfinance/WebhookConfig.ts'
-import { Api } from './http/Api.ts'
-import { SystemHandlers } from './http/System.ts'
 import * as Sqlite from './persistence/Sqlite.ts'
-
-export const ApiRoutes = HttpApiBuilder.layer(Api).pipe(
-  Layer.provide(SystemHandlers),
-)
 
 const HttpServerLive = Layer.unwrap(
   Effect.gen(function* () {
-    const { port } = yield* ServerConfig
-    return NodeHttpServer.layer(createServer, { port })
+    const { host, port } = yield* ServerConfig
+    return NodeHttpServer.layer(createServer, { host, port })
   }),
 )
 
@@ -83,7 +78,10 @@ const OpenFinanceLive = Layer.mergeAll(
   Layer.provideMerge(WebhookConfig.layer),
 )
 
-const Routes = Layer.mergeAll(ApiRoutes, Webhook.routes)
+const Routes = Layer.mergeAll(
+  ApiRoutes.pipe(Layer.provide(ApiConfig.layer)),
+  Webhook.routes,
+)
 
 export const ServerLive = HttpRouter.serve(Routes).pipe(
   Layer.provideMerge(OpenFinanceLive),

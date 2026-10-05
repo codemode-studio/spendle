@@ -2,6 +2,9 @@
   "name": "@spendle/server",
   "private": true,
   "type": "module",
+  "exports": {
+    "./api": "./src/api/definition/index.ts"
+  },
   "scripts": {
     "dev": "node --watch src/bin.ts",
     "start": "node src/bin.ts",

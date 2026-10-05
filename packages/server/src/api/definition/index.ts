@@ -1,0 +1,12 @@
+// The V2 API contract for clients: `HttpApiClient.make(SpendleApi)`.
+export * from './Accounts.ts'
+export * from './Api.ts'
+export * from './Cards.ts'
+export * from './Categories.ts'
+export * from './Entries.ts'
+export * from './Errors.ts'
+export * from './Imports.ts'
+export * from './OpenFinance.ts'
+export * from './Reconciliation.ts'
+export * from './Security.ts'
+export * from './System.ts'

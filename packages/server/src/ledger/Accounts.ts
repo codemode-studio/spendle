@@ -106,6 +106,8 @@ export class InvalidAccount extends Schema.TaggedError<InvalidAccount>()(
       'investment_purpose',
       'blank_name',
       'invalid_input',
+      /** A live Open Finance link still feeds the account; unlink it first. */
+      'linked_to_provider',
     ]),
     issue: Schema.optional(Schema.String),
   },
@@ -122,6 +124,8 @@ export class InvalidAccount extends Schema.TaggedError<InvalidAccount>()(
         return 'Account and institution names cannot be blank'
       case 'invalid_input':
         return `Invalid account: ${this.issue ?? 'unknown issue'}`
+      case 'linked_to_provider':
+        return 'An account an Open Finance link feeds cannot be archived'
     }
   }
 }
@@ -232,6 +236,19 @@ export interface AccountsShape {
     accountId: string,
   ) => Effect.Effect<Account, AccountNotFound | LedgerStoreError>
   readonly list: Effect.Effect<ReadonlyArray<Account>, LedgerStoreError>
+  readonly listOwners: Effect.Effect<ReadonlyArray<Owner>, LedgerStoreError>
+  /**
+   * Hides an account from matching and new choices, or brings it back. Its
+   * facts and decisions stay. An account a live Open Finance link feeds is
+   * not archived: the link would keep adding to it.
+   */
+  readonly setArchived: (
+    accountId: string,
+    archived: boolean,
+  ) => Effect.Effect<
+    Account,
+    AccountNotFound | InvalidAccount | LedgerStoreError
+  >
 }
 
 const decodeOpen = Schema.decodeUnknownEffect(OpenAccount)
@@ -279,6 +296,11 @@ export class Accounts extends Context.Service<Accounts, AccountsShape>()(
         Result: Schema.Struct({ id: Schema.String }),
         execute: (name) =>
           sql`SELECT id FROM institutions WHERE name_key = ${institutionKey(name)}`,
+      })
+      const findOwners = SqlSchema.findAll({
+        Request: Schema.Void,
+        Result: Owner,
+        execute: () => sql`SELECT id, name, kind FROM owners ORDER BY name, id`,
       })
       const findOwner = SqlSchema.findOneOption({
         Request: Schema.String,
@@ -446,7 +468,60 @@ export class Accounts extends Context.Service<Accounts, AccountsShape>()(
         Effect.withSpan('Accounts.list'),
       )
 
-      return Accounts.of({ createOwner, open, update, get, list })
+      const listOwners = findOwners(undefined).pipe(
+        Effect.mapError(storeError('listOwners')),
+        Effect.withSpan('Accounts.listOwners'),
+      )
+
+      const setArchived = Effect.fn('Accounts.setArchived')(function* (
+        accountId: string,
+        archived: boolean,
+      ) {
+        yield* sql
+          .withTransaction(
+            Effect.gen(function* () {
+              const current = yield* get(accountId)
+              if (current.archived === archived) return
+              if (archived) {
+                const linked = yield* sql`
+                  SELECT 1 FROM open_finance_accounts
+                  WHERE account_id = ${accountId} AND unlinked_at IS NULL
+                `
+                if (linked.length > 0)
+                  return yield* new InvalidAccount({
+                    reason: 'linked_to_provider',
+                  })
+              }
+              yield* sql`
+                UPDATE accounts SET archived_at = ${archived ? yield* now : null}
+                WHERE id = ${accountId}
+              `
+              yield* log.append([
+                {
+                  type: 'AccountUpdated',
+                  streamId: accountId,
+                  payload: { accountId, changed: ['archived'] },
+                },
+              ])
+            }),
+          )
+          .pipe(
+            Effect.catchTag(['SqlError', 'EventLogError'], (cause) =>
+              Effect.fail(storeError('setArchived')(cause)),
+            ),
+          )
+        return yield* get(accountId)
+      })
+
+      return Accounts.of({
+        createOwner,
+        open,
+        update,
+        get,
+        list,
+        listOwners,
+        setArchived,
+      })
     }),
   )
 }
