@@ -100,8 +100,11 @@ const make = Effect.gen(function* () {
       return {
         ...account,
         balances,
+        // Balance proofs start from booked and statement balances alike.
         lastCheckpoint:
-          balances.find((balance) => balance.kind === 'booked') ?? null,
+          balances
+            .filter((balance) => balance.kind !== 'available')
+            .sort((a, b) => b.asOf.localeCompare(a.asOf))[0] ?? null,
         link: state.link(account.id),
       }
     })

@@ -68,7 +68,7 @@ export const AccountView = Schema.Struct({
   archived: Schema.Boolean,
   /** The latest balance of each kind. */
   balances: Schema.Array(Balance),
-  /** The latest booked balance still standing: where the balance proof starts from. */
+  /** The latest booked or statement balance still standing: where the balance proof resumes. */
   lastCheckpoint: Schema.NullOr(Balance),
   link: Schema.NullOr(AccountLink),
 })

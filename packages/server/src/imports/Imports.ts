@@ -69,6 +69,21 @@ export interface ImportResult extends ImportPreview {
   readonly unchanged: number
 }
 
+/** A stored file, without its content. */
+export const ImportSummary = Schema.Struct({
+  id: Schema.String,
+  accountId: Schema.String,
+  sourceId: Schema.String,
+  fileName: Schema.String,
+  format: Schema.Literals(['ofx', 'csv', 'pdf']),
+  periodStart: Schema.NullOr(Schema.String),
+  periodEnd: Schema.NullOr(Schema.String),
+  dueOn: Schema.NullOr(Schema.String),
+  lineCount: Schema.Int,
+  rejectedRows: Schema.Int,
+  importedAt: Schema.String,
+})
+
 const hex = (bytes: Uint8Array) =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
 
@@ -291,7 +306,25 @@ const make = Effect.gen(function* () {
     )
   })
 
-  return { preview, importFile }
+  const findImports = SqlSchema.findAll({
+    Request: Schema.NullOr(Schema.String),
+    Result: ImportSummary,
+    execute: (accountId) => sql`
+      SELECT id, account_id AS accountId, source_id AS sourceId, file_name AS fileName,
+        format, period_start AS periodStart, period_end AS periodEnd, due_on AS dueOn,
+        line_count AS lineCount, rejected_rows AS rejectedRows, imported_at AS importedAt
+      FROM import_files
+      ${accountId === null ? sql`` : sql`WHERE account_id = ${accountId}`}
+      ORDER BY imported_at DESC, id DESC
+    `,
+  })
+
+  /** Stored files, latest first, of one account or all. */
+  const list = Effect.fn('Imports.list')((accountId?: string) =>
+    findImports(accountId ?? null),
+  )
+
+  return { preview, importFile, list }
 })
 
 export class Imports extends Context.Service<
