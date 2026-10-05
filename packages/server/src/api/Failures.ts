@@ -13,6 +13,9 @@ import {
 import { CurrencyMismatch, InvalidReport } from '../ledger/Observations.ts'
 import { OpenFinanceError } from '../openfinance/OpenFinance.ts'
 import { PluggyError } from '../openfinance/PluggyClient.ts'
+import { AssistantError } from '../planning/Assistant.ts'
+import { PlanningError } from '../planning/Planning.ts'
+import { RecurrenceError } from '../planning/Recurrences.ts'
 import { CardsError } from '../reconciliation/Cards.ts'
 import { ReconciliationError } from '../reconciliation/Reconciliation.ts'
 import {
@@ -92,6 +95,37 @@ const store: Record<KnowledgeStoreError['reason'], Status> = {
   category_not_assignable: Rejected,
 }
 
+const planningReasons: Record<PlanningError['reason'], Status> = {
+  strategy_not_found: NotFound,
+  goal_not_found: NotFound,
+  invalid_allocation: InvalidRequest,
+  invalid_input: InvalidRequest,
+  month_closed: Conflict,
+  closing_blocked: Rejected,
+}
+
+const recurrenceReasons: Record<RecurrenceError['reason'], Status> = {
+  recurrence_not_found: NotFound,
+  occurrence_not_found: NotFound,
+  entry_not_found: NotFound,
+  match_not_found: NotFound,
+  account_not_found: NotFound,
+  occurrence_resolved: Conflict,
+  already_linked: Conflict,
+  has_confirmed_links: Conflict,
+  recurrence_paused: Rejected,
+  entry_not_linkable: Rejected,
+  single_payment: Rejected,
+  nothing_linked: Rejected,
+  category_not_assignable: Rejected,
+  currency_mismatch: Rejected,
+  destination_required: InvalidRequest,
+  invalid_input: InvalidRequest,
+}
+
+const isPlanningError = Schema.is(PlanningError)
+const isRecurrenceError = Schema.is(RecurrenceError)
+const isAssistantError = Schema.is(AssistantError)
 const isAccountNotFound = Schema.is(AccountNotFound)
 const isCardsError = Schema.is(CardsError)
 const isCategoriesError = Schema.is(CategoriesError)
@@ -160,6 +194,19 @@ const known = (error: unknown): EndpointError | undefined => {
     )
   if (isKnowledgeStoreError(error))
     return byReason(store, error.reason, error.patternId ?? error.categoryId)
+  if (isPlanningError(error))
+    return byReason(planningReasons, error.reason, error.detail)
+  if (isRecurrenceError(error))
+    return byReason(recurrenceReasons, error.reason, error.detail)
+  if (isAssistantError(error))
+    return error.reason === 'not_configured'
+      ? new Unavailable({ reason: 'assistant_not_configured', detail: null })
+      : error.reason === 'invalid_report'
+        ? new Rejected({
+            reason: 'invalid_report',
+            detail: error.detail ?? null,
+          })
+        : new ProviderFailed({ reason: 'assistant_unavailable', detail: null })
   return undefined
 }
 

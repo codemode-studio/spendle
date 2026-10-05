@@ -31,6 +31,8 @@ import * as SyncReactor from '../openfinance/SyncReactor.ts'
 import { WebhookConfig } from '../openfinance/WebhookConfig.ts'
 import { Cards } from '../reconciliation/Cards.ts'
 import * as Reconciliation from '../reconciliation/Reconciliation.ts'
+import { AssistantModel } from '../planning/AssistantModel.ts'
+import { PlanningServices } from '../planning/Services.ts'
 import { makeFake } from './FakePluggy.ts'
 import type { FakePluggyData } from './FakePluggy.ts'
 import { LedgerTest } from './layers.ts'
@@ -203,30 +205,35 @@ const QaPluggy = Layer.unwrap(
   }),
 )
 
-const Services = Layer.mergeAll(
-  SyncReactor.layer,
-  Entries.reactor,
-  Reconciliation.reactor,
-  Categorizer.reactor,
-  Categorizer.modelReactor,
-).pipe(
-  Layer.provideMerge(Categorizer.Categorizer.layer),
-  Layer.provideMerge(KnowledgeStore.layer),
-  Layer.provideMerge(Categories.layer),
-  Layer.provideMerge(Classifier.disabled),
+const Services = PlanningServices.pipe(
+  Layer.provideMerge(AssistantModel.disabled),
   Layer.provideMerge(
     Layer.mergeAll(
-      Entries.Entries.layer,
-      Imports.layer,
-      Reconciliation.Reconciliation.layer,
-      Cards.layer,
+      SyncReactor.layer,
+      Entries.reactor,
+      Reconciliation.reactor,
+      Categorizer.reactor,
+      Categorizer.modelReactor,
+    ).pipe(
+      Layer.provideMerge(Categorizer.Categorizer.layer),
+      Layer.provideMerge(KnowledgeStore.layer),
+      Layer.provideMerge(Categories.layer),
+      Layer.provideMerge(Classifier.disabled),
+      Layer.provideMerge(
+        Layer.mergeAll(
+          Entries.Entries.layer,
+          Imports.layer,
+          Reconciliation.Reconciliation.layer,
+          Cards.layer,
+        ),
+      ),
+      Layer.provideMerge(OpenFinance.layer),
+      Layer.provideMerge(Reactor.Reactors.layer),
+      Layer.provideMerge(QaPluggy),
+      Layer.provideMerge(WebhookConfig.layerTest(Option.none())),
+      Layer.provideMerge(LedgerTest),
     ),
   ),
-  Layer.provideMerge(OpenFinance.layer),
-  Layer.provideMerge(Reactor.Reactors.layer),
-  Layer.provideMerge(QaPluggy),
-  Layer.provideMerge(WebhookConfig.layerTest(Option.none())),
-  Layer.provideMerge(LedgerTest),
 )
 
 /** The owner, account and card the browser QA guide refers to. */

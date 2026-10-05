@@ -5,8 +5,8 @@ import {
   financeQueryKeys,
   invalidateFinance,
   onboardingOptions,
-  strategyHistoryOptions,
 } from './queries'
+import { monthHistoryOptions } from '#/features/v2/queries'
 import type { FinanceInvalidationScope } from './queries'
 
 // Concrete cached instances exercise prefix matching, including inactive months.
@@ -46,14 +46,13 @@ const expected: Record<FinanceInvalidationScope, string[]> = {
   ownershipScope: reads,
   stagedTransactionCategory: ['imports', 'knowledge'],
   knowledgeBase: ledger,
-  aiConsent: [...ledger, 'assistant'],
   strategy: ledger,
   budgetClose: [...reads, 'history', 'analysis'],
 }
 
 describe('financial cache invalidation', () => {
   it('retains small shell and monthly queries beyond the default cache window', () => {
-    expect(strategyHistoryOptions(11).gcTime).toBe(30 * 60_000)
+    expect(monthHistoryOptions(11).gcTime).toBe(30 * 60_000)
     expect(onboardingOptions().gcTime).toBe(30 * 60_000)
   })
 

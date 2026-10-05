@@ -1,66 +1,41 @@
 import { describe, expect, it } from 'vitest'
-import type { IntegrityIssue } from '#/domain/financial-summary'
-import type { PlanningSnapshot } from '#/features/finance/snapshot.types'
-import { pendingReviewItems, reviewDestination } from './review'
 
-function snapshot(issues: IntegrityIssue[]) {
-  return {
-    dashboard: { currentMonth: '2026-09', integrity: { issues } },
-    recurrences: [],
-  } as unknown as PlanningSnapshot
-}
+import { pendingReviewItems, reviewDestination } from './review'
 
 describe('overview review', () => {
   it('has no review entry when no real items remain', () => {
-    expect(pendingReviewItems(snapshot([]))).toEqual([])
+    expect(pendingReviewItems([], '2026-09')).toEqual([])
     expect(
       pendingReviewItems(
-        snapshot([{ code: 'review_import', count: 0, blocksClosing: true }]),
+        [{ code: 'pending_entry', count: 0, blocksClosing: true }],
+        '2026-09',
       ),
     ).toEqual([])
   })
 
-  it('includes non-blocking balance warnings without changing closing rules', () => {
-    const data = snapshot([
-      { code: 'unverified_balance', count: 2, blocksClosing: false },
-      { code: 'uncategorized_confirmed', count: 3, blocksClosing: true },
-    ])
-    const before = structuredClone(data)
-    expect(
-      pendingReviewItems(data).map(({ code, count, destination }) => ({
-        code,
-        count,
-        destination,
-      })),
-    ).toEqual([
-      {
-        code: 'uncategorized_confirmed',
-        count: 3,
-        destination: 'uncategorized',
-      },
-      { code: 'unverified_balance', count: 2, destination: 'accounts' },
-    ])
-    expect(data).toEqual(before)
-  })
-
-  it('does not duplicate an already blocking balance issue', () => {
+  it('lists blocking decisions first and keeps data gaps that do not block closing', () => {
     expect(
       pendingReviewItems(
-        snapshot([
-          { code: 'unverified_balance', count: 2, blocksClosing: true },
-        ]),
-      ),
-    ).toHaveLength(1)
+        [
+          { code: 'missing_balance', count: 2, blocksClosing: false },
+          { code: 'uncategorized', count: 3, blocksClosing: true },
+        ],
+        '2026-09',
+      ).map(({ code, count, destination }) => ({ code, count, destination })),
+    ).toEqual([
+      { code: 'uncategorized', count: 3, destination: 'uncategorized' },
+      { code: 'missing_balance', count: 2, destination: 'accounts' },
+    ])
   })
 
-  it('reuses the review destination and starts uncategorized transactions on page one', () => {
-    expect(reviewDestination('imports')).toEqual({
-      to: '/importar',
-      search: { view: 'review' },
-    })
+  it('sends each decision where it is made, starting transactions on page one', () => {
     expect(reviewDestination('uncategorized')).toMatchObject({
       to: '/transacoes',
       search: { category: 'uncategorized', page: 1, search: '', target: 'all' },
+    })
+    expect(reviewDestination('review')).toMatchObject({
+      to: '/transacoes',
+      search: { category: 'review' },
     })
     expect(reviewDestination('recurrences')).toEqual({
       to: '/configuracoes',

@@ -10,7 +10,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '#/components/ui/alert-dialog'
-import { planningOptions } from '#/features/finance/queries'
 import {
   BudgetSection,
   ClosingSection,
@@ -20,49 +19,31 @@ import {
 import { usePlanningController } from '#/features/planning/planning-controller'
 import { RecurrenceDialog } from '#/features/planning/recurrence-dialogs'
 import { RecurrencesSection } from '#/features/planning/recurrences-section'
+import type { PlanningData } from '#/features/planning/types'
+import {
+  accountsOptions,
+  categoriesOptions,
+  monthOptions,
+  planningStateOptions,
+  recurrenceBookOptions,
+} from '#/features/v2/queries'
+
+function usePlanningData(): PlanningData {
+  const { data: state } = useSuspenseQuery(planningStateOptions())
+  const { data: month } = useSuspenseQuery(monthOptions())
+  const { data: book } = useSuspenseQuery(recurrenceBookOptions())
+  const { data: accounts } = useSuspenseQuery(accountsOptions())
+  const { data: categories } = useSuspenseQuery(categoriesOptions())
+  return { state, month, book, accounts, categories }
+}
 
 export function PlanningSettings({
   activeSection,
 }: {
   activeSection: 'planning' | 'recurrences'
 }) {
-  const { data } = useSuspenseQuery(planningOptions())
-  const {
-    allocation,
-    closeMutation,
-    closeRecurrenceDialog,
-    completeOccurrenceMutation,
-    confirmMatchMutation,
-    createRecurrenceMutation,
-    currentBudget,
-    deleteRecurrenceMutation,
-    deletingRecurrenceId,
-    editingRecurrence,
-    editingRecurrenceId,
-    goalMutation,
-    goalOpen,
-    linkOccurrenceMutation,
-    pendingCount,
-    recurrenceOpen,
-    recurrenceStatusMutation,
-    refreshRecurrencesMutation,
-    rejectMatchMutation,
-    selectStrategy,
-    selectedId,
-    setAllocation,
-    setDeletingRecurrenceId,
-    setEditingRecurrenceId,
-    setGoalOpen,
-    setRecurrenceOpen,
-    skipOccurrenceMutation,
-    planMutation,
-    savePlan,
-    submitGoal,
-    submitRecurrence,
-    totalBps,
-    unlinkMatchMutation,
-    updateRecurrenceMutation,
-  } = usePlanningController(data)
+  const data = usePlanningData()
+  const controller = usePlanningController(data)
 
   return (
     <>
@@ -70,95 +51,82 @@ export function PlanningSettings({
         <div className="grid gap-4">
           <BudgetSection
             data={data}
-            selectedId={selectedId}
-            allocation={allocation}
-            totalBps={totalBps}
-            selectStrategy={selectStrategy}
-            setAllocation={setAllocation}
-            savePlan={savePlan}
-            planPending={planMutation.isPending}
+            selectedId={controller.selectedId}
+            allocation={controller.allocation}
+            totalBps={controller.totalBps}
+            selectStrategy={controller.selectStrategy}
+            setAllocation={controller.setAllocation}
+            savePlan={controller.savePlan}
+            planPending={controller.planMutation.isPending}
           />
-          <GoalsSection data={data} openGoal={() => setGoalOpen(true)} />
+          <GoalsSection
+            data={data}
+            openGoal={() => controller.setGoalOpen(true)}
+          />
           <ClosingSection
             data={data}
-            closed={Boolean(currentBudget?.closed)}
-            pendingCount={pendingCount}
-            closeMonth={() => closeMutation.mutate({})}
-            closePending={closeMutation.isPending}
+            closeMonth={() => controller.closeMutation.mutate({})}
+            closePending={controller.closeMutation.isPending}
           />
         </div>
       )}
       {activeSection === 'recurrences' && (
         <RecurrencesSection
           data={data}
-          pending={
-            recurrenceStatusMutation.isPending ||
-            confirmMatchMutation.isPending ||
-            rejectMatchMutation.isPending ||
-            unlinkMatchMutation.isPending ||
-            skipOccurrenceMutation.isPending ||
-            linkOccurrenceMutation.isPending ||
-            completeOccurrenceMutation.isPending
-          }
+          pending={controller.recurrencePending}
           openNew={() => {
-            setEditingRecurrenceId(null)
-            setRecurrenceOpen(true)
+            controller.setEditingRecurrenceId(null)
+            controller.setRecurrenceOpen(true)
           }}
           openEdit={(id) => {
-            setEditingRecurrenceId(id)
-            setRecurrenceOpen(true)
+            controller.setEditingRecurrenceId(id)
+            controller.setRecurrenceOpen(true)
           }}
           toggleActive={(id, active) =>
-            recurrenceStatusMutation.mutate({ data: { id, active } })
+            controller.recurrenceStatusMutation.mutate({ data: { id, active } })
           }
-          requestDelete={setDeletingRecurrenceId}
-          refresh={() => refreshRecurrencesMutation.mutate({})}
-          confirmMatch={(matchId) =>
-            confirmMatchMutation.mutate({ data: { matchId } })
+          requestDelete={controller.setDeletingRecurrenceId}
+          confirmMatch={(match) =>
+            controller.confirmMatchMutation.mutate(match)
           }
-          rejectMatch={(matchId) =>
-            rejectMatchMutation.mutate({ data: { matchId } })
-          }
-          unlinkMatch={(matchId) =>
-            unlinkMatchMutation.mutate({ data: { matchId } })
-          }
+          rejectMatch={(match) => controller.rejectMatchMutation.mutate(match)}
+          unlinkMatch={(match) => controller.unlinkMatchMutation.mutate(match)}
           skipOccurrence={(occurrenceId) =>
-            skipOccurrenceMutation.mutate({ data: { occurrenceId } })
+            controller.skipOccurrenceMutation.mutate(occurrenceId)
           }
-          linkOccurrence={(occurrenceId, transactionIds) =>
-            linkOccurrenceMutation.mutate({
-              data: { occurrenceId, transactionIds },
-            })
+          linkOccurrence={(occurrenceId, entryIds) =>
+            controller.linkOccurrenceMutation.mutate({ occurrenceId, entryIds })
           }
           completeOccurrence={(occurrenceId) =>
-            completeOccurrenceMutation.mutate({ data: { occurrenceId } })
+            controller.completeOccurrenceMutation.mutate(occurrenceId)
           }
         />
       )}
 
       <GoalDialog
-        open={goalOpen}
-        onOpenChange={setGoalOpen}
-        onSubmit={submitGoal}
-        pending={goalMutation.isPending}
+        open={controller.goalOpen}
+        onOpenChange={controller.setGoalOpen}
+        onSubmit={controller.submitGoal}
+        pending={controller.goalMutation.isPending}
       />
       <RecurrenceDialog
-        key={editingRecurrenceId ?? 'new'}
-        open={recurrenceOpen}
+        key={controller.editingRecurrenceId ?? 'new'}
+        open={controller.recurrenceOpen}
         onOpenChange={(open) =>
-          open ? setRecurrenceOpen(true) : closeRecurrenceDialog()
+          open
+            ? controller.setRecurrenceOpen(true)
+            : controller.closeRecurrenceDialog()
         }
         data={data}
-        recurrence={editingRecurrence}
-        onSubmit={submitRecurrence}
-        pending={
-          createRecurrenceMutation.isPending ||
-          updateRecurrenceMutation.isPending
-        }
+        recurrence={controller.editingRecurrence}
+        onSubmit={controller.submitRecurrence}
+        pending={controller.saveRecurrenceMutation.isPending}
       />
       <AlertDialog
-        open={Boolean(deletingRecurrenceId)}
-        onOpenChange={(open) => !open && setDeletingRecurrenceId(null)}
+        open={Boolean(controller.deletingRecurrenceId)}
+        onOpenChange={(open) =>
+          !open && controller.setDeletingRecurrenceId(null)
+        }
       >
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -172,11 +140,11 @@ export function PlanningSettings({
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
-              disabled={deleteRecurrenceMutation.isPending}
+              disabled={controller.deleteRecurrenceMutation.isPending}
               onClick={() =>
-                deletingRecurrenceId &&
-                deleteRecurrenceMutation.mutate({
-                  data: { id: deletingRecurrenceId },
+                controller.deletingRecurrenceId &&
+                controller.deleteRecurrenceMutation.mutate({
+                  data: { id: controller.deletingRecurrenceId },
                 })
               }
             >

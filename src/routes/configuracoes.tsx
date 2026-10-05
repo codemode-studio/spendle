@@ -1,4 +1,4 @@
-import { Building2, Plus, ShieldCheck } from 'lucide-react'
+import { Building2, Plus } from 'lucide-react'
 import {
   useMutation,
   useQueryClient,
@@ -24,17 +24,11 @@ import {
 import { Field, FieldGroup, FieldLabel } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '#/components/ui/native-select'
-import { Switch } from '#/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import { AccountsSection } from '#/features/finance/accounts-section'
 import { CardsSection } from '#/features/finance/cards-section'
 import { KnowledgeBaseSection } from '#/features/finance/knowledge-base-section'
-import { updateSettingsFn } from '#/features/finance/finance.functions'
-import {
-  configurationOptions,
-  invalidateFinance,
-  planningOptions,
-} from '#/features/finance/queries'
+import { invalidateFinance } from '#/features/finance/queries'
 import { createOwnerFn } from '#/features/v2/accounts.functions'
 import { ownerKindLabels } from '#/features/v2/accounts'
 import type { Owner } from '#/features/v2/accounts'
@@ -45,7 +39,10 @@ import {
   storePatternsOptions,
   connectSettingsOptions,
   connectionsOptions,
+  monthOptions,
   ownersOptions,
+  planningStateOptions,
+  recurrenceBookOptions,
 } from '#/features/v2/queries'
 import { OpenFinanceSection } from '#/features/finance/open-finance-section'
 import { errorMessage } from '#/lib/v2/errors'
@@ -90,9 +87,6 @@ export const Route = createFileRoute('/configuracoes')({
   loaderDeps: ({ search }) => ({ tab: resolveTab(search.tab) }),
   loader: ({ context, deps }) =>
     Promise.all([
-      deps.tab === 'geral'
-        ? context.queryClient.ensureQueryData(configurationOptions())
-        : null,
       context.queryClient.ensureQueryData(ownersOptions()),
       deps.tab === 'contas' ||
       deps.tab === 'cartoes' ||
@@ -106,7 +100,13 @@ export const Route = createFileRoute('/configuracoes')({
           ])
         : null,
       deps.tab === 'orcamento' || deps.tab === 'recorrencias'
-        ? context.queryClient.ensureQueryData(planningOptions())
+        ? Promise.all([
+            context.queryClient.ensureQueryData(planningStateOptions()),
+            context.queryClient.ensureQueryData(monthOptions()),
+            context.queryClient.ensureQueryData(recurrenceBookOptions()),
+            context.queryClient.ensureQueryData(accountsOptions()),
+            context.queryClient.ensureQueryData(categoriesOptions()),
+          ])
         : null,
       deps.tab === 'conhecimento'
         ? Promise.all([
@@ -200,11 +200,9 @@ function SettingsPage() {
 }
 
 function GeneralSettings() {
-  const { data } = useSuspenseQuery(configurationOptions())
   const { data: owners } = useSuspenseQuery(ownersOptions())
   const queryClient = useQueryClient()
   const createOwner = useServerFn(createOwnerFn)
-  const updateSettings = useServerFn(updateSettingsFn)
   const [ownerDialogOpen, setOwnerDialogOpen] = useState(false)
 
   const ownerMutation = useMutation({
@@ -217,18 +215,6 @@ function GeneralSettings() {
     onError: (error) =>
       toast.error(errorMessage(error, 'Não foi possível adicionar.')),
   })
-  const settingsMutation = useMutation({
-    mutationFn: updateSettings,
-    onSuccess: () => {
-      toast.success('Preferências de IA salvas.')
-      void invalidateFinance(queryClient, 'aiConsent')
-    },
-    onError: (error) =>
-      toast.error(
-        error instanceof Error ? error.message : 'Não foi possível salvar.',
-      ),
-  })
-
   function submitOwner(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
@@ -236,19 +222,6 @@ function GeneralSettings() {
       data: {
         name: String(form.get('name')).trim(),
         kind: String(form.get('kind')) as Owner['kind'],
-      },
-    })
-  }
-
-  function submitAiSettings(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const form = new FormData(event.currentTarget)
-    settingsMutation.mutate({
-      data: {
-        monthlyIncomeTargetCents: data.settings.monthlyIncomeTargetCents,
-        reserveMonths: data.settings.reserveMonths,
-        keepReserveContributions: data.settings.keepReserveContributions,
-        aiClassificationConsent: form.get('aiConsent') === 'on',
       },
     })
   }
@@ -292,36 +265,6 @@ function GeneralSettings() {
               Adicione a família ou a pessoa titular antes de cadastrar contas.
             </p>
           )}
-        </Panel>
-
-        <Panel
-          title="Privacidade e IA"
-          description="A IA só atua quando você autoriza e nunca confirma movimentações sozinha."
-          footer={
-            <Button
-              type="submit"
-              form="ai-preferences-form"
-              disabled={settingsMutation.isPending}
-            >
-              <ShieldCheck data-icon="inline-start" />
-              {settingsMutation.isPending ? 'Salvando…' : 'Salvar preferência'}
-            </Button>
-          }
-        >
-          <form id="ai-preferences-form" onSubmit={submitAiSettings}>
-            <FieldGroup>
-              <Field orientation="horizontal">
-                <Switch
-                  id="aiConsentSetting"
-                  name="aiConsent"
-                  defaultChecked={data.settings.aiClassificationConsent}
-                />
-                <FieldLabel htmlFor="aiConsentSetting">
-                  Permitir categorização e validação de conciliações por IA
-                </FieldLabel>
-              </Field>
-            </FieldGroup>
-          </form>
         </Panel>
       </div>
 

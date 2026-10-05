@@ -9,21 +9,24 @@ import {
   within,
 } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MonthlyOverview } from './monthly-overview'
-import { buildFamilyMonth } from '#/domain/family-month'
-import { buildCommitmentBudget } from '#/domain/commitment-budget'
-import type { StrategyDashboard } from '#/features/finance/strategy-progress'
 
-vi.mock('./analysis.functions', () => ({ generateMonthlyAnalysisFn: vi.fn() }))
+import type { MonthView } from '@spendle/server/api'
+
+import { MonthlyOverview } from './monthly-overview'
+
+vi.mock('#/features/v2/planning.functions', () => ({
+  monthlyAnalysisFn: vi.fn(),
+}))
 
 const { fetchHistory } = vi.hoisted(() => ({ fetchHistory: vi.fn() }))
-vi.mock('#/features/finance/queries', () => ({
-  strategyHistoryOptions: () => ({
+vi.mock('#/features/v2/queries', () => ({
+  monthHistoryOptions: () => ({
     queryKey: ['monthly-overview-test'],
     queryFn: fetchHistory,
     retry: false,
   }),
 }))
+
 const targets = {
   essential: 40000,
   lifestyle: 20000,
@@ -31,32 +34,115 @@ const targets = {
   reserve: 10000,
 }
 const zero = { essential: 0, lifestyle: 0, investment: 0, reserve: 0 }
-const dashboard: StrategyDashboard = {
-  currentMonth: '2026-09',
-  activeStrategy: { name: 'Atual' },
-  baseIncomeCents: 100000,
-  currentIncomeCents: 100001,
-  budgetTargets: targets,
-  budgetActual: { ...zero, essential: 1001 },
-  budgetProjected: zero,
+
+function month(
+  value: string,
+  input: {
+    closed?: boolean
+    forecasting?: boolean
+    targets?: MonthView['targets']
+    expenses?: { essential?: number; lifestyle?: number; other?: number }
+    saved?: { investment?: number; reserve?: number }
+    cash?: Partial<MonthView['cashFlow']>
+    hasData?: boolean
+  } = {},
+): MonthView {
+  const goals = input.targets ?? targets
+  const expenses = { essential: 0, lifestyle: 0, other: 0, ...input.expenses }
+  const saved = { investment: 0, reserve: 0, ...input.saved }
+  const forecasting = input.forecasting ?? false
+  return {
+    month: value,
+    referenceMonth: '2026-09',
+    closed: input.closed ?? false,
+    forecasting,
+    strategy: { id: 'strategy-balanced', name: 'Equilibrada' },
+    baseIncomeCents: 100000,
+    allocation: {
+      essential: 4000,
+      lifestyle: 2000,
+      investment: 3000,
+      reserve: 1000,
+    },
+    effectiveAllocation: {
+      essential: 4000,
+      lifestyle: 2000,
+      investment: 3000,
+      reserve: 1000,
+    },
+    targets: goals,
+    reserve: {
+      currentCents: 0,
+      targetCents: 0,
+      months: 6,
+      complete: false,
+      redirected: false,
+    },
+    incomeCents: 0,
+    actual: {
+      ...zero,
+      essential: expenses.essential,
+      lifestyle: expenses.lifestyle,
+      ...saved,
+    },
+    family: {
+      plannedIncomeCents: 100000,
+      knownExpenseCents:
+        expenses.essential + expenses.lifestyle + expenses.other,
+      estimatedExpenseCents: 0,
+      expenseCents: expenses.essential + expenses.lifestyle + expenses.other,
+      savedCents: saved.investment + saved.reserve,
+      savingsTargetCents: goals.investment + goals.reserve,
+      savingsRemainingCents: 0,
+      plannedBalanceCents: 0,
+      expenses: (['essential', 'lifestyle', 'other'] as const).map(
+        (bucket) => ({
+          bucket,
+          cents: expenses[bucket],
+          knownCents: expenses[bucket],
+          estimatedCents: 0,
+          targetCents: bucket === 'other' ? null : goals[bucket],
+        }),
+      ),
+      lines: [],
+      needsCategoryCount: 0,
+      warnings: [],
+      hasData: input.hasData ?? true,
+    },
+    cashFlow: {
+      forecasting,
+      openingCashCents: 10000,
+      cashCents: 50000,
+      receivedCents: 70000,
+      paidCents: 30000,
+      expectedIncomeCents: 0,
+      remainingExpenseCents: 0,
+      closingCashCents: 50000,
+      afterGoalsCents: 50000,
+      ...input.cash,
+    },
+    integrity: { partial: false, issues: [], closingBlockerCount: 0 },
+  }
 }
-const closedMonth = {
-  month: '2026-08',
-  strategyName: 'Estratégia anterior',
-  incomeCents: 200003,
-  targets: { ...targets, essential: 80002 },
-  actual: { ...zero, essential: 12345, lifestyle: 6789, investment: 25001 },
+
+const current = month('2026-09', {
+  forecasting: true,
+  expenses: { essential: 1001 },
+  cash: {
+    expectedIncomeCents: 20000,
+    remainingExpenseCents: 15024,
+    closingCashCents: 54976,
+    afterGoalsCents: 14976,
+  },
+})
+const closedAugust = month('2026-08', {
   closed: true,
-  hasData: true,
-}
-const emptyMonth = {
-  ...closedMonth,
-  month: '2026-07',
-  closed: false,
-  hasData: false,
-  actual: zero,
-  incomeCents: 0,
-}
+  targets: { ...targets, essential: 80002 },
+  expenses: { essential: 12345, lifestyle: 6789 },
+  saved: { investment: 25001 },
+})
+const emptyJuly = month('2026-07', { hasData: false })
+
 const clients: QueryClient[] = []
 afterEach(() => {
   cleanup()
@@ -64,21 +150,20 @@ afterEach(() => {
   clients.length = 0
   vi.resetAllMocks()
 })
-function mount(currentClosed = false) {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  })
-  clients.push(client)
+function mount(view: MonthView = current, client?: QueryClient) {
+  const queries =
+    client ?? new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  clients.push(queries)
   return render(
-    <QueryClientProvider client={client}>
-      <MonthlyOverview dashboard={dashboard} currentClosed={currentClosed} />
+    <QueryClientProvider client={queries}>
+      <MonthlyOverview current={view} />
     </QueryClientProvider>,
   )
 }
 
 describe('monthly overview', () => {
   it('switches months without replacing closed targets with the current strategy or losing cents', async () => {
-    fetchHistory.mockResolvedValue([closedMonth, emptyMonth])
+    fetchHistory.mockResolvedValue([closedAugust, emptyJuly])
     mount()
     const previous = await screen.findByRole('button', { name: 'Mês anterior' })
     await screen.findByRole('button', { name: /Agosto de 2026:/ })
@@ -91,11 +176,9 @@ describe('monthly overview', () => {
     expect(screen.getByRole('heading', { name: 'Agosto de 2026' })).toBeTruthy()
     expect(screen.getByText('Orçamento fechado')).toBeTruthy()
     expect(screen.getByText('Limite R$ 800,02', { exact: false })).toBeTruthy()
-    expect(screen.getByText('R$ 191,34')).toBeTruthy()
-    expect(screen.getByText('R$ 250,01', { selector: 'dd' })).toBeTruthy()
+    expect(screen.getByText('R$ 250,01')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /Julho de 2026:/ }))
     expect(screen.getByText('Sem valores para comparar')).toBeTruthy()
-    expect(screen.queryByText('Renda do orçamento')).toBeNull()
     expect(previous.hasAttribute('disabled')).toBe(true)
     expect(
       within(
@@ -103,12 +186,14 @@ describe('monthly overview', () => {
       ).getAllByRole('button'),
     ).toHaveLength(3)
   })
-  it('marks individual overspending without offsetting unused lifestyle budget or extra investments', async () => {
+
+  it('marks individual overspending without offsetting unused budget or extra investments', async () => {
     fetchHistory.mockResolvedValue([
-      {
-        ...closedMonth,
-        actual: { ...zero, essential: 90003, investment: 90000 },
-      },
+      month('2026-08', {
+        closed: true,
+        expenses: { essential: 50001 },
+        saved: { investment: 90000 },
+      }),
     ])
     mount()
     const august = await screen.findByRole('button', {
@@ -120,23 +205,27 @@ describe('monthly overview', () => {
         .getAttribute('aria-pressed'),
     ).toBe('true')
     fireEvent.click(august)
-    expect(screen.getByText('Gastos acima dos limites')).toBeTruthy()
+    expect(
+      screen.getByText('Gastos acima dos limites', { selector: 'p' }),
+    ).toBeTruthy()
     expect(screen.getByText(/R\$ 100,01 de excesso/)).toBeTruthy()
     expect(
       screen.getByRole('img', { name: '100% da meta de investimentos' }),
     ).toBeTruthy()
     expect(screen.getByText('Abaixo da meta: R$ 100,00')).toBeTruthy()
   })
+
   it('reports a closed current month honestly', async () => {
-    fetchHistory.mockResolvedValue([closedMonth])
-    mount(true)
+    fetchHistory.mockResolvedValue([closedAugust])
+    mount(month('2026-09', { closed: true }))
     expect(await screen.findByText('Orçamento fechado')).toBeTruthy()
     expect(screen.queryByText('Em andamento')).toBeNull()
   })
+
   it('offers retry after a failed history read instead of showing an empty history', async () => {
     fetchHistory
       .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValue([closedMonth])
+      .mockResolvedValue([closedAugust])
     mount()
     fireEvent.click(
       await screen.findByRole('button', { name: 'Tentar novamente' }),
@@ -147,170 +236,44 @@ describe('monthly overview', () => {
       ).toBeTruthy(),
     )
   })
-  it('keeps cached months visible while stale history refreshes', async () => {
+
+  it('keeps cached months visible while stale history refreshes', () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: 0 } },
     })
-    clients.push(client)
-    client.setQueryData(['monthly-overview-test'], [closedMonth])
+    client.setQueryData(['monthly-overview-test'], [closedAugust])
     fetchHistory.mockReturnValue(new Promise(() => {}))
-
-    render(
-      <QueryClientProvider client={client}>
-        <MonthlyOverview dashboard={dashboard} />
-      </QueryClientProvider>,
-    )
-
+    mount(current, client)
     expect(screen.queryByLabelText('Carregando histórico mensal')).toBeNull()
     expect(screen.getByRole('button', { name: /Agosto de 2026:/ })).toBeTruthy()
     expect(fetchHistory).toHaveBeenCalledOnce()
   })
-  it('shows monthly cash projections with spending bars and contribution rings', async () => {
-    fetchHistory.mockResolvedValue([])
-    const budget = buildCommitmentBudget({
-      month: '2026-09',
-      today: '2026-09-08',
-      incomeCents: 100000,
-      targets,
-      transactions: [],
-      statements: [],
-      recurrences: [],
-      coveragePartial: false,
-    })
-    budget.lines = [
-      {
-        id: 'bill',
-        date: '2026-09-12',
-        description: 'Compra de agosto',
-        cents: 12345,
-        categoryId: 'shopping',
-        bucket: 'lifestyle',
-        certainty: 'documented',
-        paidCents: 0,
-        origin: 'card',
-      },
-      {
-        id: 'other',
-        date: '2026-09-12',
-        description: 'Compra a classificar',
-        cents: 678,
-        categoryId: null,
-        bucket: 'other',
-        certainty: 'documented',
-        paidCents: 0,
-        origin: 'card',
-      },
-      {
-        id: 'estimate',
-        date: '2026-09-30',
-        description: 'Mercado estimado',
-        cents: 2001,
-        categoryId: 'groceries',
-        bucket: 'essential',
-        certainty: 'estimated',
-        paidCents: 0,
-        origin: 'variable',
-      },
-    ]
-    const familyMonth = buildFamilyMonth({
-      month: '2026-09',
-      referenceMonth: '2026-09',
-      closed: false,
-      incomeCents: 0,
-      plannedIncomeCents: 100000,
-      targets,
-      saved: { investment: 0, reserve: 0 },
-      budget,
-    })
-    const consistent = {
-      ...dashboard,
-      currentIncomeCents: 0,
-      budgetActual: zero,
-      monthlyCommitments: budget,
-      familyMonth: {
-        ...familyMonth,
-        cashFlow: {
-          forecasting: true,
-          openingCashCents: 50000,
-          cashCents: 50000,
-          receivedCents: 0,
-          paidCents: 0,
-          expectedIncomeCents: 20000,
-          remainingExpenseCents: 15024,
-          goalRemainingCents: 40000,
-          closingCashCents: 54976,
-          afterGoalsCents: 14976,
-          unexplainedChangeCents: 0,
-        },
-      },
-    }
-    fetchHistory.mockResolvedValue([
-      {
-        ...closedMonth,
-        familyMonth: {
-          ...consistent.familyMonth,
-          forecasting: false,
-          cashFlow: {
-            forecasting: false,
-            openingCashCents: 10000,
-            cashCents: 50000,
-            receivedCents: 70000,
-            paidCents: 30000,
-            expectedIncomeCents: 0,
-            remainingExpenseCents: 0,
-            goalRemainingCents: 0,
-            closingCashCents: 50000,
-            afterGoalsCents: 50000,
-            unexplainedChangeCents: 0,
-          },
-        },
-      },
-    ])
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    })
-    clients.push(client)
-    render(
-      <QueryClientProvider client={client}>
-        <MonthlyOverview dashboard={consistent} />
-      </QueryClientProvider>,
-    )
+
+  it('shows the month’s cash and its forecast only while the month is open', async () => {
+    fetchHistory.mockResolvedValue([closedAugust])
+    mount()
     await screen.findByRole('button', {
       name: /Setembro de 2026: caixa previsto.*549,76/,
     })
-    expect(screen.getAllByText('R$ 123,45')).toHaveLength(1)
-    expect(screen.getAllByText('R$ 20,01')).toHaveLength(1)
-    expect(screen.getAllByText('R$ 6,78')).toHaveLength(1)
-    expect(screen.getByText('R$ 150,24', { selector: 'dd' })).toBeTruthy()
-    expect(screen.getAllByText('R$ 500,00')).toHaveLength(2)
-    expect(screen.getByText('R$ 149,76')).toBeTruthy()
-    expect(screen.getByText('R$ 549,76', { selector: 'dd' })).toBeTruthy()
-    expect(screen.queryByText(/Renda base|Renda confirmada/)).toBeNull()
     const labels = () =>
       [
         ...screen.getByLabelText('Movimentação do mês').querySelectorAll('dt'),
       ].map((el) => el.textContent)
-    const currentLabels = labels()
-    expect(currentLabels).toEqual([
+    expect(labels()).toEqual([
       'Caixa inicial',
       'Entradas recebidas',
       'Saídas pagas',
       'Caixa',
     ])
     expect(screen.getByRole('region', { name: 'Previsão do mês' })).toBeTruthy()
+    expect(screen.getByText('R$ 150,24', { selector: 'dd' })).toBeTruthy()
+    expect(screen.getByText('R$ 549,76', { selector: 'dd' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /Agosto de 2026:/ }))
-    expect(labels()).toEqual(currentLabels)
     expect(screen.queryByRole('region', { name: 'Previsão do mês' })).toBeNull()
     expect(
       within(screen.getByLabelText('Movimentação do mês')).getByText(
         'R$ 700,00',
       ),
-    ).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: /Setembro de 2026:/ }))
-    expect(labels()).toEqual(currentLabels)
-    expect(screen.getAllByRole('progressbar')).toHaveLength(2)
-    expect(
-      screen.getByRole('img', { name: '0% da meta de investimentos' }),
     ).toBeTruthy()
   })
 })

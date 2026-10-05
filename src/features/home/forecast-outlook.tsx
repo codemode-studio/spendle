@@ -9,32 +9,35 @@ import { Input } from '#/components/ui/input'
 import { SegmentedControl } from '#/components/segmented-control'
 import { formatCurrency, toMinorUnits } from '#/domain/currency'
 import { formatMonth } from '#/domain/finance'
-import { trimCashProjection } from '#/domain/monthly-cash-flow'
+import type {
+  CashProjection as ProjectionFromApi,
+  MonthView,
+} from '@spendle/server/api'
+
 import { formatLongDate, formatShortDate } from '#/domain/period'
-import type { FinanceSnapshot } from '#/features/finance/snapshot.types'
 import { cn } from '#/lib/utils'
 import { CashChart } from './charts'
+import { trimCashProjection } from './cash-projection'
 import { simulateRecovery } from './forecast'
 import type { HomeView } from './insights'
 
 export function ForecastOutlook({
-  snapshot,
+  forecast,
+  month,
   view,
 }: {
-  snapshot: FinanceSnapshot
+  forecast: ProjectionFromApi
+  month: MonthView
   view: HomeView
 }) {
   const [days, setDays] = useState(60)
   const [reduction, setReduction] = useState(0)
   const [extra, setExtra] = useState('')
   const cash = useMemo(
-    () => trimCashProjection(snapshot.cashProjection, days),
-    [snapshot, days],
+    () => trimCashProjection(forecast, days),
+    [forecast, days],
   )
-  const dashboard = snapshot.dashboard
-  const month = dashboard.familyMonth
-  const savingsTarget =
-    dashboard.budgetTargets.investment + dashboard.budgetTargets.reserve
+  const savingsTarget = month.targets.investment + month.targets.reserve
   let extraCents = 0
   let invalid = false
   if (extra.trim()) {
@@ -67,11 +70,11 @@ export function ForecastOutlook({
     return (
       <EmptyState
         icon={TrendingUp}
-        title="Sem caixa em reais para prever"
-        description="Uma conta operacional em moeda estrangeira está sem cotação. Cadastre a cotação para converter o saldo e liberar a previsão."
+        title="Sem saldo para prever o caixa"
+        description="Nenhuma conta operacional em reais tem saldo registrado. Importe um extrato com saldo ou conecte o banco."
         action={
-          <Link to="/configuracoes" className={buttonVariants()}>
-            Abrir configurações
+          <Link to="/importar" className={buttonVariants()}>
+            Importar extrato
           </Link>
         }
       />
@@ -334,7 +337,7 @@ export function ForecastOutlook({
             {formatMonth(month.month)}
           </p>
           <div className="mt-5 flex flex-col gap-5">
-            {month.expenses
+            {month.family.expenses
               .filter((bucket) => bucket.targetCents !== null)
               .map((bucket) => {
                 const target = bucket.targetCents ?? 0
@@ -379,7 +382,9 @@ export function ForecastOutlook({
                 )
               })}
             <p className="text-sm">
-              <strong>{formatCurrency(month.savingsRemainingCents)}</strong>{' '}
+              <strong>
+                {formatCurrency(month.family.savingsRemainingCents)}
+              </strong>{' '}
               ainda faltam para os aportes do mês.
             </p>
             <Link
@@ -487,25 +492,6 @@ export function ForecastOutlook({
             {cash.recurringEstimateTransactionIds.length} pagamentos históricos
             descontados da média para evitar duplicidade.
           </p>
-        )}
-        {cash.observedAdvancePayments.length > 0 && (
-          <div className="mt-5">
-            <h3 className="text-sm font-medium">
-              Pagamentos antecipados já descontados
-            </h3>
-            <ul className="mt-2 flex flex-col gap-2 text-sm">
-              {cash.observedAdvancePayments.map((payment) => (
-                <li key={payment.occurrenceId}>
-                  {payment.name} · {formatCurrency(payment.cents)} pagos em{' '}
-                  {formatShortDate(payment.paidDate)}, vencimento em{' '}
-                  {formatShortDate(payment.dueDate)}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Vínculos ainda pendentes de confirmação.
-            </p>
-          </div>
         )}
         {cash.largestHistoricalExpenses.length > 0 && (
           <>

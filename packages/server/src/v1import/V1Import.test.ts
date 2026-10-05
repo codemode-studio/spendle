@@ -210,11 +210,8 @@ describe('V1Import', () => {
       })
       assert.deepStrictEqual(
         summary.notMigrated.map((item) => [item.what, item.count]),
-        [
-          ['transactions typed in by hand', 1],
-          ['recurrences', 1],
-          ['recurrence patterns in the knowledge base', 1],
-        ],
+        // Recurrences and their merchants move with the planning import.
+        [['transactions typed in by hand', 1]],
       )
     }).pipe(Effect.scoped, Effect.provide(MigrationTest)),
   )

@@ -26,10 +26,7 @@ import { formatCurrency } from '#/domain/currency'
 import { formatInstrumentName } from '#/domain/finance'
 import { formatShortDate as formatDate } from '#/domain/period'
 import { isAcceptedRecurrenceMatchStatus } from '#/domain/recurrence-book'
-import type {
-  PlanningSnapshot,
-  RecurrenceSnapshot,
-} from '#/features/finance/snapshot.types'
+import type { MatchView, OccurrenceView, PlanningData } from './types'
 import { cn } from '#/lib/utils'
 import { DetectedRecurrencesPanel } from './detection-section'
 import { LinkPaymentDialog } from './recurrence-dialogs'
@@ -46,7 +43,6 @@ function RecurrencesSection({
   openEdit,
   toggleActive,
   requestDelete,
-  refresh,
   confirmMatch,
   rejectMatch,
   unlinkMatch,
@@ -54,24 +50,26 @@ function RecurrencesSection({
   linkOccurrence,
   completeOccurrence,
 }: {
-  data: PlanningSnapshot
+  data: PlanningData
   pending: boolean
   openNew: () => void
   openEdit: (id: string) => void
   toggleActive: (id: string, active: boolean) => void
   requestDelete: (id: string) => void
-  refresh: () => void
-  confirmMatch: (matchId: string) => void
-  rejectMatch: (matchId: string) => void
-  unlinkMatch: (matchId: string) => void
+  confirmMatch: (match: MatchView) => void
+  rejectMatch: (match: MatchView) => void
+  unlinkMatch: (match: MatchView) => void
   skipOccurrence: (occurrenceId: string) => void
   linkOccurrence: (occurrenceId: string, transactionIds: string[]) => void
   completeOccurrence: (occurrenceId: string) => void
 }) {
   const [linkRecurrenceId, setLinkRecurrenceId] = useState<string | null>(null)
-  const { missingConversionCount, sections } = buildRecurrenceGroups(data, {
-    today: new Date().toISOString().slice(0, 10),
-  })
+  const { missingConversionCount, sections } = buildRecurrenceGroups(
+    data.book,
+    {
+      today: new Date().toISOString().slice(0, 10),
+    },
+  )
 
   const renderRow = (entry: DisplayRow) => {
     if (entry.type === 'group') {
@@ -98,9 +96,6 @@ function RecurrencesSection({
     const account = data.accounts.find(
       (candidate) => candidate.id === item.accountId,
     )
-    const card = data.cards.find(
-      (candidate) => candidate.id === item.creditCardId,
-    )
     const category = data.categories.find(
       (candidate) => candidate.id === item.categoryId,
     )
@@ -117,7 +112,7 @@ function RecurrencesSection({
       ? item.participantLabel || item.name
       : item.name
     return (
-      <div key={item.id} className="grid gap-3 bg-card p-4">
+      <div key={item.id} className="grid gap-3 bg-card p-4 [&>*]:min-w-0">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -140,10 +135,8 @@ function RecurrencesSection({
               {item.groupId && item.name !== displayName
                 ? `${item.name} · `
                 : ''}
-              {formatInstrumentName(
-                account?.name ?? card?.name ?? 'Sem destino',
-              )}{' '}
-              · {category?.name ?? 'Sem categoria'} ·{' '}
+              {formatInstrumentName(account?.name ?? 'Conta pelo histórico')} ·{' '}
+              {category?.name ?? 'Sem categoria'} ·{' '}
               {item.frequency === 'monthly' ? 'Mensal' : 'Anual'} · Próxima{' '}
               {new Date(`${item.nextDate}T12:00:00`).toLocaleDateString(
                 'pt-BR',
@@ -277,13 +270,13 @@ function RecurrencesSection({
           />
         ) : (
           <>
-            {suggestedMatch?.transaction && (
+            {suggestedMatch && (
               <div className="rounded-md border bg-muted/30 p-3">
                 <p className="text-sm">
-                  <strong>{suggestedMatch.transaction.description}</strong> ·{' '}
+                  <strong>{suggestedMatch.entry.description}</strong> ·{' '}
                   {formatCurrency(
-                    Math.abs(suggestedMatch.transaction.amountCents),
-                    suggestedMatch.transaction.currency,
+                    Math.abs(suggestedMatch.entry.amountCents),
+                    suggestedMatch.entry.currency,
                   )}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
@@ -293,7 +286,7 @@ function RecurrencesSection({
                   <Button
                     size="sm"
                     disabled={pending}
-                    onClick={() => confirmMatch(suggestedMatch.id)}
+                    onClick={() => confirmMatch(suggestedMatch)}
                   >
                     Confirmar
                   </Button>
@@ -301,28 +294,28 @@ function RecurrencesSection({
                     size="sm"
                     variant="outline"
                     disabled={pending}
-                    onClick={() => rejectMatch(suggestedMatch.id)}
+                    onClick={() => rejectMatch(suggestedMatch)}
                   >
                     Não corresponde
                   </Button>
                 </div>
               </div>
             )}
-            {acceptedMatch?.transaction && (
+            {acceptedMatch && (
               <div className="rounded-md border bg-muted/30 p-3 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="min-w-0 flex-1 truncate">
-                    Último pagamento: {acceptedMatch.transaction.description} ·{' '}
+                    Último pagamento: {acceptedMatch.entry.description} ·{' '}
                     {formatCurrency(
-                      Math.abs(acceptedMatch.transaction.amountCents),
-                      acceptedMatch.transaction.currency,
+                      Math.abs(acceptedMatch.entry.amountCents),
+                      acceptedMatch.entry.currency,
                     )}
                   </span>
                   <Button
                     size="sm"
                     variant="outline"
                     disabled={pending}
-                    onClick={() => unlinkMatch(acceptedMatch.id)}
+                    onClick={() => unlinkMatch(acceptedMatch)}
                   >
                     Desvincular
                   </Button>
@@ -338,8 +331,7 @@ function RecurrencesSection({
                   {' · '}
                   Pago por{' '}
                   {formatInstrumentName(
-                    acceptedMatch.transaction.account?.name ??
-                      acceptedMatch.transaction.creditCard?.name ??
+                    acceptedMatch.entry.accountName ||
                       'destino não identificado',
                   )}
                 </p>
@@ -384,11 +376,8 @@ function RecurrencesSection({
               Valores fixos e estimativas variáveis para os próximos meses.
             </p>
           </div>
-          {data.recurrences.length ? (
+          {data.book.recurrences.length ? (
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={refresh} disabled={pending}>
-                Buscar pagamentos
-              </Button>
               <Button onClick={openNew}>
                 <Plus data-icon="inline-start" />
                 Nova recorrência
@@ -396,7 +385,7 @@ function RecurrencesSection({
             </div>
           ) : null}
         </header>
-        {data.recurrences.length ? (
+        {data.book.recurrences.length ? (
           <div className="grid gap-5">
             {sections.map((section) => {
               const income = section.direction === 'income'
@@ -461,7 +450,8 @@ function RecurrencesSection({
         categories={data.categories}
         key={linkRecurrenceId ?? 'none'}
         recurrence={
-          data.recurrences.find((item) => item.id === linkRecurrenceId) ?? null
+          data.book.recurrences.find((item) => item.id === linkRecurrenceId) ??
+          null
         }
         pending={pending}
         open={linkRecurrenceId !== null}
@@ -486,12 +476,12 @@ function AggregateOccurrenceBlock({
   completeOccurrence,
   openLink,
 }: {
-  occurrence: RecurrenceSnapshot['occurrences'][number]
+  occurrence: OccurrenceView
   currency: string
   pending: boolean
-  confirmMatch: (matchId: string) => void
-  rejectMatch: (matchId: string) => void
-  unlinkMatch: (matchId: string) => void
+  confirmMatch: (match: MatchView) => void
+  rejectMatch: (match: MatchView) => void
+  unlinkMatch: (match: MatchView) => void
   completeOccurrence: (occurrenceId: string) => void
   openLink: () => void
 }) {
@@ -502,7 +492,7 @@ function AggregateOccurrenceBlock({
     (match) => match.status === 'suggested',
   )
   const linkedCents = linked.reduce(
-    (sum, match) => sum + Math.abs(match.transaction?.amountCents ?? 0),
+    (sum, match) => sum + Math.abs(match.entry.amountCents),
     0,
   )
   const open = occurrence.status === 'expected'
@@ -557,9 +547,7 @@ function AggregateOccurrenceBlock({
               size="sm"
               variant="ghost"
               disabled={pending}
-              onClick={() =>
-                suggested.forEach((match) => confirmMatch(match.id))
-              }
+              onClick={() => suggested.forEach((match) => confirmMatch(match))}
             >
               <Check data-icon="inline-start" /> Confirmar todos
             </Button>
@@ -572,16 +560,14 @@ function AggregateOccurrenceBlock({
               >
                 <span className="min-w-0 flex-1 truncate">
                   <span className="text-muted-foreground">
-                    {match.transaction
-                      ? formatDate(match.transaction.postedAt)
-                      : ''}
+                    {formatDate(match.entry.bookedOn)}
                   </span>{' '}
-                  {match.transaction?.description}
+                  {match.entry.description}
                 </span>
                 <span className="shrink-0 font-medium tabular-nums">
                   {formatCurrency(
-                    Math.abs(match.transaction?.amountCents ?? 0),
-                    match.transaction?.currency ?? currency,
+                    Math.abs(match.entry.amountCents),
+                    match.entry.currency,
                   )}
                 </span>
                 <span className="flex shrink-0 gap-1">
@@ -590,7 +576,7 @@ function AggregateOccurrenceBlock({
                     variant="ghost"
                     aria-label="Confirmar"
                     disabled={pending}
-                    onClick={() => confirmMatch(match.id)}
+                    onClick={() => confirmMatch(match)}
                   >
                     <Check />
                   </Button>
@@ -599,7 +585,7 @@ function AggregateOccurrenceBlock({
                     variant="ghost"
                     aria-label="Não corresponde"
                     disabled={pending}
-                    onClick={() => rejectMatch(match.id)}
+                    onClick={() => rejectMatch(match)}
                   >
                     <X />
                   </Button>
@@ -618,16 +604,14 @@ function AggregateOccurrenceBlock({
             >
               <span className="min-w-0 flex-1 truncate">
                 <span className="text-muted-foreground">
-                  {match.transaction
-                    ? formatDate(match.transaction.postedAt)
-                    : ''}
+                  {formatDate(match.entry.bookedOn)}
                 </span>{' '}
-                {match.transaction?.description}
+                {match.entry.description}
               </span>
               <span className="shrink-0 font-medium tabular-nums">
                 {formatCurrency(
-                  Math.abs(match.transaction?.amountCents ?? 0),
-                  match.transaction?.currency ?? currency,
+                  Math.abs(match.entry.amountCents),
+                  match.entry.currency,
                 )}
               </span>
               {open && (
@@ -636,7 +620,7 @@ function AggregateOccurrenceBlock({
                   variant="ghost"
                   aria-label="Desvincular"
                   disabled={pending}
-                  onClick={() => unlinkMatch(match.id)}
+                  onClick={() => unlinkMatch(match)}
                 >
                   <X />
                 </Button>
