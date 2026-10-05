@@ -1,15 +1,16 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
+import { CalendarDays, ChevronLeft, ChevronRight, History } from 'lucide-react'
 
 import type { MonthView } from '@spendle/server/api'
 
+import { ExchangeNote } from '#/components/exchange'
 import { EmptyState, Panel, ProgressBar } from '#/components/ui'
 import { Button } from '#/components/ui/button'
 import { Skeleton } from '#/components/ui/skeleton'
 import { bucketLabels, formatCurrency, formatMonth } from '#/lib/finance'
 import { GoalRing } from '#/features/finance/strategy-progress'
-import { monthHistoryOptions } from '#/features/v2/queries'
+import { categoriesOptions, monthHistoryOptions } from '#/features/v2/queries'
 import { cn } from '#/lib/utils'
 import { MonthlyAssistant } from './monthly-assistant'
 
@@ -32,6 +33,7 @@ export function MonthlyOverview({
       family: item.family,
       flow: item.cashFlow,
       hasData: item.family.hasData,
+      exchange: item.exchange,
       chartCents: item.cashFlow.closingCashCents,
       targets: item.targets,
       actual: item.actual,
@@ -285,6 +287,10 @@ export function MonthlyOverview({
                     </div>
                   ))}
                 </dl>
+                {/* The current month's rates already show beside today's cash. */}
+                {selected.month !== current.month && (
+                  <ExchangeNote exchange={selected.exchange} />
+                )}
                 {flow.forecasting && (
                   <section
                     className="border-t pt-4"
@@ -325,6 +331,10 @@ export function MonthlyOverview({
                         </div>
                       ))}
                     </dl>
+                    <PayableBreakdown
+                      remainingCents={flow.remainingExpenseCents}
+                      lines={selected.family.lines}
+                    />
                   </section>
                 )}
                 <MonthlyAssistant
@@ -443,5 +453,86 @@ export function MonthlyOverview({
         </div>
       )}
     </Panel>
+  )
+}
+
+/**
+ * What is still to pay, split into what schedules say (bills, instalments,
+ * recurrences) and what category history suggests, with the categories
+ * behind the estimate.
+ */
+function PayableBreakdown({
+  remainingCents,
+  lines,
+}: {
+  remainingCents: number
+  lines: MonthView['family']['lines']
+}) {
+  const categories = useQuery(categoriesOptions(true))
+  const estimates = lines
+    .filter((line) => line.origin === 'history' && line.estimatedCents > 0)
+    .sort((a, b) => b.estimatedCents - a.estimatedCents)
+  const historyCents = estimates.reduce(
+    (sum, line) => sum + line.estimatedCents,
+    0,
+  )
+  if (historyCents === 0 || remainingCents <= 0) return null
+  const scheduledCents = Math.max(0, remainingCents - historyCents)
+  const nameOf = (id: string | null) =>
+    categories.data?.find((category) => category.id === id)?.name ??
+    'Outra categoria'
+  return (
+    <div className="mt-4 flex flex-col gap-3">
+      <div
+        className="flex h-2 overflow-hidden rounded-full bg-muted"
+        aria-hidden="true"
+      >
+        <span
+          className="bg-amber-600"
+          style={{ width: `${(scheduledCents / remainingCents) * 100}%` }}
+        />
+        <span
+          className="bg-[repeating-linear-gradient(135deg,var(--color-amber-600)_0_3px,transparent_3px_6px)] opacity-70"
+          style={{ width: `${(historyCents / remainingCents) * 100}%` }}
+        />
+      </div>
+      <dl
+        aria-label="Composição do valor a pagar"
+        className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2"
+      >
+        <div className="flex items-center gap-2">
+          <span className="size-2 shrink-0 rounded-sm bg-amber-600" />
+          <dt className="text-muted-foreground">Agendado</dt>
+          <dd className="ml-auto font-medium tabular-nums sm:ml-0">
+            {formatCurrency(scheduledCents)}
+          </dd>
+        </div>
+        <div className="flex items-center gap-2">
+          <History
+            className="size-3.5 shrink-0 text-amber-700"
+            aria-hidden="true"
+          />
+          <dt className="text-muted-foreground">Estimado pelo histórico</dt>
+          <dd className="ml-auto font-medium tabular-nums sm:ml-0">
+            {formatCurrency(historyCents)}
+          </dd>
+        </div>
+      </dl>
+      {categories.data && (
+        <ul
+          aria-label="Categorias estimadas pela mediana dos últimos 3 meses"
+          className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground"
+        >
+          {estimates.map((line) => (
+            <li key={line.id}>
+              {nameOf(line.categoryId)}{' '}
+              <span className="tabular-nums">
+                {formatCurrency(line.estimatedCents)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }

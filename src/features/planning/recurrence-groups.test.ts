@@ -27,6 +27,7 @@ function recurrence(
     active: true,
     matchMode: 'single',
     scheduleAnchor: '2026-09-10',
+    converted: null,
     occurrences: input.occurrences ?? [],
   }
 }
@@ -163,4 +164,44 @@ it('separa previsão variável de valores fixos sem contar itens pausados', () =
     monthlyFixedExpense: 200_000,
     monthlyVariableExpense: 445_512,
   })
+})
+
+it('soma recorrências em outra moeda pela cotação e deixa de fora as sem cotação', () => {
+  const streaming = {
+    ...recurrence({
+      id: 'streaming',
+      name: 'Streaming',
+      groupId: null,
+      direction: 'expense',
+      amountCents: 1_000,
+      frequency: 'monthly',
+    }),
+    currency: 'USD',
+    converted: {
+      cents: 5_500,
+      currency: 'USD',
+      originalCents: 1_000,
+      rateMicros: 5_500_000,
+      rateDate: '2026-09-18',
+      source: 'PTAX',
+    },
+  }
+  const unquoted = {
+    ...recurrence({
+      id: 'club',
+      name: 'Clube',
+      groupId: null,
+      direction: 'expense',
+      amountCents: 2_000,
+      frequency: 'monthly',
+    }),
+    currency: 'EUR',
+  }
+  const result = buildRecurrenceGroups(
+    { groups: [], recurrences: [streaming, unquoted] },
+    { today: '2026-09-20' },
+  )
+  expect([result.monthlyExpense, result.missingConversionCount]).toEqual([
+    5_500, 1,
+  ])
 })

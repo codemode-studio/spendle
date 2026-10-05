@@ -8,6 +8,9 @@ import * as SqlSchema from 'effect/sql/SqlSchema'
 
 import type { Account } from '../ledger/Accounts.ts'
 import { entryNotes } from '../ledger/Notes.ts'
+import { baseCurrency, convert } from '../rates/Conversion.ts'
+import type { RateTable } from '../rates/Conversion.ts'
+import { ExchangeRates } from '../rates/ExchangeRates.ts'
 import { AccountLink, Balance } from './definition/Accounts.ts'
 import type { AccountView } from './definition/Accounts.ts'
 import {
@@ -46,7 +49,7 @@ const EntryRow = Schema.Struct({
   manualId: Schema.NullOr(Schema.String),
 })
 
-const toEntry = (row: typeof EntryRow.Type): Entry => ({
+const toEntry = (row: typeof EntryRow.Type, rates: RateTable): Entry => ({
   id: row.id,
   accountId: row.accountId,
   bookedOn: row.bookedOn,
@@ -67,6 +70,11 @@ const toEntry = (row: typeof EntryRow.Type): Entry => ({
         },
   note: row.note,
   manualId: row.manualId,
+  converted:
+    row.currency === baseCurrency
+      ? null
+      : (convert(rates, row.amountCents, row.currency, row.bookedOn)
+          ?.converted ?? null),
 })
 
 const RelationRow = Schema.Struct({
@@ -103,6 +111,16 @@ export const defaultPageSize = 50
  */
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
+  const exchangeRates = yield* ExchangeRates
+
+  /** Entries with their amount in reais when they are in another currency. */
+  const toEntries = (rows: ReadonlyArray<typeof EntryRow.Type>) =>
+    Effect.map(
+      exchangeRates.table(
+        rows.map((row) => ({ currency: row.currency, from: row.bookedOn })),
+      ),
+      (rates) => rows.map((row) => toEntry(row, rates)),
+    )
 
   // Per account and kind, the latest report still standing: each source's
   // latest report of a day, unless a later read withdrew it.
@@ -279,7 +297,7 @@ const make = Effect.gen(function* () {
       FROM ${entrySource}
       WHERE ${sql.and(clauses)}
     `
-    const entries = page.slice(0, limit).map(toEntry)
+    const entries = yield* toEntries(page.slice(0, limit))
     const last = entries.at(-1)
     return Option.some({
       entries,
@@ -352,7 +370,7 @@ const make = Effect.gen(function* () {
       findExplanation(entryId),
     ])
     return Option.some({
-      entry: toEntry(found.value),
+      entry: (yield* toEntries([found.value]))[0]!,
       evidence,
       relations,
       category: Option.getOrNull(category),
@@ -369,7 +387,8 @@ const make = Effect.gen(function* () {
       FROM ${entrySource}
       WHERE ${sql.in('e.id', [...new Set(ids)])}
     `.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(EntryRow))))
-    return new Map(rows.map((row) => [row.id, toEntry(row)]))
+    const entries = yield* toEntries(rows)
+    return new Map(entries.map((entry) => [entry.id, entry]))
   })
 
   return { accountViews, accountView, entriesPage, entryDetail, entriesById }

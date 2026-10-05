@@ -75,3 +75,51 @@ it('analyzes spending by the categories the person decided, in centavos', async 
     1, 10_461,
   ])
 })
+
+it('counts spending in another currency in reais at the rate of its date', async () => {
+  await api.close()
+  api = await startV2Api({
+    rates: {
+      USD: [
+        ['2026-09-04', 5_000_000],
+        ['2026-09-08', 5_500_000],
+      ],
+    },
+  })
+  const dollars = await openChecking('Conta em dólar', 'USD')
+  const euros = await openChecking('Conta em euro', 'EUR')
+  const lunch = await v2((client) =>
+    client.manual.createTransaction({
+      payload: {
+        accountId: dollars.id,
+        bookedOn: '2026-09-05',
+        amountCents: -2_000,
+        description: 'Lunch',
+      },
+    }),
+  )
+  await v2((client) =>
+    client.manual.createTransaction({
+      payload: {
+        accountId: euros.id,
+        bookedOn: '2026-09-05',
+        amountCents: -1_000,
+        description: 'Croissant',
+      },
+    }),
+  )
+  await api.drain()
+  await v2((client) =>
+    client.categoryDecisions.decide({
+      params: { entryId: lunch.entryId! },
+      payload: { categoryId: 'restaurants' },
+    }),
+  )
+  await api.drain()
+
+  const ledger = await v2(categoryLedger)
+  // US$ 20.00 at the 4th's R$ 5.00; the euro, without a rate, stays out.
+  expect(ledger.map((entry) => [entry.description, entry.amountCents])).toEqual(
+    [['Lunch', -10_000]],
+  )
+})

@@ -12,11 +12,12 @@ import * as Categorizer from '../categories/Categorizer.ts'
 import { Classifier } from '../categories/Classifier.ts'
 import { KnowledgeStore } from '../categories/KnowledgeStore.ts'
 import { AssistantModel } from '../planning/AssistantModel.ts'
+import { fakeExchangeRates } from './FakeRates.ts'
+import type { FakeSeries } from './FakeRates.ts'
 import { PlanningServices } from '../planning/Services.ts'
 import * as Reactor from '../events/Reactor.ts'
 import { Imports } from '../imports/Imports.ts'
 import { Investments } from '../investments/Investments.ts'
-import { Quotes } from '../investments/Quotes.ts'
 import * as Entries from '../ledger/Entries.ts'
 import { ManualEntries } from '../ledger/Manual.ts'
 import { Notes } from '../ledger/Notes.ts'
@@ -271,16 +272,20 @@ export const openFinanceTest = (
 
 /**
  * `openFinanceTest` with category learning, its reactors and the given
- * model, plus manual entries, notes and investments (without quotes).
+ * model, plus manual entries, notes, investments and exchange rates from a
+ * fake source publishing `rates`.
  */
-export const categoriesTestWith = <A, E>(classifier: Layer.Layer<A, E>) =>
+export const categoriesTestWith = <A, E>(
+  classifier: Layer.Layer<A, E>,
+  rates: FakeSeries = {},
+) =>
   Layer.mergeAll(
     Categorizer.reactor,
     Categorizer.modelReactor,
     ManualEntries.layer,
     Investments.layer,
   ).pipe(
-    Layer.provideMerge(Layer.mergeAll(Notes.layer, Quotes.fixed({}))),
+    Layer.provideMerge(Layer.mergeAll(Notes.layer, fakeExchangeRates(rates))),
     Layer.provideMerge(Categorizer.Categorizer.layer),
     Layer.provideMerge(KnowledgeStore.layer),
     Layer.provideMerge(Categories.layer),
@@ -292,10 +297,13 @@ export const categoriesTestWith = <A, E>(classifier: Layer.Layer<A, E>) =>
 export const categoriesTest = () => categoriesTestWith(Classifier.disabled)
 
 /** `categoriesTest` with planning, recurrences, the dashboard and the given assistant model. */
-export const planningTestWith = <A, E>(model: Layer.Layer<A, E>) =>
+export const planningTestWith = <A, E>(
+  model: Layer.Layer<A, E>,
+  rates: FakeSeries = {},
+) =>
   PlanningServices.pipe(
     Layer.provideMerge(model),
-    Layer.provideMerge(categoriesTest()),
+    Layer.provideMerge(categoriesTestWith(Classifier.disabled, rates)),
   )
 
 /** `categoriesTest` with planning and the assistant switched off. */

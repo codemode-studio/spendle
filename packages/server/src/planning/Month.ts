@@ -2,19 +2,23 @@
  * The family's month as a projection of entries, card cycles, recurrences
  * and the plan: what came in, what was spent per envelope, what is still
  * due, what was saved, how cash moved, and what blocks closing. Pure:
- * amounts are integer centavos in the base currency (BRL; V2 has no
- * exchange rates yet, so other currencies stay out and are counted).
+ * amounts are integer centavos in reais; values in other currencies count
+ * at the rate of their date (the latest available for future dates), and
+ * those without a rate stay out and are counted.
  */
 import { addDays, monthStart } from '../domain/LocalDate.ts'
 import { cycleContaining } from '../reconciliation/Cycles.ts'
 import { knowledgeExactPatterns } from '../categories/Patterns.ts'
+import { baseCurrency, convert, rateOn } from '../rates/Conversion.ts'
+import type { Converted, RateTable } from '../rates/Conversion.ts'
 import { conservativeBase, effectiveAllocation, targetsFor } from './Budget.ts'
 import type { Allocation, AllocationBucket } from './Budget.ts'
+import { estimateVariableSpending, historyMonths } from './HistoryEstimate.ts'
 import { acceptedEntries } from './RecurrencePolicy.ts'
 import type { BookRecurrence, Occurrence } from './RecurrencePolicy.ts'
 import { aggregateWindow, scheduleDates } from './Schedule.ts'
 
-export const baseCurrency = 'BRL'
+export { baseCurrency }
 
 export interface MonthAccount {
   readonly id: string
@@ -131,6 +135,8 @@ export interface MonthFacts {
   readonly reserveInvestedCents: number | null
   /** Each category's bucket. */
   readonly categoryBuckets: ReadonlyMap<string, string>
+  /** Exchange rates to reais for every currency the facts use. */
+  readonly rates: RateTable
 }
 
 export type LineBucket = AllocationBucket | 'other'
@@ -145,7 +151,9 @@ export interface MonthLine {
   readonly bucket: LineBucket
   readonly entryId: string | null
   readonly certainty: 'documented' | 'scheduled' | 'estimated'
-  readonly origin: 'account' | 'card' | 'recurrence' | 'envelope'
+  readonly origin: 'account' | 'card' | 'recurrence' | 'envelope' | 'history'
+  /** Set when the line was in another currency and is shown in reais. */
+  readonly converted: Converted | null
 }
 
 export type IssueCode =
@@ -191,8 +199,16 @@ export const indexFacts = (facts: MonthFacts) => {
       )
       .flatMap((relation) => [relation.outflowEntryId, relation.inflowEntryId]),
   )
-  const brl = (entry: MonthEntry) =>
-    accountById.get(entry.accountId)?.currency === baseCurrency
+  const currencyOf = (accountId: string | null) =>
+    (accountId === null ? undefined : accountById.get(accountId)?.currency) ??
+    baseCurrency
+  /** `cents` of `currency` in reais at the rate of `date`; null without a rate. */
+  const toBrl = (cents: number, currency: string, date: string) =>
+    convert(facts.rates, cents, currency, date)
+  /** The entry's amount in reais, null without a rate for its currency. */
+  const entryCents = (entry: MonthEntry) =>
+    toBrl(entry.amountCents, currencyOf(entry.accountId), entry.bookedOn)
+      ?.cents ?? null
   const family = (entry: MonthEntry) => {
     const account = accountById.get(entry.accountId)
     return account !== undefined && !account.company
@@ -201,28 +217,36 @@ export const indexFacts = (facts: MonthFacts) => {
     (account) =>
       !account.archived &&
       account.purpose === 'operating' &&
-      account.card === null &&
-      account.currency === baseCurrency,
+      account.card === null,
   )
   const cashAccountIds = new Set(cashAccounts.map((account) => account.id))
   const accepted = acceptedEntries(facts.book)
+  /** Entries a recurrence or an instalment plan already stands for. */
+  const scheduledEntryIds = new Set([
+    ...accepted.keys(),
+    ...facts.installments.flatMap((plan) => plan.entryIds),
+  ])
   return {
     accountById,
     entryById,
     internal,
-    brl,
+    currencyOf,
+    toBrl,
+    entryCents,
     family,
     cashAccounts,
     cashAccountIds,
     accepted,
+    scheduledEntryIds,
   }
 }
 type Index = ReturnType<typeof indexFacts>
 
 /**
  * The operating cash at the end of `date`: each operating account from its
- * nearest balance checkpoint and the posted movements between. An account
- * with movements but no checkpoint has no known balance and is counted.
+ * nearest balance checkpoint and the posted movements between, in reais at
+ * the rate of `date`. An account with movements but no checkpoint, or in a
+ * currency without a rate, has no known balance and is counted.
  */
 export const cashAt = (facts: MonthFacts, index: Index, date: string) => {
   let cents = 0
@@ -242,8 +266,7 @@ export const cashAt = (facts: MonthFacts, index: Index, date: string) => {
       if (movements.length > 0) missing++
       continue
     }
-    known++
-    cents +=
+    const native =
       anchor.asOf <= date
         ? anchor.balanceCents +
           movements
@@ -257,6 +280,13 @@ export const cashAt = (facts: MonthFacts, index: Index, date: string) => {
               (entry) => entry.bookedOn > date && entry.bookedOn <= anchor.asOf,
             )
             .reduce((sum, entry) => sum + entry.amountCents, 0)
+    const converted = index.toBrl(native, account.currency, date)
+    if (converted === null) {
+      missing++
+      continue
+    }
+    known++
+    cents += converted.cents
   }
   return { cents: known > 0 ? cents : null, missing }
 }
@@ -377,6 +407,8 @@ const spread = (
  * What the month owes, line by line: card bills due in it (their purchases,
  * instalments not yet billed and anything the bill shows beyond them),
  * account spending dated in it, and recurrences still expected in it.
+ * Values in other currencies are in reais: a bill at the rate of its
+ * closing, everything else at the rate of its date.
  */
 export const monthLines = (facts: MonthFacts, index: Index, month: string) => {
   const lines: Array<MonthLine> = []
@@ -385,9 +417,16 @@ export const monthLines = (facts: MonthFacts, index: Index, month: string) => {
 
   for (const cycle of facts.cycles) {
     const account = index.accountById.get(cycle.accountId)
-    if (!account || account.company || account.currency !== baseCurrency)
-      continue
+    if (!account || account.company) continue
     if (!inMonth(cycle.dueOn, month)) continue
+    // One rate for the whole bill, so its lines still add up to it.
+    const rate =
+      account.currency === baseCurrency
+        ? null
+        : rateOn(facts.rates, account.currency, cycle.closingOn)
+    if (account.currency !== baseCurrency && rate === null) continue
+    const inBrl = (cents: number) =>
+      index.toBrl(cents, account.currency, rate?.date ?? cycle.closingOn)!
     const purchases = cycle.entryIds
       .map((id) => index.entryById.get(id))
       .filter(
@@ -395,19 +434,24 @@ export const monthLines = (facts: MonthFacts, index: Index, month: string) => {
           entry !== undefined && !entry.excludedFromSpending,
       )
     const billLines: Array<Omit<MonthLine, 'paidCents'>> = purchases.map(
-      (entry) => ({
-        id: entry.id,
-        description: entry.description,
-        date: cycle.dueOn,
-        cents: -entry.amountCents,
-        categoryId: entry.categoryId,
-        bucket: lineBucket(entry.bucket),
-        entryId: entry.id,
-        certainty: 'documented',
-        origin: 'card',
-      }),
+      (entry) => {
+        const value = inBrl(-entry.amountCents)
+        return {
+          id: entry.id,
+          description: entry.description,
+          date: cycle.dueOn,
+          cents: value.cents,
+          categoryId: entry.categoryId,
+          bucket: lineBucket(entry.bucket),
+          entryId: entry.id,
+          certainty: 'documented',
+          origin: 'card',
+          converted: value.converted,
+        }
+      },
     )
-    const billed = Math.max(0, cycle.billedCents)
+    const billedValue = inBrl(Math.max(0, cycle.billedCents))
+    const billed = billedValue.cents
     const gap = billed - billLines.reduce((sum, line) => sum + line.cents, 0)
     if (gap !== 0 && billed > 0) {
       billLines.push({
@@ -420,13 +464,23 @@ export const monthLines = (facts: MonthFacts, index: Index, month: string) => {
         entryId: null,
         certainty: cycle.closingOn < facts.today ? 'documented' : 'scheduled',
         origin: 'card',
+        converted:
+          billedValue.converted === null
+            ? null
+            : {
+                ...billedValue.converted,
+                cents: gap,
+                originalCents:
+                  Math.max(0, cycle.billedCents) +
+                  purchases.reduce((sum, entry) => sum + entry.amountCents, 0),
+              },
       })
       warnings.add('Há saldo de fatura cuja composição não foi identificada.')
     }
     const paid = spread(
       billLines.map((line) => line.cents),
       billLines.reduce((sum, line) => sum + line.cents, 0),
-      Math.min(billed, Math.max(0, cycle.paidCents)),
+      Math.min(billed, Math.max(0, inBrl(cycle.paidCents).cents)),
     )
     billLines.forEach((line, position) => {
       lines.push({ ...line, paidCents: paid[position]! })
@@ -436,20 +490,26 @@ export const monthLines = (facts: MonthFacts, index: Index, month: string) => {
 
   for (const instalment of futureInstalments(facts, index)) {
     const account = index.accountById.get(instalment.accountId)
-    if (!account || account.company || account.currency !== baseCurrency)
-      continue
+    if (!account || account.company) continue
     if (!inMonth(instalment.dueOn, month)) continue
+    const value = index.toBrl(
+      instalment.cents,
+      account.currency,
+      instalment.dueOn,
+    )
+    if (value === null) continue
     lines.push({
       id: `${instalment.accountId}|${instalment.description}|${instalment.number}`,
       description: instalment.description,
       date: instalment.dueOn,
-      cents: instalment.cents,
+      cents: value.cents,
       paidCents: 0,
       categoryId: instalment.categoryId,
       bucket: lineBucket(instalment.bucket),
       entryId: null,
       certainty: 'scheduled',
       origin: 'card',
+      converted: value.converted,
     })
   }
 
@@ -457,22 +517,28 @@ export const monthLines = (facts: MonthFacts, index: Index, month: string) => {
     const account = index.accountById.get(entry.accountId)
     if (!account || account.company || account.card !== null) continue
     if (!inMonth(entry.bookedOn, month)) continue
-    if (account.currency !== baseCurrency) continue
     if (index.internal.has(entry.id) || entry.excludedFromSpending) continue
     if (entry.bucket === 'investment' || entry.bucket === 'reserve') continue
     if (entry.bucket === 'income' || entry.bucket === 'excluded') continue
     if (entry.amountCents >= 0 && entry.bucket === null) continue
+    const value = index.toBrl(
+      -entry.amountCents,
+      account.currency,
+      entry.bookedOn,
+    )
+    if (value === null) continue
     lines.push({
       id: entry.id,
       description: entry.description,
       date: entry.bookedOn,
-      cents: -entry.amountCents,
-      paidCents: entry.status === 'posted' ? -entry.amountCents : 0,
+      cents: value.cents,
+      paidCents: entry.status === 'posted' ? value.cents : 0,
       categoryId: entry.categoryId,
       bucket: lineBucket(entry.bucket),
       entryId: entry.id,
       certainty: 'documented',
       origin: 'account',
+      converted: value.converted,
     })
     counted.add(entry.id)
   }
@@ -480,12 +546,7 @@ export const monthLines = (facts: MonthFacts, index: Index, month: string) => {
   const end = monthEnd(month)
   for (const recurrence of facts.book) {
     const { rule } = recurrence
-    if (
-      !rule.active ||
-      rule.direction !== 'expense' ||
-      rule.currency !== baseCurrency
-    )
-      continue
+    if (!rule.active || rule.direction !== 'expense') continue
     // A card recurrence is paid with the bill its charge lands on.
     const horizon = addDays(end, 45)
     for (const occurrence of forecastOccurrences(recurrence, horizon)) {
@@ -503,28 +564,148 @@ export const monthLines = (facts: MonthFacts, index: Index, month: string) => {
           (entry): entry is MonthEntry =>
             entry !== undefined && counted.has(entry.id),
         )
+      // Matches are in the recurrence's currency, so what remains is too.
       const coveredCents =
         window === null
           ? Math.abs(covered[0]?.amountCents ?? 0)
           : covered.reduce((sum, entry) => sum + Math.abs(entry.amountCents), 0)
       const remaining = Math.max(0, rule.amountCents - coveredCents)
       if (remaining === 0) continue
+      const value = index.toBrl(
+        remaining,
+        rule.currency,
+        occurrence.expectedDate,
+      )
+      if (value === null) continue
       lines.push({
         id: occurrence.id,
         description:
           window === null ? rule.name : `${rule.name} · restante da estimativa`,
         date: due,
-        cents: remaining,
+        cents: value.cents,
         paidCents: 0,
         categoryId: rule.categoryId,
         bucket: lineBucket(facts.categoryBuckets.get(rule.categoryId) ?? null),
         entryId: null,
         certainty: 'estimated',
         origin: window === null ? 'recurrence' : 'envelope',
+        converted: value.converted,
       })
     }
   }
   return { lines, warnings: [...warnings] }
+}
+
+/**
+ * Documented spending per category in `month`, as the month counts it
+ * (cards in their bill's month), refunds netted: essentials and lifestyle
+ * only, without what recurrences or instalments already schedule.
+ */
+const variableSpendingIn = (facts: MonthFacts, index: Index, month: string) => {
+  const spent = new Map<string, number>()
+  for (const line of monthLines(facts, index, month).lines) {
+    if (line.certainty !== 'documented' || line.entryId === null) continue
+    if (line.origin !== 'account' && line.origin !== 'card') continue
+    if (line.bucket !== 'essential' && line.bucket !== 'lifestyle') continue
+    if (line.categoryId === null || line.categoryId === 'uncategorized')
+      continue
+    if (index.scheduledEntryIds.has(line.entryId)) continue
+    spent.set(line.categoryId, (spent.get(line.categoryId) ?? 0) + line.cents)
+  }
+  return spent
+}
+
+/**
+ * What variable categories will still cost in a month not lived yet,
+ * estimated from the trailing complete months. A category an envelope
+ * recurrence already estimates is left to it.
+ */
+export const historyLines = (
+  facts: MonthFacts,
+  index: Index,
+  month: string,
+): ReadonlyArray<MonthLine> => {
+  const referenceMonth = facts.today.slice(0, 7)
+  if (month < referenceMonth) return []
+  const envelopes = new Set(
+    facts.book
+      .filter(
+        ({ rule }) =>
+          rule.active &&
+          rule.direction === 'expense' &&
+          rule.matchMode === 'aggregate',
+      )
+      .map(({ rule }) => rule.categoryId),
+  )
+  const trailing = Array.from({ length: historyMonths }, (_, offset) =>
+    variableSpendingIn(
+      facts,
+      index,
+      monthStart(facts.today, -(offset + 1)).slice(0, 7),
+    ),
+  )
+  const spent = variableSpendingIn(facts, index, month)
+  const categories = [
+    ...new Set(trailing.flatMap((months) => [...months.keys()])),
+  ]
+    .filter((categoryId) => !envelopes.has(categoryId))
+    .sort()
+  const end = monthEnd(month)
+  const monthDays = Number(end.slice(8, 10))
+  const remainingDays =
+    month === referenceMonth
+      ? monthDays - Number(facts.today.slice(8, 10))
+      : monthDays
+  return estimateVariableSpending({
+    categories: categories.map((categoryId) => ({
+      categoryId,
+      monthlyCents: trailing.map((months) => months.get(categoryId) ?? 0),
+      spentCents: spent.get(categoryId) ?? 0,
+    })),
+    remainingDays,
+    monthDays,
+  }).map((estimate) => ({
+    id: `history|${estimate.categoryId}|${month}`,
+    description: 'Estimativa pelo histórico',
+    date: end,
+    cents: estimate.estimateCents,
+    paidCents: 0,
+    categoryId: estimate.categoryId,
+    bucket: lineBucket(facts.categoryBuckets.get(estimate.categoryId) ?? null),
+    entryId: null,
+    certainty: 'estimated',
+    origin: 'history',
+    converted: null,
+  }))
+}
+
+/**
+ * The rate each other currency in use (open accounts and active
+ * recurrences) converts at on `date`, and the currencies without one.
+ */
+export const exchangeOn = (facts: MonthFacts, date: string) => {
+  const currencies = new Set([
+    ...facts.accounts
+      .filter((account) => !account.archived && !account.company)
+      .map((account) => account.currency),
+    ...facts.book
+      .filter(({ rule }) => rule.active)
+      .map(({ rule }) => rule.currency),
+  ])
+  currencies.delete(baseCurrency)
+  const rates: Array<{
+    readonly currency: string
+    readonly rateMicros: number
+    readonly date: string
+    readonly source: string
+  }> = []
+  const missing: Array<string> = []
+  for (const currency of [...currencies].sort()) {
+    const rate = rateOn(facts.rates, currency, date)
+    if (rate === null) missing.push(currency)
+    else rates.push({ currency, ...rate })
+  }
+  return { rates, missing }
 }
 
 /** Saved into each savings envelope in the month: categorised contributions and transfers to reserve or investment accounts. */
@@ -532,14 +713,10 @@ export const savedIn = (facts: MonthFacts, index: Index, month: string) => {
   const saved = { investment: 0, reserve: 0 }
   for (const entry of facts.entries) {
     if (entry.status !== 'posted' || !inMonth(entry.bookedOn, month)) continue
-    if (
-      !index.family(entry) ||
-      !index.brl(entry) ||
-      index.internal.has(entry.id)
-    )
-      continue
-    if (entry.bucket === 'investment' || entry.bucket === 'reserve')
-      saved[entry.bucket] += -entry.amountCents
+    if (!index.family(entry) || index.internal.has(entry.id)) continue
+    if (entry.bucket !== 'investment' && entry.bucket !== 'reserve') continue
+    const cents = index.entryCents(entry)
+    if (cents !== null) saved[entry.bucket] += -cents
   }
   for (const relation of facts.relations) {
     if (
@@ -550,14 +727,17 @@ export const savedIn = (facts: MonthFacts, index: Index, month: string) => {
     const outflow = index.entryById.get(relation.outflowEntryId)
     const inflow = index.entryById.get(relation.inflowEntryId)
     if (!outflow || !inflow || outflow.status !== 'posted') continue
-    if (!inMonth(outflow.bookedOn, month) || !index.brl(outflow)) continue
+    if (!inMonth(outflow.bookedOn, month)) continue
     const from = index.accountById.get(outflow.accountId)
     const to = index.accountById.get(inflow.accountId)
     if (!from || !to || from.company || to.company) continue
+    const out = index.entryCents(outflow)
+    const into = index.entryCents(inflow)
+    if (out === null || into === null) continue
     if (from.purpose === 'operating' && to.purpose !== 'operating')
-      saved[to.purpose] += -outflow.amountCents
+      saved[to.purpose] += -out
     else if (from.purpose !== 'operating' && to.purpose === 'operating')
-      saved[from.purpose] -= inflow.amountCents
+      saved[from.purpose] -= into
   }
   return saved
 }
@@ -571,10 +751,9 @@ export const incomeIn = (facts: MonthFacts, index: Index, month: string) =>
       entry.amountCents > 0 &&
       entry.bucket === 'income' &&
       index.family(entry) &&
-      index.brl(entry) &&
       !index.internal.has(entry.id) &&
       !entry.excludedFromSpending
-        ? sum + entry.amountCents
+        ? sum + (index.entryCents(entry) ?? 0)
         : sum,
     0,
   )
@@ -710,7 +889,9 @@ export const integrityOf = (
     { code: 'missing_balance', count: cash.missing, blocksClosing: false },
     {
       code: 'other_currency',
-      count: monthEntries.filter((entry) => !index.brl(entry)).length,
+      // Only what has no rate stays out; converted values count.
+      count: monthEntries.filter((entry) => index.entryCents(entry) === null)
+        .length,
       blocksClosing: false,
     },
   ]
@@ -727,7 +908,10 @@ export const buildMonth = (
   const referenceMonth = today.slice(0, 7)
   const plan = planFor(facts, month)
   const forecasting = !plan.closed && month >= referenceMonth
-  const { lines: rawLines, warnings } = monthLines(facts, index, month)
+  const { lines: documentedLines, warnings } = monthLines(facts, index, month)
+  const rawLines = forecasting
+    ? [...documentedLines, ...historyLines(facts, index, month)]
+    : documentedLines
   const incomeCents = incomeIn(facts, index, month)
   const saved = savedIn(facts, index, month)
 
@@ -827,19 +1011,16 @@ export const buildMonth = (
       ownTransfers.has(entry.id)
     )
       continue
-    if (entry.amountCents > 0) receivedCents += entry.amountCents
-    else paidCents -= entry.amountCents
+    const cents = index.entryCents(entry)
+    if (cents === null) continue
+    if (cents > 0) receivedCents += cents
+    else paidCents -= cents
   }
   let expectedIncomeCents = 0
   if (forecasting)
     for (const recurrence of facts.book) {
       const { rule } = recurrence
-      if (
-        !rule.active ||
-        rule.direction !== 'income' ||
-        rule.currency !== baseCurrency
-      )
-        continue
+      if (!rule.active || rule.direction !== 'income') continue
       if (rule.categoryId === 'transfer') continue
       if (rule.accountId !== null && !index.cashAccountIds.has(rule.accountId))
         continue
@@ -850,7 +1031,12 @@ export const buildMonth = (
           occurrence.expectedDate >= start &&
           occurrence.expectedDate <= end
         )
-          expectedIncomeCents += occurrence.expectedAmountCents
+          expectedIncomeCents +=
+            index.toBrl(
+              occurrence.expectedAmountCents,
+              rule.currency,
+              occurrence.expectedDate,
+            )?.cents ?? 0
     }
   const remainingExpenseCents = forecasting
     ? Math.max(
@@ -892,6 +1078,10 @@ export const buildMonth = (
       savingsTargetCents,
       savingsRemainingCents,
       plannedBalanceCents: plannedIncomeCents - expenseCents,
+      /** The part of the estimate that comes from category history, not from schedules. */
+      historyEstimateCents: lines
+        .filter((line) => line.origin === 'history')
+        .reduce((sum, line) => sum + line.estimatedCents, 0),
       expenses,
       lines,
       needsCategoryCount,
@@ -923,6 +1113,7 @@ export const buildMonth = (
         .filter((issue) => issue.blocksClosing)
         .reduce((sum, issue) => sum + issue.count, 0),
     },
+    exchange: exchangeOn(facts, cashDate),
   }
 }
 export type MonthView = ReturnType<typeof buildMonth>
@@ -944,6 +1135,8 @@ export interface CashEvent {
   readonly amountCents: number
   readonly kind: 'income' | 'expense' | 'statement'
   readonly certainty: 'closed' | 'installment_schedule' | 'open' | null
+  /** Set when the event is in another currency and shown in reais. */
+  readonly converted: Converted | null
 }
 
 /**
@@ -965,7 +1158,6 @@ export const projectCash = (
   const accountRecurrences = facts.book.filter(
     (recurrence) =>
       recurrence.rule.active &&
-      recurrence.rule.currency === baseCurrency &&
       (recurrence.rule.accountId === null ||
         cardTerms(index, recurrence.rule.accountId) === null),
   )
@@ -999,7 +1191,9 @@ export const projectCash = (
     if (entry.status !== 'posted' || entry.amountCents >= 0) continue
     if (entry.bookedOn > today || entry.bookedOn <= windowStart) continue
     const account = index.accountById.get(entry.accountId)
-    if (!account || account.currency !== baseCurrency) continue
+    if (!account) continue
+    const cents = index.entryCents(entry)
+    if (cents === null) continue
     const inCash = index.cashAccountIds.has(entry.accountId)
     const inCard = account.card !== null && !account.company
     if (!inCash && !inCard) continue
@@ -1033,12 +1227,12 @@ export const projectCash = (
       recurringEstimateEntryIds.push(entry.id)
       continue
     }
-    variableTotal += -entry.amountCents
+    variableTotal += -cents
     historical.push({
       id: entry.id,
       date: entry.bookedOn,
       description: entry.description,
-      cents: -entry.amountCents,
+      cents: -cents,
     })
   }
   const dailyVariableCents = Math.round(variableTotal / variableWindowDays)
@@ -1056,42 +1250,48 @@ export const projectCash = (
       if (occurrence.status !== 'expected') continue
       if (occurrence.expectedDate <= today || occurrence.expectedDate > horizon)
         continue
-      // Paid early: a confirmed or automatic match already left the account.
+      const value = index.toBrl(
+        rule.direction === 'income'
+          ? occurrence.expectedAmountCents
+          : -occurrence.expectedAmountCents,
+        rule.currency,
+        occurrence.expectedDate,
+      )
+      if (value === null) continue
       scheduled.push({
         id: occurrence.id,
         date: occurrence.expectedDate,
         name: rule.name,
-        amountCents:
-          rule.direction === 'income'
-            ? occurrence.expectedAmountCents
-            : -occurrence.expectedAmountCents,
+        amountCents: value.cents,
         kind: rule.direction,
         certainty: null,
+        converted: value.converted,
       })
     }
   }
   for (const cycle of facts.cycles) {
     const account = index.accountById.get(cycle.accountId)
-    if (!account || account.company || account.currency !== baseCurrency)
-      continue
+    if (!account || account.company) continue
     if (cycle.dueOn <= today || cycle.dueOn > horizon) continue
     const owed = cycle.billedCents - cycle.paidCents
     if (owed <= 0) continue
+    const value = index.toBrl(-owed, account.currency, cycle.closingOn)
+    if (value === null) continue
     const certainty = cycle.closingOn < today ? 'closed' : 'open'
     scheduled.push({
       id: `${cycle.accountId}|${cycle.dueOn}`,
       date: cycle.dueOn,
       name: `Fatura ${account.name}`,
-      amountCents: -owed,
+      amountCents: value.cents,
       kind: 'statement',
       certainty,
+      converted: value.converted,
     })
   }
   const instalmentsByBill = new Map<string, number>()
   for (const instalment of futureInstalments(facts, index)) {
     const account = index.accountById.get(instalment.accountId)
-    if (!account || account.company || account.currency !== baseCurrency)
-      continue
+    if (!account || account.company) continue
     if (instalment.dueOn <= today || instalment.dueOn > horizon) continue
     const key = `${instalment.accountId}|${instalment.dueOn}`
     instalmentsByBill.set(
@@ -1101,13 +1301,17 @@ export const projectCash = (
   }
   for (const [key, cents] of instalmentsByBill) {
     const [accountId, dueOn] = key.split('|') as [string, string]
+    const account = index.accountById.get(accountId)!
+    const value = index.toBrl(-cents, account.currency, dueOn)
+    if (value === null) continue
     scheduled.push({
       id: `${key}|instalments`,
       date: dueOn,
-      name: `Parcelas conhecidas ${index.accountById.get(accountId)!.name}`,
-      amountCents: -cents,
+      name: `Parcelas conhecidas ${account.name}`,
+      amountCents: value.cents,
       kind: 'statement',
       certainty: 'installment_schedule',
+      converted: value.converted,
     })
   }
   scheduled.sort(
@@ -1128,6 +1332,7 @@ export const projectCash = (
   return {
     today,
     days: options.daysAhead,
+    exchange: exchangeOn(facts, today),
     startingCents,
     points,
     todayIndex: points.length - 1,

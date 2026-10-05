@@ -342,4 +342,101 @@ describe('planning API', () => {
         )
       }).pipe(Effect.provide(apiTest())),
   )
+  it.effect(
+    'counts a dollar account in reais and says which values were converted',
+    () =>
+      Effect.gen(function* () {
+        const { client, account } = yield* september
+        const dollars = yield* client.accounts.open({
+          payload: {
+            ownerId: account.ownerId,
+            institutionName: 'Wise',
+            name: 'Conta em dólar',
+            kind: 'checking',
+            purpose: 'operating',
+            currency: 'USD',
+          },
+        })
+        const lunch = yield* client.manual.createTransaction({
+          payload: {
+            accountId: dollars.id,
+            bookedOn: '2026-09-12',
+            amountCents: -2_000,
+            description: 'Lunch',
+          },
+        })
+        yield* client.recurrences.create({
+          payload: {
+            name: 'Streaming',
+            accountId: dollars.id,
+            categoryId: 'utilities',
+            amountCents: 1_000,
+            currency: 'USD',
+            direction: 'expense',
+            amountMode: 'fixed',
+            matchMode: 'single',
+            destinationMode: 'automatic',
+            frequency: 'monthly',
+            nextDate: '2026-09-28',
+          },
+        })
+        yield* drain
+        const month = yield* client.dashboard.month({ query: {} })
+        const entry = (yield* client.entries.get({
+          params: { entryId: lunch.entryId! },
+        })).entry
+        const book = yield* client.recurrences.book()
+        const line = (id: string) =>
+          month.family.lines.find((item) => item.id.startsWith(id))
+        assert.deepStrictEqual(
+          {
+            lunch: [
+              line(lunch.entryId!)?.cents,
+              line(lunch.entryId!)?.converted?.rateDate,
+            ],
+            streaming: line(book.recurrences[0]!.id)?.cents,
+            entry: entry.converted,
+            recurrence: book.recurrences[0]!.converted?.originalCents,
+            exchange: month.exchange,
+          },
+          {
+            // US$ 20.00 on Saturday the 12th, at Friday's R$ 5.00.
+            lunch: [10_000, '2026-09-11'],
+            // US$ 10.00 due on the 28th, at the latest rate.
+            streaming: 5_500,
+            entry: {
+              cents: -10_000,
+              currency: 'USD',
+              originalCents: -2_000,
+              rateMicros: 5_000_000,
+              rateDate: '2026-09-11',
+              source: 'Fake',
+            },
+            recurrence: 1_000,
+            exchange: {
+              rates: [
+                {
+                  currency: 'USD',
+                  rateMicros: 5_500_000,
+                  date: '2026-09-18',
+                  source: 'Fake',
+                },
+              ],
+              missing: [],
+            },
+          },
+        )
+      }).pipe(
+        Effect.provide(
+          apiTest({
+            rates: {
+              USD: [
+                ['2026-09-11', 5_000_000],
+                ['2026-09-18', 5_500_000],
+              ],
+            },
+          }),
+        ),
+      ),
+  )
 })

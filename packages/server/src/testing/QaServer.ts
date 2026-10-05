@@ -20,7 +20,6 @@ import { KnowledgeStore } from '../categories/KnowledgeStore.ts'
 import * as Reactor from '../events/Reactor.ts'
 import { Imports } from '../imports/Imports.ts'
 import { Investments } from '../investments/Investments.ts'
-import { Quotes } from '../investments/Quotes.ts'
 import { Accounts } from '../ledger/Accounts.ts'
 import * as Entries from '../ledger/Entries.ts'
 import { ManualEntries } from '../ledger/Manual.ts'
@@ -37,7 +36,9 @@ import { Cards } from '../reconciliation/Cards.ts'
 import * as Reconciliation from '../reconciliation/Reconciliation.ts'
 import { AssistantModel } from '../planning/AssistantModel.ts'
 import { PlanningServices } from '../planning/Services.ts'
+import { addDays } from '../domain/LocalDate.ts'
 import { makeFake } from './FakePluggy.ts'
+import { fakeExchangeRates } from './FakeRates.ts'
 import type { FakePluggyData } from './FakePluggy.ts'
 import { LedgerTest } from './layers.ts'
 
@@ -209,6 +210,14 @@ const QaPluggy = Layer.unwrap(
   }),
 )
 
+// US$ 1 = R$ 5,40 every day from 2025 through 2027, so QA values are stable.
+const qaRates = {
+  USD: Array.from(
+    { length: 365 * 3 + 1 },
+    (_, day) => [addDays('2025-01-01', day), 5_400_000] as const,
+  ),
+}
+
 const Services = PlanningServices.pipe(
   Layer.provideMerge(AssistantModel.disabled),
   Layer.provideMerge(
@@ -221,14 +230,9 @@ const Services = PlanningServices.pipe(
       ManualEntries.layer,
       Investments.layer,
     ).pipe(
-      // Fixed quotes keep QA offline and its values stable.
+      // A fake rate source keeps QA offline and its values stable.
       Layer.provideMerge(
-        Layer.mergeAll(
-          Notes.layer,
-          Quotes.fixed({
-            USD: { rateMicros: 5_400_000, date: '2026-10-01', source: 'QA' },
-          }),
-        ),
+        Layer.mergeAll(Notes.layer, fakeExchangeRates(qaRates)),
       ),
       Layer.provideMerge(Categorizer.Categorizer.layer),
       Layer.provideMerge(KnowledgeStore.layer),

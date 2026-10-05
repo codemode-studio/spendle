@@ -35,6 +35,7 @@ const recurrence = (
   scheduleAnchor: '2026-06-01',
   nextDate: '2026-06-01',
   active: true,
+  converted: null,
   learnedDescriptions: [],
   occurrences,
 })

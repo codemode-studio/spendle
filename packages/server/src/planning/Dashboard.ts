@@ -4,6 +4,9 @@ import * as Layer from 'effect/Layer'
 
 import { monthStart, today } from '../domain/LocalDate.ts'
 import { Investments } from '../investments/Investments.ts'
+import { baseCurrency } from '../rates/Conversion.ts'
+import { ExchangeRates } from '../rates/ExchangeRates.ts'
+import type { RateNeed } from '../rates/ExchangeRates.ts'
 import { Cards } from '../reconciliation/Cards.ts'
 import { LedgerReads } from './LedgerReads.ts'
 import { buildMonth, indexFacts, projectCash } from './Month.ts'
@@ -22,6 +25,7 @@ const make = Effect.gen(function* () {
   const recurrences = yield* Recurrences
   const cards = yield* Cards
   const investments = yield* Investments
+  const exchangeRates = yield* ExchangeRates
 
   const facts = Effect.gen(function* () {
     const [day, accounts, entries, relations, checkpoints, categories] =
@@ -62,13 +66,34 @@ const make = Effect.gen(function* () {
           lastBookedOn: plan.lastBookedOn,
         })
     }
-    const [settings, strategies, budgets, goals, invested] = yield* Effect.all([
-      planning.settings,
-      planning.strategies,
-      planning.budgets,
-      planning.goalsForPlan,
-      investments.snapshot(day),
-    ])
+    // Every other currency from the first day a value in it needs a rate.
+    const currencyOf = new Map(
+      accounts.map((account) => [account.id, account.currency]),
+    )
+    const needs: Array<RateNeed> = [
+      ...entries.map((entry) => ({
+        currency: entry.currency,
+        from: entry.bookedOn,
+      })),
+      ...checkpoints.map((checkpoint) => ({
+        currency: currencyOf.get(checkpoint.accountId) ?? baseCurrency,
+        from: checkpoint.asOf,
+      })),
+      ...accounts.map((account) => ({ currency: account.currency, from: day })),
+      ...book.map(({ rule }) => ({
+        currency: rule.currency,
+        from: rule.startsOn < day ? rule.startsOn : day,
+      })),
+    ].filter((need) => need.currency !== baseCurrency)
+    const [settings, strategies, budgets, goals, invested, rates] =
+      yield* Effect.all([
+        planning.settings,
+        planning.strategies,
+        planning.budgets,
+        planning.goalsForPlan,
+        investments.snapshot(day),
+        exchangeRates.table(needs),
+      ])
     return {
       today: day,
       accounts,
@@ -89,6 +114,7 @@ const make = Effect.gen(function* () {
       categoryBuckets: new Map(
         categories.map((category) => [category.id, category.bucket]),
       ),
+      rates,
     } satisfies MonthFacts
   }).pipe(Effect.withSpan('Dashboard.facts'))
 
