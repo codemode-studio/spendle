@@ -188,7 +188,7 @@ const make = Effect.gen(function* () {
   /** Each entry's position: the latest decision whose observations it alone holds. */
   const placements = Effect.gen(function* () {
     const decisions = yield* findDecisions(undefined)
-    const entriesOf = yield* holders('investment_movement_endpoints')
+    const entriesOf = yield* holders(sql, 'investment_movement_endpoints')
     const byEntry = new Map<
       string,
       { readonly positionId: string; readonly revision: number }
@@ -445,7 +445,7 @@ const make = Effect.gen(function* () {
           positionId = position.value.id
         }
         const keys = covering(
-          yield* holders('investment_movement_endpoints'),
+          yield* holders(sql, 'investment_movement_endpoints'),
           entry.id,
         )
         const targets = keys.length > 0 ? keys : [yield* newId]
@@ -459,7 +459,12 @@ const make = Effect.gen(function* () {
               origin = excluded.origin, decided_at = excluded.decided_at,
               revision = excluded.revision
           `
-          yield* addEndpoints('investment_movement_endpoints', key, entry.id)
+          yield* addEndpoints(
+            sql,
+            'investment_movement_endpoints',
+            key,
+            entry.id,
+          )
         }
         return { entryId: entry.id, positionId }
       }),

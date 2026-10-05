@@ -71,7 +71,10 @@ const make = Effect.gen(function* () {
     const notedAt = DateTime.formatIso(yield* DateTime.now)
     yield* sql.withTransaction(
       Effect.gen(function* () {
-        const keys = covering(yield* holders('entry_note_endpoints'), entryId)
+        const keys = covering(
+          yield* holders(sql, 'entry_note_endpoints'),
+          entryId,
+        )
         if (text === '') {
           for (const key of keys)
             yield* sql`DELETE FROM entry_notes WHERE key = ${key}`
@@ -89,7 +92,7 @@ const make = Effect.gen(function* () {
             ON CONFLICT (key) DO UPDATE SET note = excluded.note,
               noted_at = excluded.noted_at, revision = excluded.revision
           `
-          yield* addEndpoints('entry_note_endpoints', key, entryId)
+          yield* addEndpoints(sql, 'entry_note_endpoints', key, entryId)
         }
       }),
     )

@@ -41,6 +41,7 @@ const transaction = (
   baseAmountCents: null,
   baseCurrency: 'BRL',
   status: 'confirmed',
+  notes: null,
   ...fields,
 })
 
@@ -55,13 +56,16 @@ const snapshot = (fields: Partial<V1Snapshot>): V1Snapshot => ({
   groups: [],
   links: [],
   statementPayments: [],
+  assetClasses: [],
+  positions: [],
+  positionMovements: [],
+  checkpoints: [],
   uncovered: {
     splits: 0,
     recurrences: 0,
     cardInstruments: 0,
     budgets: 0,
     goals: 0,
-    investmentPositions: 0,
     categorizationRules: 0,
   },
   ...fields,

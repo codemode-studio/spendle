@@ -21,8 +21,10 @@ const Holder = Schema.Struct({ key: Schema.String, entryId: Schema.String })
  * observation points to the entry it last belonged to, or the one that
  * entry merged into (see `Entries.resolveAccount`).
  */
-export const holders = Effect.fnUntraced(function* (table: EndpointsTable) {
-  const sql = yield* SqlClient.SqlClient
+export const holders = Effect.fnUntraced(function* (
+  sql: SqlClient.SqlClient,
+  table: EndpointsTable,
+) {
   const rows = yield* SqlSchema.findAll({
     Request: Schema.Void,
     Result: Holder,
@@ -56,11 +58,11 @@ export const covering = (
 
 /** Adds the entry's current observations to the key; endpoints are only ever added. */
 export const addEndpoints = Effect.fnUntraced(function* (
+  sql: SqlClient.SqlClient,
   table: EndpointsTable,
   key: string,
   entryId: string,
 ) {
-  const sql = yield* SqlClient.SqlClient
   yield* sql`
     INSERT OR IGNORE INTO ${sql(table)} (key, source_id, account_id, external_id)
     SELECT ${key}, source_id, account_id, external_id

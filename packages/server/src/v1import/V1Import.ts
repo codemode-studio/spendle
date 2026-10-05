@@ -12,9 +12,12 @@ import { Categorizer } from '../categories/Categorizer.ts'
 import { KnowledgeStore } from '../categories/KnowledgeStore.ts'
 import type { ImportedPattern } from '../categories/Store.ts'
 import * as Reactor from '../events/Reactor.ts'
+import { Investments } from '../investments/Investments.ts'
 import { Accounts } from '../ledger/Accounts.ts'
 import { Entries, entriesResolved } from '../ledger/Entries.ts'
 import type { LedgerEntry } from '../ledger/Entries.ts'
+import { ManualEntries } from '../ledger/Manual.ts'
+import { Notes } from '../ledger/Notes.ts'
 import {
   Reconciliation,
   relationsChanged,
@@ -29,6 +32,7 @@ import {
 } from './Plan.ts'
 import type { AccountPlan, Movement, Target, Unmapped } from './Plan.ts'
 import type { V1Category, V1Snapshot } from './V1Database.ts'
+import { today } from '../domain/LocalDate.ts'
 
 /** How many records of one kind moved, were already there, or stayed behind. */
 export interface Tally {
@@ -46,7 +50,8 @@ export interface PendingTally {
 
 /** A decision still waiting for its movement, and why. */
 export interface Waiting {
-  readonly kind: 'category_decision' | 'relation_decision'
+  readonly kind:
+    'category_decision' | 'relation_decision' | 'note' | 'investment_movement'
   readonly v1Id: string
   readonly label: string
   readonly reason: 'not_observed' | 'ambiguous' | 'no_suggestion'
@@ -60,6 +65,11 @@ export interface Summary {
   readonly knowledge: Tally
   readonly categoryDecisions: Tally
   readonly relationDecisions: Tally
+  readonly manualTransactions: Tally
+  readonly checkpoints: Tally
+  readonly positions: Tally
+  readonly notes: Tally
+  readonly investmentMovements: Tally
   readonly unmapped: ReadonlyArray<Unmapped>
   /** V1 data V2 has no place for, by what it is. */
   readonly notMigrated: ReadonlyArray<{
@@ -67,18 +77,25 @@ export interface Summary {
     readonly count: number
   }>
   readonly coveredByKnowledge: number
-  readonly pending: {
-    readonly categories: PendingTally
-    readonly relations: PendingTally
-    readonly waiting: ReadonlyArray<Waiting>
-  }
+  readonly pending: Applied
 }
 
 export interface Applied {
   readonly categories: PendingTally
   readonly relations: PendingTally
+  readonly notes: PendingTally
+  readonly investmentMovements: PendingTally
   readonly waiting: ReadonlyArray<Waiting>
 }
+
+const LedgerKind = Schema.Literals([
+  'position',
+  'asset_class',
+  'manual_transaction',
+  'checkpoint',
+  'valuation',
+])
+type LedgerKind = typeof LedgerKind.Type
 
 const MapKind = Schema.Literals(['owner', 'account', 'card', 'category'])
 type MapKind = typeof MapKind.Type
@@ -131,6 +148,9 @@ const make = Effect.gen(function* () {
   const categorizer = yield* Categorizer
   const reconciliation = yield* Reconciliation
   const entries = yield* Entries
+  const manualEntries = yield* ManualEntries
+  const notes = yield* Notes
+  const investments = yield* Investments
 
   const now = Effect.map(DateTime.now, DateTime.formatIso)
 
@@ -151,6 +171,54 @@ const make = Effect.gen(function* () {
         INSERT INTO v1_import_map (kind, v1_id, v2_id, imported_at)
         VALUES (${kind}, ${v1Id}, ${v2Id}, ${yield* now})
         ON CONFLICT (kind, v1_id) DO NOTHING
+      `
+    })
+
+  const findLedgerMapped = SqlSchema.findAll({
+    Request: LedgerKind,
+    Result: Schema.Struct({ v1Id: Schema.String, v2Id: Schema.String }),
+    execute: (kind) =>
+      sql`SELECT v1_id AS v1Id, v2_id AS v2Id FROM v1_import_ledger_map WHERE kind = ${kind}`,
+  })
+  const ledgerMapped = (kind: LedgerKind) =>
+    Effect.map(
+      findLedgerMapped(kind),
+      (rows) => new Map(rows.map((row) => [row.v1Id, row.v2Id])),
+    )
+  const rememberLedger = (kind: LedgerKind, v1Id: string, v2Id: string) =>
+    Effect.gen(function* () {
+      yield* sql`
+        INSERT INTO v1_import_ledger_map (kind, v1_id, v2_id, imported_at)
+        VALUES (${kind}, ${v1Id}, ${v2Id}, ${yield* now})
+        ON CONFLICT (kind, v1_id) DO NOTHING
+      `
+    })
+  const findLedgerDecisions = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Schema.Struct({
+      kind: Schema.Literals(['note', 'investment_movement']),
+      v1Id: Schema.String,
+      v1TransactionId: Schema.String,
+      value: Schema.String,
+      status: Status,
+    }),
+    execute: () => sql`
+      SELECT kind, v1_id AS v1Id, v1_transaction_id AS v1TransactionId, value, status
+      FROM v1_import_ledger_decisions ORDER BY kind, v1_id
+    `,
+  })
+  const resolveLedger = (
+    kind: 'note' | 'investment_movement',
+    v1Id: string,
+    status: 'applied' | 'superseded' | 'refused',
+    entryId: string,
+    detail: string | null,
+  ) =>
+    Effect.gen(function* () {
+      yield* sql`
+        UPDATE v1_import_ledger_decisions SET status = ${status}, entry_id = ${entryId},
+          detail = ${detail}, resolved_at = ${yield* now}
+        WHERE kind = ${kind} AND v1_id = ${v1Id}
       `
     })
 
@@ -243,12 +311,16 @@ const make = Effect.gen(function* () {
   const applyPending = Effect.fn('V1Import.applyPending')(function* () {
     const categoryRows = yield* findCategoryDecisions(undefined)
     const relationRows = yield* findRelationDecisions(undefined)
+    const ledgerRows = yield* findLedgerDecisions(undefined)
     const categoryTally = pendingTally()
     const relationTally = pendingTally()
+    const noteTally = pendingTally()
+    const investmentTally = pendingTally()
     const waiting: Array<Waiting> = []
     const open =
       categoryRows.some((row) => row.status === 'pending') ||
-      relationRows.some((row) => row.status === 'pending')
+      relationRows.some((row) => row.status === 'pending') ||
+      ledgerRows.some((row) => row.status === 'pending')
     const movements = open
       ? new Map(
           (yield* findMovements(undefined)).map((row) => [
@@ -404,9 +476,74 @@ const make = Effect.gen(function* () {
         relationTally[status]++
       }
     }
+    // Notes and investment classifications: the person's V2 call wins.
+    for (const row of ledgerRows) {
+      const counts = row.kind === 'note' ? noteTally : investmentTally
+      if (row.status !== 'pending') {
+        counts[row.status]++
+        continue
+      }
+      const movement = movements.get(row.v1TransactionId)!
+      const found = yield* find(movement)
+      if (found._tag !== 'Entry') {
+        counts.pending++
+        waiting.push({
+          kind: row.kind,
+          v1Id: row.v1Id,
+          label: label(movement),
+          reason: found._tag === 'Missing' ? 'not_observed' : 'ambiguous',
+        })
+        continue
+      }
+      const taken =
+        row.kind === 'note'
+          ? (yield* notes.of(found.entryId)) !== null
+          : Option.isSome(yield* investments.positionOf(found.entryId))
+      if (taken) {
+        yield* resolveLedger(
+          row.kind,
+          row.v1Id,
+          'superseded',
+          found.entryId,
+          null,
+        )
+        counts.superseded++
+        continue
+      }
+      const outcome =
+        row.kind === 'note'
+          ? yield* notes.set(found.entryId, row.value).pipe(
+              Effect.as(Option.none<string>()),
+              Effect.catchTag('NotesError', (error) =>
+                Effect.succeed(Option.some(error.message)),
+              ),
+            )
+          : yield* investments
+              .classify(
+                { entryId: found.entryId, positionId: row.value },
+                'v1_import',
+              )
+              .pipe(
+                Effect.as(Option.none<string>()),
+                Effect.catchTag('InvestmentsError', (error) =>
+                  Effect.succeed(Option.some(error.message)),
+                ),
+              )
+      const status = Option.isSome(outcome) ? 'refused' : 'applied'
+      yield* resolveLedger(
+        row.kind,
+        row.v1Id,
+        status,
+        found.entryId,
+        Option.getOrNull(outcome),
+      )
+      counts[status]++
+    }
     return {
       categories: categoryTally,
       relations: relationTally,
+      notes: noteTally,
+      investmentMovements: investmentTally,
       waiting,
     } satisfies Applied
   })
@@ -626,8 +763,173 @@ const make = Effect.gen(function* () {
     })
     unmapped.push(...plan.unmapped)
 
+    // Transactions typed in by hand become manual facts again, before the
+    // decisions about them look for their entries.
+    const manualTally = tally()
+    const knownManual = yield* ledgerMapped('manual_transaction')
+    for (const typed of plan.manual) {
+      if (knownManual.has(typed.v1TransactionId)) {
+        manualTally.already++
+        continue
+      }
+      const outcome = yield* manualEntries
+        .createTransaction({
+          accountId: typed.accountId,
+          externalId: `v1:${typed.v1TransactionId}`,
+          transaction: {
+            bookedOn: typed.bookedOn,
+            amountCents: typed.amountCents,
+            description: typed.description,
+          },
+        })
+        .pipe(
+          Effect.map((receipt) => ({ ok: true as const, receipt })),
+          Effect.catchTag('ManualEntryError', (error) =>
+            Effect.succeed({ ok: false as const, error }),
+          ),
+        )
+      if (!outcome.ok) {
+        manualTally.skipped++
+        unmapped.push({
+          kind: 'manual_transaction',
+          v1Id: typed.v1TransactionId,
+          label: `${typed.bookedOn} ${formatCents(typed.amountCents)} ${typed.description}`,
+          reason: outcome.error.message,
+        })
+        continue
+      }
+      yield* rememberLedger(
+        'manual_transaction',
+        typed.v1TransactionId,
+        outcome.receipt.externalId,
+      )
+      manualTally.migrated++
+    }
+
+    // Balances the person informed, on accounts: cards follow statement cycles.
+    const checkpointTally = tally()
+    const knownCheckpoints = yield* ledgerMapped('checkpoint')
+    for (const checkpoint of snapshot.checkpoints) {
+      if (knownCheckpoints.has(checkpoint.id)) {
+        checkpointTally.already++
+        continue
+      }
+      const label = `${checkpoint.asOf.slice(0, 10)} ${formatCents(checkpoint.balanceCents)}`
+      const skip = (reason: string) => {
+        checkpointTally.skipped++
+        unmapped.push({
+          kind: 'checkpoint',
+          v1Id: checkpoint.id,
+          label,
+          reason,
+        })
+      }
+      if (checkpoint.accountId === null) {
+        skip('a card statement balance; V2 checks cards by their cycles')
+        continue
+      }
+      const target = targets.get(`account:${checkpoint.accountId}`)
+      if (target === undefined) {
+        skip('its account was not migrated')
+        continue
+      }
+      const outcome = yield* manualEntries
+        .recordCheckpoint({
+          accountId: target.accountId,
+          asOf: checkpoint.asOf.slice(0, 10),
+          balanceCents: checkpoint.balanceCents,
+        })
+        .pipe(
+          Effect.map((recorded) => ({ ok: true as const, recorded })),
+          Effect.catchTag('ManualEntryError', (error) =>
+            Effect.succeed({ ok: false as const, error }),
+          ),
+        )
+      if (!outcome.ok) {
+        skip(outcome.error.message)
+        continue
+      }
+      yield* rememberLedger('checkpoint', checkpoint.id, outcome.recorded.id)
+      checkpointTally.migrated++
+    }
+
+    // Asset classes and positions, with their opening amount and the value
+    // the person last entered.
+    for (const assetClass of snapshot.assetClasses) {
+      yield* sql`
+        INSERT INTO investment_asset_classes (id, name, color, sort_order, active)
+        VALUES (${assetClass.id}, ${assetClass.name}, ${assetClass.color},
+          ${assetClass.sortOrder}, ${assetClass.active ? 1 : 0})
+        ON CONFLICT DO NOTHING
+      `
+    }
+    const positionTally = tally()
+    const knownPositions = yield* ledgerMapped('position')
+    for (const position of snapshot.positions) {
+      if (knownPositions.has(position.id)) {
+        positionTally.already++
+        continue
+      }
+      const skip = (reason: string) => {
+        positionTally.skipped++
+        unmapped.push({
+          kind: 'position',
+          v1Id: position.id,
+          label: position.name,
+          reason,
+        })
+      }
+      const target = targets.get(`account:${position.accountId}`)
+      if (target === undefined) {
+        skip('its account was not migrated')
+        continue
+      }
+      if (target.currency !== position.currency) {
+        skip(`in ${position.currency}, its account in ${target.currency}`)
+        continue
+      }
+      const outcome = yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const created = yield* investments.createPosition({
+              accountId: target.accountId,
+              assetClassId: position.assetClassId,
+              name: position.name,
+              symbol: position.symbol,
+              reserve: position.reserve,
+              openingCents: position.initialAmountMinor,
+              archived: !position.active,
+            })
+            if (position.manualCurrentAmountMinor !== null)
+              yield* investments.recordValuation(
+                {
+                  positionId: created.id,
+                  asOf: (position.manualCurrentAt ?? (yield* today)).slice(
+                    0,
+                    10,
+                  ),
+                  amountCents: position.manualCurrentAmountMinor,
+                },
+                'v1_import',
+              )
+            yield* rememberLedger('position', position.id, created.id)
+          }),
+        )
+        .pipe(
+          Effect.as(Option.none<string>()),
+          Effect.catchTag('InvestmentsError', (error) =>
+            Effect.succeed(Option.some(error.message)),
+          ),
+        )
+      if (Option.isSome(outcome)) skip(outcome.value)
+      else positionTally.migrated++
+    }
+    const positionIds = yield* ledgerMapped('position')
+
     const categoryDecisionTally = tally()
     const relationDecisionTally = tally()
+    const noteTally = tally()
+    const investmentTally = tally()
     yield* sql.withTransaction(
       Effect.gen(function* () {
         for (const movement of plan.movements.values()) {
@@ -662,8 +964,62 @@ const make = Effect.gen(function* () {
           if (inserted.length > 0) relationDecisionTally.migrated++
           else relationDecisionTally.already++
         }
+        const ledgerDecision = (
+          kind: 'note' | 'investment_movement',
+          v1Id: string,
+          v1TransactionId: string,
+          value: string,
+          counts: Tally & { migrated: number; already: number },
+        ) =>
+          Effect.gen(function* () {
+            const inserted = yield* sql`
+              INSERT INTO v1_import_ledger_decisions (kind, v1_id, v1_transaction_id, value, status)
+              VALUES (${kind}, ${v1Id}, ${v1TransactionId}, ${value}, 'pending')
+              ON CONFLICT (kind, v1_id) DO NOTHING
+              RETURNING v1_id
+            `
+            if (inserted.length > 0) counts.migrated++
+            else counts.already++
+          })
+        for (const note of plan.notes)
+          yield* ledgerDecision(
+            'note',
+            note.v1TransactionId,
+            note.v1TransactionId,
+            note.note,
+            noteTally,
+          )
+        for (const row of plan.investmentMovements) {
+          const positionId = positionIds.get(row.v1PositionId)
+          if (positionId === undefined) {
+            investmentTally.skipped++
+            unmapped.push({
+              kind: 'investment_movement',
+              v1Id: row.v1MovementId,
+              label: row.v1TransactionId,
+              reason: 'its position was not migrated',
+            })
+            continue
+          }
+          yield* ledgerDecision(
+            'investment_movement',
+            row.v1MovementId,
+            row.v1TransactionId,
+            positionId,
+            investmentTally,
+          )
+        }
       }),
     )
+    noteTally.skipped = plan.unmapped.filter(
+      (item) => item.kind === 'note',
+    ).length
+    investmentTally.skipped += plan.unmapped.filter(
+      (item) => item.kind === 'investment_movement',
+    ).length
+    manualTally.skipped += plan.unmapped.filter(
+      (item) => item.kind === 'manual_transaction',
+    ).length
     categoryDecisionTally.skipped = plan.unmapped.filter(
       (item) => item.kind === 'category_decision',
     ).length
@@ -674,7 +1030,6 @@ const make = Effect.gen(function* () {
     const applied = yield* applyPending()
     const { uncovered } = snapshot
     const notMigrated = [
-      { what: 'transactions typed in by hand', count: plan.manualTransactions },
       { what: 'recurrences', count: uncovered.recurrences },
       {
         what: 'recurrence patterns in the knowledge base',
@@ -688,7 +1043,6 @@ const make = Effect.gen(function* () {
       { what: 'categorization rules', count: uncovered.categorizationRules },
       { what: 'monthly budgets', count: uncovered.budgets },
       { what: 'investment goals', count: uncovered.goals },
-      { what: 'investment positions', count: uncovered.investmentPositions },
     ].filter((item) => item.count > 0)
 
     return {
@@ -699,6 +1053,11 @@ const make = Effect.gen(function* () {
       knowledge: knowledgeTally,
       categoryDecisions: categoryDecisionTally,
       relationDecisions: relationDecisionTally,
+      manualTransactions: manualTally,
+      checkpoints: checkpointTally,
+      positions: positionTally,
+      notes: noteTally,
+      investmentMovements: investmentTally,
       unmapped,
       notMigrated,
       coveredByKnowledge: plan.coveredByKnowledge,

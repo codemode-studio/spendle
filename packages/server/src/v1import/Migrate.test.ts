@@ -19,7 +19,7 @@ describe('migrateV1', () => {
       const v1Bytes = yield* fs.readFile(v1)
 
       const preview = yield* migrateV1({ from: v1, databasePath, dryRun: true })
-      assert.strictEqual(preview.accounts.migrated, 3)
+      assert.strictEqual(preview.accounts.migrated, 4)
       assert.isFalse(yield* fs.exists(databasePath))
 
       yield* migrateV1({ from: v1, databasePath, dryRun: false })
@@ -38,7 +38,7 @@ describe('migrateV1', () => {
 
       assert.deepStrictEqual(next.accounts, {
         migrated: 1,
-        already: 3,
+        already: 4,
         skipped: 0,
       })
       assert.deepStrictEqual(yield* fs.readFile(databasePath), bytes)

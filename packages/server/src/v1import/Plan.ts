@@ -26,6 +26,11 @@ export type UnmappedKind =
   | 'category_decision'
   | 'relation_decision'
   | 'statement_payment'
+  | 'manual_transaction'
+  | 'note'
+  | 'investment_movement'
+  | 'position'
+  | 'checkpoint'
 
 /** A V1 record that does not move, and why. */
 export interface Unmapped {
@@ -191,15 +196,36 @@ export interface RelationDecisionPlan {
   readonly inflow: string
 }
 
+/** A V1 transaction the person typed in, recorded in V2 as a fact of the `manual` source. */
+export interface ManualTransactionPlan {
+  readonly v1TransactionId: string
+  readonly accountId: string
+  readonly bookedOn: string
+  readonly amountCents: number
+  readonly description: string
+}
+
+export interface NotePlan {
+  readonly v1TransactionId: string
+  readonly note: string
+}
+
+export interface InvestmentMovementPlan {
+  readonly v1MovementId: string
+  readonly v1TransactionId: string
+  readonly v1PositionId: string
+}
+
 export interface DecisionPlan {
   readonly movements: ReadonlyMap<string, Movement>
   readonly categories: ReadonlyArray<CategoryDecisionPlan>
   readonly relations: ReadonlyArray<RelationDecisionPlan>
+  readonly manual: ReadonlyArray<ManualTransactionPlan>
+  readonly notes: ReadonlyArray<NotePlan>
+  readonly investmentMovements: ReadonlyArray<InvestmentMovementPlan>
   readonly unmapped: ReadonlyArray<Unmapped>
   /** Changed categories the migrated patterns already give, so no decision is needed. */
   readonly coveredByKnowledge: number
-  /** V1 transactions the person typed in; V2 cannot observe them again. */
-  readonly manualTransactions: number
 }
 
 /** Centavos as `-25.00`, without passing through floating point. */
@@ -234,9 +260,9 @@ export const planDecisions = (input: {
   const byId = new Map(snapshot.transactions.map((t) => [t.id, t]))
   const manual = (t: V1Transaction) =>
     t.sourceKey?.startsWith('manual:') ?? false
-  const live = snapshot.transactions.filter(
-    (t) => t.status !== 'excluded' && !manual(t),
-  )
+  // Typed-in transactions count too: V2 records them again as manual
+  // facts, and decisions about them wait for those like any other.
+  const live = snapshot.transactions.filter((t) => t.status !== 'excluded')
 
   // Day, amount and description of each live transaction, in its target's currency.
   const keyed = new Map<
@@ -284,11 +310,6 @@ export const planDecisions = (input: {
     const transaction = byId.get(transactionId)
     if (transaction === undefined)
       return { ok: false, reason: 'transaction not found in V1' }
-    if (manual(transaction))
-      return {
-        ok: false,
-        reason: 'typed in by hand in V1; V2 cannot observe it again',
-      }
     if (transaction.status === 'excluded')
       return { ok: false, reason: 'excluded in V1' }
     const key = keyed.get(transactionId)
@@ -383,13 +404,36 @@ export const planDecisions = (input: {
     categories.push({ v1TransactionId: transaction.id, categoryId, via })
   }
 
-  let manualTransactions = 0
+  const manualPlans: Array<ManualTransactionPlan> = []
   for (const transaction of snapshot.transactions) {
+    if (transaction.status === 'excluded') continue
     if (manual(transaction)) {
-      manualTransactions++
+      const found = movement(transaction.id)
+      const description = transaction.description.trim()
+      if (!found.ok || description.length < 2) {
+        unmapped.push({
+          kind: 'manual_transaction',
+          v1Id: transaction.id,
+          label: describe(transaction),
+          reason: found.ok
+            ? 'description shorter than 2 characters'
+            : found.reason,
+        })
+        continue
+      }
+      manualPlans.push({
+        v1TransactionId: transaction.id,
+        accountId: found.movement.accountId,
+        bookedOn: found.movement.bookedOn,
+        amountCents: found.movement.amountCents,
+        description: description.slice(0, 200),
+      })
+      // The category typed in with it was the person's choice.
+      const typed = transaction.categoryId
+      if (typed !== null && typed !== 'uncategorized')
+        decide(transaction, typed, 'transaction_list')
       continue
     }
-    if (transaction.status === 'excluded') continue
     const current = transaction.categoryId
     const chosen = reviewChoice.get(transaction.id)
     const byGroup = confirmedCategory.get(transaction.id)
@@ -482,6 +526,43 @@ export const planDecisions = (input: {
     })
   }
 
+  const notes: Array<NotePlan> = []
+  for (const transaction of snapshot.transactions) {
+    const note = transaction.notes?.trim() ?? ''
+    if (note === '' || transaction.status === 'excluded') continue
+    const found = movement(transaction.id)
+    if (!found.ok) {
+      unmapped.push({
+        kind: 'note',
+        v1Id: transaction.id,
+        label: describe(transaction),
+        reason: found.reason,
+      })
+      continue
+    }
+    notes.push({ v1TransactionId: transaction.id, note: note.slice(0, 500) })
+  }
+
+  const investmentMovements: Array<InvestmentMovementPlan> = []
+  for (const row of snapshot.positionMovements) {
+    const found = movement(row.transactionId)
+    if (!found.ok) {
+      const transaction = byId.get(row.transactionId)
+      unmapped.push({
+        kind: 'investment_movement',
+        v1Id: row.id,
+        label: transaction ? describe(transaction) : row.transactionId,
+        reason: found.reason,
+      })
+      continue
+    }
+    investmentMovements.push({
+      v1MovementId: row.id,
+      v1TransactionId: row.transactionId,
+      v1PositionId: row.positionId,
+    })
+  }
+
   for (const payment of snapshot.statementPayments) {
     const transaction = byId.get(payment.transactionId)
     unmapped.push({
@@ -499,9 +580,11 @@ export const planDecisions = (input: {
     movements,
     categories,
     relations,
+    manual: manualPlans,
+    notes,
+    investmentMovements,
     unmapped,
     coveredByKnowledge,
-    manualTransactions,
   }
 }
 

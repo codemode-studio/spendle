@@ -22,6 +22,11 @@ const unmappedTitle: Record<Unmapped['kind'], string> = {
   category_decision: 'Category decisions',
   relation_decision: 'Reconciliation decisions',
   statement_payment: 'Manual bill payment links',
+  manual_transaction: 'Transactions typed in by hand',
+  note: 'Transaction notes',
+  investment_movement: 'Investment classifications',
+  position: 'Investment positions',
+  checkpoint: 'Balances informed by hand',
 }
 
 /** The summary `migrate-v1` prints, ending with what the person does next. */
@@ -43,11 +48,18 @@ export const formatSummary = (
     row('Knowledge patterns', summary.knowledge),
     row('Category decisions', summary.categoryDecisions),
     row('Reconciliation', summary.relationDecisions),
+    row('Typed-in transactions', summary.manualTransactions),
+    row('Informed balances', summary.checkpoints),
+    row('Investment positions', summary.positions),
+    row('Notes', summary.notes),
+    row('Investment movements', summary.investmentMovements),
     '',
     'Decisions are applied when V2 observes their movements again:',
     `  ${''.padEnd(22)} ${'applied'.padStart(8)} ${'waiting'.padStart(8)} ${'superseded'.padStart(11)} ${'refused'.padStart(8)}`,
     pendingRow('Category decisions', summary.pending.categories),
     pendingRow('Reconciliation', summary.pending.relations),
+    pendingRow('Notes', summary.pending.notes),
+    pendingRow('Investment movements', summary.pending.investmentMovements),
   ]
   if (summary.coveredByKnowledge > 0)
     lines.push(
