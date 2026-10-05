@@ -11,6 +11,8 @@ import { Categories } from '../categories/Categories.ts'
 import * as Categorizer from '../categories/Categorizer.ts'
 import { Classifier } from '../categories/Classifier.ts'
 import { KnowledgeStore } from '../categories/KnowledgeStore.ts'
+import { AssistantModel } from '../planning/AssistantModel.ts'
+import { PlanningServices } from '../planning/Services.ts'
 import * as Reactor from '../events/Reactor.ts'
 import { Imports } from '../imports/Imports.ts'
 import * as Entries from '../ledger/Entries.ts'
@@ -275,6 +277,16 @@ export const categoriesTestWith = <A, E>(classifier: Layer.Layer<A, E>) =>
 
 /** `openFinanceTest` with category learning and its reactors; the model is disabled. */
 export const categoriesTest = () => categoriesTestWith(Classifier.disabled)
+
+/** `categoriesTest` with planning, recurrences, the dashboard and the given assistant model. */
+export const planningTestWith = <A, E>(model: Layer.Layer<A, E>) =>
+  PlanningServices.pipe(
+    Layer.provideMerge(model),
+    Layer.provideMerge(categoriesTest()),
+  )
+
+/** `categoriesTest` with planning and the assistant switched off. */
+export const planningTest = () => planningTestWith(AssistantModel.disabled)
 
 /** Connects item `item-1` with the given Pluggy data, as the widget flow would, on 2026-10-04. */
 export const connect = (

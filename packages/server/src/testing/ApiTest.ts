@@ -9,19 +9,27 @@ import * as HttpApiClient from 'effect/http-api/HttpApiClient'
 import { ApiConfig } from '../api/ApiConfig.ts'
 import { SpendleApi } from '../api/definition/Api.ts'
 import { ApiRoutes } from '../api/Routes.ts'
-import { categoriesTest } from './FakePluggy.ts'
+import { planningTestWith } from './FakePluggy.ts'
+import { AssistantModel } from '../planning/AssistantModel.ts'
 
 /**
  * The API served over a real socket, with every service, reactor and a fake
  * Pluggy behind it. Tests call it with `apiClient` or a raw `HttpClient`.
  */
-export const apiTest = (options: { readonly token?: string } = {}) =>
+export const apiTest = (
+  options: {
+    readonly token?: string
+    readonly assistant?: Layer.Layer<AssistantModel>
+  } = {},
+) =>
   HttpRouter.serve(ApiRoutes, {
     disableListenLog: true,
     disableLogger: true,
   }).pipe(
     Layer.provideMerge(ApiConfig.layerTest(options.token)),
-    Layer.provideMerge(categoriesTest()),
+    Layer.provideMerge(
+      planningTestWith(options.assistant ?? AssistantModel.disabled),
+    ),
     Layer.provideMerge(NodeHttpServer.layerTest),
   )
 
