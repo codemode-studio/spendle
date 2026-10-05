@@ -651,7 +651,15 @@ describe('matchRelations', () => {
         }),
       ]).flatMap((relation) => [relation.status])
     assert.deepStrictEqual(
-      [card, transfer, initials, joined('D&A'), joined('E&M'), joined('O&S')],
+      [
+        card,
+        transfer,
+        initials,
+        joined('D&A'),
+        joined('E&M'),
+        joined('O&S'),
+        joined('TEC2000'),
+      ],
       [
         ['suggested'],
         ['suggested'],
@@ -659,7 +667,29 @@ describe('matchRelations', () => {
         ['suggested'],
         ['suggested'],
         ['suggested'],
+        ['suggested'],
       ],
+    )
+  })
+
+  it('reads a month abbreviation as a possible name', () => {
+    const pair = (outflow: string, inflow: string) =>
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: outflow,
+          ownerName: 'Joao Silva',
+        }),
+        entry('in', 'inter', 50000, {
+          description: inflow,
+          ownerName: 'Joao Silva',
+        }),
+      ]).flatMap((relation) => [relation.status])
+    assert.deepStrictEqual(
+      [
+        pair('Pix enviado Jan Silva', 'Pix recebido Joao Silva'),
+        pair('Pix enviado Joao Silva', 'Pix recebido Joao Silva'),
+      ],
+      [['suggested'], ['confirmed']],
     )
   })
 

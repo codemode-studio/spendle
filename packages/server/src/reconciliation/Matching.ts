@@ -164,18 +164,6 @@ const transferWords = new Set([
   'remetente',
   'destinatario',
   'favorecido',
-  'jan',
-  'fev',
-  'mar',
-  'abr',
-  'mai',
-  'jun',
-  'jul',
-  'ago',
-  'set',
-  'out',
-  'nov',
-  'dez',
 ])
 
 // Words common to many names, so sharing one says nothing about who it is.
@@ -261,12 +249,12 @@ const ownAccountWording =
 
 const months = 'jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez'
 
-// Words whose shape marks them as a reference rather than a name: a run of
-// four or more digits (ids, agencies, masked card endings such as
-// `xxxx1234`, e2e ids), a day glued to a month (`10set`, `10set26`), or a
-// card mask (`xxxx`).
+// Words whose shape marks them as a reference rather than a name: only
+// digits (agencies, accounts, endings), a day glued to a month (`10set`,
+// `10set26`), a card mask (`xxxx`, `xxxx1234`), or a long id with at most a
+// short letter prefix (e2e ids). A name with digits (`tec2000`) is a name.
 const code = new RegExp(
-  `^(?:.*\\d{4}.*|\\d{1,2}(?:${months})\\d{0,4}|x{3,}\\d*)$`,
+  `^(?:\\d+|\\d{1,2}(?:${months})\\d{0,4}|x{3,}\\d*|\\*+\\d+|[a-z]{0,3}\\d{8,}[a-z0-9]*)$`,
 )
 // Only these shapes are codes; any other word with letters, short
 // alphanumeric names like `88i` or `99pay` included, may name someone.
