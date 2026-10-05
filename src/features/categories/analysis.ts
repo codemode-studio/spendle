@@ -1,13 +1,13 @@
-import { isSpending, spendingByCategory } from '#/domain/ledger'
-import type { FamilyTransaction } from '#/domain/ledger'
+import { isSpending, spendingByCategory } from '#/lib/ledger'
+import type { FamilyTransaction } from '#/lib/ledger'
 import {
   daysBetween,
   inPeriod,
   monthKey,
   monthsInPeriod,
   previousPeriod as periodBefore,
-} from '#/domain/period'
-import type { Period } from '#/domain/period'
+} from '#/lib/period'
+import type { Period } from '#/lib/period'
 
 export interface MonthPoint {
   /** `YYYY-MM` */

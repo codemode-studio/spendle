@@ -16,8 +16,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '#/components/ui/tooltip'
-import { formatCurrency } from '#/domain/currency'
-import { formatShortDate } from '#/domain/period'
+import { formatCurrency } from '#/lib/currency'
+import { formatShortDate } from '#/lib/period'
 import {
   confirmCategoryFn,
   correctCategoryFn,

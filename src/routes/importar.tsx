@@ -37,9 +37,9 @@ import {
   TableHeader,
   TableRow,
 } from '#/components/ui/table'
-import { formatCurrency } from '#/domain/currency'
-import { formatInstrumentName } from '#/domain/finance'
-import { formatPeriod, formatShortDate } from '#/domain/period'
+import { formatCurrency } from '#/lib/currency'
+import { formatInstrumentName } from '#/lib/finance'
+import { formatPeriod, formatShortDate } from '#/lib/period'
 import { accountOptionLabel } from '#/features/v2/accounts'
 import {
   previewImportFn,

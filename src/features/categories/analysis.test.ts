@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import type { FamilyTransaction } from '#/domain/ledger'
-import { monthsInPeriod } from '#/domain/period'
+import type { FamilyTransaction } from '#/lib/ledger'
+import { monthsInPeriod } from '#/lib/period'
 
 import { analyzeCategories } from './analysis'
 

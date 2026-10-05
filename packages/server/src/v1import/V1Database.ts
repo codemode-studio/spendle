@@ -7,9 +7,9 @@ import * as SqlClient from 'effect/sql/SqlClient'
 import * as SqlSchema from 'effect/sql/SqlSchema'
 
 /**
- * The parts of a V1 database (`src/db/schema.ts`) the migration reads:
- * configuration, what the person taught, and the transactions and groups
- * their decisions are about. Imported facts are read only to recognise
+ * The parts of a V1 database (schema frozen in `fixtures/v1-schema.sql`)
+ * the migration reads: configuration, what the person taught, and the
+ * transactions and groups their decisions are about. Imported facts are read only to recognise
  * those decisions; V2 observes the facts again from their sources.
  */
 

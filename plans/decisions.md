@@ -50,13 +50,13 @@ Decisões de produto não implicam que todos os recortes já estejam implementad
 
 ## Tecnologia e segurança
 
-- TanStack Start/Router/Query, TypeScript, pnpm, Drizzle e SQLite.
+- App web em TanStack Start/Router/Query e TypeScript; backend V2 em Effect 4 com SQLite (`node:sqlite`); pnpm. O backend V1 (Drizzle) foi aposentado.
 - shadcn preset `base-nova` sobre Base UI; componentes locais podem ser adaptados sem trocar os primitives.
 - Todo banco, arquivo, segredo e chamada a provedor fica em código de servidor.
-- Originais ficam em `imports/<sha256>` ao lado do SQLite configurado, fora de `public/` e do Git. O padrão é `data/imports`.
-- OFX e CSV são fontes estruturadas. PDF usa `@firecrawl/pdf-inspector` para classificação, Markdown e coordenadas; o parser antigo existe somente como comparação diagnóstica.
+- Banco e originais ficam em `data/`, fora de `public/` e do Git.
+- OFX e CSV são fontes estruturadas. PDF usa `@firecrawl/pdf-inspector` para classificação, Markdown e coordenadas.
 - Um CSV pode usar o PDF equivalente como controle quando todas as datas, valores, moedas e multiplicidades conferem. Só uma fonte gera transações.
 - Originais e extrações são imutáveis. Falhas, divergências e PDFs usados apenas como evidência permanecem auditáveis.
-- Envio de documentos ou briefings à IA exige consentimento explícito. A resposta nunca torna o lote automaticamente confiável nem alimenta a base de conhecimento.
+- A IA fica ligada por padrão quando o servidor tem a chave configurada, sem consentimento separado. A resposta nunca torna um lote automaticamente confiável nem ensina a base de categorias.
 - Modelos de IA são acessados pelo OpenRouter usando identificadores `provider/model`; o saldo, roteamento e consumo ficam centralizados nesse serviço.
-- Saídas de IA passam por Zod e sempre ficam sujeitas à revisão humana.
+- Saídas de IA são decodificadas por `Schema` no servidor e sempre ficam sujeitas à revisão humana.

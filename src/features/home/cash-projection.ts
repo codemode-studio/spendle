@@ -1,6 +1,6 @@
 import type { CashProjection as ProjectionFromApi } from '@spendle/server/api'
 
-import { shiftDays } from '#/domain/period'
+import { shiftDays } from '#/lib/period'
 
 export interface CashPoint {
   date: string

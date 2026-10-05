@@ -34,9 +34,9 @@ import {
   formatCurrency,
   formatMinorUnitsForInput,
   toMinorUnits,
-} from '#/domain/currency'
-import { formatInstrumentName } from '#/domain/finance'
-import { formatMonthLong, formatShortDate as formatDate } from '#/domain/period'
+} from '#/lib/currency'
+import { formatInstrumentName } from '#/lib/finance'
+import { formatMonthLong, formatShortDate as formatDate } from '#/lib/period'
 import { CardCyclesExplorer } from '#/features/finance/card-cycles-explorer'
 import { InstrumentCard } from '#/features/finance/instrument-card'
 import type { InstrumentMetric } from '#/features/finance/instrument-card'

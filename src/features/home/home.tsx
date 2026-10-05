@@ -59,8 +59,8 @@ import type {
   MonthView,
 } from '@spendle/server/api'
 
-import { formatCurrency } from '#/domain/currency'
-import type { FamilyTransaction } from '#/domain/ledger'
+import { formatCurrency } from '#/lib/currency'
+import type { FamilyTransaction } from '#/lib/ledger'
 import {
   askAssistantFn,
   latestAnalysisFn,

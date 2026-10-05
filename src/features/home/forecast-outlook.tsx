@@ -7,14 +7,14 @@ import { Field, FieldGroup, FieldLabel } from '#/components/ui/field'
 import { Progress } from '#/components/ui/progress'
 import { Input } from '#/components/ui/input'
 import { SegmentedControl } from '#/components/segmented-control'
-import { formatCurrency, toMinorUnits } from '#/domain/currency'
-import { formatMonth } from '#/domain/finance'
+import { formatCurrency, toMinorUnits } from '#/lib/currency'
+import { formatMonth } from '#/lib/finance'
 import type {
   CashProjection as ProjectionFromApi,
   MonthView,
 } from '@spendle/server/api'
 
-import { formatLongDate, formatShortDate } from '#/domain/period'
+import { formatLongDate, formatShortDate } from '#/lib/period'
 import { cn } from '#/lib/utils'
 import { CashChart } from './charts'
 import { trimCashProjection } from './cash-projection'

@@ -1,21 +1,5 @@
 import { ShieldCheck, TrendingUp } from 'lucide-react'
 
-import type { CommitmentBudget } from '#/domain/commitment-budget'
-import type { FamilyMonth } from '#/domain/family-month'
-import type { BucketAmounts } from '#/domain/strategy-progress'
-
-export type StrategyDashboard = {
-  currentMonth: string
-  baseIncomeCents: number
-  currentIncomeCents: number
-  activeStrategy: { name: string }
-  budgetTargets: BucketAmounts
-  budgetActual: BucketAmounts
-  budgetProjected: BucketAmounts
-  monthlyCommitments?: CommitmentBudget
-  familyMonth?: FamilyMonth
-}
-
 export function GoalRing({
   value,
   target,

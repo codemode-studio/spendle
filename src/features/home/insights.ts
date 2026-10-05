@@ -7,10 +7,10 @@ import {
   isSpending,
   OTHER_CATEGORY_COLOR,
   spendingByCategory,
-} from '#/domain/ledger'
-import type { FamilyTransaction } from '#/domain/ledger'
-import { inPeriod, shiftDays, todayIso, trailingPeriod } from '#/domain/period'
-import type { Period } from '#/domain/period'
+} from '#/lib/ledger'
+import type { FamilyTransaction } from '#/lib/ledger'
+import { inPeriod, shiftDays, todayIso, trailingPeriod } from '#/lib/period'
+import type { Period } from '#/lib/period'
 
 const ALLOCATION_BUCKETS = new Set(['investment', 'reserve'])
 

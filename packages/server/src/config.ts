@@ -11,7 +11,7 @@ export interface ServerConfigShape {
   readonly port: number
 }
 
-// Resolves to `<repo>/data/v2`, beside the v1 database and inside the gitignored `data/`.
+// Resolves to `<repo>/data/v2`, inside the gitignored `data/`.
 const defaultDatabaseUrl = new URL(
   '../../../data/v2/spendle.sqlite',
   import.meta.url,

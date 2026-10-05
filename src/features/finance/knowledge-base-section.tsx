@@ -46,8 +46,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '#/components/ui/tooltip'
-import { formatCurrency } from '#/domain/currency'
-import { formatLongDate, formatShortDate } from '#/domain/period'
+import { formatCurrency } from '#/lib/currency'
+import { formatLongDate, formatShortDate } from '#/lib/period'
 import {
   applyStoreEditFn,
   previewStoreEditFn,

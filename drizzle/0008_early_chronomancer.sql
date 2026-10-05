@@ -1,1 +1,0 @@
-ALTER TABLE `imports` ADD `statement_due_date` text;

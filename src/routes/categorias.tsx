@@ -15,10 +15,10 @@ import {
   TableHeader,
   TableRow,
 } from '#/components/ui/table'
-import { formatCurrency } from '#/domain/currency'
-import { fullPeriod } from '#/domain/ledger'
-import { formatPeriod, trailingPeriod } from '#/domain/period'
-import type { Period } from '#/domain/period'
+import { formatCurrency } from '#/lib/currency'
+import { fullPeriod } from '#/lib/ledger'
+import { formatPeriod, trailingPeriod } from '#/lib/period'
+import type { Period } from '#/lib/period'
 import { analyzeCategories } from '#/features/categories/analysis'
 import {
   CategoryHeatmap,

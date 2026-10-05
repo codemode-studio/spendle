@@ -22,10 +22,10 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '#/components/ui/tooltip'
-import { formatCurrency } from '#/domain/currency'
-import { formatInstrumentName } from '#/domain/finance'
-import { formatShortDate as formatDate } from '#/domain/period'
-import { isAcceptedRecurrenceMatchStatus } from '#/domain/recurrence-book'
+import { formatCurrency } from '#/lib/currency'
+import { formatInstrumentName } from '#/lib/finance'
+import { formatShortDate as formatDate } from '#/lib/period'
+import { isAcceptedRecurrenceMatchStatus } from '#/lib/recurrence'
 import type { MatchView, OccurrenceView, PlanningData } from './types'
 import { cn } from '#/lib/utils'
 import { DetectedRecurrencesPanel } from './detection-section'

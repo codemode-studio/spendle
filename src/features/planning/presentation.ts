@@ -1,4 +1,4 @@
-import type { RecurrencePresentationStatus } from '#/domain/recurrence-book'
+import type { RecurrencePresentationStatus } from '#/lib/recurrence'
 
 export function recurrenceStatusBadge(
   status: RecurrencePresentationStatus,

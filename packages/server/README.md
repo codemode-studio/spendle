@@ -1,6 +1,6 @@
 # @spendle/server
 
-Backend V2 ([ADR 003](../../plans/adrs/003-backend-v2-effect.md)). Roda separado do app V1, com banco próprio.
+Backend V2 ([ADR 003](../../plans/adrs/003-backend-v2-effect.md)), o único backend do Spendle: o app web em `src/` o chama pelas server functions. Banco próprio em `data/v2/`.
 
 ```bash
 pnpm --filter @spendle/server dev     # http://localhost:4100
@@ -129,19 +129,19 @@ Recorrências guardam o calendário (início, âncora, frequência) e os veredit
 
 O mês (`Month.ts`) e a previsão de caixa são política pura: faturas pertencem ao mês de vencimento (compras do ciclo, parcelas ainda não lançadas e o que a fatura mostra além delas), gastos em conta ao mês do lançamento, recorrências ainda esperadas viram estimativas, aportes são lançamentos de investimento ou reserva e transferências confirmadas para contas dessas finalidades. Caixa é a soma das contas operacionais em BRL a partir do checkpoint de saldo mais próximo; contas em outra moeda ficam de fora e são contadas (o V2 ainda não tem cotações).
 
-O assistente usa o OpenRouter como no V1, atrás de `AssistantModel`; sem `OPENROUTER_API_KEY` e `OPENROUTER_MODEL` nunca chama o modelo. Não há consentimento separado. Relatórios ficam em `assistant_reports` como saída de modelo, nunca como decisão; as economias propostas são calculadas no servidor a partir dos gastos observados.
+O assistente usa o OpenRouter, atrás de `AssistantModel`; sem `OPENROUTER_API_KEY` e `OPENROUTER_MODEL` nunca chama o modelo. Não há consentimento separado. Relatórios ficam em `assistant_reports` como saída de modelo, nunca como decisão; as economias propostas são calculadas no servidor a partir dos gastos observados.
 
 ## Migração do V1
 
 `migrate-v1` traz do banco do V1 o que a pessoa configurou e decidiu, sem copiar fatos importados: o V2 volta a observá-los nas fontes ([ADR 003](../../plans/adrs/003-backend-v2-effect.md)).
 
 ```bash
-# Da raiz do repositório; o banco do V1 fica em DATABASE_URL, por padrão data/financas.db
+# Da raiz do repositório, com o arquivo SQLite do V1 (o V1 o gravava em data/financas.db)
 pnpm --filter @spendle/server migrate-v1 --from "$PWD/data/financas.db" --dry-run  # mostra o que mudaria
 pnpm --filter @spendle/server migrate-v1 --from "$PWD/data/financas.db"            # grava no banco do V2
 ```
 
-O caminho é relativo a `packages/server`, por isso o `$PWD`. O banco do V1 é aberto só para leitura. O do V2 é o de `SPENDLE_DATABASE_PATH`. `--dry-run` executa a migração numa cópia do banco do V2 (feita com o backup do SQLite) e imprime o resumo: contagens por tipo, o que fica para trás e por quê, e as decisões que ainda esperam lançamentos. Rodar de novo não muda nada: cada registro trazido fica em `v1_import_map` e só é criado uma vez; depois disso, editá-lo é com a pessoa, no V2.
+O caminho é relativo a `packages/server`, por isso o `$PWD`. O banco do V1 é aberto só para leitura; o código do V1 já foi removido e a migração depende só desse arquivo. Os testes montam bancos V1 sintéticos com o esquema congelado em `src/v1import/fixtures/v1-schema.sql`. O do V2 é o de `SPENDLE_DATABASE_PATH`. `--dry-run` executa a migração numa cópia do banco do V2 (feita com o backup do SQLite) e imprime o resumo: contagens por tipo, o que fica para trás e por quê, e as decisões que ainda esperam lançamentos. Rodar de novo não muda nada: cada registro trazido fica em `v1_import_map` e só é criado uma vez; depois disso, editá-lo é com a pessoa, no V2.
 
 | V1                                                                                           | V2                                                                                                                                                          |
 | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |

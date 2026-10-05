@@ -1,31 +1,25 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
-import { openDatabase } from '../src/db/connection.server'
-import { seedQaDatabase } from '../src/db/qa-seed.server'
+import { createRequire } from 'node:module'
+import { resolve } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { pathToFileURL } from 'node:url'
 
-const directory = mkdtempSync(join(tmpdir(), 'financas-doctor-'))
-const connection = openDatabase(join(directory, 'check.db'))
+console.log(
+  `Node ${process.version}; pnpm ${execFileSync('pnpm', ['--version'], { encoding: 'utf8' }).trim()}`,
+)
+
+// The V2 server stores everything in SQLite through `node:sqlite`.
+const sqlite = new DatabaseSync(':memory:')
 try {
-  const expectedNode = execFileSync('node', ['--version'], {
-    encoding: 'utf8',
-  }).trim()
-  console.log(
-    `Node ${expectedNode}; pnpm ${execFileSync('pnpm', ['--version'], { encoding: 'utf8' }).trim()}`,
-  )
-  migrate(connection.db, { migrationsFolder: resolve('drizzle') })
-  await seedQaDatabase(connection.db)
-  if ((connection.sqlite.pragma('foreign_key_check') as unknown[]).length)
-    throw new Error('Foreign key violations')
-  await import('@firecrawl/pdf-inspector')
-  if (!existsSync('src/features/finance/fixtures/synthetic-mercado-pago.pdf'))
-    throw new Error('Missing synthetic PDF fixture')
-  console.log(
-    'SQLite native binding, migrations, synthetic seed, PDF native binding and fixture: OK',
-  )
+  const row = sqlite.prepare('select sqlite_version() as version').get()
+  console.log(`SQLite ${String(row?.version)} (node:sqlite): OK`)
 } finally {
-  connection.close()
-  rmSync(directory, { recursive: true, force: true })
+  sqlite.close()
 }
+
+// PDF statements are read by a native binding the server depends on.
+const serverRequire = createRequire(resolve('packages/server/package.json'))
+await import(
+  pathToFileURL(serverRequire.resolve('@firecrawl/pdf-inspector')).href
+)
+console.log('PDF native binding: OK')
