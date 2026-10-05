@@ -1,179 +1,28 @@
 import { assert, describe, it } from '@effect/vitest'
-import * as Context from 'effect/Context'
-import * as Deferred from 'effect/Deferred'
 import * as DateTime from 'effect/DateTime'
+import * as Deferred from 'effect/Deferred'
 import * as Effect from 'effect/Effect'
-import * as Layer from 'effect/Layer'
 import * as Ref from 'effect/Ref'
 import * as Result from 'effect/Result'
 import * as Schema from 'effect/Schema'
-import * as TestClock from 'effect/testing/TestClock'
 import * as SqlClient from 'effect/sql/SqlClient'
+import * as TestClock from 'effect/testing/TestClock'
 
 import { EventLog } from '../events/EventLog.ts'
-import * as Reactor from '../events/Reactor.ts'
 import { Accounts, CardTerms } from '../ledger/Accounts.ts'
 import { Observations } from '../ledger/Observations.ts'
-import { LedgerTest } from '../testing/layers.ts'
-import { OpenFinance, OpenFinanceError } from './OpenFinance.ts'
-import type {
-  PluggyAccount,
-  PluggyItem,
-  PluggyTransaction,
-} from './PluggyApi.ts'
-import { PluggyClient, PluggyError } from './PluggyClient.ts'
-import * as SyncReactor from './SyncReactor.ts'
-
-interface FakeState {
-  readonly clientUserId: string
-  readonly accounts: ReadonlyArray<PluggyAccount>
-  readonly transactions: Readonly<
-    Record<string, ReadonlyArray<PluggyTransaction>>
-  >
-  readonly deleted: ReadonlyArray<string>
-  /** Pluggy's item status; UPDATED unless a test says otherwise. */
-  readonly itemStatus?: string
-  readonly statusDetail?: PluggyItem['statusDetail']
-  /** Accounts of a given item; others list `accounts`. */
-  readonly itemAccounts?: Readonly<Record<string, ReadonlyArray<PluggyAccount>>>
-  /** The item's top-level `lastUpdatedAt`. */
-  readonly itemLastUpdatedAt?: string
-  /** Runs before Pluggy answers `getItem`, to hold responses back. */
-  readonly beforeGetItem?: Effect.Effect<void>
-  /** Runs after Pluggy produced the item, delaying its delivery. */
-  readonly afterGetItem?: Effect.Effect<void>
-}
-
-class FakePluggyState extends Context.Service<
+import {
+  bank,
+  card,
+  connect,
+  drain,
   FakePluggyState,
-  Ref.Ref<FakeState>
->()('@spendle/server/openfinance/OpenFinance.test/FakePluggyState') {}
-
-const bank: PluggyAccount = {
-  id: 'provider-bank',
-  type: 'BANK',
-  name: 'Conta Corrente',
-  number: '0001/12345-6',
-  balance: 1000,
-  currencyCode: 'BRL',
-}
-const card: PluggyAccount = {
-  id: 'provider-card',
-  type: 'CREDIT',
-  name: 'Ultravioleta',
-  number: '5555 **** **** 1889',
-  balance: 250,
-  currencyCode: 'BRL',
-}
-const tx = (
-  id: string,
-  date: string,
-  fields: Partial<PluggyTransaction> = {},
-): PluggyTransaction => ({
-  id,
-  accountId: 'provider-bank',
-  date: `${date}T15:00:00.000Z`,
-  description: id,
-  type: 'DEBIT',
-  amount: 10,
-  currencyCode: 'BRL',
-  ...fields,
-})
-
-// Pluggy as seen through PluggyClient, backed by a mutable state the test edits.
-const makeFake = (state: Ref.Ref<FakeState>) =>
-  PluggyClient.of({
-    createConnectToken: () => Effect.succeed('connect-token'),
-    getItem: (itemId) =>
-      Effect.gen(function* () {
-        yield* (yield* Ref.get(state)).beforeGetItem ?? Effect.void
-        const current = yield* Ref.get(state)
-        // A deleted item is gone, as Pluggy answers 404 for it.
-        if (current.deleted.includes(itemId)) {
-          return yield* new PluggyError({
-            operation: 'getItem',
-            reason: 'not_found',
-            status: 404,
-          })
-        }
-        const item: PluggyItem = {
-          id: itemId,
-          status: current.itemStatus ?? 'UPDATED',
-          clientUserId: current.clientUserId,
-          connector: { id: 1, name: 'Nubank' },
-          statusDetail: current.statusDetail,
-          lastUpdatedAt: current.itemLastUpdatedAt,
-        }
-        yield* current.afterGetItem ?? Effect.void
-        return item
-      }),
-    deleteItem: (itemId) =>
-      Ref.update(state, (current) => ({
-        ...current,
-        deleted: [...current.deleted, itemId],
-      })),
-    listAccounts: (itemId) =>
-      Effect.map(
-        Ref.get(state),
-        (current) => current.itemAccounts?.[itemId] ?? current.accounts,
-      ),
-    listTransactions: ({ accountId, dateFrom, dateTo }) =>
-      Effect.map(Ref.get(state), (current) =>
-        (current.transactions[accountId] ?? []).filter(
-          (transaction) =>
-            transaction.date.slice(0, 10) >= dateFrom &&
-            transaction.date.slice(0, 10) <= dateTo,
-        ),
-      ),
-  })
-
-const ManualLayer = Layer.unwrap(
-  Effect.gen(function* () {
-    const state = yield* Ref.make<FakeState>({
-      clientUserId: '',
-      accounts: [],
-      transactions: {},
-      deleted: [],
-    })
-    return OpenFinance.layer.pipe(
-      Layer.provideMerge(Reactor.Reactors.layer),
-      Layer.provideMerge(Layer.succeed(PluggyClient, makeFake(state))),
-      Layer.provideMerge(Layer.succeed(FakePluggyState, state)),
-      Layer.provideMerge(LedgerTest),
-    )
-  }),
-)
-
-const TestLayer = SyncReactor.layer.pipe(Layer.provideMerge(ManualLayer))
-
-// Connects an item with the given Pluggy data, as the widget flow would.
-const connect = (
-  data: Omit<
-    FakeState,
-    'clientUserId' | 'deleted' | 'beforeGetItem' | 'afterGetItem'
-  >,
-) =>
-  Effect.gen(function* () {
-    yield* TestClock.setTime(
-      DateTime.toEpochMillis(DateTime.makeUnsafe('2026-10-04T15:00:00Z')),
-    )
-    const openFinance = yield* OpenFinance
-    const owner = yield* (yield* Accounts).createOwner({
-      name: 'Donald',
-      kind: 'person',
-    })
-    const { connectionId } = yield* openFinance.createConnectToken({
-      ownerId: owner.id,
-    })
-    const state = yield* FakePluggyState
-    yield* Ref.set(state, { ...data, clientUserId: connectionId, deleted: [] })
-    yield* openFinance.registerItem({ connectionId, itemId: 'item-1' })
-    return { openFinance, connectionId, state }
-  })
-
-const drain = Effect.gen(function* () {
-  yield* (yield* Reactor.Reactors).drain
-})
+  openFinanceManualTest,
+  openFinanceTest,
+  tx,
+} from '../testing/FakePluggy.ts'
+import { OpenFinance, OpenFinanceError } from './OpenFinance.ts'
+import type { PluggyAccount, PluggyTransaction } from './PluggyApi.ts'
 
 const balancesOf = (accountId: string) =>
   Effect.gen(function* () {
@@ -211,7 +60,7 @@ describe('OpenFinance', () => {
         ),
         ['item_belongs_elsewhere', 'item_already_registered'],
       )
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -269,7 +118,7 @@ describe('OpenFinance', () => {
           (yield* openFinance.providerAccounts(connectionId))[0]?.name,
           'NuConta',
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -327,7 +176,7 @@ describe('OpenFinance', () => {
           skipped: 0,
           providerReady: true,
         })
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -370,7 +219,7 @@ describe('OpenFinance', () => {
           ]),
           [['cycle-start', -8990]],
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect('revokes consent at Pluggy on disconnect and stops syncing', () =>
@@ -399,7 +248,7 @@ describe('OpenFinance', () => {
         error._tag === 'OpenFinanceError' && error.reason,
         'connection_disconnected',
       )
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -441,7 +290,7 @@ describe('OpenFinance', () => {
           { kind: 'booked', asOf: '2026-10-01', balanceCents: 100000 },
           { kind: 'booked', asOf: '2026-10-02', balanceCents: 85000 },
         ])
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -486,7 +335,7 @@ describe('OpenFinance', () => {
             ['recent', 'posted'],
           ],
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -538,7 +387,7 @@ describe('OpenFinance', () => {
             ['recent', 'posted', -1000],
           ],
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -586,7 +435,7 @@ describe('OpenFinance', () => {
           current.map((observation) => observation.externalId),
           ['recent'],
         )
-      }).pipe(Effect.provide(ManualLayer)),
+      }).pipe(Effect.provide(openFinanceManualTest())),
   )
 
   it.effect('does not take a skipped foreign purchase for a removed one', () =>
@@ -624,7 +473,7 @@ describe('OpenFinance', () => {
         ),
         ['abroad'],
       )
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -650,7 +499,7 @@ describe('OpenFinance', () => {
           (yield* (yield* Observations).current(account.id)).length,
           0,
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -671,7 +520,7 @@ describe('OpenFinance', () => {
           (yield* openFinance.connection(connectionId)).status,
           'disconnected',
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect('keeps the item that wins two concurrent registrations', () =>
@@ -691,18 +540,16 @@ describe('OpenFinance', () => {
       const arrived = yield* Ref.make(0)
       const bothAsked = yield* Deferred.make<void>()
       const state = yield* FakePluggyState
-      yield* Ref.set(state, {
+      yield* Ref.update(state, (current) => ({
+        ...current,
         clientUserId: connectionId,
-        accounts: [],
         itemAccounts: { 'item-a': [bank], 'item-b': [card] },
-        transactions: {},
-        deleted: [],
         beforeGetItem: Effect.gen(function* () {
           if ((yield* Ref.updateAndGet(arrived, (n) => n + 1)) >= 2)
             yield* Deferred.succeed(bothAsked, undefined)
           yield* Deferred.await(bothAsked)
         }),
-      })
+      }))
 
       const results = yield* Effect.all(
         ['item-a', 'item-b'].map((itemId) =>
@@ -733,7 +580,7 @@ describe('OpenFinance', () => {
           accounts: [winner === 'item-a' ? 'provider-bank' : 'provider-card'],
         },
       )
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -767,7 +614,7 @@ describe('OpenFinance', () => {
           ),
           [{ kind: 'booked', asOf: '2026-10-01', balanceCents: 100000 }],
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -838,7 +685,7 @@ describe('OpenFinance', () => {
             deleted: [],
           },
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -894,7 +741,7 @@ describe('OpenFinance', () => {
           yield* sql`SELECT * FROM open_finance_unresolved`,
           [],
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -943,7 +790,7 @@ describe('OpenFinance', () => {
             ],
           },
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -1003,7 +850,7 @@ describe('OpenFinance', () => {
             invalidated: ['2026-10-02'],
           },
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -1053,7 +900,7 @@ describe('OpenFinance', () => {
             ['recent', -1000],
           ],
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   // Without the sync reactor: its 5-second sweep would replay every tick of
@@ -1103,7 +950,7 @@ describe('OpenFinance', () => {
           },
           { thirtyDays: ['abroad'], thirtyOneDays: [] },
         )
-      }).pipe(Effect.provide(ManualLayer)),
+      }).pipe(Effect.provide(openFinanceManualTest())),
   )
 
   it.effect(
@@ -1127,7 +974,7 @@ describe('OpenFinance', () => {
         assert.deepStrictEqual(yield* balancesOf(account.id), [
           { kind: 'available', asOf: '2026-10-02', balanceCents: 70000 },
         ])
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -1188,7 +1035,7 @@ describe('OpenFinance', () => {
             status: 'disconnected',
           },
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
   // Syncs a 1 October salary and the given lines, then the lines Pluggy
   // reports next; returns the booked checkpoints and the withdrawn days.
@@ -1248,7 +1095,7 @@ describe('OpenFinance', () => {
             invalidated: ['2026-10-02'],
           },
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -1271,7 +1118,7 @@ describe('OpenFinance', () => {
           ),
           { booked: [['2026-10-01', 100000]], invalidated: [] },
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -1292,7 +1139,7 @@ describe('OpenFinance', () => {
             invalidated: ['2026-10-02'],
           },
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect(
@@ -1311,7 +1158,7 @@ describe('OpenFinance', () => {
             invalidated: [],
           },
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   // A 10 September debit closes its day at R$900; Pluggy later dates it 2
@@ -1378,7 +1225,7 @@ describe('OpenFinance', () => {
             invalidated: ['2026-09-10'],
           },
         )
-      }).pipe(Effect.provide(ManualLayer)),
+      }).pipe(Effect.provide(openFinanceManualTest())),
   )
 
   it.effect(
@@ -1428,7 +1275,7 @@ describe('OpenFinance', () => {
             invalidated: ['2026-09-10'],
           },
         )
-      }).pipe(Effect.provide(ManualLayer)),
+      }).pipe(Effect.provide(openFinanceManualTest())),
   )
 
   it.effect(
@@ -1478,6 +1325,6 @@ describe('OpenFinance', () => {
           ),
           ['market', 'pharmacy'],
         )
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 })

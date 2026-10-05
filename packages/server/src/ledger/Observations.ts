@@ -137,6 +137,14 @@ export interface ObservationsShape {
   readonly current: (
     accountId: string,
   ) => Effect.Effect<ReadonlyArray<TransactionObservation>, LedgerStoreError>
+  /**
+   * External ids a source ever reported for an account, removed ones
+   * included: a fact once observed stays known after its removal.
+   */
+  readonly observedIds: (input: {
+    readonly sourceId: string
+    readonly accountId: string
+  }) => Effect.Effect<ReadonlySet<string>, LedgerStoreError>
 }
 
 const LatestRow = Schema.Struct({
@@ -267,6 +275,18 @@ export class Observations extends Context.Service<
                 AND l.external_id = o.external_id
             )
           ORDER BY booked_on, id
+        `,
+      })
+
+      const findObservedIds = SqlSchema.findAll({
+        Request: Schema.Struct({
+          sourceId: Schema.String,
+          accountId: Schema.String,
+        }),
+        Result: Schema.Struct({ externalId: Schema.String }),
+        execute: ({ sourceId, accountId }) => sql`
+          SELECT DISTINCT external_id AS externalId FROM transaction_observations
+          WHERE source_id = ${sourceId} AND account_id = ${accountId}
         `,
       })
 
@@ -452,11 +472,24 @@ export class Observations extends Context.Service<
         findCurrent(accountId).pipe(Effect.mapError(storeError('current'))),
       )
 
+      const observedIds = Effect.fn('Observations.observedIds')(
+        function* (input: {
+          readonly sourceId: string
+          readonly accountId: string
+        }) {
+          const rows = yield* findObservedIds(input).pipe(
+            Effect.mapError(storeError('observedIds')),
+          )
+          return new Set(rows.map((row) => row.externalId))
+        },
+      )
+
       return Observations.of({
         registerSource,
         recordTransactions,
         recordBalance,
         current,
+        observedIds,
       })
     }),
   )

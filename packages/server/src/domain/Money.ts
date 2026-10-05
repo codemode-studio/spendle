@@ -7,9 +7,14 @@ export const Cents = Schema.Int
 export const Currency = Schema.String.check(Schema.isPattern(/^[A-Z]{3}$/))
 
 const isCalendarDate = (date: string) => {
-  const [year, month, day] = date.split('-').map(Number) as [number, number, number]
+  const [year, month, day] = date.split('-').map(Number) as [
+    number,
+    number,
+    number,
+  ]
   const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
-  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 0
+  const days =
+    [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 0
   return day >= 1 && day <= days
 }
 

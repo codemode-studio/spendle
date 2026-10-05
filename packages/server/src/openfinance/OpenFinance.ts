@@ -36,6 +36,7 @@ import { endOfDayBalances } from './EndOfDay.ts'
 import type { RunningLine } from './EndOfDay.ts'
 import type { PluggyAccount, PluggyItem } from './PluggyApi.ts'
 import { PluggyClient } from './PluggyClient.ts'
+import { WebhookConfig } from './WebhookConfig.ts'
 
 export const ConnectionStatus = Schema.Literals([
   'pending',
@@ -108,6 +109,7 @@ export class OpenFinanceError extends Schema.TaggedError<OpenFinanceError>()(
       'not_linked',
       'incompatible_account',
       'item_already_registered',
+      'item_deleted',
     ]),
     detail: Schema.optional(Schema.String),
   },
@@ -164,6 +166,11 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto
   const log = yield* EventLog
   const pluggy = yield* PluggyClient
+  // With webhooks on, each item is created pointing at our endpoint.
+  const webhookUrl = Option.map(
+    yield* WebhookConfig,
+    (settings) => settings.url,
+  ).pipe(Option.getOrUndefined)
   const accounts = yield* Accounts
   const observations = yield* Observations
 
@@ -222,6 +229,22 @@ const make = Effect.gen(function* () {
         SELECT booked_on AS bookedOn FROM open_finance_absent_pending
         WHERE provider_account_id = ${providerAccountId} AND removed_on >= ${removedSince}
         ORDER BY booked_on LIMIT 1
+      `,
+  })
+
+  // Unresolved transactions a sync's date range does not reach: known ones a
+  // correction moved before the history start or past today.
+  const findUnresolvedOutside = SqlSchema.findAll({
+    Request: Schema.Struct({
+      providerAccountId: Schema.String,
+      from: Schema.String,
+      to: Schema.String,
+    }),
+    Result: Schema.Struct({ id: Schema.String }),
+    execute: ({ providerAccountId, from, to }) => sql`
+        SELECT provider_transaction_id AS id FROM open_finance_unresolved
+        WHERE provider_account_id = ${providerAccountId}
+          AND (booked_on < ${from} OR booked_on > ${to})
       `,
   })
 
@@ -300,6 +323,25 @@ const make = Effect.gen(function* () {
     (connectionId: string) => findProviderAccounts(connectionId),
   )
 
+  // Writes what Pluggy answered only if the connection was not disconnected
+  // meanwhile: an item/deleted or disconnect that landed while Pluggy
+  // answered wins. The check and the writes share one transaction, so a
+  // disconnect cannot slip between them.
+  const whileConnected = <A, E, R>(
+    connectionId: string,
+    write: Effect.Effect<A, E, R>,
+  ) =>
+    sql.withTransaction(
+      Effect.gen(function* () {
+        const live = yield* sql`
+          SELECT 1 FROM open_finance_connections
+          WHERE id = ${connectionId} AND status != 'disconnected'
+        `
+        if (live.length === 0) return yield* fail('connection_disconnected')
+        return yield* write
+      }),
+    )
+
   // Provider fields are refreshed on every read; the ledger link and window are not.
   const storeProviderAccounts = (
     connectionId: string,
@@ -337,9 +379,10 @@ const make = Effect.gen(function* () {
           RETURNING id
         `
       if (updated.length === 0) return yield* fail('connection_disconnected')
-      yield* storeProviderAccounts(
+      const listed = yield* pluggy.listAccounts(item.id)
+      yield* whileConnected(
         current.id,
-        yield* pluggy.listAccounts(item.id),
+        storeProviderAccounts(current.id, listed),
       )
       return yield* connection(current.id)
     })
@@ -354,6 +397,7 @@ const make = Effect.gen(function* () {
       `
       const accessToken = yield* pluggy.createConnectToken({
         clientUserId: connectionId,
+        webhookUrl,
       })
       return { connectionId, accessToken }
     },
@@ -368,7 +412,44 @@ const make = Effect.gen(function* () {
     return yield* pluggy.createConnectToken({
       clientUserId: current.id,
       itemId: current.itemId ?? undefined,
+      webhookUrl,
     })
+  })
+
+  // Attaches a fetched item to the connection, once known to be its own.
+  const attachItem = Effect.fnUntraced(function* (
+    current: Connection,
+    item: PluggyItem,
+  ) {
+    // The widget reports the item id from the browser; only an item created
+    // with this connection's clientUserId may attach to it.
+    if (item.clientUserId !== current.id)
+      return yield* fail('item_belongs_elsewhere')
+    // Another registration may have pinned an item while Pluggy answered:
+    // the first to pin wins, and the loser stores nothing. Pluggy may also
+    // have deleted the item meanwhile; the deletion and the pin are each one
+    // statement, so either the pin sees the deletion or the deletion sees
+    // the pinned item and disconnects the connection.
+    const pinned = yield* sql`
+      UPDATE open_finance_connections SET item_id = ${item.id}, updated_at = ${yield* now}
+      WHERE id = ${current.id} AND status != 'disconnected'
+        AND (item_id IS NULL OR item_id = ${item.id})
+        AND NOT EXISTS (SELECT 1 FROM open_finance_deleted_items WHERE item_id = ${item.id})
+      RETURNING id
+    `
+    if (pinned.length === 0) {
+      const deleted = yield* sql`
+        SELECT 1 FROM open_finance_deleted_items WHERE item_id = ${item.id}
+      `
+      // The connection never held the deleted item, so it stays pending:
+      // another item from the same connect token can still attach to it.
+      return yield* fail(
+        deleted.length > 0 ? 'item_deleted' : 'item_already_registered',
+        deleted.length > 0 ? item.id : undefined,
+      )
+    }
+    yield* applyItem(current, item)
+    return yield* providerAccounts(current.id)
   })
 
   const registerItem = Effect.fn('OpenFinance.registerItem')(function* (input: {
@@ -382,22 +463,29 @@ const make = Effect.gen(function* () {
     // registered item stays the connection's item.
     if (current.itemId !== null && current.itemId !== input.itemId)
       return yield* fail('item_already_registered')
-    const item = yield* pluggy.getItem(input.itemId)
-    // The widget reports the item id from the browser; only an item created
-    // with this connection's clientUserId may attach to it.
-    if (item.clientUserId !== current.id)
-      return yield* fail('item_belongs_elsewhere')
-    // Another registration may have pinned an item while Pluggy answered:
-    // the first to pin wins, and the loser stores nothing.
-    const pinned = yield* sql`
-      UPDATE open_finance_connections SET item_id = ${item.id}, updated_at = ${yield* now}
-      WHERE id = ${current.id} AND status != 'disconnected'
-        AND (item_id IS NULL OR item_id = ${item.id})
-      RETURNING id
-    `
-    if (pinned.length === 0) return yield* fail('item_already_registered')
-    yield* applyItem(current, item)
-    return yield* providerAccounts(current.id)
+    return yield* attachItem(current, yield* pluggy.getItem(input.itemId))
+  })
+
+  /**
+   * Attaches an item Pluggy reported by webhook to the pending connection
+   * whose connect token created it, when the widget callback never arrived.
+   * The connection is the item's `clientUserId`; an item of no pending
+   * connection here is left alone. Returns the connection it attached to.
+   */
+  const adoptItem = Effect.fn('OpenFinance.adoptItem')(function* (
+    itemId: string,
+  ) {
+    const item = yield* pluggy.getItem(itemId)
+    if (!item.clientUserId) return Option.none<string>()
+    const pending = yield* findConnection(item.clientUserId)
+    if (
+      Option.isNone(pending) ||
+      pending.value.status !== 'pending' ||
+      pending.value.itemId !== null
+    )
+      return Option.none<string>()
+    yield* attachItem(pending.value, item)
+    return Option.some(pending.value.id)
   })
 
   const refreshConnection = Effect.fn('OpenFinance.refreshConnection')(
@@ -492,7 +580,9 @@ const make = Effect.gen(function* () {
    * not. A judged day that yields none withdraws the checkpoint an earlier
    * read inferred for it, even when no posted line remains on it; a later
    * complete read that infers the withdrawn balance again reinstates it. A
-   * missing checkpoint is safe, a stale one is not.
+   * missing checkpoint is safe, a stale one is not. `only`
+   * restricts the judged days to those a read covered completely;
+   * `incompleteDays` yield no checkpoint, as unresolved ones.
    */
   const reconcileCheckpoints = Effect.fnUntraced(function* (input: {
     readonly accountId: string
@@ -511,9 +601,12 @@ const make = Effect.gen(function* () {
       string,
       { readonly bookedOn: string; readonly balanceAfterCents: number | null }
     >
+    readonly only?: ReadonlySet<string>
+    readonly incompleteDays?: ReadonlySet<string>
   }) {
     const { accountId, sourceId, dateFrom, dateTo } = input
     const inWindow = (day: string) => day >= dateFrom && day < dateTo
+    const allowed = (day: string) => input.only?.has(day) ?? true
     const posted = (yield* observations.current(accountId)).filter(
       (observation) =>
         observation.sourceId === sourceId && observation.status === 'posted',
@@ -535,6 +628,7 @@ const make = Effect.gen(function* () {
     }
     for (const observation of posted)
       if (inWindow(observation.bookedOn)) judged.add(observation.bookedOn)
+    for (const day of judged) if (!allowed(day)) judged.delete(day)
     const earliest = [...judged].reduce(
       (found, day) => (day < found ? day : found),
       dateFrom,
@@ -545,14 +639,17 @@ const make = Effect.gen(function* () {
       from: earliest,
       to: addDays(dateTo, 1),
     })).filter(
-      (checkpoint) => inWindow(checkpoint.asOf) || judged.has(checkpoint.asOf),
+      (checkpoint) =>
+        allowed(checkpoint.asOf) &&
+        (inWindow(checkpoint.asOf) || judged.has(checkpoint.asOf)),
     )
     for (const checkpoint of previousCheckpoints) judged.add(checkpoint.asOf)
-    const unresolvedDays = new Set(
-      (yield* findUnresolvedDays(input.providerAccountId)).map(
+    const unresolvedDays = new Set([
+      ...(yield* findUnresolvedDays(input.providerAccountId)).map(
         (row) => row.bookedOn,
       ),
-    )
+      ...(input.incompleteDays ?? []),
+    ])
 
     const closings = new Map<string, number>()
     for (const day of judged) {
@@ -662,13 +759,18 @@ const make = Effect.gen(function* () {
     const stored = (yield* observations.current(accountId)).filter(
       (observation) => observation.sourceId === sourceId,
     )
-    const latest = stored.reduce<string | null>(
-      (found, observation) =>
-        found === null || observation.bookedOn > found
-          ? observation.bookedOn
-          : found,
-      null,
-    )
+    const dateTo = yield* today
+    // A future-dated line (an instalment a webhook copied) must not carry the
+    // continuation past today, where no read could reach current days.
+    const latest = stored
+      .filter((observation) => observation.bookedOn <= dateTo)
+      .reduce<string | null>(
+        (found, observation) =>
+          found === null || observation.bookedOn > found
+            ? observation.bookedOn
+            : found,
+        null,
+      )
     // Re-read from the overlap before the latest fact, or further back to the
     // oldest transaction still pending, so it is seen to settle or vanish.
     const oldestPending = stored
@@ -686,7 +788,6 @@ const make = Effect.gen(function* () {
       yield* findOldestUnresolved(providerAccountId),
       { onNone: () => null, onSome: (row) => row.bookedOn },
     )
-    const dateTo = yield* today
     // A pending transaction removed for being absent from an earlier response
     // is re-read until it returns or its retention passes: once removed it is
     // no longer among the current observations above.
@@ -712,11 +813,33 @@ const make = Effect.gen(function* () {
     const item = items.find((candidate) => candidate.id === providerAccountId)
     if (!item)
       return yield* fail('provider_account_not_found', providerAccountId)
-    const fetched = yield* pluggy.listTransactions({
+    const inRange = yield* pluggy.listTransactions({
       accountId: providerAccountId,
       dateFrom,
       dateTo,
     })
+    // An unresolved transaction outside the range is re-read by id, so a
+    // known one moved before the history start or past today still gains its
+    // amount, and its previous fact is not taken for absent.
+    const inRangeIds = new Set(inRange.map((transaction) => transaction.id))
+    const strayIds = (yield* findUnresolvedOutside({
+      providerAccountId,
+      from: dateFrom,
+      to: dateTo,
+    }))
+      .map((row) => row.id)
+      .filter((id) => !inRangeIds.has(id))
+    const strays =
+      strayIds.length > 0
+        ? (yield* pluggy.listTransactions({
+            accountId: providerAccountId,
+            ids: strayIds,
+          })).filter((transaction) => !inRangeIds.has(transaction.id))
+        : []
+    const fetched = [...inRange, ...strays]
+    // Known means ever observed, removed or not: one inferred removed and
+    // returned on another day is restored wherever Pluggy moved it.
+    const known = yield* observations.observedIds({ sourceId, accountId })
 
     const reported: Array<ReportedTransaction> = []
     // The running balance this response gave each posted transaction.
@@ -727,17 +850,23 @@ const make = Effect.gen(function* () {
     const unresolved: Array<{ id: string; bookedOn: string }> = []
     let skipped = 0
     for (const transaction of fetched) {
+      // The history start gates only transactions never seen before; a
+      // known one is updated wherever Pluggy moves it.
+      const day = bookedOn(transaction.date)
+      if (day < historyFrom && !known.has(transaction.id)) continue
       const normalized = toReportedTransaction(item, transaction)
       if (Option.isNone(normalized)) {
         skipped++
-        const day = bookedOn(transaction.date)
-        if (day < historyFrom) continue
         unresolved.push({ id: transaction.id, bookedOn: day })
         continue
       }
-      if (normalized.value.bookedOn < historyFrom) continue
       reported.push(normalized.value)
-      if (normalized.value.status === 'posted') {
+      // A line read by id carries a running balance, but its day was not
+      // read whole: it backs no closing balance.
+      if (
+        normalized.value.status === 'posted' &&
+        inRangeIds.has(transaction.id)
+      ) {
         runningBalances.set(normalized.value.externalId, {
           bookedOn: normalized.value.bookedOn,
           balanceAfterCents: runningBalanceCents(item, transaction),
@@ -745,8 +874,8 @@ const make = Effect.gen(function* () {
       }
     }
 
-    // A pending transaction Pluggy stops reporting was replaced or dropped
-    // by the bank. Presence is judged by the ids Pluggy returned, not by what
+    // A pending transaction Pluggy stops reporting within the range read was
+    // replaced or dropped by the bank. Presence is judged by the ids Pluggy returned, not by what
     // could be normalized. Posted ones are never inferred removed from
     // absence: a partial response must not erase facts.
     const seen = new Set(fetched.map((transaction) => transaction.id))
@@ -754,6 +883,7 @@ const make = Effect.gen(function* () {
       (observation) =>
         observation.status === 'pending' &&
         observation.bookedOn >= dateFrom &&
+        observation.bookedOn <= dateTo &&
         !seen.has(observation.externalId),
     )
     for (const observation of vanished) {
@@ -771,17 +901,20 @@ const make = Effect.gen(function* () {
     // Everything this read concluded is written at once, after all provider
     // I/O: should any write fail, the transaction facts roll back too, and
     // the retry sees the same changes again instead of finding them stored
-    // and leaving the days they left unjudged.
-    return yield* sql.withTransaction(
+    // and leaving the days they left unjudged. Nothing from this read is
+    // written once the connection is disconnected.
+    return yield* whileConnected(
+      owner.id,
       Effect.gen(function* () {
         const result = yield* observations.recordTransactions({
           sourceId,
           accountId,
           transactions: reported,
         })
-        // Every unresolved transaction from `dateFrom` on was covered by this
-        // read: one still unresolved is kept as seen today, one now recorded
-        // is done, and one absent is dropped only after a long absence.
+        // Every unresolved transaction was covered by this read, by range or
+        // by id: one still unresolved is kept as seen today, one now
+        // recorded is done, and one absent is dropped only after a long
+        // absence.
         for (const transaction of reported) {
           yield* sql`
             DELETE FROM open_finance_unresolved
@@ -791,7 +924,7 @@ const make = Effect.gen(function* () {
         }
         yield* sql`
           DELETE FROM open_finance_unresolved
-          WHERE provider_account_id = ${providerAccountId} AND booked_on >= ${dateFrom}
+          WHERE provider_account_id = ${providerAccountId}
             AND last_seen_on < ${addDays(dateTo, -unresolvedRetentionDays)}
         `
         for (const transaction of unresolved) {
@@ -895,6 +1028,211 @@ const make = Effect.gen(function* () {
       ),
   )
 
+  /**
+   * Reads specific transactions Pluggy says were created or updated,
+   * wherever they fall in time: a change to an old transaction is outside
+   * the regular sync's overlap. The account's history start still applies to
+   * transactions never seen before; known ones are always updated. A bank
+   * account's checkpoints on the days those transactions left or joined are
+   * judged again from a read of those whole days: the changed transactions
+   * alone cannot establish a day's closing balance.
+   */
+  const refreshTransactions = Effect.fn('OpenFinance.refreshTransactions')(
+    (
+      providerAccountId: string,
+      query:
+        | { readonly ids: ReadonlyArray<string> }
+        | { readonly createdAtFrom: string },
+    ) =>
+      lockFor(providerAccountId).withPermits(1)(
+        Effect.gen(function* () {
+          const found = yield* findProviderAccount(providerAccountId)
+          if (
+            Option.isNone(found) ||
+            found.value.accountId === null ||
+            found.value.historyFrom === null
+          )
+            return 0
+          const provider = found.value
+          const accountId = found.value.accountId
+          const historyFrom = found.value.historyFrom
+          const owner = yield* connection(provider.connectionId)
+          if (
+            owner.status === 'disconnected' ||
+            owner.itemId === null ||
+            owner.sourceId === null
+          )
+            return 0
+          const sourceId = owner.sourceId
+          const item = (yield* pluggy.listAccounts(owner.itemId)).find(
+            (candidate) => candidate.id === providerAccountId,
+          )
+          if (!item) return 0
+          const fetched = yield* pluggy.listTransactions({
+            accountId: providerAccountId,
+            ...query,
+          })
+          const stored = (yield* observations.current(accountId)).filter(
+            (observation) => observation.sourceId === sourceId,
+          )
+          const storedDay = new Map(
+            stored.map((observation) => [
+              observation.externalId,
+              observation.bookedOn,
+            ]),
+          )
+          // The history start gates only transactions never observed; one
+          // removed before is restored wherever Pluggy moved it.
+          const observed = yield* observations.observedIds({
+            sourceId,
+            accountId,
+          })
+          const dateTo = yield* today
+          const reported: Array<ReportedTransaction> = []
+          // Every returned transaction in scope, recordable or not, by the
+          // day Pluggy now reports it on.
+          const returned: Array<{ externalId: string; bookedOn: string }> = []
+          // One without an amount in the account currency is skipped, as in
+          // a sync: its stored fact stays as it is, it is re-read until it
+          // gains one, and the days it left and joined yield no checkpoint
+          // meanwhile.
+          const unresolved: Array<{ id: string; bookedOn: string }> = []
+          const incompleteDays = new Set<string>()
+          for (const transaction of fetched) {
+            const day = bookedOn(transaction.date)
+            const known = storedDay.get(transaction.id)
+            if (day < historyFrom && !observed.has(transaction.id)) continue
+            returned.push({ externalId: transaction.id, bookedOn: day })
+            const normalized = toReportedTransaction(item, transaction)
+            if (Option.isNone(normalized)) {
+              incompleteDays.add(day)
+              if (known !== undefined) incompleteDays.add(known)
+              // Known ones are tracked wherever they moved: a sync re-reads
+              // those outside its range by id.
+              unresolved.push({ id: transaction.id, bookedOn: day })
+              continue
+            }
+            reported.push(normalized.value)
+          }
+
+          // The days these transactions are on or were on, before today;
+          // only bank accounts carry checkpoints.
+          const affected = new Set<string>()
+          if (item.type === 'BANK')
+            for (const transaction of returned) {
+              affected.add(transaction.bookedOn)
+              const previous = storedDay.get(transaction.externalId)
+              if (previous !== undefined) affected.add(previous)
+            }
+          const days = [...affected].filter((day) => day < dateTo).sort()
+          const first = days[0]
+          const last = days[days.length - 1]
+          const wholeDays =
+            first !== undefined && last !== undefined
+              ? yield* pluggy.listTransactions({
+                  accountId: providerAccountId,
+                  dateFrom: first,
+                  dateTo: last,
+                })
+              : []
+          const judged = new Set(days)
+          const runningBalances = new Map<
+            string,
+            {
+              readonly bookedOn: string
+              readonly balanceAfterCents: number | null
+            }
+          >()
+          // A judged day with a line that cannot be compared with the stored
+          // facts yields no checkpoint.
+          const postedLines: Array<ReportedTransaction> = []
+          for (const transaction of wholeDays) {
+            const normalized = toReportedTransaction(item, transaction)
+            if (Option.isNone(normalized)) {
+              incompleteDays.add(bookedOn(transaction.date))
+              continue
+            }
+            if (normalized.value.status !== 'posted') continue
+            postedLines.push(normalized.value)
+            runningBalances.set(normalized.value.externalId, {
+              bookedOn: normalized.value.bookedOn,
+              balanceAfterCents: runningBalanceCents(item, transaction),
+            })
+          }
+
+          const result = yield* whileConnected(
+            owner.id,
+            Effect.gen(function* () {
+              const recorded = yield* observations.recordTransactions({
+                sourceId,
+                accountId,
+                transactions: reported,
+              })
+              for (const transaction of reported) {
+                yield* sql`
+                  DELETE FROM open_finance_unresolved
+                  WHERE provider_account_id = ${providerAccountId}
+                    AND provider_transaction_id = ${transaction.externalId}
+                `
+              }
+              for (const transaction of unresolved) {
+                yield* sql`
+                  INSERT INTO open_finance_unresolved (provider_account_id,
+                    provider_transaction_id, booked_on, last_seen_on)
+                  VALUES (${providerAccountId}, ${transaction.id}, ${transaction.bookedOn}, ${dateTo})
+                  ON CONFLICT (provider_account_id, provider_transaction_id)
+                  DO UPDATE SET booked_on = excluded.booked_on,
+                    last_seen_on = excluded.last_seen_on
+                `
+              }
+              if (first === undefined || last === undefined) return recorded
+              // The day's stored facts are complete only when they hold
+              // every posted line of the full-day read as Pluggy reports it
+              // now. A line never copied, settled since, or whose stored
+              // amount, currency or day differs (a correction not delivered
+              // yet) would pair a stale amount with a newer running balance.
+              const held = new Map(
+                (yield* observations.current(accountId))
+                  .filter(
+                    (observation) =>
+                      observation.sourceId === sourceId &&
+                      observation.status === 'posted',
+                  )
+                  .map((observation) => [observation.externalId, observation]),
+              )
+              for (const line of postedLines) {
+                const fact = held.get(line.externalId)
+                if (
+                  fact === undefined ||
+                  fact.bookedOn !== line.bookedOn ||
+                  fact.amountCents !== line.amountCents ||
+                  fact.currency !== line.currency
+                ) {
+                  incompleteDays.add(line.bookedOn)
+                  if (fact !== undefined) incompleteDays.add(fact.bookedOn)
+                }
+              }
+              yield* reconcileCheckpoints({
+                accountId,
+                sourceId,
+                providerAccountId,
+                currency: item.currencyCode,
+                dateFrom: first,
+                dateTo: addDays(last, 1),
+                stored,
+                reported: returned,
+                runningBalances,
+                only: judged,
+                incompleteDays,
+              })
+              return recorded
+            }),
+          )
+          return result.recorded.length
+        }),
+      ),
+  )
+
   const requestSync = Effect.fn('OpenFinance.requestSync')(function* (
     request: typeof SyncRequest.Type,
   ) {
@@ -922,6 +1260,26 @@ const make = Effect.gen(function* () {
     'OpenFinance.invalidatedCheckpoints',
   )((accountId: string) => findInvalidatedCheckpoints(accountId))
 
+  /**
+   * Marks a connection disconnected and releases its links' ledger accounts,
+   * which stay linkable through another connection; account_id is kept as
+   * history. Shared by every way a connection ends: the person's disconnect
+   * and Pluggy's own deletion of the item.
+   */
+  const disconnectLocally = Effect.fnUntraced(function* (connectionId: string) {
+    const disconnectedAt = yield* now
+    yield* sql`
+      UPDATE open_finance_connections SET status = 'disconnected',
+        updated_at = ${disconnectedAt}
+      WHERE id = ${connectionId} AND status != 'disconnected'
+    `
+    yield* sql`
+      UPDATE open_finance_accounts SET unlinked_at = ${disconnectedAt}
+      WHERE connection_id = ${connectionId} AND account_id IS NOT NULL
+        AND unlinked_at IS NULL
+    `
+  })
+
   const disconnect = Effect.fn('OpenFinance.disconnect')(function* (
     connectionId: string,
   ) {
@@ -935,26 +1293,144 @@ const make = Effect.gen(function* () {
         ),
       )
     }
-    // Its links release their ledger accounts, which stay linkable through
-    // another connection; account_id is kept as history.
-    const disconnectedAt = yield* now
+    yield* sql.withTransaction(disconnectLocally(connectionId))
+  })
+
+  const findConnectionByItem = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ id: Schema.String }),
+    execute: (itemId) =>
+      sql`SELECT id FROM open_finance_connections WHERE item_id = ${itemId}`,
+  })
+
+  /** The connection that owns a Pluggy item, if any. */
+  const connectionByItem = Effect.fn('OpenFinance.connectionByItem')(function* (
+    itemId: string,
+  ) {
+    const found = yield* findConnectionByItem(itemId)
+    return yield* Option.match(found, {
+      onNone: () => Effect.succeed(Option.none<Connection>()),
+      onSome: ({ id }) => Effect.map(connection(id), Option.some),
+    })
+  })
+
+  /** Pluggy deleted the item (consent revoked or expired); nothing to delete remotely. */
+  const markItemDeleted = Effect.fn('OpenFinance.markItemDeleted')(function* (
+    connectionId: string,
+  ) {
+    yield* sql.withTransaction(disconnectLocally(connectionId))
+  })
+
+  /**
+   * Pluggy deleted the item (item/deleted). The deletion is kept even when no
+   * connection holds the item yet, so a registration still waiting on Pluggy
+   * cannot attach it afterwards; a connection that holds it is disconnected.
+   */
+  const itemDeleted = Effect.fn('OpenFinance.itemDeleted')(function* (
+    itemId: string,
+  ) {
+    const deletedAt = yield* now
     yield* sql.withTransaction(
       Effect.gen(function* () {
         yield* sql`
-          UPDATE open_finance_connections SET status = 'disconnected',
-            updated_at = ${disconnectedAt}
-          WHERE id = ${connectionId}
+          INSERT INTO open_finance_deleted_items (item_id, deleted_at)
+          VALUES (${itemId}, ${deletedAt})
+          ON CONFLICT (item_id) DO NOTHING
         `
-        yield* sql`
-          UPDATE open_finance_accounts SET unlinked_at = ${disconnectedAt}
-          WHERE connection_id = ${connectionId} AND account_id IS NOT NULL
-            AND unlinked_at IS NULL
-        `
+        const holder = yield* findConnectionByItem(itemId)
+        if (Option.isSome(holder)) yield* disconnectLocally(holder.value.id)
+      }),
+    )
+  })
+
+  /**
+   * Records Pluggy's deletion of transactions as removed versions. Unknown ids
+   * are ignored: Pluggy may delete transactions outside the copied window.
+   */
+  const removeTransactions = Effect.fn('OpenFinance.removeTransactions')(
+    function* (
+      providerAccountId: string,
+      transactionIds: ReadonlyArray<string>,
+    ) {
+      // Under the sync lock, so an in-flight sync cannot write back what
+      // Pluggy deleted while it was fetching.
+      return yield* lockFor(providerAccountId).withPermits(1)(
+        removeLocked(providerAccountId, transactionIds),
+      )
+    },
+  )
+  const removeLocked = Effect.fnUntraced(function* (
+    providerAccountId: string,
+    transactionIds: ReadonlyArray<string>,
+  ) {
+    // A deletion for an account that was never copied removes nothing.
+    const found = yield* findProviderAccount(providerAccountId)
+    if (Option.isNone(found)) {
+      yield* Effect.logInfo(
+        `No copied account for Pluggy account ${providerAccountId}; nothing to remove`,
+      )
+      return 0
+    }
+    const provider = found.value
+    const owner = yield* connection(provider.connectionId)
+    if (provider.accountId === null || owner.sourceId === null) return 0
+    const sourceId = owner.sourceId
+    const ids = new Set(transactionIds)
+    const doomed = (yield* observations.current(provider.accountId)).filter(
+      (observation) =>
+        observation.sourceId === sourceId && ids.has(observation.externalId),
+    )
+    const accountId = provider.accountId
+    const days = [
+      ...new Set(doomed.map((observation) => observation.bookedOn)),
+    ].sort()
+    // The removal and the withdrawal of the checkpoints it falsifies land
+    // together. A checkpoint inferred with the deleted line no longer holds
+    // for its day; the next complete read of that day that infers the same
+    // balance reinstates it.
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const result = yield* observations.recordTransactions({
+          sourceId,
+          accountId,
+          transactions: doomed.map((observation) => ({
+            externalId: observation.externalId,
+            bookedOn: observation.bookedOn,
+            amountCents: observation.amountCents,
+            currency: observation.currency,
+            description: observation.description,
+            status: 'removed' as const,
+            raw: { reason: 'deleted_by_provider' },
+          })),
+        })
+        const first = days[0]
+        const last = days[days.length - 1]
+        if (first !== undefined && last !== undefined)
+          yield* reconcileCheckpoints({
+            accountId,
+            sourceId,
+            providerAccountId,
+            currency: provider.currency,
+            dateFrom: first,
+            dateTo: addDays(last, 1),
+            stored: doomed,
+            reported: doomed,
+            // No read of these days backs a closing balance.
+            runningBalances: new Map(),
+            only: new Set(days),
+          })
+        return result.recorded.length
       }),
     )
   })
 
   return {
+    refreshTransactions,
+    connectionByItem,
+    adoptItem,
+    markItemDeleted,
+    itemDeleted,
+    removeTransactions,
     createConnectToken,
     reconnectToken,
     registerItem,

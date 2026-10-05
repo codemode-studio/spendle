@@ -58,18 +58,46 @@ export interface PluggyClientShape {
   readonly listAccounts: (
     itemId: string,
   ) => Effect.Effect<ReadonlyArray<PluggyAccount>, PluggyError>
+  /**
+   * Makes Pluggy deliver every event to `url` with `Authorization: Bearer
+   * <secret>`, updating the existing subscription for that URL if there is one.
+   */
+  readonly ensureWebhook: (input: {
+    readonly url: string
+    readonly secret: Redacted.Redacted
+  }) => Effect.Effect<void, PluggyError>
   /** Every transaction booked in `[dateFrom, dateTo]`, following cursor pages. */
-  readonly listTransactions: (input: {
-    readonly accountId: string
-    readonly dateFrom: string
-    readonly dateTo: string
-  }) => Effect.Effect<ReadonlyArray<PluggyTransaction>, PluggyError>
+  readonly listTransactions: (
+    input: TransactionQuery,
+  ) => Effect.Effect<ReadonlyArray<PluggyTransaction>, PluggyError>
 }
+
+/**
+ * Which transactions of an account to read: those booked in a date range,
+ * specific ids (up to 500 per request), or those created since an instant.
+ */
+export type TransactionQuery =
+  | {
+      readonly accountId: string
+      readonly dateFrom: string
+      readonly dateTo: string
+    }
+  | { readonly accountId: string; readonly ids: ReadonlyArray<string> }
+  | { readonly accountId: string; readonly createdAtFrom: string }
 
 // API keys last two hours; refresh a little early so a request never races expiry.
 const apiKeyLifetime = Duration.toMillis(Duration.minutes(115))
 
 const AuthResponse = Schema.Struct({ apiKey: Schema.String })
+const Webhooks = Schema.Struct({
+  results: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      url: Schema.String,
+      event: Schema.String,
+    }),
+  ),
+})
 const ConnectTokenResponse = Schema.Struct({ accessToken: Schema.String })
 
 const transient = (status: number) => status === 429 || status >= 500
@@ -183,6 +211,12 @@ export class PluggyClient extends Context.Service<
               response.status,
             )()
           }
+          // A 204 has no body; the schema decides whether null is acceptable.
+          if (response.status === 204) {
+            return yield* Schema.decodeUnknownEffect(schema)(null).pipe(
+              Effect.mapError(fail(operation, 'invalid', 204)),
+            )
+          }
           return yield* HttpClientResponse.schemaBodyJson(schema)(
             response,
           ).pipe(Effect.mapError(fail(operation, 'invalid')))
@@ -238,7 +272,7 @@ export class PluggyClient extends Context.Service<
           PluggyPage(PluggyAccount),
         ).pipe(Effect.map((page) => page.results))
 
-      const listTransactions: PluggyClientShape['listTransactions'] = (input) =>
+      const listPages = (params: Record<string, string>) =>
         Effect.gen(function* () {
           const all: Array<PluggyTransaction> = []
           let after: string | undefined
@@ -247,9 +281,7 @@ export class PluggyClient extends Context.Service<
               'listTransactions',
               HttpClientRequest.get('/v2/transactions').pipe(
                 HttpClientRequest.setUrlParams({
-                  accountId: input.accountId,
-                  dateFrom: input.dateFrom,
-                  dateTo: input.dateTo,
+                  ...params,
                   ...(after ? { after } : {}),
                 }),
               ),
@@ -265,8 +297,73 @@ export class PluggyClient extends Context.Service<
           return all
         })
 
+      const listTransactions: PluggyClientShape['listTransactions'] = (
+        input,
+      ) => {
+        if ('ids' in input) {
+          const chunks: Array<ReadonlyArray<string>> = []
+          for (let index = 0; index < input.ids.length; index += 500)
+            chunks.push(input.ids.slice(index, index + 500))
+          return Effect.map(
+            Effect.forEach(chunks, (ids) =>
+              listPages({ accountId: input.accountId, ids: ids.join(',') }),
+            ),
+            (pages) => pages.flat(),
+          )
+        }
+        if ('createdAtFrom' in input) {
+          return listPages({
+            accountId: input.accountId,
+            createdAtFrom: input.createdAtFrom,
+          })
+        }
+        return listPages({
+          accountId: input.accountId,
+          dateFrom: input.dateFrom,
+          dateTo: input.dateTo,
+        })
+      }
+
+      const ensureWebhook: PluggyClientShape['ensureWebhook'] = (input) =>
+        Effect.gen(function* () {
+          const subscription = {
+            url: input.url,
+            event: 'all',
+            headers: {
+              Authorization: `Bearer ${Redacted.value(input.secret)}`,
+            },
+          }
+          // Pluggy answers 204 with no body when there are no subscriptions.
+          const listed = yield* send(
+            'listWebhooks',
+            HttpClientRequest.get('/webhooks'),
+            Schema.NullOr(Webhooks),
+          )
+          const results = listed?.results ?? []
+          const existing = results.find((webhook) => webhook.url === input.url)
+          yield* existing
+            ? send(
+                'updateWebhook',
+                HttpClientRequest.patch(`/webhooks/${existing.id}`).pipe(
+                  HttpClientRequest.bodyJsonUnsafe({
+                    ...subscription,
+                    enabled: true,
+                  }),
+                ),
+                Schema.Unknown,
+              )
+            : send(
+                'createWebhook',
+                HttpClientRequest.post('/webhooks').pipe(
+                  HttpClientRequest.bodyJsonUnsafe(subscription),
+                ),
+                Schema.Unknown,
+              )
+        })
+
       return PluggyClient.of({
         createConnectToken,
+        ensureWebhook,
         getItem,
         deleteItem,
         listAccounts,

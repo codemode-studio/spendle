@@ -107,4 +107,24 @@ export default Effect.gen(function* () {
     BEFORE DELETE ON open_finance_checkpoint_invalidations
     BEGIN SELECT RAISE(ABORT, 'checkpoint invalidations are immutable'); END
   `
+
+  // Pluggy items reported deleted, whether or not a connection held them yet:
+  // a registration still waiting on Pluggy must not attach an item deleted
+  // meanwhile. A deletion is final, so rows are never changed.
+  yield* sql`
+    CREATE TABLE open_finance_deleted_items (
+      item_id TEXT PRIMARY KEY,
+      deleted_at TEXT NOT NULL
+    )
+  `
+  yield* sql`
+    CREATE TRIGGER open_finance_deleted_items_no_update
+    BEFORE UPDATE ON open_finance_deleted_items
+    BEGIN SELECT RAISE(ABORT, 'deleted items are immutable'); END
+  `
+  yield* sql`
+    CREATE TRIGGER open_finance_deleted_items_no_delete
+    BEFORE DELETE ON open_finance_deleted_items
+    BEGIN SELECT RAISE(ABORT, 'deleted items are immutable'); END
+  `
 })
