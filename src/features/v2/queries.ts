@@ -12,7 +12,12 @@ import {
   listOwnersFn,
 } from './accounts.functions'
 import { cardOverviewFn, cycleEntriesFn } from './cards.functions'
-import { categoryLedgerFn, listCategoriesFn } from './categories.functions'
+import {
+  categoryLedgerFn,
+  listCategoriesFn,
+  providerMappingsFn,
+  storePatternsFn,
+} from './categories.functions'
 import { listImportsFn } from './imports.functions'
 import {
   categoryReviewFn,
@@ -105,6 +110,11 @@ export const v2QueryKeys = {
   imports: () => [...financeQueryKeys.all, 'read', 'imports'] as const,
   categoryLedger: () =>
     [...financeQueryKeys.all, 'read', 'categories'] as const,
+  /** Same key as the V1 knowledge base, so its invalidation group applies. */
+  storePatterns: () =>
+    [...financeQueryKeys.all, 'read', 'knowledge-base'] as const,
+  providerMappings: () =>
+    [...financeQueryKeys.all, 'read', 'knowledge-base', 'provider'] as const,
   connectSettings: () =>
     [...financeQueryKeys.all, 'open-finance', 'connect-settings'] as const,
 }
@@ -237,6 +247,20 @@ export const categoryLedgerOptions = () =>
     queryKey: v2QueryKeys.categoryLedger(),
     queryFn: () => categoryLedgerFn(),
     staleTime: 15_000,
+  })
+
+export const storePatternsOptions = () =>
+  queryOptions({
+    queryKey: v2QueryKeys.storePatterns(),
+    queryFn: () => storePatternsFn(),
+    staleTime: 15_000,
+  })
+
+export const providerMappingsOptions = () =>
+  queryOptions({
+    queryKey: v2QueryKeys.providerMappings(),
+    queryFn: () => providerMappingsFn(),
+    staleTime: 60_000,
   })
 
 /**

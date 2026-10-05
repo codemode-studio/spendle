@@ -190,16 +190,14 @@ const QaPluggy = Layer.unwrap(
       PluggyClient.of({
         ...fake,
         createConnectToken: (input) =>
-          fake
-            .createConnectToken(input)
-            .pipe(
-              Effect.tap(() =>
-                Ref.update(state, (current) => ({
-                  ...current,
-                  clientUserId: input.clientUserId,
-                })),
-              ),
+          fake.createConnectToken(input).pipe(
+            Effect.tap(() =>
+              Ref.update(state, (current) => ({
+                ...current,
+                clientUserId: input.clientUserId,
+              })),
             ),
+          ),
       }),
     )
   }),
@@ -254,7 +252,12 @@ const Seed = Layer.effectDiscard(
       kind: 'credit_card',
       purpose: 'operating',
       currency: 'BRL',
-      card: { closingDay: 5, dueDay: 12, limitCents: 300_000, lastFour: '1234' },
+      card: {
+        closingDay: 5,
+        dueDay: 12,
+        limitCents: 300_000,
+        lastFour: '1234',
+      },
     })
     yield* Effect.logInfo('QA data seeded', { ownerId: owner.id })
   }),

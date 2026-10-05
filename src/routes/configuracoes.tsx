@@ -33,7 +33,6 @@ import { updateSettingsFn } from '#/features/finance/finance.functions'
 import {
   configurationOptions,
   invalidateFinance,
-  knowledgeBaseOptions,
   planningOptions,
 } from '#/features/finance/queries'
 import { createOwnerFn } from '#/features/v2/accounts.functions'
@@ -41,6 +40,9 @@ import { ownerKindLabels } from '#/features/v2/accounts'
 import type { Owner } from '#/features/v2/accounts'
 import {
   accountsOptions,
+  categoriesOptions,
+  providerMappingsOptions,
+  storePatternsOptions,
   connectSettingsOptions,
   connectionsOptions,
   ownersOptions,
@@ -107,7 +109,11 @@ export const Route = createFileRoute('/configuracoes')({
         ? context.queryClient.ensureQueryData(planningOptions())
         : null,
       deps.tab === 'conhecimento'
-        ? context.queryClient.ensureQueryData(knowledgeBaseOptions())
+        ? Promise.all([
+            context.queryClient.ensureQueryData(storePatternsOptions()),
+            context.queryClient.ensureQueryData(providerMappingsOptions()),
+            context.queryClient.ensureQueryData(categoriesOptions()),
+          ])
         : null,
     ]),
   component: SettingsPage,

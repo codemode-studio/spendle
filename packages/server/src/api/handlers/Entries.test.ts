@@ -124,33 +124,35 @@ describe('entries API', () => {
     }).pipe(Effect.provide(apiTest())),
   )
 
-  it.effect('filters by direction and absolute amount, counting across pages', () =>
-    Effect.gen(function* () {
-      const { client } = yield* imported
-      const page = (query: Parameters<typeof client.entries.list>[0]) =>
-        client.entries.list(query).pipe(
-          Effect.map((found) => ({
-            amounts: found.entries.map((entry) => entry.amountCents),
-            total: found.total,
-          })),
+  it.effect(
+    'filters by direction and absolute amount, counting across pages',
+    () =>
+      Effect.gen(function* () {
+        const { client } = yield* imported
+        const page = (query: Parameters<typeof client.entries.list>[0]) =>
+          client.entries.list(query).pipe(
+            Effect.map((found) => ({
+              amounts: found.entries.map((entry) => entry.amountCents),
+              total: found.total,
+            })),
+          )
+        assert.deepStrictEqual(
+          {
+            inflow: yield* page({ query: { direction: 'inflow' } }),
+            outflow: yield* page({ query: { direction: 'outflow', limit: 1 } }),
+            between: yield* page({
+              query: { minAmountCents: 5000, maxAmountCents: 10000 },
+            }),
+            large: yield* page({ query: { minAmountCents: 10001 } }),
+          },
+          {
+            inflow: { amounts: [100000], total: 1 },
+            outflow: { amounts: [-5000], total: 2 },
+            between: { amounts: [-5000, -10000], total: 2 },
+            large: { amounts: [100000], total: 1 },
+          },
         )
-      assert.deepStrictEqual(
-        {
-          inflow: yield* page({ query: { direction: 'inflow' } }),
-          outflow: yield* page({ query: { direction: 'outflow', limit: 1 } }),
-          between: yield* page({
-            query: { minAmountCents: 5000, maxAmountCents: 10000 },
-          }),
-          large: yield* page({ query: { minAmountCents: 10001 } }),
-        },
-        {
-          inflow: { amounts: [100000], total: 1 },
-          outflow: { amounts: [-5000], total: 2 },
-          between: { amounts: [-5000, -10000], total: 2 },
-          large: { amounts: [100000], total: 1 },
-        },
-      )
-    }).pipe(Effect.provide(apiTest())),
+      }).pipe(Effect.provide(apiTest())),
   )
 
   it.effect('shows an entry with its evidence and category', () =>

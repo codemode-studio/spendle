@@ -20,14 +20,6 @@ import {
   saveGoal,
   updateSettings,
 } from './planning.server'
-import {
-  forgetKnowledgeEntry,
-  getKnowledgeBaseSnapshot,
-} from './knowledge-base.server'
-import {
-  reviewKnowledgeCategoryAndSync,
-  updateKnowledgePatternAndSync,
-} from './knowledge-sync.server'
 import { serverInput } from './input-errors.server'
 import {
   approveDetectedRecurrence,
@@ -261,28 +253,6 @@ export const ignoreDetectedRecurrenceFn = createServerFn({ method: 'POST' })
     }),
   )
   .handler(({ data }) => ignoreDetectedRecurrence(data))
-
-export const getKnowledgeBaseFn = createServerFn({ method: 'GET' }).handler(
-  () => getKnowledgeBaseSnapshot(),
-)
-
-export const reviewKnowledgeCategoryFn = createServerFn({ method: 'POST' })
-  .validator(z.object({ id: z.string().min(1), categoryId: z.string().min(1) }))
-  .handler(({ data }) => reviewKnowledgeCategoryAndSync(data))
-
-export const updateKnowledgePatternFn = createServerFn({ method: 'POST' })
-  .validator(
-    z.object({
-      id: z.string().min(1),
-      pattern: z.string().min(1),
-      matchMode: z.enum(['exact', 'prefix']),
-    }),
-  )
-  .handler(({ data }) => updateKnowledgePatternAndSync(data))
-
-export const forgetKnowledgeEntryFn = createServerFn({ method: 'POST' })
-  .validator(z.object({ id: z.string().min(1) }))
-  .handler(({ data }) => forgetKnowledgeEntry(data))
 
 export const getStrategyHistoryFn = createServerFn({ method: 'GET' })
   .validator(z.object({ months: z.number().int().min(1).max(12).default(3) }))

@@ -10,7 +10,6 @@ import {
   getFinanceSnapshotFn,
   getConfigurationSnapshotFn,
   getPlanningSnapshotFn,
-  getKnowledgeBaseFn,
   getStrategyHistoryFn,
   listLinkCandidatesFn,
 } from './finance.functions'
@@ -170,12 +169,6 @@ export const configurationOptions = () =>
   queryOptions({
     queryKey: [...financeQueryKeys.all, 'read', 'configuration'],
     queryFn: () => getConfigurationSnapshotFn(),
-    staleTime: 15_000,
-  })
-export const knowledgeBaseOptions = () =>
-  queryOptions({
-    queryKey: financeQueryKeys.knowledgeBase(),
-    queryFn: () => getKnowledgeBaseFn(),
     staleTime: 15_000,
   })
 export const planningOptions = () =>
