@@ -5,6 +5,7 @@ import { AccountsApi, OwnersApi } from './Accounts.ts'
 import { EntriesApi } from './Entries.ts'
 import { ImportsApi } from './Imports.ts'
 import { OpenFinanceApi } from './OpenFinance.ts'
+import { ReconciliationApi } from './Reconciliation.ts'
 import { ApiAuthorization, RequestValidation } from './Security.ts'
 import { SystemApi } from './System.ts'
 
@@ -14,7 +15,14 @@ import { SystemApi } from './System.ts'
  * `effect`, so they are safe to bundle in the web app.
  */
 export class V2Api extends HttpApi.make('spendle-v2')
-  .add(OwnersApi, AccountsApi, OpenFinanceApi, ImportsApi, EntriesApi)
+  .add(
+    OwnersApi,
+    AccountsApi,
+    OpenFinanceApi,
+    ImportsApi,
+    EntriesApi,
+    ReconciliationApi,
+  )
   .middleware(ApiAuthorization) {}
 
 /** `V2Api` plus `/health`, which answers without a token. */
