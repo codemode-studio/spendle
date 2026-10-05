@@ -1,1 +1,0 @@
-ALTER TABLE `app_settings` ADD `keep_reserve_contributions` integer DEFAULT false NOT NULL;

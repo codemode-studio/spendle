@@ -1,1 +1,0 @@
-ALTER TABLE `staged_transactions` ADD `suggestion_source` text DEFAULT 'none' NOT NULL;
