@@ -346,6 +346,30 @@ const movementPhrase = new Set([
 ])
 
 // Card-bill wording, understood anywhere in a card payment's descriptions.
+// How a card bill wording may end (`Pagamento de fatura efetuado`).
+const statusWords = new Set([
+  'efetuado',
+  'efetuada',
+  'recebido',
+  'recebida',
+  'realizado',
+  'realizada',
+])
+
+// Words that introduce the other side of a movement.
+const prepositions = new Set([
+  'de',
+  'da',
+  'do',
+  'dos',
+  'das',
+  'para',
+  'em',
+  'no',
+  'na',
+  'ao',
+])
+
 const cardBill = new Set(['fatura', 'cartao', 'cartoes', 'credito'])
 
 // Rails that are also first names: a rail only as a description's first word.
@@ -496,14 +520,22 @@ const read = (description: string, vocabulary: Vocabulary) => {
   // Bill wording (`fatura`, `cartao de credito`) may only open a card leg;
   // anywhere else it may be part of a name (`Joao Cartoes`), and on a
   // receipt that also names someone it may be their trade name.
+  // Once a preposition introduces the other side (`para`, `de`), only bill
+  // wording on a card leg (and how it ends, `efetuado`) may still follow:
+  // anything else is the counterparty (`para Deposito Joao Paulo`) and goes
+  // to the identity check.
   let billWording = false
+  let introduced = false
   while (at < words.length && ownAccount(at) === undefined) {
     const word = words[at]!
-    if (movementPhrase.has(word)) at++
-    else if (vocabulary.side !== 'transfer' && cardBill.has(word)) {
+    if (!introduced && movementPhrase.has(word)) {
+      introduced = prepositions.has(word)
+      at++
+    } else if (vocabulary.side !== 'transfer' && cardBill.has(word)) {
       billWording = true
       at++
-    } else break
+    } else if (billWording && statusWords.has(word)) at++
+    else break
   }
   const named = new Set<string>()
   let bank = false
