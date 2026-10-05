@@ -770,6 +770,48 @@ describe('matchRelations', () => {
     )
   })
 
+  it('never reads bill wording inside a name as wording', () => {
+    const transfer = relations([
+      entry('out', 'nubank', -50000, {
+        description: 'Pix enviado Credito Joao',
+        ownerName: 'Joao Silva',
+      }),
+      entry('in', 'inter', 50000, {
+        description: 'Pix recebido Joao Silva',
+        ownerName: 'Joao Silva',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    const card = (paying: string, receipt: string) =>
+      relations([
+        entry('pay', 'inter', -50000, {
+          description: paying,
+          institution: 'Banco Inter',
+          ownerName: 'Joao Silva',
+        }),
+        entry('nu', 'card-nu', 50000, {
+          description: receipt,
+          institution: 'Nubank',
+          ownerName: 'Joao Silva',
+        }),
+      ]).flatMap((relation) => [relation.status])
+    assert.deepStrictEqual(
+      [
+        transfer,
+        card('Pagamento fatura Nubank', 'Pagamento recebido de Joao Cartoes'),
+        card('Pagamento fatura Nubank', 'Pagamento recebido Credito Joao'),
+        card('Pagamento fatura Credito Joao', 'Pagamento recebido'),
+        card('Pagamento fatura cartao de credito Nubank', 'Pagamento recebido'),
+      ],
+      [
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['confirmed'],
+      ],
+    )
+  })
+
   it('confirms only when every word of every description is understood', () => {
     const transfer = (
       outflow: string,

@@ -311,10 +311,6 @@ const movementPhrase = new Set([
   'pagamento',
   'pgto',
   'pagto',
-  'fatura',
-  'cartao',
-  'credito',
-  'debito',
   'deposito',
   'envio',
   'recebimento',
@@ -337,7 +333,6 @@ const movementPhrase = new Set([
   'celular',
   'telefone',
   'email',
-  'conta',
   'de',
   'da',
   'do',
@@ -428,8 +423,12 @@ interface Vocabulary {
   readonly owners: ReadonlyArray<Owner>
   /** Which banks it may name (see `institutionCore`). */
   readonly institutions: ReadonlyArray<ReadonlyArray<string>>
-  /** Whether card-bill wording (`fatura`, `final 1234`) is understood anywhere. */
-  readonly card: boolean
+  /**
+   * Which leg it reads: a transfer's, a card bill payment's paying side
+   * (which may open with bill wording and name the card's `final 1234`), or
+   * a card's receipt.
+   */
+  readonly side: 'transfer' | 'bill' | 'receipt'
 }
 
 /**
@@ -494,12 +493,18 @@ const read = (description: string, vocabulary: Vocabulary) => {
     )
   let at = 0
   if (railNames.has(words[0] ?? '')) at++
-  while (
-    at < words.length &&
-    movementPhrase.has(words[at]!) &&
-    ownAccount(at) === undefined
-  )
-    at++
+  // Bill wording (`fatura`, `cartao de credito`) may only open a card leg;
+  // anywhere else it may be part of a name (`Joao Cartoes`), and on a
+  // receipt that also names someone it may be their trade name.
+  let billWording = false
+  while (at < words.length && ownAccount(at) === undefined) {
+    const word = words[at]!
+    if (movementPhrase.has(word)) at++
+    else if (vocabulary.side !== 'transfer' && cardBill.has(word)) {
+      billWording = true
+      at++
+    } else break
+  }
   const named = new Set<string>()
   let bank = false
   let bare = false
@@ -518,11 +523,15 @@ const read = (description: string, vocabulary: Vocabulary) => {
       at += own.length
       continue
     }
-    if (isCode(word) || (vocabulary.card && cardBill.has(word))) {
+    if (isCode(word)) {
       at++
       continue
     }
-    if (vocabulary.card && word === 'final' && isCode(words[at + 1] ?? '')) {
+    if (
+      vocabulary.side === 'bill' &&
+      word === 'final' &&
+      isCode(words[at + 1] ?? '')
+    ) {
       at += 2
       continue
     }
@@ -541,8 +550,10 @@ const read = (description: string, vocabulary: Vocabulary) => {
     (owner) => owner.first !== null && named.has(owner.first),
   )
   // Beside a person's name a bare bank word may be their surname
-  // (`Carlos Santander`): without `banco` it is not a bank reference.
-  if (bare && named.size > 0) return { understood: false, bank }
+  // (`Carlos Santander`), and opening bill wording part of their trade name
+  // (`Credito Joao`): neither is then understood.
+  if ((bare || billWording) && named.size > 0)
+    return { understood: false, bank }
   return { understood: named.size === 0 || proven, bank }
 }
 
@@ -551,12 +562,17 @@ const vocabularyOf = (
   kind: RelationKind,
   outflow: MatchableEntry,
   inflow: MatchableEntry,
+  side: Vocabulary['side'] = kind === 'card_payment' ? 'receipt' : 'transfer',
 ): Vocabulary => ({
-  owners: [outflow, inflow].map((entry) => ownerOf(entry.ownerName ?? '')),
+  // A bill payment's paying side names the card, never a person.
+  owners:
+    side === 'bill'
+      ? []
+      : [outflow, inflow].map((entry) => ownerOf(entry.ownerName ?? '')),
   institutions: [outflow, inflow].map((entry) =>
     institutionCore(entry.institution ?? ''),
   ),
-  card: kind === 'card_payment',
+  side,
 })
 
 /** Whether every description of the entry is understood (see `read`). */
@@ -697,7 +713,7 @@ const cardTarget = (outflow: MatchableEntry, card: MatchableEntry) => {
     read(text, {
       owners: [],
       institutions: [institutionCore(card.institution ?? '')],
-      card: true,
+      side: 'bill',
     }),
   )
   const bill = describes(outflow, cardBillWording)
@@ -821,9 +837,13 @@ const cardEvidence = (outflow: MatchableEntry, card: MatchableEntry) => {
   // A card receipt naming anyone but the owner (`Pagamento recebido de Maria
   // Souza`, `de Silva S.A.`, `de Ted`), in any source's report, may be
   // someone else paying the card: never confirmed alone.
-  const vocabulary = vocabularyOf('card_payment', outflow, card)
-  const thirdPartyPayer = !understood(card, vocabulary)
-  const unrecognized = thirdPartyPayer || !understood(outflow, vocabulary)
+  const thirdPartyPayer = !understood(
+    card,
+    vocabularyOf('card_payment', outflow, card, 'receipt'),
+  )
+  const unrecognized =
+    thirdPartyPayer ||
+    !understood(outflow, vocabularyOf('card_payment', outflow, card, 'bill'))
   const reasons: Array<string> = unrecognized ? ['unrecognized_words'] : []
   if (target === 'named') reasons.push('names_card_institution')
   if (target === 'other') reasons.push('names_other_payee')
