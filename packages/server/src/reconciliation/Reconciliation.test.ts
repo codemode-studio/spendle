@@ -673,6 +673,55 @@ describe('Reconciliation', () => {
       }).pipe(Effect.provide(openFinanceTest())),
   )
 
+  it.effect(
+    'links the branch of a split confirmation that kept its id, without reviving the split',
+    () =>
+      Effect.gen(function* () {
+        const { reconciliation, report, interEntries, inter, nubankEntry } =
+          yield* twoAccounts
+        yield* report('a1', '2026-09-10', 'Pix recebido Donald')
+        yield* (yield* Imports).importFile({
+          accountId: inter.id,
+          fileName: 'inter.ofx',
+          bytes: ofx(line('i1', '20260910', '500.00', 'Pix recebido Donald')),
+        })
+        yield* drain
+        const [transfer] = yield* reconciliation.relations
+        yield* reconciliation.decide(transfer!.key, 'confirmed')
+        yield* report('a1', '2026-09-11', 'Deposito')
+        assert.strictEqual((yield* interEntries).length, 2)
+
+        // The person links the branch that kept the confirmed id.
+        const key = yield* reconciliation.link({
+          outflowEntryId: nubankEntry,
+          inflowEntryId: transfer!.inflowEntryId,
+        })
+        const linked = Effect.map(reconciliation.relations, (relations) =>
+          relations.map((relation) => [
+            relation.outflowEntryId,
+            relation.inflowEntryId,
+            relation.status,
+            relation.origin,
+          ]),
+        )
+        assert.deepStrictEqual(yield* linked, [
+          [nubankEntry, transfer!.inflowEntryId, 'confirmed', 'person'],
+        ])
+        assert.strictEqual(key, transfer!.key)
+        assert.deepStrictEqual(yield* reconciliation.orphanedDecisions, [])
+
+        // The feed corrects back: both observations merge again and the
+        // link holds instead of the superseded confirmation splitting it.
+        yield* report('a1', '2026-09-10', 'Pix recebido Donald')
+        yield* report('a1', '2026-09-11', 'Deposito')
+        yield* reconciliation.rebuild()
+        assert.deepStrictEqual(yield* linked, [
+          [nubankEntry, transfer!.inflowEntryId, 'confirmed', 'person'],
+        ])
+        assert.deepStrictEqual(yield* reconciliation.orphanedDecisions, [])
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
   it.effect('lets the person reject a confirmation whose entry vanished', () =>
     Effect.gen(function* () {
       const { reconciliation, report, nubankEntry } = yield* twoAccounts
