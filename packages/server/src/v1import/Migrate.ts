@@ -14,14 +14,29 @@ import { Accounts } from '../ledger/Accounts.ts'
 import { Entries } from '../ledger/Entries.ts'
 import { Observations } from '../ledger/Observations.ts'
 import * as Sqlite from '../persistence/Sqlite.ts'
+import { AssistantModel } from '../planning/AssistantModel.ts'
+import { PlanningServices } from '../planning/Services.ts'
+import { Cards } from '../reconciliation/Cards.ts'
 import { Reconciliation } from '../reconciliation/Reconciliation.ts'
+import { V1PlanningImport } from './PlanningImport.ts'
 import { readV1 } from './V1Database.ts'
 import { V1Import } from './V1Import.ts'
 
 /** What the migration writes through, over the V2 database in `ServerConfig`. The model stays off. */
-export const MigrationLive = V1Import.layer.pipe(
+export const MigrationLive = Layer.mergeAll(
+  V1Import.layer,
+  V1PlanningImport.layer,
+).pipe(
   Layer.provideMerge(
-    Layer.mergeAll(Categorizer.layer, Reconciliation.layer, Entries.layer),
+    PlanningServices.pipe(Layer.provideMerge(AssistantModel.disabled)),
+  ),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      Categorizer.layer,
+      Reconciliation.layer,
+      Entries.layer,
+      Cards.layer,
+    ),
   ),
   Layer.provideMerge(KnowledgeStore.layer),
   Layer.provideMerge(Categories.layer),
@@ -48,7 +63,9 @@ export const migrateV1 = Effect.fn('migrateV1')(function* (input: {
     ? yield* scratchCopy(input.databasePath)
     : input.databasePath
   return yield* Effect.gen(function* () {
-    return yield* (yield* V1Import).run(snapshot)
+    const summary = yield* (yield* V1Import).run(snapshot)
+    const planning = yield* (yield* V1PlanningImport).run(snapshot)
+    return { ...summary, planning }
   }).pipe(
     Effect.provide(
       MigrationLive.pipe(

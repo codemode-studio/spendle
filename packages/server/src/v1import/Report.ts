@@ -1,4 +1,5 @@
 import type { Unmapped } from './Plan.ts'
+import type { PlanningSummary } from './PlanningImport.ts'
 import type { PendingTally, Summary, Tally, Waiting } from './V1Import.ts'
 
 const row = (label: string, tally: Tally) =>
@@ -22,11 +23,16 @@ const unmappedTitle: Record<Unmapped['kind'], string> = {
   category_decision: 'Category decisions',
   relation_decision: 'Reconciliation decisions',
   statement_payment: 'Manual bill payment links',
+  recurrence_link: 'Recurrence payment links',
+  strategy: 'Strategies',
+  budget: 'Closed months',
+  goal: 'Goals',
+  recurrence: 'Recurrences',
 }
 
 /** The summary `migrate-v1` prints, ending with what the person does next. */
 export const formatSummary = (
-  summary: Summary,
+  summary: Summary & { readonly planning?: PlanningSummary },
   options: { readonly dryRun: boolean; readonly detailLimit?: number },
 ) => {
   const limit = options.detailLimit ?? 20
@@ -49,6 +55,25 @@ export const formatSummary = (
     pendingRow('Category decisions', summary.pending.categories),
     pendingRow('Reconciliation', summary.pending.relations),
   ]
+  const planning = summary.planning
+  if (planning)
+    lines.push(
+      '',
+      'Planning:',
+      `  ${''.padEnd(22)} ${'moved'.padStart(6)} ${'already'.padStart(8)} ${'skipped'.padStart(8)}`,
+      row('Income and reserve', planning.settings),
+      row('Strategies', planning.strategies),
+      row('Closed months', planning.budgets),
+      row('Goals', planning.goals),
+      row('Recurrences', planning.recurrences),
+      row('Recurrence merchants', planning.aliases),
+      row('Skipped occurrences', planning.skippedOccurrences),
+      row('Detection ignores', planning.ignores),
+      row('Recurrence payments', planning.links),
+      '',
+      `  ${''.padEnd(22)} ${'applied'.padStart(8)} ${'waiting'.padStart(8)} ${'superseded'.padStart(11)} ${'refused'.padStart(8)}`,
+      pendingRow('Recurrence payments', planning.pending.links),
+    )
   if (summary.coveredByKnowledge > 0)
     lines.push(
       '',
@@ -56,7 +81,7 @@ export const formatSummary = (
     )
 
   const groups = new Map<Unmapped['kind'], Array<Unmapped>>()
-  for (const item of summary.unmapped) {
+  for (const item of [...summary.unmapped, ...(planning?.unmapped ?? [])]) {
     const list = groups.get(item.kind) ?? []
     list.push(item)
     groups.set(item.kind, list)
@@ -70,15 +95,16 @@ export const formatSummary = (
       lines.push(`    … and ${items.length - limit} more`)
   }
 
-  if (summary.pending.waiting.length > 0) {
-    lines.push(
-      '',
-      `Waiting for V2 to observe (${summary.pending.waiting.length}):`,
-    )
-    for (const item of summary.pending.waiting.slice(0, limit))
+  const waiting = [
+    ...summary.pending.waiting,
+    ...(planning?.pending.waiting ?? []),
+  ]
+  if (waiting.length > 0) {
+    lines.push('', `Waiting for V2 to observe (${waiting.length}):`)
+    for (const item of waiting.slice(0, limit))
       lines.push(`    - ${item.label}: ${waitingReason[item.reason]}`)
-    if (summary.pending.waiting.length > limit)
-      lines.push(`    … and ${summary.pending.waiting.length - limit} more`)
+    if (waiting.length > limit)
+      lines.push(`    … and ${waiting.length - limit} more`)
   }
 
   if (summary.notMigrated.length > 0) {
