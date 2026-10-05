@@ -3,10 +3,7 @@ import { z } from 'zod'
 
 import { currencySchema } from '#/domain/currency'
 
-import {
-  createManualBalanceCheckpoint,
-  createManualTransaction,
-} from './finance.server'
+import { createManualTransaction } from './finance.server'
 import {
   getFinanceSnapshot,
   getConfigurationSnapshot,
@@ -53,23 +50,6 @@ export const getFinanceSnapshotFn = createServerFn({ method: 'GET' })
     }),
   )
   .handler(({ data }) => getFinanceSnapshot(data.month))
-
-export const createManualBalanceCheckpointFn = createServerFn({
-  method: 'POST',
-})
-  .validator(
-    z.object({
-      targetType: z.enum(['account', 'card']),
-      targetId: z.string().min(1),
-      balanceCents: z.number().int(),
-      asOf: isoDateSchema,
-      periodStart: isoDateSchema.optional(),
-      balanceType: z.enum(['posted', 'available', 'card_statement']),
-      note: z.string().trim().max(200).optional(),
-      replaceExisting: z.boolean().default(false),
-    }),
-  )
-  .handler(({ data }) => serverInput(() => createManualBalanceCheckpoint(data)))
 
 export const createManualTransactionFn = createServerFn({ method: 'POST' })
   .validator(
