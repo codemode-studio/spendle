@@ -3,6 +3,7 @@ import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder'
 
 import { SpendleApi } from './definition/Api.ts'
 import { AccountsHandlers, OwnersHandlers } from './handlers/Accounts.ts'
+import { CardsHandlers } from './handlers/Cards.ts'
 import { EntriesHandlers } from './handlers/Entries.ts'
 import { ImportsHandlers } from './handlers/Imports.ts'
 import { OpenFinanceHandlers } from './handlers/OpenFinance.ts'
@@ -20,6 +21,7 @@ export const ApiHandlers = Layer.mergeAll(
   ImportsHandlers,
   EntriesHandlers,
   ReconciliationHandlers,
+  CardsHandlers,
 ).pipe(Layer.provide(ReadModel.layer), Layer.provideMerge(SecurityLive))
 
 /** `SpendleApi` as routes, with its OpenAPI document at `/api/v2/openapi.json`. */
