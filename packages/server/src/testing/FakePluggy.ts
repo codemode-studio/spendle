@@ -10,6 +10,7 @@ import * as TestClock from 'effect/testing/TestClock'
 import * as Reactor from '../events/Reactor.ts'
 import { Imports } from '../imports/Imports.ts'
 import * as Entries from '../ledger/Entries.ts'
+import { Cards } from '../reconciliation/Cards.ts'
 import * as Reconciliation from '../reconciliation/Reconciliation.ts'
 import { Accounts } from '../ledger/Accounts.ts'
 import { OpenFinance } from '../openfinance/OpenFinance.ts'
@@ -244,6 +245,7 @@ export const openFinanceTest = (
             Entries.Entries.layer,
             Imports.layer,
             Reconciliation.Reconciliation.layer,
+            Cards.layer,
           ),
         ),
         Layer.provideMerge(OpenFinance.layer),

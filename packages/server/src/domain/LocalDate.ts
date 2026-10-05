@@ -1,4 +1,5 @@
 import * as DateTime from 'effect/DateTime'
+import * as Effect from 'effect/Effect'
 
 // Calendar arithmetic on `YYYY-MM-DD` strings. Dates are anchored at UTC
 // midnight only to reuse DateTime's calendar math; no time zone is implied.
@@ -46,3 +47,35 @@ export const dayNumber = (date: string) => {
 /** Whole days between two dates, regardless of order. */
 export const daysBetween = (a: string, b: string) =>
   Math.abs(dayNumber(a) - dayNumber(b))
+
+const saoPaulo = DateTime.zoneMakeNamedUnsafe('America/Sao_Paulo')
+
+/** The São Paulo calendar day of an instant; Brazilian banks book on it. */
+export const dateInSaoPaulo = (instant: DateTime.DateTime | string) =>
+  DateTime.formatIsoDate(
+    DateTime.makeZonedUnsafe(instant, { timeZone: saoPaulo }),
+  )
+
+/** Today's date in São Paulo, from the Effect clock. */
+export const today = Effect.map(DateTime.now, dateInSaoPaulo)
+
+/** 0 = Sunday … 6 = Saturday. */
+export const weekday = (date: string) => {
+  const [year, month, day] = date.split('-').map(Number) as [
+    number,
+    number,
+    number,
+  ]
+  // Sakamoto's method.
+  const offsets = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]
+  const y = month < 3 ? year - 1 : year
+  return (
+    (y +
+      Math.floor(y / 4) -
+      Math.floor(y / 100) +
+      Math.floor(y / 400) +
+      offsets[month - 1]! +
+      day) %
+    7
+  )
+}

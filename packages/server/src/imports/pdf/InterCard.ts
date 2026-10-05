@@ -187,6 +187,8 @@ export const parseInterCard = ({
     // it, which are recorded as lines. Money owed on a card is negative in
     // the ledger.
     closingBalance: { asOf: periodEnd, cents: 0 - statementTotal },
+    // "Fatura atual" is never negative: credit beyond what is owed prints zero.
+    floorsAtZero: true,
     accountHint:
       mostFrequent(
         lines.flatMap((line) => [
@@ -194,6 +196,7 @@ export const parseInterCard = ({
         ]),
       ) ?? null,
     rejectedRows,
+    dueOn: dueDate,
   })
 }
 

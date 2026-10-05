@@ -26,6 +26,19 @@ export interface ParsedStatement {
   readonly lines: ReadonlyArray<StatementLine>
   /** Rows that looked like transactions but had no valid date, description or amount. */
   readonly rejectedRows: number
+  /** The payment deadline a card bill prints. */
+  readonly dueOn?: string
+  /**
+   * Whether the closing balance counts only the period's charges, while the
+   * payments printed with them settled earlier bills. Otherwise payments made
+   * within the period already reduced it.
+   */
+  readonly chargesOnly?: boolean
+  /**
+   * Whether the closing balance is an amount due printed as zero when credit
+   * exceeds what is owed, so a zero does not say how much credit is left.
+   */
+  readonly floorsAtZero?: boolean
 }
 
 export type StatementProblem =

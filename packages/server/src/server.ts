@@ -14,6 +14,7 @@ import * as Reactor from './events/Reactor.ts'
 import { Imports } from './imports/Imports.ts'
 import { Accounts } from './ledger/Accounts.ts'
 import * as Entries from './ledger/Entries.ts'
+import { Cards } from './reconciliation/Cards.ts'
 import * as Reconciliation from './reconciliation/Reconciliation.ts'
 import { Observations } from './ledger/Observations.ts'
 import { OpenFinance } from './openfinance/OpenFinance.ts'
@@ -42,6 +43,7 @@ const CoreLive = Layer.mergeAll(
   Imports.layer,
   Entries.Entries.layer,
   Reconciliation.Reconciliation.layer,
+  Cards.layer,
 ).pipe(
   Layer.provideMerge(Observations.layer),
   Layer.provideMerge(Accounts.layer),

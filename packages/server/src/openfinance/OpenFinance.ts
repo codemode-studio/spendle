@@ -9,7 +9,7 @@ import * as Semaphore from 'effect/Semaphore'
 import * as SqlClient from 'effect/sql/SqlClient'
 import * as SqlSchema from 'effect/sql/SqlSchema'
 
-import { addDays, max } from '../domain/LocalDate.ts'
+import { addDays, max, today } from '../domain/LocalDate.ts'
 import { EventLog } from '../events/EventLog.ts'
 import {
   Accounts,
@@ -175,9 +175,6 @@ const make = Effect.gen(function* () {
   const observations = yield* Observations
 
   const now = Effect.map(DateTime.now, DateTime.formatIso)
-  const today = Effect.map(DateTime.now, (instant) =>
-    bookedOn(DateTime.formatIso(instant)),
-  )
   const fail = (reason: OpenFinanceError['reason'], detail?: string) =>
     new OpenFinanceError({ reason, detail })
 
