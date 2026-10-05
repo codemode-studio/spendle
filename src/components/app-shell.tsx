@@ -33,6 +33,7 @@ import {
 } from '#/components/ui/sidebar'
 import { Button } from '#/components/ui/button'
 import { cn } from '#/lib/utils'
+import { NavigationProgress } from '#/components/navigation-progress'
 import { TooltipProvider } from '#/components/ui/tooltip'
 import { Toaster } from '#/components/ui/sonner'
 import { OnboardingCard } from '#/features/home/onboarding-card'
@@ -103,9 +104,6 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   })
 
   const search = useRouterState({ select: (state) => state.location.search })
-  const navigating = useRouterState({
-    select: (state) => state.status === 'pending',
-  })
 
   if (pathname === '/marca') {
     return (
@@ -117,13 +115,7 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
 
   return (
     <>
-      <div
-        aria-hidden="true"
-        className={cn(
-          'fixed inset-x-0 top-0 z-50 h-0.5 origin-left bg-primary transition-transform duration-200',
-          navigating ? 'scale-x-100' : 'scale-x-0',
-        )}
-      />
+      <NavigationProgress />
       <Sidebar collapsible="icon" variant="inset">
         <SidebarHeader className="flex-row items-center justify-between">
           <Link
