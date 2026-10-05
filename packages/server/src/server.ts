@@ -11,6 +11,7 @@ import { createServer } from 'node:http'
 import { ServerConfig } from './config.ts'
 import { EventLog } from './events/EventLog.ts'
 import * as Reactor from './events/Reactor.ts'
+import { Imports } from './imports/Imports.ts'
 import { Accounts } from './ledger/Accounts.ts'
 import { Observations } from './ledger/Observations.ts'
 import { OpenFinance } from './openfinance/OpenFinance.ts'
@@ -34,10 +35,8 @@ const HttpServerLive = Layer.unwrap(
 )
 
 // Services every feature builds on. Feature reactors are added beside the routes.
-const CoreLive = Layer.mergeAll(
-  Reactor.Reactors.layer,
-  Observations.layer,
-).pipe(
+const CoreLive = Layer.mergeAll(Reactor.Reactors.layer, Imports.layer).pipe(
+  Layer.provideMerge(Observations.layer),
   Layer.provideMerge(Accounts.layer),
   Layer.provideMerge(EventLog.layer),
   Layer.provideMerge(Sqlite.layer),
