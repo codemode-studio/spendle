@@ -3,6 +3,7 @@ import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint'
 import * as HttpApiGroup from 'effect/http-api/HttpApiGroup'
 
 import { EndpointErrors } from './Errors.ts'
+import { Converted } from './Rates.ts'
 
 /** A calendar day, `YYYY-MM-DD`. */
 export const LocalDate = Schema.String.check(
@@ -49,6 +50,8 @@ export const Entry = Schema.Struct({
   note: Schema.NullOr(Schema.String),
   /** Set when the person typed the movement in: the id to edit or delete it with. */
   manualId: Schema.NullOr(Schema.String),
+  /** The amount in reais at the rate of its date; null in reais or without a rate. */
+  converted: Schema.NullOr(Converted),
 })
 export type Entry = typeof Entry.Type
 

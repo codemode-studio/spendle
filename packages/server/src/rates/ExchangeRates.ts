@@ -56,7 +56,10 @@ const CoverageRow = Schema.Struct({
 const refreshAfter = Duration.hours(1)
 /** How long a failed source is left alone before the next attempt. */
 const retryAfter = Duration.minutes(5)
-/** Days `on` looks back for a date's rate, enough to cross long holidays. */
+/**
+ * Days fetched before the first day asked for, so it finds the close of
+ * the business day before it across weekends and long holidays.
+ */
 const lookBackDays = 10
 
 /** The service over the cache; without a source it only reads what is cached. */
@@ -180,8 +183,9 @@ const makeWith = (source: RateSourceShape | null) =>
       for (const need of needs) {
         if (need.currency === baseCurrency) continue
         const current = earliest.get(need.currency)
-        if (current === undefined || need.from < current)
-          earliest.set(need.currency, need.from)
+        const from = addDays(need.from, -lookBackDays)
+        if (current === undefined || from < current)
+          earliest.set(need.currency, from)
       }
       if (earliest.size === 0) return new Map() as RateTable
       const currencies = [...earliest.keys()]
@@ -214,10 +218,7 @@ const makeWith = (source: RateSourceShape | null) =>
       date: string,
     ) {
       const rates = yield* table(
-        currencies.map((currency) => ({
-          currency,
-          from: addDays(date, -lookBackDays),
-        })),
+        currencies.map((currency) => ({ currency, from: date })),
       )
       const found = new Map<string, Rate>()
       for (const currency of currencies) {

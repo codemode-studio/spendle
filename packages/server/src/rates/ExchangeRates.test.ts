@@ -80,8 +80,10 @@ describe('ExchangeRates', () => {
               brl: first.has('BRL'),
             },
             {
-              requests: [['USD', '2026-09-28', '2026-10-05']],
+              // Ten days before the first day asked for, to find the previous close.
+              requests: [['USD', '2026-09-18', '2026-10-05']],
               first: [
+                ['2026-09-25', 5_199_100],
                 ['2026-09-28', 5_210_000],
                 ['2026-09-29', 5_220_000],
                 ['2026-09-30', 5_230_000],
@@ -89,7 +91,7 @@ describe('ExchangeRates', () => {
                 ['2026-10-02', 5_250_000],
                 ['2026-10-05', 5_260_000],
               ],
-              sameAgain: 6,
+              sameAgain: 7,
               brl: false,
             },
           )
@@ -111,8 +113,8 @@ describe('ExchangeRates', () => {
           },
           {
             requests: [
-              ['USD', '2026-09-30', '2026-10-05'],
-              ['USD', '2026-09-25', '2026-09-29'],
+              ['USD', '2026-09-20', '2026-10-05'],
+              ['USD', '2026-09-15', '2026-09-19'],
             ],
             earliest: '2026-09-25',
           },
@@ -134,7 +136,7 @@ describe('ExchangeRates', () => {
           yield* TestClock.adjust(Duration.hours(1))
           yield* rates.table([{ currency: 'USD', from: '2026-10-01' }])
           assert.deepStrictEqual(yield* Ref.get(requests), [
-            ['USD', '2026-10-01', '2026-10-05'],
+            ['USD', '2026-09-21', '2026-10-05'],
             ['USD', '2026-10-05', '2026-10-05'],
           ])
         }),

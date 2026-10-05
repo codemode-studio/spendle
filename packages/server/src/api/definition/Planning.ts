@@ -4,6 +4,7 @@ import * as HttpApiGroup from 'effect/http-api/HttpApiGroup'
 import * as HttpApiSchema from 'effect/http-api/HttpApiSchema'
 
 import { EndpointErrors } from './Errors.ts'
+import { Converted, Exchange } from './Rates.ts'
 
 const LocalDate = Schema.String.check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/))
 const Month = Schema.String.check(Schema.isPattern(/^\d{4}-(0[1-9]|1[0-2])$/))
@@ -107,7 +108,15 @@ export const MonthLine = Schema.Struct({
   bucket: Schema.Literals(['essential', 'lifestyle', 'other']),
   entryId: Schema.NullOr(Schema.String),
   certainty: Schema.Literals(['documented', 'scheduled', 'estimated']),
-  origin: Schema.Literals(['account', 'card', 'recurrence', 'envelope']),
+  /** `history` estimates a variable category from its trailing months. */
+  origin: Schema.Literals([
+    'account',
+    'card',
+    'recurrence',
+    'envelope',
+    'history',
+  ]),
+  converted: Schema.NullOr(Converted),
 })
 
 /** The family's month: plan, spending per envelope, savings, cash and what blocks closing. */
@@ -142,6 +151,8 @@ export const MonthView = Schema.Struct({
     savingsTargetCents: Schema.Int,
     savingsRemainingCents: Schema.Int,
     plannedBalanceCents: Schema.Int,
+    /** The part of the estimate that comes from category history, not from schedules. */
+    historyEstimateCents: Schema.Int,
     expenses: Schema.Array(
       Schema.Struct({
         bucket: Schema.Literals(['essential', 'lifestyle', 'other']),
@@ -172,12 +183,14 @@ export const MonthView = Schema.Struct({
     issues: Schema.Array(IntegrityIssue),
     closingBlockerCount: Schema.Int,
   }),
+  exchange: Exchange,
 })
 export type MonthView = typeof MonthView.Type
 
 export const CashProjection = Schema.Struct({
   today: Schema.String,
   days: Schema.Int,
+  exchange: Exchange,
   startingCents: Schema.NullOr(Schema.Int),
   points: Schema.Array(
     Schema.Struct({ date: Schema.String, balanceCents: Schema.Int }),
@@ -194,6 +207,7 @@ export const CashProjection = Schema.Struct({
       certainty: Schema.NullOr(
         Schema.Literals(['closed', 'installment_schedule', 'open']),
       ),
+      converted: Schema.NullOr(Converted),
     }),
   ),
   recurringEstimateEntryIds: Schema.Array(Schema.String),
@@ -237,6 +251,8 @@ export const RecurrenceView = Schema.Struct({
   scheduleAnchor: Schema.String,
   nextDate: Schema.String,
   active: Schema.Boolean,
+  /** The amount in reais at the latest rate; null in reais or without a rate. */
+  converted: Schema.NullOr(Converted),
   learnedDescriptions: Schema.Array(Schema.String),
   occurrences: Schema.Array(
     Schema.Struct({

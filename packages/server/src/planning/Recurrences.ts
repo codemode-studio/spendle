@@ -11,6 +11,9 @@ import { Categorizer } from '../categories/Categorizer.ts'
 import { today } from '../domain/LocalDate.ts'
 import { EventLog } from '../events/EventLog.ts'
 import { foldDescription } from '../imports/Statement.ts'
+import { convert, rateTable } from '../rates/Conversion.ts'
+import type { Converted } from '../rates/Conversion.ts'
+import { ExchangeRates } from '../rates/ExchangeRates.ts'
 import { LedgerReads } from './LedgerReads.ts'
 import type { PlanningEntry } from './LedgerReads.ts'
 import type { MonthRelation } from './Month.ts'
@@ -159,6 +162,8 @@ export interface RecurrenceView {
   readonly scheduleAnchor: string
   readonly nextDate: string
   readonly active: boolean
+  /** The amount in reais at the latest rate; null in reais or without a rate. */
+  readonly converted: Converted | null
   /** Merchant descriptions the person confirmed for it. */
   readonly learnedDescriptions: ReadonlyArray<string>
   readonly occurrences: ReadonlyArray<{
@@ -205,6 +210,7 @@ const make = Effect.gen(function* () {
   const log = yield* EventLog
   const crypto = yield* Crypto.Crypto
   const reads = yield* LedgerReads
+  const exchangeRates = yield* ExchangeRates
   const categorizer = yield* Categorizer
   const now = Effect.map(DateTime.now, DateTime.formatIso)
   const newId = crypto.randomUUIDv7.pipe(Effect.orDie)
@@ -363,6 +369,14 @@ const make = Effect.gen(function* () {
     )
     const entryById = new Map(entries.map((entry) => [entry.id, entry]))
     const rowById = new Map(ruleRows.map(({ row }) => [row.id, row]))
+    const day = yield* today
+    const latest = yield* exchangeRates.on(
+      book.map(({ rule }) => rule.currency),
+      day,
+    )
+    const rates = rateTable(
+      [...latest].map(([currency, rate]) => ({ currency, ...rate })),
+    )
     const recurrences = book.map((recurrence): RecurrenceView => {
       const row = rowById.get(recurrence.rule.id)!
       const overdue = new Set(
@@ -386,6 +400,8 @@ const make = Effect.gen(function* () {
         scheduleAnchor: row.scheduleAnchor,
         nextDate: recurrence.nextDate,
         active: row.active,
+        converted:
+          convert(rates, row.amountCents, row.currency, day)?.converted ?? null,
         learnedDescriptions: recurrence.learnedDescriptions,
         occurrences: recurrence.occurrences.map((occurrence) => ({
           id: occurrence.id,
