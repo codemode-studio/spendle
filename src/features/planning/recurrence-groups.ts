@@ -1,16 +1,21 @@
 import { describeRecurrence } from '#/domain/recurrence-book'
-import type {
-  FinanceSnapshot,
-  RecurrenceSnapshot,
-} from '#/features/finance/snapshot.types'
+import type { RecurrenceBook } from '@spendle/server/api'
 
-type RecurrenceGroup = FinanceSnapshot['recurrenceGroups'][number]
+type RecurrenceSnapshot = RecurrenceBook['recurrences'][number]
+type RecurrenceGroup = RecurrenceBook['groups'][number]
+
+/**
+ * The amount in reais, or null when the recurrence is in another currency:
+ * V2 has no exchange rates yet, so it stays out of the totals.
+ */
+const baseAmount = (item: RecurrenceSnapshot) =>
+  item.currency === 'BRL' ? item.amountCents : null
 
 export type RecurrenceDisplayRow =
   | {
       type: 'group'
       group: RecurrenceGroup
-      items: FinanceSnapshot['recurrences']
+      items: RecurrenceBook['recurrences']
       monthlyTotal: number
       missingConversions: number
     }
@@ -30,29 +35,26 @@ export type RecurrenceDisplayRow =
     }
 
 export function buildRecurrenceGroups(
-  {
-    recurrences,
-    recurrenceGroups,
-  }: Pick<FinanceSnapshot, 'recurrences' | 'recurrenceGroups'>,
+  { recurrences, groups: recurrenceGroups }: RecurrenceBook,
   { today }: { today: string },
 ) {
   const active = recurrences.filter((item) => item.active)
   const missingConversionCount = active.filter(
-    (item) => item.amountCents !== 0 && item.baseAmountCents === null,
+    (item) => item.amountCents !== 0 && baseAmount(item) === null,
   ).length
   const monthlyIncome = active.reduce(
     (sum, item) =>
       sum +
-      (item.direction === 'income' && item.baseAmountCents !== null
-        ? item.baseAmountCents / (item.frequency === 'yearly' ? 12 : 1)
+      (item.direction === 'income' && baseAmount(item) !== null
+        ? baseAmount(item)! / (item.frequency === 'yearly' ? 12 : 1)
         : 0),
     0,
   )
   const monthlyExpense = active.reduce(
     (sum, item) =>
       sum +
-      (item.direction === 'expense' && item.baseAmountCents !== null
-        ? item.baseAmountCents / (item.frequency === 'yearly' ? 12 : 1)
+      (item.direction === 'expense' && baseAmount(item) !== null
+        ? baseAmount(item)! / (item.frequency === 'yearly' ? 12 : 1)
         : 0),
     0,
   )
@@ -61,8 +63,8 @@ export function buildRecurrenceGroups(
       sum +
       (item.direction === 'expense' &&
       item.amountMode === 'variable' &&
-      item.baseAmountCents !== null
-        ? item.baseAmountCents / (item.frequency === 'yearly' ? 12 : 1)
+      baseAmount(item) !== null
+        ? baseAmount(item)! / (item.frequency === 'yearly' ? 12 : 1)
         : 0),
     0,
   )
@@ -123,13 +125,13 @@ export function buildRecurrenceGroups(
         const monthlyTotal = activeItems.reduce(
           (sum, item) =>
             sum +
-            (item.baseAmountCents === null
+            (baseAmount(item) === null
               ? 0
-              : item.baseAmountCents / (item.frequency === 'yearly' ? 12 : 1)),
+              : baseAmount(item)! / (item.frequency === 'yearly' ? 12 : 1)),
           0,
         )
         const missingConversions = activeItems.filter(
-          (item) => item.amountCents !== 0 && item.baseAmountCents === null,
+          (item) => item.amountCents !== 0 && baseAmount(item) === null,
         ).length
         return [
           {

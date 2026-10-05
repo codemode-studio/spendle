@@ -16,27 +16,26 @@ import {
 } from '#/domain/currency'
 import { formatInstrumentName } from '#/domain/finance'
 import { formatShortDate as formatDate } from '#/domain/period'
-import {
-  approveDetectedRecurrenceFn,
-  ignoreDetectedRecurrenceFn,
-} from '#/features/finance/finance.functions'
-import type { detectRecurrencesFn } from '#/features/finance/finance.functions'
-import {
-  invalidateFinance,
-  recurrenceDetectionOptions,
-} from '#/features/finance/queries'
-import type { PlanningSnapshot } from '#/features/finance/snapshot.types'
+import type { DetectedRecurrence } from '@spendle/server/api'
 
-type DetectedRecurrence = Awaited<
-  ReturnType<typeof detectRecurrencesFn>
->[number]
+import {
+  approveDetectedFn,
+  ignoreDetectedFn,
+} from '#/features/v2/planning.functions'
+import {
+  detectedRecurrencesOptions,
+  invalidateAfterReactors,
+} from '#/features/v2/queries'
+import { errorMessage } from '#/lib/v2/errors'
 
-function DetectedRecurrencesPanel({ data }: { data: PlanningSnapshot }) {
+import type { PlanningData } from './types'
+
+function DetectedRecurrencesPanel({ data }: { data: PlanningData }) {
   const queryClient = useQueryClient()
-  const detection = useQuery(recurrenceDetectionOptions())
-  const approve = useServerFn(approveDetectedRecurrenceFn)
-  const ignore = useServerFn(ignoreDetectedRecurrenceFn)
-  const invalidate = () => invalidateFinance(queryClient, 'ledger')
+  const detection = useQuery(detectedRecurrencesOptions())
+  const approve = useServerFn(approveDetectedFn)
+  const ignore = useServerFn(ignoreDetectedFn)
+  const invalidate = () => invalidateAfterReactors(queryClient)
   const approveMutation = useMutation({
     mutationFn: approve,
     onSuccess: (result) => {
@@ -46,9 +45,7 @@ function DetectedRecurrencesPanel({ data }: { data: PlanningSnapshot }) {
       void invalidate()
     },
     onError: (error) =>
-      toast.error(
-        error instanceof Error ? error.message : 'Não foi possível aprovar.',
-      ),
+      toast.error(errorMessage(error, 'Não foi possível aprovar.')),
   })
   const ignoreMutation = useMutation({
     mutationFn: ignore,
@@ -57,9 +54,7 @@ function DetectedRecurrencesPanel({ data }: { data: PlanningSnapshot }) {
       void invalidate()
     },
     onError: (error) =>
-      toast.error(
-        error instanceof Error ? error.message : 'Não foi possível ignorar.',
-      ),
+      toast.error(errorMessage(error, 'Não foi possível ignorar.')),
   })
 
   const candidates = detection.data ?? []
@@ -108,7 +103,7 @@ function DetectedRecurrenceCard({
   onIgnore,
 }: {
   candidate: DetectedRecurrence
-  data: PlanningSnapshot
+  data: PlanningData
   pending: boolean
   onApprove: (input: {
     name: string
@@ -119,9 +114,8 @@ function DetectedRecurrenceCard({
     amountMode: 'fixed' | 'variable'
     frequency: 'monthly' | 'yearly'
     nextDate: string
-    accountId?: string
-    creditCardId?: string
-    transactionIds: string[]
+    accountId: string | null
+    entryIds: ReadonlyArray<string>
   }) => void
   onIgnore: () => void
 }) {
@@ -147,10 +141,8 @@ function DetectedRecurrenceCard({
     }
   })()
   const source =
-    data.accounts.find((item) => item.id === candidate.accountId)?.name ??
-    data.cards.find((item) => item.id === candidate.creditCardId)?.name ??
-    null
-  const recent = [...candidate.transactions].reverse().slice(0, 3)
+    data.accounts.find((item) => item.id === candidate.accountId)?.name ?? null
+  const recent = [...candidate.entries].reverse().slice(0, 3)
   const canApprove =
     name.trim().length >= 2 &&
     categoryId !== '' &&
@@ -226,17 +218,16 @@ function DetectedRecurrenceCard({
             className="flex items-center justify-between gap-3 px-3 py-1.5"
           >
             <span className="text-muted-foreground">
-              {formatDate(item.postedAt)}
+              {formatDate(item.bookedOn)}
             </span>
             <span className="font-medium tabular-nums">
               {formatCurrency(Math.abs(item.amountCents), candidate.currency)}
             </span>
           </li>
         ))}
-        {candidate.transactions.length > recent.length && (
+        {candidate.entries.length > recent.length && (
           <li className="px-3 py-1.5 text-muted-foreground">
-            + {candidate.transactions.length - recent.length} pagamento(s)
-            anteriores
+            + {candidate.entries.length - recent.length} pagamento(s) anteriores
           </li>
         )}
       </ul>
@@ -268,9 +259,8 @@ function DetectedRecurrenceCard({
                 amountMode: candidate.amountMode,
                 frequency: candidate.frequency,
                 nextDate: candidate.nextExpectedDate,
-                accountId: candidate.accountId ?? undefined,
-                creditCardId: candidate.creditCardId ?? undefined,
-                transactionIds: candidate.transactions.map((item) => item.id),
+                accountId: candidate.accountId,
+                entryIds: candidate.entries.map((item) => item.id),
               })
             }
           >

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { shiftDays } from '#/domain/period'
-import type { CashProjection } from '#/domain/monthly-cash-flow'
+import type { CashProjection } from './cash-projection'
 import { simulateRecovery } from './forecast'
 
 function projection(
@@ -20,7 +20,6 @@ function projection(
     dailyVariableCents,
     recurringEstimateTransactionIds: [],
     largestHistoricalExpenses: [],
-    observedAdvancePayments: [],
     assumptions: {
       days: balances.length - 1,
       startingCents: balances[0],

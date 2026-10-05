@@ -47,7 +47,7 @@ import {
 } from '#/domain/finance'
 import { formatMonthLong as formatMonth } from '#/domain/period'
 import { transactionSearchDefaults } from '#/features/finance/transactions.search'
-import type { PlanningSnapshot } from '#/features/finance/snapshot.types'
+import type { PlanningData } from './types'
 import { cn } from '#/lib/utils'
 import { buildClosingIssuePresentations } from './closing-issues'
 import type { ClosingIssueDestination } from './closing-issues'
@@ -93,7 +93,7 @@ function BudgetSection({
   savePlan,
   planPending,
 }: {
-  data: PlanningSnapshot
+  data: PlanningData
   selectedId: string
   allocation: Allocation
   totalBps: number
@@ -103,24 +103,29 @@ function BudgetSection({
   planPending: boolean
 }) {
   const [income, setIncome] = useState(
-    formatMinorUnitsForInput(data.settings.monthlyIncomeTargetCents, 'BRL'),
+    formatMinorUnitsForInput(
+      data.state.settings.monthlyIncomeTargetCents,
+      'BRL',
+    ),
   )
   const [reserveMonths, setReserveMonths] = useState(
-    String(data.settings.reserveMonths),
+    String(data.state.settings.reserveMonths),
   )
   const [keepContributions, setKeepContributions] = useState(
-    data.settings.keepReserveContributions,
+    data.state.settings.keepReserveContributions,
   )
   const incomeCents = parseIncome(income)
   const months = Number(reserveMonths)
-  const selectedStrategy = data.strategies.find((s) => s.id === selectedId)
+  const selectedStrategy = data.state.strategies.find(
+    (s) => s.id === selectedId,
+  )
   const matchesPreset =
     selectedStrategy &&
-    selectedStrategy.essentialBps === allocation.essential &&
-    selectedStrategy.lifestyleBps === allocation.lifestyle &&
-    selectedStrategy.investmentBps === allocation.investment &&
-    selectedStrategy.reserveBps === allocation.reserve
-  const emergencyGoal = data.goals.find(
+    selectedStrategy.allocation.essential === allocation.essential &&
+    selectedStrategy.allocation.lifestyle === allocation.lifestyle &&
+    selectedStrategy.allocation.investment === allocation.investment &&
+    selectedStrategy.allocation.reserve === allocation.reserve
+  const emergencyGoal = data.state.goals.find(
     (goal) => goal.type === 'emergency_reserve' && goal.targetCents > 0,
   )
   const essentialCents =
@@ -139,7 +144,7 @@ function BudgetSection({
     months >= 1 &&
     months <= 36
   const baseDiffers =
-    data.dashboard.baseIncomeCents !== data.settings.monthlyIncomeTargetCents
+    data.month.baseIncomeCents !== data.state.settings.monthlyIncomeTargetCents
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -177,7 +182,7 @@ function BudgetSection({
           />
           <FieldDescription>
             {baseDiffers
-              ? `Este mês o app usa ${formatCurrency(data.dashboard.baseIncomeCents)}, a média conservadora dos últimos meses fechados.`
+              ? `Este mês o app usa ${formatCurrency(data.month.baseIncomeCents)}, a média conservadora dos últimos meses fechados.`
               : 'Use o valor líquido que costuma entrar. O app ajusta pela média quando houver meses fechados.'}
           </FieldDescription>
         </Field>
@@ -195,7 +200,7 @@ function BudgetSection({
             className="w-full md:hidden"
             aria-label="Selecionar estratégia"
           >
-            {data.strategies.map((strategy) => (
+            {data.state.strategies.map((strategy) => (
               <NativeSelectOption key={strategy.id} value={strategy.id}>
                 {strategy.name}
               </NativeSelectOption>
@@ -207,7 +212,7 @@ function BudgetSection({
             className="hidden w-full grid-cols-2 items-stretch md:grid xl:grid-cols-4"
             spacing={2}
           >
-            {data.strategies.map((strategy) => {
+            {data.state.strategies.map((strategy) => {
               const preset = strategyPresets[strategy.template]
               return (
                 <ToggleGroupItem
@@ -319,26 +324,30 @@ function BudgetSection({
 
 function ClosingSection({
   data,
-  closed,
-  pendingCount,
   closeMonth,
   closePending,
 }: {
-  data: PlanningSnapshot
-  closed: boolean
-  pendingCount: number
+  data: PlanningData
   closeMonth: () => void
   closePending: boolean
 }) {
-  const closingIssues = buildClosingIssuePresentations(data, {
-    today: new Date().toISOString().slice(0, 10),
-  })
+  const closed = data.month.closed
+  const pendingCount = data.month.integrity.closingBlockerCount
+  const closingIssues = buildClosingIssuePresentations(
+    data.month.integrity.issues,
+    { month: data.month.month, book: data.book },
+  )
   const closingIssueAction = (destination: ClosingIssueDestination) => {
     if (destination === 'accounts') {
       return <Link to="/configuracoes" search={{ tab: 'contas' }} />
     }
-    if (destination === 'imports') {
-      return <Link to="/importar" search={{ view: 'review' }} />
+    if (destination === 'review') {
+      return (
+        <Link
+          to="/transacoes"
+          search={{ ...transactionSearchDefaults, category: 'review' }}
+        />
+      )
     }
     if (destination === 'recurrences') {
       return <Link to="/configuracoes" search={{ tab: 'recorrencias' }} />
@@ -359,7 +368,7 @@ function ClosingSection({
 
   return (
     <Panel
-      title={`Fechamento de ${formatMonth(data.dashboard.currentMonth).toLocaleLowerCase('pt-BR')}`}
+      title={`Fechamento de ${formatMonth(data.month.month).toLocaleLowerCase('pt-BR')}`}
       description="Preserva o retrato do orçamento deste mês."
       action={
         <StatusBadge
@@ -424,10 +433,7 @@ function ClosingSection({
             <AlertDialogHeader>
               <AlertDialogTitle>
                 Fechar{' '}
-                {formatMonth(data.dashboard.currentMonth).toLocaleLowerCase(
-                  'pt-BR',
-                )}
-                ?
+                {formatMonth(data.month.month).toLocaleLowerCase('pt-BR')}?
               </AlertDialogTitle>
               <AlertDialogDescription>
                 O orçamento será preservado como concluído para consulta.
@@ -450,7 +456,7 @@ function GoalsSection({
   data,
   openGoal,
 }: {
-  data: PlanningSnapshot
+  data: PlanningData
   openGoal: () => void
 }) {
   return (
@@ -464,12 +470,12 @@ function GoalsSection({
         </Button>
       }
     >
-      {data.goals.length ? (
+      {data.state.goals.length ? (
         <div className="divide-y rounded-lg border">
-          {data.goals.map((goal) => {
+          {data.state.goals.map((goal) => {
             const target =
               goal.type === 'emergency_reserve' && !goal.targetCents
-                ? data.dashboard.reserve.targetCents
+                ? data.month.reserve.targetCents
                 : goal.targetCents
             return (
               <div key={goal.id} className="p-4">

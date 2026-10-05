@@ -6,55 +6,49 @@ import { toast } from 'sonner'
 
 import { parseCurrency, toMinorUnits as toCents } from '#/domain/currency'
 import { formatMonthLong as formatMonth } from '#/domain/period'
-import {
-  activateStrategyFn,
-  closeCurrentBudgetFn,
-  completeRecurrenceOccurrenceFn,
-  confirmRecurrenceMatchFn,
-  createRecurrenceFn,
-  deleteRecurrenceFn,
-  linkRecurrenceOccurrenceFn,
-  refreshRecurrencesFn,
-  rejectRecurrenceMatchFn,
-  saveGoalFn,
-  setRecurrenceActiveFn,
-  skipRecurrenceOccurrenceFn,
-  unlinkRecurrenceMatchFn,
-  updateRecurrenceFn,
-  updateSettingsFn,
-} from '#/features/finance/finance.functions'
 import { invalidateFinance } from '#/features/finance/queries'
-import type { PlanningSnapshot } from '#/features/finance/snapshot.types'
-import type { Allocation, PlanInput } from './budget-section'
+import {
+  closeMonthFn,
+  completeOccurrenceFn,
+  confirmMatchFn,
+  deleteRecurrenceFn,
+  linkPaymentsFn,
+  rejectMatchFn,
+  savePlanFn,
+  saveGoalFn,
+  saveRecurrenceFn,
+  setRecurrenceActiveFn,
+  skipOccurrenceFn,
+  unlinkMatchFn,
+} from '#/features/v2/planning.functions'
+import { invalidateAfterReactors } from '#/features/v2/queries'
+import { errorMessage } from '#/lib/v2/errors'
 
-export function usePlanningController(data: PlanningSnapshot) {
+import type { Allocation, PlanInput } from './budget-section'
+import { matchRef, occurrenceRef } from './types'
+import type { MatchView, PlanningData } from './types'
+
+export function usePlanningController(data: PlanningData) {
   const queryClient = useQueryClient()
-  const activateStrategy = useServerFn(activateStrategyFn)
-  const updateSettings = useServerFn(updateSettingsFn)
+  const savePlan = useServerFn(savePlanFn)
   const saveGoal = useServerFn(saveGoalFn)
-  const closeBudget = useServerFn(closeCurrentBudgetFn)
-  const createRecurrence = useServerFn(createRecurrenceFn)
-  const updateRecurrence = useServerFn(updateRecurrenceFn)
+  const closeMonth = useServerFn(closeMonthFn)
+  const saveRecurrence = useServerFn(saveRecurrenceFn)
   const setRecurrenceActive = useServerFn(setRecurrenceActiveFn)
   const deleteRecurrence = useServerFn(deleteRecurrenceFn)
-  const refreshRecurrences = useServerFn(refreshRecurrencesFn)
-  const confirmRecurrenceMatch = useServerFn(confirmRecurrenceMatchFn)
-  const rejectRecurrenceMatch = useServerFn(rejectRecurrenceMatchFn)
-  const unlinkRecurrenceMatch = useServerFn(unlinkRecurrenceMatchFn)
-  const skipRecurrenceOccurrence = useServerFn(skipRecurrenceOccurrenceFn)
-  const linkRecurrenceOccurrence = useServerFn(linkRecurrenceOccurrenceFn)
-  const completeRecurrenceOccurrence = useServerFn(
-    completeRecurrenceOccurrenceFn,
-  )
-  const [selectedId, setSelectedId] = useState(data.dashboard.activeStrategy.id)
-  const selected =
-    data.strategies.find((strategy) => strategy.id === selectedId) ??
-    data.dashboard.activeStrategy
+  const confirmMatch = useServerFn(confirmMatchFn)
+  const rejectMatch = useServerFn(rejectMatchFn)
+  const unlinkMatch = useServerFn(unlinkMatchFn)
+  const skipOccurrence = useServerFn(skipOccurrenceFn)
+  const linkPayments = useServerFn(linkPaymentsFn)
+  const completeOccurrence = useServerFn(completeOccurrenceFn)
+
+  const defaultStrategy =
+    data.state.strategies.find((strategy) => strategy.isDefault) ??
+    data.state.strategies[0]
+  const [selectedId, setSelectedId] = useState(defaultStrategy.id)
   const [allocation, setAllocation] = useState<Allocation>({
-    essential: selected.essentialBps,
-    lifestyle: selected.lifestyleBps,
-    investment: selected.investmentBps,
-    reserve: selected.reserveBps,
+    ...defaultStrategy.allocation,
   })
   const [goalOpen, setGoalOpen] = useState(false)
   const [recurrenceOpen, setRecurrenceOpen] = useState(false)
@@ -65,22 +59,20 @@ export function usePlanningController(data: PlanningSnapshot) {
     string | null
   >(null)
   const invalidateStrategy = () => invalidateFinance(queryClient, 'strategy')
-  const invalidateBudgetClose = () =>
-    invalidateFinance(queryClient, 'budgetClose')
-  const invalidateLedger = () => invalidateFinance(queryClient, 'ledger')
+  // Linking a payment may categorise it, which the categorizer settles in the background.
+  const invalidateLedger = () => invalidateAfterReactors(queryClient)
 
-  const strategyMutation = useMutation({
-    mutationFn: activateStrategy,
+  const showError = (error: unknown) =>
+    toast.error(errorMessage(error, 'Não foi possível salvar.'))
+
+  // Renda, estratégia e reserva são salvas juntas: um clique, um aviso.
+  const planMutation = useMutation({
+    mutationFn: (input: PlanInput) =>
+      savePlan({
+        data: { ...input, strategyId: selectedId, allocation },
+      }),
     onSuccess: () => {
-      toast.success('Estratégia atualizada.')
-      void invalidateStrategy()
-    },
-    onError: showError,
-  })
-  const settingsMutation = useMutation({
-    mutationFn: updateSettings,
-    onSuccess: () => {
-      toast.success('Planejamento atualizado.')
+      toast.success('Plano salvo.')
       void invalidateStrategy()
     },
     onError: showError,
@@ -94,60 +86,28 @@ export function usePlanningController(data: PlanningSnapshot) {
     },
     onError: showError,
   })
-  // Renda, estratégia e reserva são salvas juntas: um clique, um aviso.
-  const planMutation = useMutation({
-    mutationFn: async (input: PlanInput) => {
-      await updateSettings({
-        data: {
-          ...input,
-          aiClassificationConsent: data.settings.aiClassificationConsent,
-        },
-      })
-      await activateStrategy({
-        data: {
-          strategyId: selectedId,
-          essentialBps: allocation.essential,
-          lifestyleBps: allocation.lifestyle,
-          investmentBps: allocation.investment,
-          reserveBps: allocation.reserve,
-        },
-      })
-    },
-    onSuccess: () => {
-      toast.success('Plano salvo.')
-      void invalidateStrategy()
-    },
-    onError: showError,
-  })
   const closeMutation = useMutation({
-    mutationFn: closeBudget,
+    mutationFn: closeMonth,
     onSuccess: (result) => {
       toast.success(
         result.alreadyClosed
           ? `${formatMonth(result.month, { capitalize: true })} já estava fechado.`
           : `${formatMonth(result.month, { capitalize: true })} foi fechado.`,
       )
-      if ('analysisError' in result && result.analysisError)
+      if (result.analysisError)
         toast.error(
           'Mês fechado. A análise falhou; tente novamente no Assistente.',
         )
-      void invalidateBudgetClose()
+      void invalidateFinance(queryClient, 'budgetClose')
     },
     onError: showError,
   })
-  const createRecurrenceMutation = useMutation({
-    mutationFn: createRecurrence,
-    onSuccess: () => {
-      toast.success('Recorrência criada.')
-      closeRecurrenceDialog()
-      void invalidateLedger()
-    },
-    onError: showError,
-  })
-  const updateRecurrenceMutation = useMutation({
-    mutationFn: updateRecurrence,
-    onSuccess: () => {
-      toast.success('Recorrência atualizada.')
+  const saveRecurrenceMutation = useMutation({
+    mutationFn: saveRecurrence,
+    onSuccess: (_, variables) => {
+      toast.success(
+        variables.data.id ? 'Recorrência atualizada.' : 'Recorrência criada.',
+      )
       closeRecurrenceDialog()
       void invalidateLedger()
     },
@@ -174,22 +134,8 @@ export function usePlanningController(data: PlanningSnapshot) {
     },
     onError: showError,
   })
-  const refreshRecurrencesMutation = useMutation({
-    mutationFn: refreshRecurrences,
-    onSuccess: (result) => {
-      const parts = [
-        `${result.suggestionCount} nova(s) correspondência(s) para revisão`,
-        result.autoConfirmCount
-          ? `${result.autoConfirmCount} conciliada(s) automaticamente`
-          : null,
-      ].filter(Boolean)
-      toast.success(`${parts.join(' · ')}.`)
-      void invalidateLedger()
-    },
-    onError: showError,
-  })
   const confirmMatchMutation = useMutation({
-    mutationFn: confirmRecurrenceMatch,
+    mutationFn: (match: MatchView) => confirmMatch({ data: matchRef(match) }),
     onSuccess: () => {
       toast.success('Pagamento conciliado com a recorrência.')
       void invalidateLedger()
@@ -197,17 +143,15 @@ export function usePlanningController(data: PlanningSnapshot) {
     onError: showError,
   })
   const rejectMatchMutation = useMutation({
-    mutationFn: rejectRecurrenceMatch,
+    mutationFn: (match: MatchView) => rejectMatch({ data: matchRef(match) }),
     onSuccess: () => {
-      toast.success(
-        'Correspondência rejeitada. O sistema vai considerar isso no histórico.',
-      )
+      toast.success('Correspondência rejeitada. Ela não será sugerida de novo.')
       void invalidateLedger()
     },
     onError: showError,
   })
   const unlinkMatchMutation = useMutation({
-    mutationFn: unlinkRecurrenceMatch,
+    mutationFn: (match: MatchView) => unlinkMatch({ data: matchRef(match) }),
     onSuccess: () => {
       toast.success('Pagamento desvinculado.')
       void invalidateLedger()
@@ -215,7 +159,8 @@ export function usePlanningController(data: PlanningSnapshot) {
     onError: showError,
   })
   const skipOccurrenceMutation = useMutation({
-    mutationFn: skipRecurrenceOccurrence,
+    mutationFn: (occurrenceId: string) =>
+      skipOccurrence({ data: occurrenceRef(occurrenceId) }),
     onSuccess: () => {
       toast.success('Ocorrência ignorada.')
       void invalidateLedger()
@@ -223,7 +168,13 @@ export function usePlanningController(data: PlanningSnapshot) {
     onError: showError,
   })
   const linkOccurrenceMutation = useMutation({
-    mutationFn: linkRecurrenceOccurrence,
+    mutationFn: (input: { occurrenceId: string; entryIds: string[] }) =>
+      linkPayments({
+        data: {
+          ...occurrenceRef(input.occurrenceId),
+          entryIds: input.entryIds,
+        },
+      }),
     onSuccess: (result) => {
       toast.success(
         result.linked === 1
@@ -235,7 +186,8 @@ export function usePlanningController(data: PlanningSnapshot) {
     onError: showError,
   })
   const completeOccurrenceMutation = useMutation({
-    mutationFn: completeRecurrenceOccurrence,
+    mutationFn: (occurrenceId: string) =>
+      completeOccurrence({ data: occurrenceRef(occurrenceId) }),
     onSuccess: () => {
       toast.success('Período concluído com o total real.')
       void invalidateLedger()
@@ -243,42 +195,35 @@ export function usePlanningController(data: PlanningSnapshot) {
     onError: showError,
   })
 
-  function showError(error: unknown) {
-    toast.error(
-      error instanceof Error ? error.message : 'Não foi possível salvar.',
-    )
-  }
-
   function closeRecurrenceDialog() {
     setRecurrenceOpen(false)
     setEditingRecurrenceId(null)
   }
 
   function selectStrategy(id: string) {
-    const strategy = data.strategies.find((item) => item.id === id)
+    const strategy = data.state.strategies.find((item) => item.id === id)
     if (!strategy) return
     setSelectedId(id)
-    setAllocation({
-      essential: strategy.essentialBps,
-      lifestyle: strategy.lifestyleBps,
-      investment: strategy.investmentBps,
-      reserve: strategy.reserveBps,
-    })
+    setAllocation({ ...strategy.allocation })
   }
 
   function submitGoal(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    goalMutation.mutate({
-      data: {
-        name: String(form.get('name')),
-        type: String(form.get('type')) as
-          'emergency_reserve' | 'medium_term' | 'retirement' | 'other',
-        targetCents: toCents(String(form.get('target'))),
-        currentCents: toCents(String(form.get('current') || '0')),
-        targetDate: String(form.get('targetDate') || '') || undefined,
-      },
-    })
+    try {
+      goalMutation.mutate({
+        data: {
+          name: String(form.get('name')),
+          type: String(form.get('type')) as
+            'emergency_reserve' | 'medium_term' | 'retirement' | 'other',
+          targetCents: toCents(String(form.get('target'))),
+          currentCents: toCents(String(form.get('current') || '0')),
+          targetDate: String(form.get('targetDate') || '') || null,
+        },
+      })
+    } catch {
+      toast.error('Informe o valor-alvo em reais, como 100.000,00.')
+    }
   }
 
   function submitRecurrence(event: React.FormEvent<HTMLFormElement>) {
@@ -286,50 +231,47 @@ export function usePlanningController(data: PlanningSnapshot) {
     const form = new FormData(event.currentTarget)
     const destinationMode = String(form.get('destinationMode')) as
       'automatic' | 'fixed'
-    const [kind, id] = String(form.get('destination') || '').split(':')
-    const destination =
-      kind === 'account'
-        ? data.accounts.find((account) => account.id === id)
-        : data.cards.find((card) => card.id === id)
+    const accountId =
+      destinationMode === 'fixed'
+        ? String(form.get('destination') || '') || null
+        : null
+    const account = data.accounts.find((item) => item.id === accountId)
     const currency = parseCurrency(
-      destination?.currency ?? String(form.get('currency') || 'BRL'),
+      account?.currency ?? String(form.get('currency') || 'BRL'),
     )
-    const values = {
-      name: String(form.get('name')),
-      groupName: String(form.get('groupName') || '') || undefined,
-      participantLabel: String(form.get('participantLabel') || '') || undefined,
-      accountId: kind === 'account' ? id : undefined,
-      creditCardId: kind === 'card' ? id : undefined,
-      categoryId: String(form.get('categoryId')),
-      amountCents: Math.abs(toCents(String(form.get('amount')), currency)),
-      currency,
-      direction: String(form.get('direction')) as 'income' | 'expense',
-      amountMode: String(form.get('amountMode')) as 'fixed' | 'variable',
-      matchMode: String(form.get('matchMode') || 'single') as
-        'single' | 'aggregate',
-      destinationMode,
-      frequency: String(form.get('frequency')) as 'monthly' | 'yearly',
-      nextDate: String(form.get('nextDate')),
+    let amountCents: number
+    try {
+      amountCents = Math.abs(toCents(String(form.get('amount')), currency))
+    } catch {
+      toast.error('Informe o valor em reais, como 150,00.')
+      return
     }
-    if (editingRecurrenceId) {
-      updateRecurrenceMutation.mutate({
-        data: { ...values, id: editingRecurrenceId },
-      })
-    } else {
-      createRecurrenceMutation.mutate({ data: values })
-    }
+    saveRecurrenceMutation.mutate({
+      data: {
+        id: editingRecurrenceId ?? undefined,
+        recurrence: {
+          name: String(form.get('name')),
+          groupName: String(form.get('groupName') || '') || null,
+          participantLabel: String(form.get('participantLabel') || '') || null,
+          accountId,
+          categoryId: String(form.get('categoryId')),
+          amountCents,
+          currency,
+          direction: String(form.get('direction')) as 'income' | 'expense',
+          amountMode: String(form.get('amountMode')) as 'fixed' | 'variable',
+          matchMode: String(form.get('matchMode') || 'single') as
+            'single' | 'aggregate',
+          destinationMode,
+          frequency: String(form.get('frequency')) as 'monthly' | 'yearly',
+          nextDate: String(form.get('nextDate')),
+        },
+      },
+    })
   }
 
   const totalBps = Object.values(allocation).reduce(
     (sum, value) => sum + value,
     0,
-  )
-  const currentBudget = data.monthlyBudgets.find(
-    (budget) => budget.month === data.dashboard.currentMonth,
-  )
-  const pendingCount = data.dashboard.integrity.closingBlockerCount
-  const editingRecurrence = data.recurrences.find(
-    (item) => item.id === editingRecurrenceId,
   )
   return {
     allocation,
@@ -337,19 +279,29 @@ export function usePlanningController(data: PlanningSnapshot) {
     closeRecurrenceDialog,
     completeOccurrenceMutation,
     confirmMatchMutation,
-    createRecurrenceMutation,
     deleteRecurrenceMutation,
     deletingRecurrenceId,
-    editingRecurrence,
+    editingRecurrence: data.book.recurrences.find(
+      (item) => item.id === editingRecurrenceId,
+    ),
     editingRecurrenceId,
     goalMutation,
     goalOpen,
     linkOccurrenceMutation,
-    pendingCount,
+    planMutation,
     recurrenceOpen,
+    recurrencePending:
+      recurrenceStatusMutation.isPending ||
+      confirmMatchMutation.isPending ||
+      rejectMatchMutation.isPending ||
+      unlinkMatchMutation.isPending ||
+      skipOccurrenceMutation.isPending ||
+      linkOccurrenceMutation.isPending ||
+      completeOccurrenceMutation.isPending,
     recurrenceStatusMutation,
-    refreshRecurrencesMutation,
     rejectMatchMutation,
+    saveRecurrenceMutation,
+    savePlan: (input: PlanInput) => planMutation.mutate(input),
     selectStrategy,
     selectedId,
     setAllocation,
@@ -357,16 +309,10 @@ export function usePlanningController(data: PlanningSnapshot) {
     setEditingRecurrenceId,
     setGoalOpen,
     setRecurrenceOpen,
-    settingsMutation,
     skipOccurrenceMutation,
-    strategyMutation,
-    planMutation,
-    savePlan: (input: PlanInput) => planMutation.mutate(input),
     submitGoal,
     submitRecurrence,
     totalBps,
-    currentBudget,
     unlinkMatchMutation,
-    updateRecurrenceMutation,
   }
 }

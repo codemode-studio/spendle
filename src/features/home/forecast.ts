@@ -1,4 +1,4 @@
-import type { CashProjection } from '#/domain/monthly-cash-flow'
+import type { CashProjection } from './cash-projection'
 
 /** Uniform daily changes are a simulation, never scheduled receipts or ledger writes. */
 export function simulateRecovery(

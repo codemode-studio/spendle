@@ -56,10 +56,10 @@ const { ask, generate, latest } = vi.hoisted(() => ({
   generate: vi.fn(),
   latest: vi.fn(),
 }))
-vi.mock('./analysis.functions', () => ({
-  askFinanceQuestionFn: ask,
-  generateMonthlyAnalysisFn: generate,
-  getLatestMonthlyAnalysisFn: latest,
+vi.mock('#/features/v2/planning.functions', () => ({
+  askAssistantFn: ask,
+  monthlyAnalysisFn: generate,
+  latestAnalysisFn: latest,
 }))
 afterEach(() => {
   cleanup()
@@ -73,7 +73,7 @@ it('never calls the model when the assistant is disabled', () => {
       <MonthlyAssistant month="2026-09" revision="a" configured={false} />
     </QueryClientProvider>,
   )
-  expect(screen.getByText(/Ative o assistente/)).toBeTruthy()
+  expect(screen.getByText(/Assistente desligado/)).toBeTruthy()
   expect(generate).not.toHaveBeenCalled()
   client.clear()
 })

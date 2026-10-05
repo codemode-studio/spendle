@@ -170,6 +170,7 @@ export interface RecurrenceView {
     readonly overdue: boolean
     readonly matches: ReadonlyArray<{
       readonly id: string
+      readonly occurrenceId: string
       readonly entryId: string
       readonly status: 'suggested' | 'confirmed' | 'auto_confirmed'
       readonly score: number
@@ -395,6 +396,7 @@ const make = Effect.gen(function* () {
           overdue: overdue.has(occurrence.id),
           matches: occurrence.matches.map((match) => ({
             id: match.id,
+            occurrenceId: match.occurrenceId,
             entryId: match.entryId,
             status: match.status,
             score: match.score,

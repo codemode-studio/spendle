@@ -1,35 +1,26 @@
 import { linkOptions } from '@tanstack/react-router'
-import { todayIso } from '#/domain/period'
-import type { PlanningSnapshot } from '#/features/finance/snapshot.types'
+import type { IntegrityIssue } from '@spendle/server/api'
+
 import { transactionSearchDefaults } from '#/features/finance/transactions.search'
-import { buildClosingIssuePresentations } from '#/features/planning/closing-issues'
+import { presentIssues } from '#/features/planning/closing-issues'
 import type { ClosingIssueDestination } from '#/features/planning/closing-issues'
 
-/** Same pending decisions as planning, plus the non-blocking balance warning. */
-export function pendingReviewItems(data: PlanningSnapshot, today = todayIso()) {
-  const items = buildClosingIssuePresentations(data, { today })
-  const balance = data.dashboard.integrity.issues.find(
-    (issue) => issue.code === 'unverified_balance' && !issue.blocksClosing,
-  )
-  if (balance) {
-    items.push({
-      code: balance.code,
-      count: balance.count,
-      label: 'Saldos sem verificação recente',
-      actionLabel: 'Conferir contas',
-      destination: 'accounts',
-      detail: 'Atualize os extratos para conferir os saldos.',
-    })
-  }
-  return items.filter((item) => item.count > 0)
+/** The month's pending decisions, blocking ones first, then data gaps that do not block closing. */
+export function pendingReviewItems(
+  issues: ReadonlyArray<IntegrityIssue>,
+  month: string,
+) {
+  const items = presentIssues(issues, { month })
+  return [
+    ...items.filter((item) => item.blocksClosing),
+    ...items.filter((item) => !item.blocksClosing),
+  ]
 }
 
 export function reviewDestination(destination: ClosingIssueDestination) {
   switch (destination) {
     case 'accounts':
       return linkOptions({ to: '/configuracoes', search: { tab: 'contas' } })
-    case 'imports':
-      return linkOptions({ to: '/importar', search: { view: 'review' } })
     case 'recurrences':
       return linkOptions({
         to: '/configuracoes',
@@ -39,6 +30,11 @@ export function reviewDestination(destination: ClosingIssueDestination) {
       return linkOptions({
         to: '/transacoes',
         search: { ...transactionSearchDefaults, category: 'uncategorized' },
+      })
+    case 'review':
+      return linkOptions({
+        to: '/transacoes',
+        search: { ...transactionSearchDefaults, category: 'review' },
       })
     default:
       return linkOptions({

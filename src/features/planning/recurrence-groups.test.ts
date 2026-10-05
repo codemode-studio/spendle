@@ -1,31 +1,34 @@
 import { describe, expect, it } from 'vitest'
 
-import type {
-  FinanceSnapshot,
-  RecurrenceSnapshot,
-} from '#/features/finance/snapshot.types'
+import type { RecurrenceBook } from '@spendle/server/api'
+
 import { buildRecurrenceGroups } from './recurrence-groups'
+
+type RecurrenceSnapshot = RecurrenceBook['recurrences'][number]
 
 function recurrence(
   input: Pick<
     RecurrenceSnapshot,
-    | 'id'
-    | 'name'
-    | 'groupId'
-    | 'direction'
-    | 'amountCents'
-    | 'baseAmountCents'
-    | 'frequency'
+    'id' | 'name' | 'groupId' | 'direction' | 'amountCents' | 'frequency'
   > &
     Partial<Pick<RecurrenceSnapshot, 'occurrences'>>,
 ): RecurrenceSnapshot {
   return {
     ...input,
+    participantLabel: null,
+    accountId: null,
+    categoryId: 'housing',
+    currency: 'BRL',
+    amountMode: 'fixed',
+    destinationMode: 'automatic',
+    startsOn: '2026-08-10',
+    nextDate: '2026-09-10',
+    learnedDescriptions: [],
     active: true,
     matchMode: 'single',
     scheduleAnchor: '2026-09-10',
     occurrences: input.occurrences ?? [],
-  } as RecurrenceSnapshot
+  }
 }
 
 function occurrence(
@@ -34,24 +37,18 @@ function occurrence(
 ): RecurrenceSnapshot['occurrences'][number] {
   return {
     id,
-    recurrenceId: 'gym-donald',
     expectedDate,
     expectedAmountCents: 12_000,
     currency: 'BRL',
-    direction: 'expense',
-    categoryId: 'personal-care',
     status: 'expected',
-    resolvedAt: null,
-    createdAt: new Date('2026-01-01T00:00:00Z'),
+    overdue: false,
     matches: [],
   }
 }
 
 describe('buildRecurrenceGroups', () => {
   it('preserva totais, grupos, fallback e ordem das ocorrências', () => {
-    const recurrenceGroups = [
-      { id: 'group-gym', name: 'Academia' },
-    ] as FinanceSnapshot['recurrenceGroups']
+    const groups = [{ id: 'group-gym', name: 'Academia' }]
     const recurrences = [
       recurrence({
         id: 'gym-donald',
@@ -59,7 +56,6 @@ describe('buildRecurrenceGroups', () => {
         groupId: 'group-gym',
         direction: 'expense',
         amountCents: 12_000,
-        baseAmountCents: 12_000,
         frequency: 'monthly',
         occurrences: [
           occurrence('august', '2026-08-10'),
@@ -73,7 +69,6 @@ describe('buildRecurrenceGroups', () => {
         groupId: 'group-gym',
         direction: 'expense',
         amountCents: 24_000,
-        baseAmountCents: 24_000,
         frequency: 'monthly',
       }),
       recurrence({
@@ -82,13 +77,12 @@ describe('buildRecurrenceGroups', () => {
         groupId: null,
         direction: 'expense',
         amountCents: 120_000,
-        baseAmountCents: 120_000,
         frequency: 'yearly',
       }),
     ]
 
     const result = buildRecurrenceGroups(
-      { recurrenceGroups, recurrences },
+      { groups, recurrences },
       { today: '2026-09-15' },
     )
     const expense = result.sections.find(
@@ -148,7 +142,6 @@ it('separa previsão variável de valores fixos sem contar itens pausados', () =
       groupId: null,
       direction: 'expense',
       amountCents: 200_000,
-      baseAmountCents: 200_000,
       frequency: 'monthly',
     }),
     amountMode: 'fixed' as const,
@@ -159,11 +152,10 @@ it('separa previsão variável de valores fixos sem contar itens pausados', () =
     name: 'Mercado',
     amountMode: 'variable' as const,
     amountCents: 445_512,
-    baseAmountCents: 445_512,
   }
   const paused = { ...variable, id: 'paused', active: false }
   const result = buildRecurrenceGroups(
-    { recurrences: [fixed, variable, paused], recurrenceGroups: [] },
+    { recurrences: [fixed, variable, paused], groups: [] },
     { today: '2026-09-05' },
   )
   expect(result.monthlyExpense).toBe(645_512)

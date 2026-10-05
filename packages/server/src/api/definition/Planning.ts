@@ -249,6 +249,7 @@ export const RecurrenceView = Schema.Struct({
       matches: Schema.Array(
         Schema.Struct({
           id: Schema.String,
+          occurrenceId: Schema.String,
           entryId: Schema.String,
           status: Schema.Literals(['suggested', 'confirmed', 'auto_confirmed']),
           score: Schema.Int,

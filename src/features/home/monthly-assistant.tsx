@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Sparkles } from 'lucide-react'
 import { Button } from '#/components/ui/button'
 import { AnalysisCard } from './analysis-card'
-import { generateMonthlyAnalysisFn } from './analysis.functions'
+import { monthlyAnalysisFn } from '#/features/v2/planning.functions'
 
 export function MonthlyAssistant({
   month,
@@ -17,7 +17,7 @@ export function MonthlyAssistant({
 }) {
   const analysis = useQuery({
     queryKey: ['monthly-assistant', month, closed, revision],
-    queryFn: () => generateMonthlyAnalysisFn({ data: { month } }),
+    queryFn: () => monthlyAnalysisFn({ data: { month } }),
     enabled: configured && closed,
     staleTime: Infinity,
     retry: 1,
@@ -36,8 +36,8 @@ export function MonthlyAssistant({
       <div className="min-w-0 flex-1" aria-live="polite">
         {!configured ? (
           <p className="text-sm">
-            Ative o assistente em Configurações para receber uma análise deste
-            mês.
+            Assistente desligado neste servidor: configure OPENROUTER_API_KEY e
+            OPENROUTER_MODEL para receber uma análise deste mês.
           </p>
         ) : !closed ? (
           <p className="text-sm">
