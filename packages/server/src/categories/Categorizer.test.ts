@@ -8,6 +8,7 @@ import { Imports } from '../imports/Imports.ts'
 import { Accounts, CardTerms } from '../ledger/Accounts.ts'
 import { Entries } from '../ledger/Entries.ts'
 import { Observations } from '../ledger/Observations.ts'
+import type { ReportedTransaction } from '../ledger/Observations.ts'
 import type { PluggyTransaction } from '../openfinance/PluggyApi.ts'
 import {
   bank,
@@ -577,6 +578,237 @@ describe('Categorizer with reconciliation', () => {
           store.map((row) => [row.pattern, row.direction]),
           [['amazon marketplace', 'expense']],
         )
+      }).pipe(Effect.provide(categoriesTest())),
+  )
+})
+
+// Reports transactions straight from a source named `ref`, as a feed would.
+const report = (
+  accountId: string,
+  ref: string,
+  transactions: ReadonlyArray<
+    Pick<
+      ReportedTransaction,
+      'externalId' | 'bookedOn' | 'amountCents' | 'description' | 'raw'
+    >
+  >,
+) =>
+  Effect.gen(function* () {
+    const observations = yield* Observations
+    const source = yield* observations.registerSource({
+      kind: 'open_finance',
+      externalRef: ref,
+      label: ref,
+    })
+    yield* observations.recordTransactions({
+      sourceId: source.id,
+      accountId,
+      transactions: transactions.map((transaction) => ({
+        ...transaction,
+        currency: 'BRL',
+        status: 'posted' as const,
+      })),
+    })
+    yield* drain
+  })
+
+describe('Categorizer and provider categories', () => {
+  it.effect(
+    'follows a provider category corrected in a later observation',
+    () =>
+      Effect.gen(function* () {
+        const purchase = (fields: Partial<PluggyTransaction>) =>
+          tx('loja', '2026-10-01', {
+            description: 'LOJA CENTRAL',
+            amount: 80,
+            ...fields,
+          })
+        const { openFinance, connectionId, state } = yield* connect({
+          accounts: [bank],
+          transactions: {
+            'provider-bank': [
+              purchase({ category: 'Groceries', categoryId: '10000000' }),
+            ],
+          },
+        })
+        const store = yield* KnowledgeStore
+        yield* store.setProviderMapping('pluggy', '10000000', 'groceries')
+        yield* store.setProviderMapping('pluggy', '08000000', 'shopping')
+        const account = yield* openFinance.linkAccount({
+          providerAccountId: 'provider-bank',
+          target: { kind: 'checking', purpose: 'operating' },
+          historyMonths: 3,
+        })
+        yield* drain
+        const categorizer = yield* Categorizer
+        const [entry] = yield* (yield* Entries).entries(account.id)
+        assert.deepInclude(yield* categorizer.explain(entry!.id), {
+          categoryId: 'groceries',
+          status: 'applied',
+        })
+
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: {
+            'provider-bank': [
+              purchase({ category: 'Shopping', categoryId: '08000000' }),
+            ],
+          },
+        }))
+        yield* openFinance.requestSync({ connectionId })
+        yield* drain
+
+        assert.deepInclude(yield* categorizer.explain(entry!.id), {
+          categoryId: 'shopping',
+          origin: 'provider',
+          status: 'applied',
+        })
+      }).pipe(Effect.provide(categoriesTest())),
+  )
+
+  it.effect(
+    'sends an entry to review when its sources’ provider categories map apart',
+    () =>
+      Effect.gen(function* () {
+        const { account, categorizer } = yield* statement('')
+        const store = yield* KnowledgeStore
+        yield* store.setProviderMapping('pluggy', '10000000', 'groceries')
+        yield* store.setProviderMapping('pluggy', '08000000', 'shopping')
+        const purchase = {
+          bookedOn: '2026-10-01',
+          amountCents: -8000,
+          description: 'LOJA CENTRAL',
+        }
+        yield* report(account.id, 'old-connection', [
+          {
+            ...purchase,
+            externalId: 'old-1',
+            raw: { category: 'Groceries', categoryId: '10000000' },
+          },
+        ])
+        yield* report(account.id, 'new-connection', [
+          {
+            ...purchase,
+            externalId: 'new-1',
+            raw: { category: 'Shopping', categoryId: '08000000' },
+          },
+        ])
+
+        const [entry, ...others] = yield* (yield* Entries).entries(account.id)
+        assert.deepStrictEqual(others, [])
+        assert.deepInclude(entry, { sources: 2 })
+        const inference = yield* categorizer.explain(entry!.id)
+        assert.deepInclude(inference, { origin: 'provider', status: 'review' })
+        assert.include(inference.reasons, 'conflicting_provider_categories')
+        assert.sameMembers(
+          [
+            ...new Set(
+              [inference, ...inference.candidates].map(
+                (proposal) => proposal.categoryId,
+              ),
+            ),
+          ],
+          ['groceries', 'shopping'],
+        )
+      }).pipe(Effect.provide(categoriesTest())),
+  )
+
+  it.effect(
+    'previews a new provider mapping with the id it commits under',
+    () =>
+      Effect.gen(function* () {
+        const { account, categorizer } = yield* statement('')
+        yield* report(account.id, 'feed', [
+          {
+            externalId: 'shop',
+            bookedOn: '2026-10-01',
+            amountCents: -8000,
+            description: 'LOJA CENTRAL',
+            raw: { category: 'Shopping', categoryId: '08000000' },
+          },
+        ])
+        const edit = {
+          _tag: 'SetProviderMapping',
+          provider: 'pluggy',
+          providerCategory: '08000000',
+          categoryId: 'shopping',
+        } as const
+        const [change] = yield* categorizer.previewStoreEdit(edit)
+        yield* (yield* KnowledgeStore).edit(edit)
+        yield* drain
+        const { categoryId, origin, originRef, status, confidence, reasons } =
+          yield* categorizer.explain(change!.entryId)
+        assert.deepStrictEqual(
+          { categoryId, origin, originRef, status, confidence, reasons },
+          {
+            categoryId: change!.after.categoryId,
+            origin: change!.after.origin,
+            originRef: change!.after.originRef,
+            status: change!.after.status,
+            confidence: change!.after.confidence,
+            reasons: change!.after.reasons,
+          },
+        )
+        assert.strictEqual(status, 'applied')
+      }).pipe(Effect.provide(categoriesTest())),
+  )
+})
+
+describe('Categorizer and refunds', () => {
+  it.effect(
+    'leaves a refund of an uncategorised purchase without a category until the purchase has one',
+    () =>
+      Effect.gen(function* () {
+        const { card, categorizer, entryId, outcome } = yield* ownAccounts({
+          nubank: '',
+        })
+        yield* (yield* KnowledgeStore).setProviderMapping(
+          'pluggy',
+          '02030000',
+          'reimbursements',
+        )
+        yield* report(card.id, 'feed', [
+          {
+            externalId: 'order',
+            bookedOn: '2026-09-16',
+            amountCents: -25000,
+            description: 'Amazon Marketplace',
+            raw: null,
+          },
+          {
+            externalId: 'credit',
+            bookedOn: '2026-09-25',
+            amountCents: 25000,
+            description: 'Estorno Amazon Marketplace',
+            raw: { category: 'Refunds', categoryId: '02030000' },
+          },
+        ])
+        assert.deepStrictEqual(yield* outcome(card.id, 25000), [
+          null,
+          'refund',
+          'none',
+          false,
+        ])
+
+        yield* categorizer.decide(yield* entryId(card.id, -25000), 'shopping')
+        assert.deepStrictEqual(yield* outcome(card.id, 25000), [
+          'shopping',
+          'refund',
+          'applied',
+          false,
+        ])
+
+        // The person's own category for the credit still wins.
+        yield* categorizer.decide(
+          yield* entryId(card.id, 25000),
+          'reimbursements',
+        )
+        assert.deepStrictEqual(yield* outcome(card.id, 25000), [
+          'reimbursements',
+          'decision',
+          'applied',
+          false,
+        ])
       }).pipe(Effect.provide(categoriesTest())),
   )
 })

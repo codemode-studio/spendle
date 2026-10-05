@@ -76,6 +76,13 @@ export interface StoreClock {
   readonly newId: string
 }
 
+/**
+ * A provider mapping's id, from its unique key: previewing a new mapping
+ * names the row exactly as committing it does.
+ */
+export const providerMappingId = (pattern: string) =>
+  `provider_category:${pattern}:any`
+
 /** The key a provider mapping is stored under: `pluggy:<category id or name>`. */
 export const providerPattern = (provider: string, providerCategory: string) =>
   `${provider}:${providerCategory.trim()}`
@@ -336,13 +343,14 @@ export const applyEdit = (
               : row,
           ),
         }
+      const id = providerMappingId(pattern)
       return {
         ok: true,
-        patternId: clock.newId,
+        patternId: id,
         rows: [
           ...rows,
           {
-            id: clock.newId,
+            id,
             kind: 'provider_category',
             pattern,
             matchMode: 'exact',

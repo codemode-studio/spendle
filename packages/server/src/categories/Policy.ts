@@ -162,13 +162,16 @@ const infer = (
  * 3. A decision about an entry that has since split: each part to review.
  * 4. A confirmed refund: the credit takes its purchase's category and
  *    status, so it lowers that category's spending. Nothing is learned.
+ *    While the purchase has none, neither has the credit: no lower rule
+ *    applies to it.
  * 5. A suggested (or conflicting) transfer or card payment: the system
  *    category, to review, never applied.
  * 6. The merchant's exact pattern, applied; to review when alternative
  *    patterns disagree or the pattern is corrected more than confirmed.
  * 7. The longest prefix covering the merchant, applied.
  * 8. The person's mapping of the provider category, applied; otherwise a
- *    built-in mapping, to review.
+ *    built-in mapping, to review. Observations of the entry whose provider
+ *    categories map to different categories send it to review.
  * 9. The model's cached answer: applied from `applyThreshold`, to review
  *    from `suggestFloor`, dropped below. Never written to the store.
  * 10. Nothing.
@@ -251,30 +254,56 @@ export const categorize = (input: PolicyInput): ReadonlyArray<Inference> => {
 
   // The refund's credit follows its purchase, whose own inference is
   // computed first (a purchase is an outflow, never a refund's credit).
-  const refunded = (entry: PolicyEntry): ReadonlyArray<Proposal> =>
-    (relationsOf.get(entry.id) ?? []).flatMap(
-      (relation): ReadonlyArray<Proposal> => {
-        if (
-          relation.kind !== 'refund' ||
-          relation.status !== 'confirmed' ||
-          relation.inflowEntryId !== entry.id
-        )
-          return []
-        const purchase = inferenceOf(relation.outflowEntryId)
-        if (purchase === undefined || purchase.categoryId === null) return []
-        return [
-          {
-            categoryId: purchase.categoryId,
-            origin: 'refund',
-            originRef: relation.key,
-            confidence: purchase.confidence,
-            status: purchase.status === 'applied' ? 'applied' : 'review',
-            excludedFromSpending: purchase.excludedFromSpending,
-            reasons: ['refund', `purchase_${purchase.origin}`],
-          },
-        ]
-      },
+  // While the purchase has no category the credit has none either: an
+  // income category from a lower rule would count the refund as earnings.
+  // A credit refunding purchases of different categories goes to review.
+  const refunded = (
+    entry: PolicyEntry,
+  ):
+    | { readonly key: string; readonly proposals: ReadonlyArray<Proposal> }
+    | undefined => {
+    const relations = (relationsOf.get(entry.id) ?? []).filter(
+      (relation) =>
+        relation.kind === 'refund' &&
+        relation.status === 'confirmed' &&
+        relation.inflowEntryId === entry.id,
     )
+    const [first] = relations
+    if (first === undefined) return undefined
+    const purchases = relations.map((relation) => ({
+      relation,
+      purchase: inferenceOf(relation.outflowEntryId),
+    }))
+    const agree =
+      new Set(purchases.map(({ purchase }) => purchase?.categoryId ?? null))
+        .size === 1
+    return {
+      key: first.key,
+      proposals: purchases.flatMap(
+        ({ relation, purchase }): ReadonlyArray<Proposal> =>
+          purchase === undefined || purchase.categoryId === null
+            ? []
+            : [
+                {
+                  categoryId: purchase.categoryId,
+                  origin: 'refund',
+                  originRef: relation.key,
+                  confidence: purchase.confidence,
+                  status:
+                    agree && purchase.status === 'applied'
+                      ? 'applied'
+                      : 'review',
+                  excludedFromSpending: purchase.excludedFromSpending,
+                  reasons: [
+                    'refund',
+                    `purchase_${purchase.origin}`,
+                    ...(agree ? [] : ['conflicting_purchases']),
+                  ],
+                },
+              ],
+      ),
+    }
+  }
 
   const decided = (entry: PolicyEntry): ReadonlyArray<Proposal> => {
     const decision = input.decisions.byEntry.get(entry.id)
@@ -362,16 +391,23 @@ export const categorize = (input: PolicyInput): ReadonlyArray<Inference> => {
     return proposals
   }
 
+  // Each observation's category: the person's mapping of its id, then of
+  // its name, then the built-in map. Observations of one entry (a
+  // historical and a replacement connection) that land on different
+  // categories send it to review: none of them is applied.
   const provided = (entry: PolicyEntry): ReadonlyArray<Proposal> => {
     if (entry.amountCents === 0) return []
     const direction: Direction = entry.amountCents < 0 ? 'expense' : 'income'
     const mapped: Array<Proposal> = []
     const builtIn: Array<Proposal> = []
+    const chosen = new Set<string>()
     for (const reported of entry.providerCategories) {
+      let first: string | undefined
       for (const value of [reported.id, reported.name]) {
         if (value === null) continue
         const row = providers.get(providerPattern(pluggyProvider, value))
-        if (row && fits(row.categoryId, direction))
+        if (row && fits(row.categoryId, direction)) {
+          first ??= row.categoryId
           mapped.push({
             categoryId: row.categoryId,
             origin: 'provider',
@@ -381,12 +417,14 @@ export const categorize = (input: PolicyInput): ReadonlyArray<Inference> => {
             excludedFromSpending: false,
             reasons: ['provider_mapping'],
           })
+        }
       }
       const categoryId =
         reported.name === null
           ? undefined
           : builtInProviderCategories.get(reported.name)
-      if (categoryId && usable(categoryId) && fits(categoryId, direction))
+      if (categoryId && usable(categoryId) && fits(categoryId, direction)) {
+        first ??= categoryId
         builtIn.push({
           categoryId,
           origin: 'provider',
@@ -396,14 +434,30 @@ export const categorize = (input: PolicyInput): ReadonlyArray<Inference> => {
           excludedFromSpending: false,
           reasons: ['provider_category'],
         })
+      }
+      if (first !== undefined) chosen.add(first)
     }
+    const conflicting = chosen.size > 1
     const seen = new Set<string>()
-    return [...mapped, ...builtIn].filter((proposal) => {
-      const key = `${proposal.originRef}|${proposal.categoryId}`
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
+    return [...mapped, ...builtIn].flatMap(
+      (proposal): ReadonlyArray<Proposal> => {
+        const key = `${proposal.originRef}|${proposal.categoryId}`
+        if (seen.has(key)) return []
+        seen.add(key)
+        return [
+          conflicting
+            ? {
+                ...proposal,
+                status: 'review',
+                reasons: [
+                  ...proposal.reasons,
+                  'conflicting_provider_categories',
+                ],
+              }
+            : proposal,
+        ]
+      },
+    )
   }
 
   const modelled = (entry: PolicyEntry): ReadonlyArray<Proposal> => {
@@ -443,15 +497,25 @@ export const categorize = (input: PolicyInput): ReadonlyArray<Inference> => {
     // A cycle cannot happen (see `refunded`); guard rather than loop.
     if (entry === undefined || visiting.has(entryId)) return undefined
     visiting.add(entryId)
-    const inference = infer(entry.id, [
-      ...reconciled(entry, true),
-      ...decided(entry),
-      ...refunded(entry),
+    const first = [...reconciled(entry, true), ...decided(entry)]
+    const refund = refunded(entry)
+    const rest = [
       ...reconciled(entry, false),
       ...learned(entry),
       ...provided(entry),
       ...modelled(entry),
-    ])
+    ]
+    const inference =
+      first.length === 0 &&
+      refund !== undefined &&
+      refund.proposals.length === 0
+        ? {
+            ...none(entry.id, rest),
+            origin: 'refund' as const,
+            originRef: refund.key,
+            reasons: ['refund', 'purchase_uncategorized'],
+          }
+        : infer(entry.id, [...first, ...(refund?.proposals ?? []), ...rest])
     visiting.delete(entryId)
     done.set(entryId, inference)
     return inference

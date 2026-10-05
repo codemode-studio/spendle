@@ -821,13 +821,18 @@ export class Categorizer extends Context.Service<
 
 /**
  * Recategorizes whenever what the policy reads changes: an account's
- * entries, the account itself, relations, the store or a category. A rebuild reads
- * current state, so events it already covers are skipped.
+ * entries, the account itself, an observation, relations, the store or a
+ * category. The policy reads every source's latest provider category, so a
+ * correction that leaves entries alone still changes categories. A rebuild
+ * reads current state, so events it already covers are skipped, and one
+ * that runs before the entries resolve is followed by another on their
+ * `EntriesResolved`.
  */
 export const reactor = Reactor.layer({
   name: 'categorizer',
   types: [
     entriesResolved,
+    'TransactionObserved',
     'AccountUpdated',
     relationsChanged,
     categoryStoreChanged,
