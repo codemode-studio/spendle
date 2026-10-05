@@ -100,4 +100,62 @@ describe('Categories', () => {
       )
     }).pipe(Effect.provide(CategoriesTest)),
   )
+  it.effect('brings V1 categories over under their ids, once', () =>
+    Effect.gen(function* () {
+      const categories = yield* Categories
+      const log = yield* EventLog
+      const v1 = {
+        parentId: null,
+        icon: null,
+        active: true,
+        color: '#111111',
+      } as const
+
+      assert.deepStrictEqual(
+        [
+          yield* categories.importV1({
+            ...v1,
+            id: 'groceries',
+            name: 'Supermercado',
+            bucket: 'essential',
+          }),
+          yield* categories.importV1({
+            ...v1,
+            id: 'vet',
+            name: 'Veterinário',
+            bucket: 'lifestyle',
+            parentId: 'pets',
+          }),
+          yield* categories.importV1({
+            ...v1,
+            id: 'transfer',
+            name: 'Transf.',
+            bucket: 'lifestyle',
+          }),
+        ],
+        ['updated', 'created', 'kept'],
+      )
+      const vet = yield* categories.get('vet')
+      assert.deepStrictEqual(
+        [vet.name, vet.parentId, vet.color, vet.system],
+        ['Veterinário', 'pets', '#111111', false],
+      )
+      assert.strictEqual(
+        (yield* categories.get('transfer')).name,
+        'Transferência interna',
+      )
+
+      const sequence = yield* log.latestSequence
+      assert.strictEqual(
+        yield* categories.importV1({
+          ...v1,
+          id: 'groceries',
+          name: 'Supermercado',
+          bucket: 'essential',
+        }),
+        'unchanged',
+      )
+      assert.strictEqual(yield* log.latestSequence, sequence)
+    }).pipe(Effect.provide(CategoriesTest)),
+  )
 })
