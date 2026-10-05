@@ -69,6 +69,7 @@ describe('convert', () => {
         {
           cents: -10_500,
           converted: {
+            cents: -10_500,
             currency: 'USD',
             originalCents: -2_000,
             rateMicros: 5_250_000,

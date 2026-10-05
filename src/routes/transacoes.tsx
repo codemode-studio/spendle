@@ -38,6 +38,7 @@ import {
   StatusBadge,
 } from '#/components/ui'
 import { CategorySelect } from '#/components/category-select'
+import { ConvertedAmount } from '#/components/exchange'
 import { ManualTransactionDialog } from '#/components/manual-transaction-dialog'
 import type { ManualTransactionDraft } from '#/components/manual-transaction-dialog'
 import { SegmentedControl } from '#/components/segmented-control'
@@ -865,6 +866,7 @@ function TransactionsPage() {
                                 entry.currency,
                               )}
                             </span>
+                            <ConvertedAmount converted={entry.converted} />
                           </TableCell>
                         </TableRow>
                       )

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { ArrowRight, ChevronDown, Sparkles, TrendingUp } from 'lucide-react'
+import { ExchangeNote } from '#/components/exchange'
 import { EmptyState } from '#/components/ui'
 import { Button, buttonVariants } from '#/components/ui/button'
 import { Field, FieldGroup, FieldLabel } from '#/components/ui/field'
@@ -176,6 +177,7 @@ export function ForecastOutlook({
             </span>
           )}
         </div>
+        <ExchangeNote exchange={forecast.exchange} className="mt-2" />
         {(view.integrity.partial || !view.comparisonReady.month) && (
           <p className="mt-2 text-sm text-warning">
             Dados parciais.{' '}

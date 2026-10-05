@@ -12,6 +12,7 @@ import * as Reactor from '../../packages/server/src/events/Reactor.ts'
 import { apiTest } from '../../packages/server/src/testing/ApiTest.ts'
 import { FakePluggyState } from '../../packages/server/src/testing/FakePluggy.ts'
 import type { FakePluggyData } from '../../packages/server/src/testing/FakePluggy.ts'
+import type { FakeSeries } from '../../packages/server/src/testing/FakeRates.ts'
 
 export { bank, card, tx } from '../../packages/server/src/testing/FakePluggy.ts'
 
@@ -20,10 +21,10 @@ export { bank, card, tx } from '../../packages/server/src/testing/FakePluggy.ts'
  * in-memory database and a fake Pluggy. `SPENDLE_API_URL` points at it, so
  * the web app's server-side client (`v2()`) talks to it over HTTP.
  */
-export async function startV2Api() {
+export async function startV2Api(options: { rates?: FakeSeries } = {}) {
   const scope = Scope.makeUnsafe()
   const context = await Effect.runPromise(
-    Layer.buildWithScope(apiTest(), scope),
+    Layer.buildWithScope(apiTest({ rates: options.rates }), scope),
   )
   const server = Context.get(context, HttpServer.HttpServer)
   const previous = {

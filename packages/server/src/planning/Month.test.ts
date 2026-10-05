@@ -520,6 +520,7 @@ describe('other currencies', () => {
         lunch: [
           10_000,
           {
+            cents: 10_000,
             currency: 'USD',
             originalCents: 2_000,
             rateMicros: 5_000_000,

@@ -469,6 +469,7 @@ export const monthLines = (facts: MonthFacts, index: Index, month: string) => {
             ? null
             : {
                 ...billedValue.converted,
+                cents: gap,
                 originalCents:
                   Math.max(0, cycle.billedCents) +
                   purchases.reduce((sum, entry) => sum + entry.amountCents, 0),

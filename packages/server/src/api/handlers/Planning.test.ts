@@ -405,6 +405,7 @@ describe('planning API', () => {
             // US$ 10.00 due on the 28th, at the latest rate.
             streaming: 5_500,
             entry: {
+              cents: -10_000,
               currency: 'USD',
               originalCents: -2_000,
               rateMicros: 5_000_000,

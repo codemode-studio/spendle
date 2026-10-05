@@ -2,6 +2,8 @@ import * as Schema from 'effect/Schema'
 
 /** A value that was in another currency, shown in reais. */
 export const Converted = Schema.Struct({
+  /** The value in centavos. */
+  cents: Schema.Int,
   currency: Schema.String,
   /** The value in its own currency's minor units. */
   originalCents: Schema.Int,

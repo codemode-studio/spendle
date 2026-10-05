@@ -39,7 +39,7 @@ export function statementUpload(
 }
 
 /** A household with one checking account, through the V2 API. */
-export async function openChecking(name = 'Conta') {
+export async function openChecking(name = 'Conta', currency = 'BRL') {
   const owner = await v2((client) =>
     client.owners.create({ payload: { name: 'Família', kind: 'household' } }),
   )
@@ -51,7 +51,7 @@ export async function openChecking(name = 'Conta') {
         name,
         kind: 'checking',
         purpose: 'operating',
-        currency: 'BRL',
+        currency,
       },
     }),
   )

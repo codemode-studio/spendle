@@ -65,6 +65,8 @@ export const rateOn = (
 
 /** An amount shown in reais, with what it was before. */
 export interface Converted {
+  /** The amount in centavos. */
+  readonly cents: number
   readonly currency: string
   /** The amount in its own currency's minor units. */
   readonly originalCents: number
@@ -86,9 +88,11 @@ export const convert = (
   if (currency === baseCurrency) return { cents, converted: null }
   const rate = rateOn(table, currency, date)
   if (rate === null) return null
+  const brl = toBrlCents(cents, currency, rate.rateMicros)
   return {
-    cents: toBrlCents(cents, currency, rate.rateMicros),
+    cents: brl,
     converted: {
+      cents: brl,
       currency,
       originalCents: cents,
       rateMicros: rate.rateMicros,
