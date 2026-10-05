@@ -53,4 +53,4 @@ O classificador por modelo usa escolha tipada com probabilidade (avaliar TypeSaf
 ## Em aberto
 
 - Autenticação: o V1 não tem. A API V2 escuta só em `127.0.0.1` e aceita um token Bearer opcional (`SPENDLE_API_TOKEN`) para outra máquina da rede local; contas de usuário ficam para quando ela sair da rede local. O webhook da Pluggy é a única rota pública e se autentica pelo segredo próprio.
-- Importação dos dados do V1: quais decisões humanas e fontes trazer, e como validar a equivalência.
+- Equivalência com o V1: `migrate-v1` ([README do servidor](../../packages/server/README.md#migração-do-v1)) traz configuração, base de conhecimento e decisões humanas, e as fontes são reprocessadas. Falta comparar, com os dados reais, as categorias e os vínculos do V2 com os do V1 depois da reimportação.
