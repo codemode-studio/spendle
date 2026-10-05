@@ -627,7 +627,20 @@ describe('matchRelations', () => {
         ownerName: 'Joao Silva',
       }),
     ]).flatMap((relation) => [relation.status])
-    assert.deepStrictEqual([card, transfer], [['suggested'], ['suggested']])
+    const initials = relations([
+      entry('pay', 'inter', -50000, {
+        description: 'Pagamento fatura C&A',
+        institution: 'Banco Inter',
+      }),
+      entry('nu', 'card-nu', 50000, {
+        description: 'Pagamento recebido',
+        institution: 'Nubank',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    assert.deepStrictEqual(
+      [card, transfer, initials],
+      [['suggested'], ['suggested'], ['suggested']],
+    )
   })
 
   it('reads alphanumeric issuers and payees as names, and codes as no one', () => {

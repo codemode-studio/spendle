@@ -309,6 +309,17 @@ const nameWords = (text: string) =>
       .map(unglue),
   )
 
+// Letters joined by punctuation are one name (`C&A`, `D'Avila`), and so is
+// a corporation suffix (`S.A.`, `S/A`, `S-A` read as `sa`).
+const joinInitials = (text: string) =>
+  text.replace(/\b[a-z0-9](?:[&.\/'-][a-z0-9])+\b\.?/g, (run) =>
+    run.replace(/[&.\/'-]/g, ''),
+  )
+
+// One-letter words that are grammar, not names: every other letter may be an
+// initial that identifies someone.
+const articles = new Set(['a', 'e', 'o'])
+
 /**
  * Every word of a description that could identify a party: whatever is not
  * a bank, transfer, Pix or card-bill wording, or a code may be someone else.
@@ -320,11 +331,11 @@ const identityWords = (
   institutions: ReadonlySet<string>,
 ) =>
   new Set(
-    bankAliases(description)
+    joinInitials(bankAliases(description))
       .split(/[^a-z0-9]+/)
       .filter(
         (word) =>
-          word.length > 1 &&
+          !articles.has(word) &&
           /[a-z]/.test(word) &&
           !isCode(word) &&
           !transferWords.has(word) &&
