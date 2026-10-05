@@ -39,6 +39,13 @@ export interface ParsedStatement {
    * exceeds what is owed, so a zero does not say how much credit is left.
    */
   readonly floorsAtZero?: boolean
+  /**
+   * What a balance statement prints as paid in advance of its own charges,
+   * when it prints it: payments made within the period that reduced the
+   * amount due, not the credits it may count with them. The rest of the
+   * payments it prints paid earlier bills.
+   */
+  readonly advanceCents?: number
 }
 
 export type StatementProblem =

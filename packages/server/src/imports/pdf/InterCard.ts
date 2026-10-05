@@ -189,6 +189,17 @@ export const parseInterCard = ({
     closingBalance: { asOf: periodEnd, cents: 0 - statementTotal },
     // "Fatura atual" is never negative: credit beyond what is owed prints zero.
     floorsAtZero: true,
+    // Which of the printed payments were an advance cannot be told from a
+    // zero due, so the printed advance is kept, less the credits it counts
+    // when "Despesas do mês" is gross of them.
+    ...(anticipated !== null
+      ? {
+          advanceCents: Math.max(
+            0,
+            anticipated - (monthlyExpenses ?? charged) + charged,
+          ),
+        }
+      : {}),
     accountHint:
       mostFrequent(
         lines.flatMap((line) => [
