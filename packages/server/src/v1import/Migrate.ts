@@ -11,13 +11,13 @@ import { KnowledgeStore } from '../categories/KnowledgeStore.ts'
 import { ServerConfig } from '../config.ts'
 import { EventLog } from '../events/EventLog.ts'
 import { Investments } from '../investments/Investments.ts'
-import { Quotes } from '../investments/Quotes.ts'
 import { Accounts } from '../ledger/Accounts.ts'
 import { Entries } from '../ledger/Entries.ts'
 import { ManualEntries } from '../ledger/Manual.ts'
 import { Notes } from '../ledger/Notes.ts'
 import { Observations } from '../ledger/Observations.ts'
 import * as Sqlite from '../persistence/Sqlite.ts'
+import { ExchangeRates } from '../rates/ExchangeRates.ts'
 import { AssistantModel } from '../planning/AssistantModel.ts'
 import { PlanningServices } from '../planning/Services.ts'
 import { Cards } from '../reconciliation/Cards.ts'
@@ -35,8 +35,8 @@ export const MigrationLive = Layer.mergeAll(
     PlanningServices.pipe(Layer.provideMerge(AssistantModel.disabled)),
   ),
   Layer.provideMerge(Layer.mergeAll(ManualEntries.layer, Investments.layer)),
-  // The migration never shows values, so it needs no quotes.
-  Layer.provideMerge(Layer.mergeAll(Notes.layer, Quotes.fixed({}))),
+  // The migration never shows values, so it asks no source for rates.
+  Layer.provideMerge(Layer.mergeAll(Notes.layer, ExchangeRates.cacheOnly)),
   Layer.provideMerge(
     Layer.mergeAll(
       Categorizer.layer,

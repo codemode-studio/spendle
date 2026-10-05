@@ -75,23 +75,3 @@ export const valuePosition = (input: {
     upcoming: upcoming.map((movement) => movement.entryId),
   }
 }
-
-/** Digits after the decimal point of a currency's minor unit. */
-export const fractionDigits = (currency: string) => (currency === 'BTC' ? 8 : 2)
-
-/**
- * Minor units of `currency` in centavos at `rateMicros` reais per unit
- * (rate × 1 000 000), rounded half away from zero, in exact integers.
- */
-export const toBrlCents = (
-  amount: number,
-  currency: string,
-  rateMicros: number,
-) => {
-  if (currency === 'BRL') return amount
-  const divisor = 1_000_000n * 10n ** BigInt(fractionDigits(currency) - 2)
-  const product = BigInt(amount) * BigInt(rateMicros)
-  const magnitude = product < 0n ? -product : product
-  const rounded = (magnitude * 2n + divisor) / (divisor * 2n)
-  return Number(product < 0n ? -rounded : rounded)
-}

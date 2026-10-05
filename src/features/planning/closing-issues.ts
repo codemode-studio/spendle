@@ -60,7 +60,7 @@ const issueCopy: Record<
     destination: 'accounts',
   },
   other_currency: {
-    label: 'Lançamentos em outra moeda fora dos totais',
+    label: 'Lançamentos em moeda sem cotação fora dos totais',
     actionLabel: 'Revisar lançamentos',
     destination: 'transactions',
   },

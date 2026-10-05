@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { ExchangeNote } from '#/components/exchange'
 import { EmptyState, Page, Panel } from '#/components/ui'
 import { Button, buttonVariants } from '#/components/ui/button'
 import {
@@ -111,7 +112,11 @@ export function Home({ data }: { data: HomeData }) {
 
   return (
     <Page className="home-page max-w-[1120px]">
-      <CashHeader cash={month.cashFlow.cashCents} analysis={showAnalysis}>
+      <CashHeader
+        cash={month.cashFlow.cashCents}
+        exchange={month.exchange}
+        analysis={showAnalysis}
+      >
         <Button
           variant="outline"
           aria-label={showAnalysis ? 'Voltar à visão geral' : 'Previsão'}
@@ -190,10 +195,12 @@ export function Home({ data }: { data: HomeData }) {
 
 function CashHeader({
   cash,
+  exchange,
   children,
   analysis,
 }: {
   cash: number | null
+  exchange: MonthView['exchange']
   children: React.ReactNode
   analysis: boolean
 }) {
@@ -210,6 +217,7 @@ function CashHeader({
               ? 'Sem saldo registrado'
               : formatCurrency(cash)}
         </h1>
+        {!analysis && <ExchangeNote exchange={exchange} className="mt-1" />}
       </div>
       <div className="flex shrink-0 items-center justify-end gap-1 sm:gap-2">
         {children}

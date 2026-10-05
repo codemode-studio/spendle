@@ -5,11 +5,11 @@ type RecurrenceSnapshot = RecurrenceBook['recurrences'][number]
 type RecurrenceGroup = RecurrenceBook['groups'][number]
 
 /**
- * The amount in reais, or null when the recurrence is in another currency:
- * V2 has no exchange rates yet, so it stays out of the totals.
+ * The amount in reais: another currency at the latest rate, or null
+ * without one, which keeps it out of the totals.
  */
 const baseAmount = (item: RecurrenceSnapshot) =>
-  item.currency === 'BRL' ? item.amountCents : null
+  item.currency === 'BRL' ? item.amountCents : (item.converted?.cents ?? null)
 
 export type RecurrenceDisplayRow =
   | {

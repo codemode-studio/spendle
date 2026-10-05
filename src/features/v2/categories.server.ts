@@ -8,10 +8,11 @@ import { allEntries } from '#/lib/v2/client.server'
 const otherColor = '#94a3b8'
 
 /**
- * Every BRL entry as the category analysis reads it. Transfers and bill
- * payments keep their system category, which is outside the spending
- * buckets; entries without a category count as uncategorized. Entries in
- * other currencies are left out: V2 has no exchange rates yet.
+ * Every entry as the category analysis reads it, in reais: entries in
+ * other currencies at the rate of their date, and left out only without
+ * one. Transfers and bill payments keep their system category, which is
+ * outside the spending buckets; entries without a category count as
+ * uncategorized.
  */
 export function categoryLedger(client: V2Client) {
   return Effect.gen(function* () {
@@ -26,21 +27,25 @@ export function categoryLedger(client: V2Client) {
         .filter((account) => account.kind === 'credit_card')
         .map((account) => account.id),
     )
-    return entries
-      .filter((entry) => entry.currency === 'BRL')
-      .map((entry): FamilyTransaction => {
-        const categoryId = entry.category?.categoryId ?? null
-        const category = categoryId ? categoryById.get(categoryId) : undefined
-        const uncategorized =
-          !category || category.id === 'uncategorized'
-            ? !entry.category?.excludedFromSpending
-            : false
-        return {
+    return entries.flatMap((entry): Array<FamilyTransaction> => {
+      const amountCents =
+        entry.currency === 'BRL'
+          ? entry.amountCents
+          : (entry.converted?.cents ?? null)
+      if (amountCents === null) return []
+      const categoryId = entry.category?.categoryId ?? null
+      const category = categoryId ? categoryById.get(categoryId) : undefined
+      const uncategorized =
+        !category || category.id === 'uncategorized'
+          ? !entry.category?.excludedFromSpending
+          : false
+      return [
+        {
           id: entry.id,
           postedAt: entry.bookedOn,
           description: entry.description,
           normalized: entry.description.toLowerCase(),
-          amountCents: entry.amountCents,
+          amountCents,
           categoryId: uncategorized ? null : (category?.id ?? null),
           categoryName: uncategorized
             ? 'Sem categoria'
@@ -49,7 +54,8 @@ export function categoryLedger(client: V2Client) {
           bucket: uncategorized ? null : (category?.bucket ?? null),
           source: cards.has(entry.accountId) ? 'card' : 'account',
           uncategorized,
-        }
-      })
+        },
+      ]
+    })
   })
 }

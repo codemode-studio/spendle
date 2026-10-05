@@ -25,6 +25,14 @@ vi.mock('#/features/v2/queries', () => ({
     queryFn: fetchHistory,
     retry: false,
   }),
+  categoriesOptions: () => ({
+    queryKey: ['monthly-overview-categories'],
+    queryFn: () => [
+      { id: 'groceries', name: 'Mercado' },
+      { id: 'delivery', name: 'Delivery' },
+    ],
+    retry: false,
+  }),
 }))
 
 const targets = {
@@ -45,6 +53,8 @@ function month(
     saved?: { investment?: number; reserve?: number }
     cash?: Partial<MonthView['cashFlow']>
     hasData?: boolean
+    lines?: MonthView['family']['lines']
+    exchange?: MonthView['exchange']
   } = {},
 ): MonthView {
   const goals = input.targets ?? targets
@@ -95,6 +105,9 @@ function month(
       savingsTargetCents: goals.investment + goals.reserve,
       savingsRemainingCents: 0,
       plannedBalanceCents: 0,
+      historyEstimateCents: (input.lines ?? [])
+        .filter((line) => line.origin === 'history')
+        .reduce((sum, line) => sum + line.estimatedCents, 0),
       expenses: (['essential', 'lifestyle', 'other'] as const).map(
         (bucket) => ({
           bucket,
@@ -104,7 +117,7 @@ function month(
           targetCents: bucket === 'other' ? null : goals[bucket],
         }),
       ),
-      lines: [],
+      lines: input.lines ?? [],
       needsCategoryCount: 0,
       warnings: [],
       hasData: input.hasData ?? true,
@@ -122,8 +135,28 @@ function month(
       ...input.cash,
     },
     integrity: { partial: false, issues: [], closingBlockerCount: 0 },
+    exchange: input.exchange ?? { rates: [], missing: [] },
   }
 }
+
+const estimate = (
+  categoryId: string,
+  cents: number,
+): MonthView['family']['lines'][number] => ({
+  id: `history|${categoryId}|2026-09`,
+  description: 'Estimativa pelo histórico',
+  date: '2026-09-30',
+  cents,
+  knownCents: 0,
+  estimatedCents: cents,
+  paidCents: 0,
+  categoryId,
+  bucket: 'essential',
+  entryId: null,
+  certainty: 'estimated',
+  origin: 'history',
+  converted: null,
+})
 
 const current = month('2026-09', {
   forecasting: true,
@@ -275,5 +308,61 @@ describe('monthly overview', () => {
         'R$ 700,00',
       ),
     ).toBeTruthy()
+  })
+
+  it('splits what is left to pay into scheduled items and the history estimate by category', async () => {
+    fetchHistory.mockResolvedValue([closedAugust])
+    mount(
+      month('2026-09', {
+        forecasting: true,
+        lines: [estimate('groceries', 45_000), estimate('delivery', 10_000)],
+        cash: { remainingExpenseCents: 67_000 },
+      }),
+    )
+    const breakdown = await screen.findByLabelText(
+      'Composição do valor a pagar',
+    )
+    expect(
+      [...breakdown.querySelectorAll('dt, dd')].map((el) =>
+        el.textContent.replace(/\s/g, ' '),
+      ),
+    ).toEqual(['Agendado', 'R$ 120,00', 'Estimado pelo histórico', 'R$ 550,00'])
+    const categories = await screen.findByRole('list', {
+      name: /Categorias estimadas/,
+    })
+    await waitFor(() =>
+      expect(
+        within(categories)
+          .getAllByRole('listitem')
+          .map((el) => el.textContent.replace(/\s/g, ' ')),
+      ).toEqual(['Mercado R$ 450,00', 'Delivery R$ 100,00']),
+    )
+  })
+
+  it('says which exchange rate a past month used and which currency stayed out', async () => {
+    fetchHistory.mockResolvedValue([
+      {
+        ...closedAugust,
+        exchange: {
+          rates: [
+            {
+              currency: 'USD',
+              rateMicros: 5_223_800,
+              date: '2026-08-31',
+              source: 'PTAX',
+            },
+          ],
+          missing: ['EUR'],
+        },
+      },
+    ])
+    mount()
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Agosto de 2026:/ }),
+    )
+    expect(
+      screen.getByText(/USD em reais: USD 1 = R\$\s5,2238 \(PTAX, 31 de ago\)/),
+    ).toBeTruthy()
+    expect(screen.getByText(/EUR sem cotação, fora dos totais/)).toBeTruthy()
   })
 })
