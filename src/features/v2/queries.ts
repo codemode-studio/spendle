@@ -19,6 +19,11 @@ import {
 } from './entries.functions'
 import type { EntryPageQuery } from './entries.functions'
 import {
+  linkCandidatesFn,
+  orphanedDecisionsFn,
+  relationsFn,
+} from './reconciliation.functions'
+import {
   connectSettingsFn,
   listConnectionsFn,
   providerAccountsFn,
@@ -65,6 +70,25 @@ export const v2QueryKeys = {
     ] as const,
   categoryReview: () =>
     [...financeQueryKeys.all, 'read', 'category-review'] as const,
+  relations: (status?: string) =>
+    [
+      ...financeQueryKeys.all,
+      'read',
+      'reconciliation',
+      'relations',
+      status ?? 'all',
+    ] as const,
+  orphanedDecisions: () =>
+    [...financeQueryKeys.all, 'read', 'reconciliation', 'orphaned'] as const,
+  linkCandidates: (entryId: string, text: string) =>
+    [
+      ...financeQueryKeys.all,
+      'read',
+      'reconciliation',
+      'candidates',
+      entryId,
+      text,
+    ] as const,
   connectSettings: () =>
     [...financeQueryKeys.all, 'open-finance', 'connect-settings'] as const,
 }
@@ -139,6 +163,31 @@ export const categoryReviewOptions = () =>
     queryKey: v2QueryKeys.categoryReview(),
     queryFn: () => categoryReviewFn(),
     staleTime: 15_000,
+  })
+
+export const relationsOptions = (
+  status?: 'suggested' | 'confirmed' | 'conflict',
+) =>
+  queryOptions({
+    queryKey: v2QueryKeys.relations(status),
+    queryFn: () => relationsFn({ data: { status } }),
+    staleTime: 15_000,
+  })
+
+export const orphanedDecisionsOptions = () =>
+  queryOptions({
+    queryKey: v2QueryKeys.orphanedDecisions(),
+    queryFn: () => orphanedDecisionsFn(),
+    staleTime: 15_000,
+  })
+
+export const linkCandidatesOptions = (entryId: string | null, text = '') =>
+  queryOptions({
+    queryKey: v2QueryKeys.linkCandidates(entryId ?? '', text),
+    queryFn: entryId
+      ? () => linkCandidatesFn({ data: { entryId, text } })
+      : skipToken,
+    staleTime: 0,
   })
 
 /**

@@ -3,6 +3,7 @@ import {
   CalendarDays,
   Check,
   Layers,
+  Link2,
   ReceiptText,
   Search,
   SlidersHorizontal,
@@ -20,7 +21,7 @@ import {
   stripSearchParams,
 } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import { Fragment, useDeferredValue, useEffect, useMemo } from 'react'
+import { Fragment, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import type { DateRange } from 'react-day-picker'
@@ -72,6 +73,10 @@ import {
   transactionSearchSchema,
   transactionSearchToFilters,
 } from '#/features/finance/transactions.search'
+import {
+  LinkEntryDialog,
+  ReconciliationReview,
+} from '#/features/finance/reconciliation-review'
 import { accountOptionLabel } from '#/features/v2/accounts'
 import {
   confirmCategoryFn,
@@ -84,7 +89,9 @@ import {
   entriesPageOptions,
   entryCountsOptions,
   invalidateAfterReactors,
+  orphanedDecisionsOptions,
   patchEntryCategory,
+  relationsOptions,
 } from '#/features/v2/queries'
 import { useIsMobile } from '#/hooks/use-mobile'
 import { errorMessage } from '#/lib/v2/errors'
@@ -102,6 +109,8 @@ export const Route = createFileRoute('/transacoes')({
       context.queryClient.ensureQueryData(entryCountsOptions()),
       context.queryClient.ensureQueryData(categoriesOptions(true)),
       context.queryClient.ensureQueryData(accountsOptions(true)),
+      context.queryClient.ensureQueryData(relationsOptions()),
+      context.queryClient.ensureQueryData(orphanedDecisionsOptions()),
     ]),
   component: TransactionsPage,
 })
@@ -112,6 +121,7 @@ function TransactionsPage() {
   const decideCategory = useServerFn(decideCategoryFn)
   const correctCategory = useServerFn(correctCategoryFn)
   const confirmCategory = useServerFn(confirmCategoryFn)
+  const [linking, setLinking] = useState<Entry | null>(null)
   const urlState = Route.useSearch()
   const navigate = Route.useNavigate()
   const setUrlState = (
@@ -674,6 +684,27 @@ function TransactionsPage() {
                                   </TooltipContent>
                                 </Tooltip>
                               ) : null}
+                              {entry.category?.excludedFromSpending ? null : (
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon-xs"
+                                        className="shrink-0 text-muted-foreground"
+                                        aria-label={`Vincular ${displayDescription(entry.description)} a outro lançamento`}
+                                        onClick={() => setLinking(entry)}
+                                      />
+                                    }
+                                  >
+                                    <Link2 />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    Vincular transferência, fatura ou estorno
+                                  </TooltipContent>
+                                </Tooltip>
+                              )}
                             </div>
                             <p className="mt-0.5 truncate text-xs font-normal text-muted-foreground md:hidden">
                               {formatInstrumentName(account?.name ?? '—')}
@@ -774,6 +805,8 @@ function TransactionsPage() {
           )}
         </Panel>
       )}
+      <ReconciliationReview />
+      <LinkEntryDialog entry={linking} onClose={() => setLinking(null)} />
     </Page>
   )
 }
