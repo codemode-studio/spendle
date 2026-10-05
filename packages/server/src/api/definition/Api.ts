@@ -3,6 +3,11 @@ import * as OpenApi from 'effect/http-api/OpenApi'
 
 import { AccountsApi, OwnersApi } from './Accounts.ts'
 import { CardsApi } from './Cards.ts'
+import {
+  CategoriesApi,
+  CategoryDecisionsApi,
+  CategoryStoreApi,
+} from './Categories.ts'
 import { EntriesApi } from './Entries.ts'
 import { ImportsApi } from './Imports.ts'
 import { OpenFinanceApi } from './OpenFinance.ts'
@@ -24,6 +29,9 @@ export class V2Api extends HttpApi.make('spendle-v2')
     EntriesApi,
     ReconciliationApi,
     CardsApi,
+    CategoriesApi,
+    CategoryStoreApi,
+    CategoryDecisionsApi,
   )
   .middleware(ApiAuthorization) {}
 
