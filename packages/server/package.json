@@ -6,9 +6,9 @@
     "./api": "./src/api/definition/index.ts"
   },
   "scripts": {
-    "dev": "node --watch src/bin.ts",
-    "start": "node src/bin.ts",
-    "migrate-v1": "node src/migrate-v1.ts",
+    "dev": "node --env-file-if-exists=../../.env.local --watch src/bin.ts",
+    "start": "node --env-file-if-exists=../../.env.local src/bin.ts",
+    "migrate-v1": "node --env-file-if-exists=../../.env.local src/migrate-v1.ts",
     "qa": "node src/testing/QaServer.ts",
     "typecheck": "tsc --noEmit && effect-language-service diagnostics --project tsconfig.json --strict --format text",
     "test": "vitest run",
