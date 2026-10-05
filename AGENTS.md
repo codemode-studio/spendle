@@ -1,16 +1,20 @@
 # Working in this repository
 
+Spendle is V2-only: the web app in `src/` (TanStack Start routes, components, hooks and server functions) reads and writes everything through the V2 API in `packages/server`. The V1 server, its Drizzle database and its domain logic were removed; do not reintroduce financial rules, database access or provider calls in `src/`. A V1 SQLite file only enters through `pnpm --filter @spendle/server migrate-v1`.
+
 - For UI, navigation, import-flow or query-invalidation changes, read [browser QA](.agents/skills/browser-qa/SKILL.md) and use the integrated browser against an isolated QA run. Browser automation is agent-driven; do not add an E2E framework just to run these checks.
-- Use `pnpm setup:check` after setup, focused Vitest files while editing, and `pnpm verify` before delivery. `pnpm bench` measures synthetic reconciliation, read counts and response sizes. Record skipped/private-fixture checks separately.
-- For concurrent worktrees, install with `pnpm install --frozen-lockfile` and start `pnpm qa:start <unused-port>`. The command creates independent synthetic state. Do not share `data/`, SQLite WAL files, or imported sources between runs.
-- DB integration tests use `openTestDatabase()` from `src/test/database.ts`; its directory owns uploads too. Use that directory for temporary fixture files. A test without the installed database is rejected instead of falling back to local financial data.
-- Preserve centavo precision, immutable imported facts, zero-difference import gating, both transfer sides, and frozen closed-budget allocations. Test those outcomes when changing financial reads or writes. Server-function validators and query keys are functional boundaries, not redundant wrappers.
-- `knowledge_base` learns only from explicit human decisions (category chosen in review or in the transaction list, recurrence confirmed or approved). Never write to it from heuristics, implicit history, automatic matches or AI. When adding a new human decision path, route it through `knowledge-base.server.ts`. Data migrations may use the SQL functions `normalize_description`, `merchant_signature` and `knowledge_pattern` registered in `connection.server.ts`; they are unavailable to `drizzle-kit migrate`. Knowledge prefixes are never created automatically; only the person or an approved migration list creates them. Reapplying the base to existing transactions goes through `knowledge-sync.server.ts` (entry-scoped after a base edit, full sync only from the Transações button with preview).
+- Use `pnpm setup:check` after setup, focused Vitest files while editing, and `pnpm verify` (web and server) before delivery. Record skipped checks separately.
+- For concurrent worktrees, install with `pnpm install --frozen-lockfile` and start `pnpm qa:start <unused-port>`. It runs the app against an in-memory V2 QA API with synthetic data and a fake Pluggy. Do not share `data/`, SQLite WAL files, or imported sources between runs.
+- Server functions in `src/features/v2/*.functions.ts` validate input with `Schema.toStandardSchemaV1` and call the API through `src/lib/v2/client.server.ts`; the browser never reaches the API. Their validators and query keys are functional boundaries, not redundant wrappers. Tests that need the API use `src/test/v2-api.ts`, which serves the real V2 routes in memory.
+- When a screen needs data the API does not expose, add the endpoint in `packages/server` with a server test instead of computing it in `src/`. `src/lib` holds presentation helpers only (formatting, periods, presets).
+- Preserve centavo precision, immutable imported facts, zero-difference import gating, both transfer sides, and frozen closed-budget allocations; those rules live in the server and are tested there.
+- Category learning comes only from a person's decision; in the UI, route category choices and recurrence confirmations to the V2 decision endpoints, never to heuristics or model output.
 - Scope UI types to the read model they need. Invalidation of financial reads includes configuration, planning, categories and paginated transactions; optimistic category edits must also cover cached transaction pages.
+- AI features (assistant, model classifier) are on by default when the server has their keys; there is no separate consent step. Model output never unlocks an import or teaches categories.
 
 ## Backend V2 (`packages/server`)
 
-The v2 backend is a fresh Effect 4 server with its own SQLite database (`data/v2/`). It replaces the v1 server code under `src/` incrementally; see [ADR 003](plans/adrs/003-backend-v2-effect.md). Until cutover, v1 rules above still govern `src/`.
+The V2 backend is an Effect 4 server with its own SQLite database (`data/v2/`) and the only backend; see [ADR 003](plans/adrs/003-backend-v2-effect.md). The V1 import (`src/v1import`) reads a V1 SQLite file; its tests build synthetic V1 databases from the frozen schema in `src/v1import/fixtures/v1-schema.sql`, which never changes.
 
 - Run `pnpm sync:effect-docs` once, then read `.repos/effect/LLMS.md` before writing Effect code. `.repos/` holds read-only references matching the pinned version; prefer their patterns over invented ones, never import from them, and resync when bumping `effect`.
 - Effect 4 stable ships SQL, HTTP and testing as `effect/sql`, `effect/http`, `effect/http-api` and `effect/testing`. Older `effect/unstable/*` examples (including T3 Code's) need translating.
@@ -130,11 +134,5 @@ tanstackIntent:
 - id: "@tanstack/virtual-file-routes#virtual-file-routes"
   run: "pnpm dlx @tanstack/intent@latest load @tanstack/virtual-file-routes#virtual-file-routes"
   for: "Programmatic route tree building as an alternative to filesystem conventions: rootRoute, index, route, layout, physical, defineVirtualSubtreeConfig. Use with TanStack Router plugin's virtualRouteConfig option."
-- id: "dotenv#dotenv"
-  run: "pnpm dlx @tanstack/intent@latest load dotenv#dotenv"
-  for: "Load environment variables from a .env file into process.env for Node.js applications. Use when configuring apps with secrets, setting up local development environments, managing API keys and database uRLs, parsing .env file contents, or populating environment variables programmatically. Always use this skill when the user mentions .env, even for simple tasks like \"set up dotenv\" — the skill contains critical gotchas (encrypted keys, variable expansion, command substitution) that prevent common production issues."
-- id: "dotenv#dotenvx"
-  run: "pnpm dlx @tanstack/intent@latest load dotenv#dotenvx"
-  for: "Use dotenvx to run commands with environment variables, manage multiple .env files, expand variables, and encrypt env files for safe commits and CI/CD."
 
 <!-- intent-skills:end -->

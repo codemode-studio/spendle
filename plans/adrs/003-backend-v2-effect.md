@@ -1,6 +1,6 @@
 # ADR 003: backend V2 em Effect
 
-Decisão de 04/10/2026, em implementação por PRs empilhados.
+Decisão de 04/10/2026, implementada por PRs empilhados. O V1 foi aposentado em 05/10/2026 (fase 10).
 
 ## Problema
 
@@ -8,7 +8,7 @@ Um assistente financeiro só é útil se os dados forem exatos. O backend V1 cre
 
 ## Decisão
 
-Um backend novo em `packages/server`, escrito em Effect 4 com `effect/sql` sobre `node:sqlite` (`@effect/sql-sqlite-node`), com banco próprio em `data/v2/`. O V1 continua funcionando até a troca. Não há migração de esquema do V1; dados do V1 entram depois por importação explícita de decisões humanas e reprocessamento das fontes.
+Um backend novo em `packages/server`, escrito em Effect 4 com `effect/sql` sobre `node:sqlite` (`@effect/sql-sqlite-node`), com banco próprio em `data/v2/`. O V1 funcionou até a troca e foi aposentado na fase 10. Não há migração de esquema do V1; dados do V1 entram depois por importação explícita de decisões humanas e reprocessamento das fontes.
 
 O foco inicial é Open Finance e importação manual, com reconciliação como diferencial do produto.
 
@@ -48,9 +48,9 @@ O classificador por modelo usa escolha tipada com probabilidade (avaliar TypeSaf
 7. Lançamentos canônicos: resolução de entidades e prova de saldo entre checkpoints
 8. Reconciliação: transferências, faturas, estornos, parcelamentos
 9. Aprendizado de categorias
-10. API para o app web e troca do V1
+10. API para o app web e troca do V1 (concluída: todas as telas usam a API V2 e o código, o banco e as dependências do V1 foram removidos de `src/`. `migrate-v1` continua lendo um arquivo SQLite do V1, com o esquema congelado em `packages/server/src/v1import/fixtures/v1-schema.sql` para os testes)
 
 ## Em aberto
 
-- Autenticação: o V1 não tem. A API V2 escuta só em `127.0.0.1` e aceita um token Bearer opcional (`SPENDLE_API_TOKEN`) para outra máquina da rede local; contas de usuário ficam para quando ela sair da rede local. O webhook da Pluggy é a única rota pública e se autentica pelo segredo próprio.
+- Autenticação: o app não tem contas. A API V2 escuta só em `127.0.0.1` e aceita um token Bearer opcional (`SPENDLE_API_TOKEN`) para outra máquina da rede local; contas de usuário ficam para quando ela sair da rede local. O webhook da Pluggy é a única rota pública e se autentica pelo segredo próprio.
 - Equivalência com o V1: `migrate-v1` ([README do servidor](../../packages/server/README.md#migração-do-v1)) traz configuração, base de conhecimento e decisões humanas, e as fontes são reprocessadas. Falta comparar, com os dados reais, as categorias e os vínculos do V2 com os do V1 depois da reimportação.
