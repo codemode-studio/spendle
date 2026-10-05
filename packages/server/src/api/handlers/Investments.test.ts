@@ -308,4 +308,46 @@ describe('investments API', () => {
       )
     }).pipe(Effect.provide(apiTest())),
   )
+  it.effect(
+    'values a foreign position in reais at the rate of the reference date',
+    () =>
+      Effect.gen(function* () {
+        const { client, open, typed } = yield* setup
+        const usd = yield* open('Corretora EUA', 'investment', 'USD')
+        const deposit = yield* typed(usd.id, '2026-09-01', 50_000, 'Wire')
+        yield* client.investments.classify({
+          payload: {
+            entryId: deposit.entryId!,
+            newPosition: { name: 'VT', assetClassId: 'stocks', reserve: false },
+          },
+        })
+        const snapshot = yield* client.investments.snapshot({ query: {} })
+        assert.deepStrictEqual(
+          [
+            snapshot.positions[0]!.currentBrlCents,
+            snapshot.positions[0]!.quote,
+            snapshot.summary.totalBrlCents,
+            snapshot.summary.missingQuoteCount,
+          ],
+          [
+            // US$ 500.00 at R$ 5.25
+            262_500,
+            { date: '2026-10-02', rateMicros: 5_250_000, source: 'Fake' },
+            262_500,
+            0,
+          ],
+        )
+      }).pipe(
+        Effect.provide(
+          apiTest({
+            rates: {
+              USD: [
+                ['2026-09-30', 5_200_000],
+                ['2026-10-02', 5_250_000],
+              ],
+            },
+          }),
+        ),
+      ),
+  )
 })

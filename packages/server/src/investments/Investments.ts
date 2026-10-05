@@ -10,8 +10,9 @@ import * as SqlSchema from 'effect/sql/SqlSchema'
 
 import { today } from '../domain/LocalDate.ts'
 import { addEndpoints, covering, holders } from '../ledger/Followed.ts'
-import { Quotes } from './Quotes.ts'
-import { toBrlCents, valuePosition } from './Valuation.ts'
+import { toBrlCents } from '../rates/Conversion.ts'
+import { ExchangeRates } from '../rates/ExchangeRates.ts'
+import { valuePosition } from './Valuation.ts'
 
 export class InvestmentsError extends Schema.TaggedError<InvestmentsError>()(
   'InvestmentsError',
@@ -95,7 +96,7 @@ const isBrokerage = (account: { kind: string; purpose: string }) =>
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   const crypto = yield* Crypto.Crypto
-  const quotes = yield* Quotes
+  const exchangeRates = yield* ExchangeRates
 
   const now = Effect.map(DateTime.now, DateTime.formatIso)
   const newId = crypto.randomUUIDv7.pipe(Effect.orDie)
@@ -235,7 +236,10 @@ const make = Effect.gen(function* () {
       list.push(valuation)
       valuationsOf.set(valuation.positionId, list)
     }
-    const rates = yield* quotes.toBrl(positions.map((p) => p.currency))
+    const rates = yield* exchangeRates.on(
+      positions.map((p) => p.currency),
+      referenceDate,
+    )
     const inBrl = (cents: number, currency: string) => {
       if (currency === 'BRL') return cents
       const quote = rates.get(currency)
