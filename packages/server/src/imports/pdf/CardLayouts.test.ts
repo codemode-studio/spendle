@@ -276,6 +276,28 @@ describe('Inter card bill', () => {
     )
   })
 
+  it('keeps the payments the bill prints as anticipated, apart from its credits', () => {
+    const advance = (items: ReadonlyArray<ReturnType<typeof positionedText>>) =>
+      Result.getOrThrow(read(parseInterCard, items)).advanceCents ?? null
+    // "Valor antecipado" R$ 30,00 counts the R$ 20,00 credit: R$ 10,00 was paid.
+    assert.deepStrictEqual(
+      [
+        advance(gross),
+        advance(
+          gross.filter((item) => !/^Valor antecipado/.test(item.text)).map(
+            (item) =>
+              /^Fatura atual/.test(item.text)
+                ? { ...item, text: 'Fatura atual R$ 130,00' }
+                : /^Despesas do m/.test(item.text)
+                  ? { ...item, text: 'Despesas do mês R$ 130,00' }
+                  : item,
+          ),
+        ),
+      ],
+      [1_000, null],
+    )
+  })
+
   it('keeps the printed due date of a bill net of payments before the cut', () => {
     const statement = Result.getOrThrow(read(parseInterCard, gross))
     assert.deepStrictEqual(
