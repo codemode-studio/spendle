@@ -231,6 +231,17 @@ const make = Effect.gen(function* () {
         : [
             sql`e.description LIKE ${likePattern(filters.text.trim())} ESCAPE '\\'`,
           ]),
+      ...(filters.direction === undefined
+        ? []
+        : filters.direction === 'inflow'
+          ? [sql`e.amount_cents > 0`]
+          : [sql`e.amount_cents < 0`]),
+      ...(filters.minAmountCents === undefined
+        ? []
+        : [sql`abs(e.amount_cents) >= ${filters.minAmountCents}`]),
+      ...(filters.maxAmountCents === undefined
+        ? []
+        : [sql`abs(e.amount_cents) <= ${filters.maxAmountCents}`]),
     ]
     const after = cursor.value
     const page = yield* sql`

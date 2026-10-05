@@ -199,6 +199,9 @@ importers:
       '@shadcn/react':
         specifier: ^0.3.1
         version: 0.3.1(@types/react@19.2.18)(react@19.2.8)
+      '@spendle/server':
+        specifier: workspace:*
+        version: link:packages/server
       '@tailwindcss/vite':
         specifier: ^4.1.18
         version: 4.3.3(vite@8.2.0(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5))
@@ -247,6 +250,9 @@ importers:
       drizzle-orm:
         specifier: ^0.45.1
         version: 0.45.2(@types/better-sqlite3@7.6.13)(better-sqlite3@12.11.1)
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0
       lucide-react:
         specifier: ^1.28.0
         version: 1.28.0(react@19.2.8)

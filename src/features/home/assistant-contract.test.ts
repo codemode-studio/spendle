@@ -21,8 +21,8 @@ function findOptionalObjectProperties(
     const properties = node.properties as Record<string, unknown>
     const required = new Set(
       Array.isArray(node.required)
-        ? node.required.filter((value): value is string =>
-            typeof value === 'string',
+        ? node.required.filter(
+            (value): value is string => typeof value === 'string',
           )
         : [],
     )

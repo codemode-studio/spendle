@@ -1,6 +1,7 @@
-import { Building2, Plus } from 'lucide-react'
+import { Archive, ArchiveRestore, Building2, Plug, Plus } from 'lucide-react'
 import {
   useMutation,
+  useQuery,
   useQueryClient,
   useSuspenseQuery,
 } from '@tanstack/react-query'
@@ -10,7 +11,6 @@ import { toast } from 'sonner'
 import { useState } from 'react'
 
 import { EmptyState, Panel, SectionHeader, StatusBadge } from '#/components/ui'
-import { BalanceCheckpointDialog } from '#/components/balance-checkpoint-dialog'
 import { Button } from '#/components/ui/button'
 import {
   Dialog,
@@ -29,67 +29,59 @@ import {
 } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
 import { NativeSelect } from '#/components/ui/native-select'
-import {
-  currencyOptions,
-  formatCurrency,
-  parseCurrency,
-} from '#/domain/currency'
+import { currencyOptions, formatCurrency } from '#/domain/currency'
 import { formatInstrumentName } from '#/domain/finance'
 import { formatShortDate as formatDate } from '#/domain/period'
-import {
-  createAccountFn,
-  updateAccountFn,
-} from '#/features/finance/finance.functions'
 import { InstrumentCard } from '#/features/finance/instrument-card'
 import {
-  configurationOptions,
-  invalidateFinance,
-} from '#/features/finance/queries'
-import type {
-  AccountSnapshot,
-  FinanceSnapshot,
-} from '#/features/finance/snapshot.types'
+  archiveAccountFn,
+  openAccountFn,
+  restoreAccountFn,
+  updateAccountFn,
+} from '#/features/v2/accounts.functions'
+import {
+  balanceSourceLabels,
+  currentBalance,
+  isCard,
+  isInvestment,
+} from '#/features/v2/accounts'
+import type { AccountView, Owner } from '#/features/v2/accounts'
+import {
+  accountsOptions,
+  balanceProofOptions,
+  invalidateAfterReactors,
+  ownersOptions,
+} from '#/features/v2/queries'
+import { errorMessage } from '#/lib/v2/errors'
 
-type AccountKind = AccountSnapshot['kind']
-type AccountStatusSnapshot = Pick<
-  AccountSnapshot,
-  'coverage' | 'currency' | 'latestCheckpoint' | 'latestVerifiedCheckpoint'
->
-type AccountFormSnapshot = Pick<
-  AccountSnapshot,
-  | 'currency'
-  | 'id'
-  | 'institution'
-  | 'kind'
-  | 'name'
-  | 'ownershipScopeId'
->
-type OwnershipScopeOption = Pick<
-  FinanceSnapshot['scopes'][number],
-  'id' | 'name'
->
+type BankKind = Exclude<AccountView['kind'], 'credit_card'>
 
 export function AccountsSection() {
-  const { data } = useSuspenseQuery(configurationOptions())
+  const { data: allAccounts } = useSuspenseQuery(accountsOptions(true))
+  const { data: owners } = useSuspenseQuery(ownersOptions())
   const queryClient = useQueryClient()
-  const createAccount = useServerFn(createAccountFn)
+  const openAccount = useServerFn(openAccountFn)
   const updateAccount = useServerFn(updateAccountFn)
+  const archiveAccount = useServerFn(archiveAccountFn)
+  const restoreAccount = useServerFn(restoreAccountFn)
   const [error, setError] = useState('')
   const [addOpen, setAddOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const editing = data.accounts.find((account) => account.id === editingId)
-  const invalidate = () => invalidateFinance(queryClient, 'ledger')
+  const accounts = allAccounts.filter((account) => !isCard(account))
+  const editing = accounts.find((account) => account.id === editingId)
+  const ownerName = new Map(owners.map((owner) => [owner.id, owner.name]))
+  const invalidate = () => invalidateAfterReactors(queryClient)
   const fail = (fallback: string) => (reason: unknown) => {
-    const message = reason instanceof Error ? reason.message : fallback
+    const message = errorMessage(reason, fallback)
     setError(message)
     toast.error(message)
   }
   const createMutation = useMutation({
-    mutationFn: createAccount,
+    mutationFn: openAccount,
     onSuccess: () => {
       toast.success('Conta adicionada.')
       setAddOpen(false)
-      invalidate()
+      void invalidate()
     },
     onError: fail('Não foi possível salvar.'),
   })
@@ -98,18 +90,42 @@ export function AccountsSection() {
     onSuccess: () => {
       toast.success('Conta atualizada.')
       setEditingId(null)
-      invalidate()
+      void invalidate()
     },
     onError: fail('Não foi possível atualizar.'),
+  })
+  const archiveMutation = useMutation({
+    mutationFn: archiveAccount,
+    onSuccess: (account) => {
+      toast.success(`${account.name} arquivada. O histórico continua salvo.`)
+      setEditingId(null)
+      void invalidate()
+    },
+    onError: fail('Não foi possível arquivar.'),
+  })
+  const restoreMutation = useMutation({
+    mutationFn: restoreAccount,
+    onSuccess: (account) => {
+      toast.success(`${account.name} voltou para as contas ativas.`)
+      void invalidate()
+    },
+    onError: (reason) =>
+      toast.error(errorMessage(reason, 'Não foi possível restaurar.')),
   })
 
   function submitCreate(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError('')
+    const form = new FormData(event.currentTarget)
+    const kind = String(form.get('kind')) as BankKind
     createMutation.mutate({
       data: {
-        ...readAccountForm(new FormData(event.currentTarget)),
-        initialBalanceCents: 0,
+        ownerId: String(form.get('ownerId')),
+        name: String(form.get('name')).trim(),
+        institutionName: String(form.get('institutionName')).trim(),
+        kind,
+        purpose: kind === 'investment' ? 'investment' : 'operating',
+        currency: String(form.get('currency')),
       },
     })
   }
@@ -118,25 +134,30 @@ export function AccountsSection() {
     event.preventDefault()
     if (!editing) return
     setError('')
+    const form = new FormData(event.currentTarget)
+    const kind = String(form.get('kind')) as BankKind
     updateMutation.mutate({
       data: {
-        id: editing.id,
-        ...readAccountForm(new FormData(event.currentTarget)),
+        accountId: editing.id,
+        changes: {
+          name: String(form.get('name')).trim(),
+          institutionName: String(form.get('institutionName')).trim(),
+          kind,
+          purpose: kind === 'investment' ? 'investment' : 'operating',
+        },
       },
     })
   }
 
-  const activeAccounts = data.accounts.filter((account) => account.active)
-  const currencies = new Set(activeAccounts.map((account) => account.currency))
+  const active = accounts.filter((account) => !account.archived)
+  const archived = accounts.filter((account) => account.archived)
+  const currencies = new Set(active.map((account) => account.currency))
   const groups = [
     {
       title: 'Movimentação',
-      accounts: activeAccounts.filter((account) => !isInvestment(account)),
+      accounts: active.filter((account) => !isInvestment(account)),
     },
-    {
-      title: 'Investimentos',
-      accounts: activeAccounts.filter(isInvestment),
-    },
+    { title: 'Investimentos', accounts: active.filter(isInvestment) },
   ].filter((group) => group.accounts.length > 0)
 
   return (
@@ -170,58 +191,42 @@ export function AccountsSection() {
               </div>
             )}
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {group.accounts.map((account) => (
-                <InstrumentCard
-                  key={account.id}
-                  title={formatInstrumentName(account.name)}
-                  subtitle={[
-                    account.institution?.name ?? 'Sem instituição',
-                    account.scope?.name,
-                    currencies.size > 1 ? account.currency : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                  editLabel={`Editar ${formatInstrumentName(account.name)}`}
-                  onEdit={() => {
-                    setError('')
-                    setEditingId(account.id)
-                  }}
-                  metrics={[
-                    {
-                      label: 'Saldo',
-                      value: formatCurrency(
-                        account.balanceCents,
-                        account.currency,
-                      ),
-                      caption: account.latestCheckpoint
-                        ? `Atualizado ${formatDate(account.latestCheckpoint.asOf)}`
-                        : 'Ainda não atualizado',
-                    },
-                    ...(account.projectedBalanceCents !== account.balanceCents
-                      ? [
-                          {
-                            label: 'Projetado',
-                            value: formatCurrency(
-                              account.projectedBalanceCents,
+              {group.accounts.map((account) => {
+                const balance = currentBalance(account)
+                return (
+                  <InstrumentCard
+                    key={account.id}
+                    title={formatInstrumentName(account.name)}
+                    subtitle={[
+                      account.institutionName,
+                      ownerName.get(account.ownerId),
+                      currencies.size > 1 ? account.currency : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                    editLabel={`Editar ${formatInstrumentName(account.name)}`}
+                    onEdit={() => {
+                      setError('')
+                      setEditingId(account.id)
+                    }}
+                    metrics={[
+                      {
+                        label: 'Saldo',
+                        value: balance
+                          ? formatCurrency(
+                              balance.balanceCents,
                               account.currency,
-                            ),
-                            caption: 'Com lançamentos pendentes',
-                          },
-                        ]
-                      : []),
-                  ]}
-                  status={<AccountStatus account={account} />}
-                  actions={
-                    <BalanceCheckpointDialog
-                      targetType="account"
-                      targetId={account.id}
-                      targetName={formatInstrumentName(account.name)}
-                      targetCurrency={account.currency}
-                      trigger="icon"
-                    />
-                  }
-                />
-              ))}
+                            )
+                          : '—',
+                        caption: balance
+                          ? `${formatDate(balance.asOf)} · ${balanceSourceLabels[balance.sourceKind]}`
+                          : 'Importe um extrato ou conecte o banco',
+                      },
+                    ]}
+                    status={<AccountStatus account={account} />}
+                  />
+                )
+              })}
             </div>
           </section>
         ))
@@ -230,8 +235,52 @@ export function AccountsSection() {
           <EmptyState
             icon={Building2}
             title="Cadastre sua primeira conta"
-            description="Contas pessoais e empresariais."
+            description="Adicione a conta aqui ou conecte o banco pelo Open Finance."
+            action={
+              <Button
+                variant="outline"
+                nativeButton={false}
+                render={
+                  <Link to="/configuracoes" search={{ tab: 'open-finance' }} />
+                }
+              >
+                <Plug data-icon="inline-start" />
+                Conectar banco
+              </Button>
+            }
           />
+        </Panel>
+      )}
+
+      {archived.length > 0 && (
+        <Panel title="Arquivadas">
+          <ul className="divide-y rounded-lg border">
+            {archived.map((account) => (
+              <li
+                key={account.id}
+                className="flex items-center justify-between gap-3 px-3 py-2"
+              >
+                <span className="min-w-0 truncate text-sm">
+                  {formatInstrumentName(account.name)}
+                  <span className="text-muted-foreground">
+                    {' '}
+                    · {account.institutionName}
+                  </span>
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={restoreMutation.isPending}
+                  onClick={() =>
+                    restoreMutation.mutate({ data: { accountId: account.id } })
+                  }
+                >
+                  <ArchiveRestore data-icon="inline-start" />
+                  Restaurar
+                </Button>
+              </li>
+            ))}
+          </ul>
         </Panel>
       )}
 
@@ -247,10 +296,10 @@ export function AccountsSection() {
             <DialogHeader>
               <DialogTitle>Adicionar conta</DialogTitle>
               <DialogDescription>
-                Cadastre uma conta PF ou PJ antes de importar o extrato.
+                Cadastre a conta antes de importar o extrato.
               </DialogDescription>
             </DialogHeader>
-            <AccountFormFields scopes={data.scopes} />
+            <AccountFormFields owners={owners} />
             {error && <FieldError>{error}</FieldError>}
             <DialogFooter>
               <DialogClose render={<Button type="button" variant="outline" />}>
@@ -280,17 +329,34 @@ export function AccountsSection() {
                   O saldo e o histórico importado não mudam.
                 </DialogDescription>
               </DialogHeader>
-              <AccountFormFields scopes={data.scopes} account={editing} />
+              <AccountFormFields owners={owners} account={editing} />
               {error && <FieldError>{error}</FieldError>}
-              <DialogFooter>
-                <DialogClose
-                  render={<Button type="button" variant="outline" />}
+              <DialogFooter className="sm:justify-between">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={archiveMutation.isPending}
+                  onClick={() =>
+                    archiveMutation.mutate({
+                      data: { accountId: editing.id },
+                    })
+                  }
                 >
-                  Cancelar
-                </DialogClose>
-                <Button type="submit" disabled={updateMutation.isPending}>
-                  {updateMutation.isPending ? 'Salvando…' : 'Salvar alterações'}
+                  <Archive data-icon="inline-start" />
+                  Arquivar
                 </Button>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row">
+                  <DialogClose
+                    render={<Button type="button" variant="outline" />}
+                  >
+                    Cancelar
+                  </DialogClose>
+                  <Button type="submit" disabled={updateMutation.isPending}>
+                    {updateMutation.isPending
+                      ? 'Salvando…'
+                      : 'Salvar alterações'}
+                  </Button>
+                </div>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -300,51 +366,54 @@ export function AccountsSection() {
   )
 }
 
-function AccountStatus({ account }: { account: AccountStatusSnapshot }) {
-  const coverageEnd = account.coverage.latestCoverageEnd
-  const verifiedAt = account.latestVerifiedCheckpoint?.asOf ?? null
-  const freshness = account.coverage.freshness.status
-  const tone =
-    freshness === 'current'
-      ? 'success'
-      : freshness === 'recommended'
-        ? 'warning'
-        : 'neutral'
-  const difference = account.latestCheckpoint?.differenceCents ?? 0
+/** Open Finance link and whether the balances prove the posted movements. */
+function AccountStatus({ account }: { account: AccountView }) {
+  const proof = useQuery(balanceProofOptions(account.id))
+  const intervals = proof.data?.supported ? proof.data.intervals : []
+  const gaps = intervals.filter((interval) => interval.differenceCents !== 0)
+  const provedUntil = intervals.at(-1)?.to
   return (
     <>
-      {coverageEnd ? (
-        <StatusBadge tone={tone}>
-          {verifiedAt && verifiedAt >= coverageEnd ? 'Conferido' : 'Extrato'}{' '}
-          até {formatDate(coverageEnd)}
+      {account.link ? (
+        <StatusBadge tone="info">
+          <Plug />
+          Open Finance
         </StatusBadge>
-      ) : (
-        <StatusBadge>Sem extratos</StatusBadge>
-      )}
-      {difference !== 0 && (
-        <StatusBadge tone="warning">
-          Diferença de {formatCurrency(Math.abs(difference), account.currency)}
-        </StatusBadge>
-      )}
-      {account.coverage.gaps.map((gap) => (
+      ) : null}
+      {gaps.map((gap) => (
         <StatusBadge
-          key={`${gap.start}-${gap.end}`}
+          key={`${gap.from}-${gap.to}`}
           tone="warning"
-          render={<Link to="/importar" search={{ view: 'upload' }} />}
+          render={<Link to="/importar" search={{ account: account.id }} />}
         >
-          Falta {formatDate(gap.start)} a {formatDate(gap.end)}
+          Diferença de{' '}
+          {formatCurrency(Math.abs(gap.differenceCents), account.currency)}{' '}
+          entre {formatDate(gap.from)} e {formatDate(gap.to)}
         </StatusBadge>
       ))}
+      {!gaps.length && provedUntil ? (
+        <StatusBadge tone="success">
+          Saldo conferido até {formatDate(provedUntil)}
+        </StatusBadge>
+      ) : null}
+      {proof.isSuccess && !intervals.length && account.lastCheckpoint ? (
+        <StatusBadge>
+          Primeiro saldo: {formatDate(account.lastCheckpoint.asOf)}
+        </StatusBadge>
+      ) : null}
+      {proof.isSuccess && !account.lastCheckpoint ? (
+        <StatusBadge>Sem saldo para conferir</StatusBadge>
+      ) : null}
     </>
   )
 }
 
 function AccountFormFields({
-  scopes,
+  owners,
   account,
 }: {
-  scopes: ReadonlyArray<OwnershipScopeOption>
-  account?: AccountFormSnapshot
+  owners: ReadonlyArray<Owner>
+  account?: AccountView
 }) {
   const prefix = account ? `account-${account.id}` : 'account-new'
   return (
@@ -365,22 +434,23 @@ function AccountFormFields({
           id={`${prefix}-bank`}
           name="institutionName"
           placeholder="Banco"
-          defaultValue={account?.institution?.name ?? ''}
+          defaultValue={account?.institutionName ?? ''}
           required
         />
       </Field>
       <Field>
-        <FieldLabel htmlFor={`${prefix}-owner`}>Proprietário</FieldLabel>
+        <FieldLabel htmlFor={`${prefix}-owner`}>Titular</FieldLabel>
         <NativeSelect
           id={`${prefix}-owner`}
-          name="ownershipScopeId"
+          name="ownerId"
           className="w-full"
-          defaultValue={account?.ownershipScopeId}
+          defaultValue={account?.ownerId}
+          disabled={Boolean(account)}
           required
         >
-          {scopes.map((scope) => (
-            <option key={scope.id} value={scope.id}>
-              {scope.name}
+          {owners.map((owner) => (
+            <option key={owner.id} value={owner.id}>
+              {owner.name}
             </option>
           ))}
         </NativeSelect>
@@ -391,9 +461,10 @@ function AccountFormFields({
           id={`${prefix}-kind`}
           name="kind"
           className="w-full"
-          defaultValue={account?.kind === 'savings' ? 'checking' : account?.kind}
+          defaultValue={account?.kind}
         >
           <option value="checking">Conta corrente</option>
+          <option value="savings">Poupança</option>
           <option value="cash">Dinheiro</option>
           <option value="investment">Corretora</option>
         </NativeSelect>
@@ -404,7 +475,8 @@ function AccountFormFields({
           id={`${prefix}-currency`}
           name="currency"
           className="w-full"
-          defaultValue={account?.currency}
+          defaultValue={account?.currency ?? 'BRL'}
+          disabled={Boolean(account)}
         >
           {currencyOptions.map((currency) => (
             <option key={currency.value} value={currency.value}>
@@ -417,30 +489,14 @@ function AccountFormFields({
   )
 }
 
-function readAccountForm(form: FormData) {
-  const kind = String(form.get('kind')) as AccountKind
-  return {
-    name: String(form.get('name')),
-    institutionName: String(form.get('institutionName')),
-    ownershipScopeId: String(form.get('ownershipScopeId')),
-    kind,
-    purpose: kind === 'investment' ? ('investment' as const) : ('operating' as const),
-    currency: parseCurrency(String(form.get('currency'))),
-  }
-}
-
-function isInvestment(account: Pick<AccountSnapshot, 'kind' | 'purpose'>) {
-  return account.kind === 'investment' || account.purpose === 'investment'
-}
-
-function sumByCurrency(
-  accounts: ReadonlyArray<Pick<AccountSnapshot, 'balanceCents' | 'currency'>>,
-) {
+function sumByCurrency(accounts: ReadonlyArray<AccountView>) {
   const totals = new Map<string, number>()
   for (const account of accounts) {
+    const balance = currentBalance(account)
+    if (!balance) continue
     totals.set(
       account.currency,
-      (totals.get(account.currency) ?? 0) + account.balanceCents,
+      (totals.get(account.currency) ?? 0) + balance.balanceCents,
     )
   }
   return [...totals.entries()]

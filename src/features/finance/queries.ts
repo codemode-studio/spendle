@@ -1,4 +1,3 @@
-import type { TransactionFilters } from './transactions.filters'
 import { queryOptions, skipToken } from '@tanstack/react-query'
 import type { QueryClient, QueryKey } from '@tanstack/react-query'
 
@@ -9,17 +8,11 @@ import { assistantQueryKeys } from '#/features/home/query-keys'
 import {
   detectRecurrencesFn,
   getFinanceSnapshotFn,
-  getCategoryTransactionsFn,
-  getTransactionsPageFn,
   getConfigurationSnapshotFn,
   getPlanningSnapshotFn,
-  getImportReviewSnapshotFn,
-  getKnowledgeBaseFn,
   getStrategyHistoryFn,
-  listCardStatementPaymentCandidatesFn,
   listLinkCandidatesFn,
 } from './finance.functions'
-import type { FinanceSnapshot, TransactionSnapshot } from './snapshot.types'
 
 export const financeQueryKeys = {
   all: ['finance'] as const,
@@ -141,97 +134,10 @@ export async function invalidateFinance(
   )
 }
 
-export async function patchTransactionCategory(
-  queryClient: QueryClient,
-  input: {
-    transactionId: TransactionSnapshot['id']
-    categoryId: NonNullable<TransactionSnapshot['categoryId']>
-  },
-) {
-  type EditableRows = Pick<FinanceSnapshot, 'transactions' | 'categories'>
-  const filters: { queryKey: QueryKey }[] = [
-    { queryKey: financeQueryKeys.snapshots() },
-    { queryKey: [...financeQueryKeys.all, 'read', 'transactions'] },
-  ]
-  await Promise.all(filters.map((filter) => queryClient.cancelQueries(filter)))
-  const previous = filters.flatMap((filter) =>
-    queryClient.getQueriesData<EditableRows>(filter),
-  )
-
-  for (const filter of filters)
-    queryClient.setQueriesData<EditableRows>(filter, (snapshot) => {
-      if (!snapshot) return snapshot
-      const category =
-        snapshot.categories.find((item) => item.id === input.categoryId) ?? null
-      return {
-        ...snapshot,
-        transactions: snapshot.transactions.map((transaction) =>
-          transaction.id === input.transactionId
-            ? {
-                ...transaction,
-                categoryId: input.categoryId,
-                category: category ?? transaction.category,
-              }
-            : transaction,
-        ),
-      }
-    })
-
-  return () => {
-    for (const [queryKey, snapshot] of previous) {
-      queryClient.setQueryData(queryKey, snapshot)
-    }
-  }
-}
-
-export async function patchTransactionNote(
-  queryClient: QueryClient,
-  input: {
-    transactionId: TransactionSnapshot['id']
-    note: string | null
-  },
-) {
-  type EditableRows = Pick<FinanceSnapshot, 'transactions'>
-  const filters: { queryKey: QueryKey }[] = [
-    { queryKey: financeQueryKeys.snapshots() },
-    { queryKey: [...financeQueryKeys.all, 'read', 'transactions'] },
-  ]
-  await Promise.all(filters.map((filter) => queryClient.cancelQueries(filter)))
-  const previous = filters.flatMap((filter) =>
-    queryClient.getQueriesData<EditableRows>(filter),
-  )
-
-  for (const filter of filters)
-    queryClient.setQueriesData<EditableRows>(filter, (snapshot) =>
-      snapshot
-        ? {
-            ...snapshot,
-            transactions: snapshot.transactions.map((transaction) =>
-              transaction.id === input.transactionId
-                ? { ...transaction, notes: input.note }
-                : transaction,
-            ),
-          }
-        : snapshot,
-    )
-
-  return () => {
-    for (const [queryKey, snapshot] of previous)
-      queryClient.setQueryData(queryKey, snapshot)
-  }
-}
-
 export const financeSnapshotOptions = (month?: string) =>
   queryOptions({
     queryKey: financeQueryKeys.snapshot(month),
     queryFn: () => getFinanceSnapshotFn({ data: { month } }),
-    staleTime: 15_000,
-  })
-
-export const importReviewOptions = () =>
-  queryOptions({
-    queryKey: financeQueryKeys.importReview(),
-    queryFn: () => getImportReviewSnapshotFn(),
     staleTime: 15_000,
   })
 
@@ -251,22 +157,6 @@ export const recurrenceLinkCandidatesOptions = (occurrenceId?: string) =>
     staleTime: 0,
   })
 
-export const cardStatementCandidatesOptions = (input?: {
-  creditCardId: string
-  dueDate: string
-  amountCents?: number
-}) =>
-  queryOptions({
-    queryKey: financeQueryKeys.cardStatementCandidates(
-      input?.creditCardId ?? '',
-      input?.dueDate ?? '',
-    ),
-    queryFn: input
-      ? () => listCardStatementPaymentCandidatesFn({ data: input })
-      : skipToken,
-    staleTime: 0,
-  })
-
 export const strategyHistoryOptions = (months = 3) =>
   queryOptions({
     queryKey: financeQueryKeys.strategyHistory(months),
@@ -281,30 +171,10 @@ export const configurationOptions = () =>
     queryFn: () => getConfigurationSnapshotFn(),
     staleTime: 15_000,
   })
-export const knowledgeBaseOptions = () =>
-  queryOptions({
-    queryKey: financeQueryKeys.knowledgeBase(),
-    queryFn: () => getKnowledgeBaseFn(),
-    staleTime: 15_000,
-  })
 export const planningOptions = () =>
   queryOptions({
     queryKey: [...financeQueryKeys.all, 'read', 'planning'],
     queryFn: () => getPlanningSnapshotFn(),
-    staleTime: 15_000,
-  })
-
-export const transactionsPageOptions = (filters: TransactionFilters) =>
-  queryOptions({
-    queryKey: [...financeQueryKeys.all, 'read', 'transactions', filters],
-    queryFn: () => getTransactionsPageFn({ data: filters }),
-    staleTime: 15_000,
-  })
-
-export const categoryTransactionsOptions = () =>
-  queryOptions({
-    queryKey: [...financeQueryKeys.all, 'read', 'categories'],
-    queryFn: () => getCategoryTransactionsFn(),
     staleTime: 15_000,
   })
 

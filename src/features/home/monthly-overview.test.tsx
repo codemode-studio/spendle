@@ -161,12 +161,8 @@ describe('monthly overview', () => {
       </QueryClientProvider>,
     )
 
-    expect(
-      screen.queryByLabelText('Carregando histórico mensal'),
-    ).toBeNull()
-    expect(
-      screen.getByRole('button', { name: /Agosto de 2026:/ }),
-    ).toBeTruthy()
+    expect(screen.queryByLabelText('Carregando histórico mensal')).toBeNull()
+    expect(screen.getByRole('button', { name: /Agosto de 2026:/ })).toBeTruthy()
     expect(fetchHistory).toHaveBeenCalledOnce()
   })
   it('shows monthly cash projections with spending bars and contribution rings', async () => {

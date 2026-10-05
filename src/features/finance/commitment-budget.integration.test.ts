@@ -70,22 +70,20 @@ it('leva recorrência de cartão cobrada após o corte para o vencimento seguint
   vi.setSystemTime(new Date('2026-09-06T12:00:00Z'))
   database = await openTestDatabase()
   const { db, schema: s, ids } = database
-  await db
-    .insert(s.recurrences)
-    .values({
-      id: 'subscription',
-      name: 'Assinatura',
-      creditCardId: ids.card,
-      categoryId: ids.categories.subscriptions,
-      amountCents: 7000,
-      currency: 'BRL',
-      direction: 'expense',
-      amountMode: 'fixed',
-      frequency: 'monthly',
-      startsOn: '2026-09-20',
-      scheduleAnchor: '2026-09-20',
-      nextDate: '2026-09-20',
-    })
+  await db.insert(s.recurrences).values({
+    id: 'subscription',
+    name: 'Assinatura',
+    creditCardId: ids.card,
+    categoryId: ids.categories.subscriptions,
+    amountCents: 7000,
+    currency: 'BRL',
+    direction: 'expense',
+    amountMode: 'fixed',
+    frequency: 'monthly',
+    startsOn: '2026-09-20',
+    scheduleAnchor: '2026-09-20',
+    nextDate: '2026-09-20',
+  })
   const september = await getFinanceSnapshot('2026-09')
   expect(
     september.dashboard.monthlyCommitments.lines.some(

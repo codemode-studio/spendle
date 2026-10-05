@@ -5,7 +5,8 @@ import { InvestmentsPage } from '#/features/investments/investments-page'
 import { investmentsOptions } from '#/features/investments/queries'
 
 export const Route = createFileRoute('/investimentos')({
-  loader: ({ context }) => context.queryClient.ensureQueryData(investmentsOptions()),
+  loader: ({ context }) =>
+    context.queryClient.ensureQueryData(investmentsOptions()),
   component: InvestmentsRoute,
 })
 

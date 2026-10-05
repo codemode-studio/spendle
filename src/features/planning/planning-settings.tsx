@@ -78,10 +78,7 @@ export function PlanningSettings({
             savePlan={savePlan}
             planPending={planMutation.isPending}
           />
-          <GoalsSection
-            data={data}
-            openGoal={() => setGoalOpen(true)}
-          />
+          <GoalsSection data={data} openGoal={() => setGoalOpen(true)} />
           <ClosingSection
             data={data}
             closed={Boolean(currentBudget?.closed)}

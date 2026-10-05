@@ -5,7 +5,10 @@ Backend V2 ([ADR 003](../../plans/adrs/003-backend-v2-effect.md)). Roda separado
 ```bash
 pnpm --filter @spendle/server dev     # http://localhost:4100
 pnpm --filter @spendle/server verify  # typecheck, diagnósticos Effect e testes
+pnpm --filter @spendle/server qa      # API em memória com dados sintéticos e Pluggy falsa
 ```
+
+`pnpm qa:start <porta>` na raiz sobe essa API de QA na porta `<porta> + 1200` junto com o app web.
 
 | Variável                                      | Uso                                                          |
 | --------------------------------------------- | ------------------------------------------------------------ |
@@ -83,7 +86,7 @@ const client = HttpApiClient.make(SpendleApi, {
 | Contas       | `GET /accounts` (`includeArchived`), `GET/PATCH /accounts/:id`, `POST /accounts`, `PUT /accounts/:id/card-terms`, `POST /accounts/:id/archive`, `POST /accounts/:id/restore`                                                                                                                                                                                       |
 | Open Finance | `POST /open-finance/connect-token`, `GET /open-finance/connections[/:id]`, `POST …/:id/reconnect-token`, `POST …/:id/item`, `POST …/:id/refresh`, `GET …/:id/accounts`, `POST …/:id/sync`, `DELETE …/:id`, `PUT/DELETE /open-finance/provider-accounts/:id/link`                                                                                                   |
 | Importação   | `POST /imports/preview` e `POST /imports` (`multipart/form-data` com `accountId` e `file`), `GET /imports` (`accountId`)                                                                                                                                                                                                                                           |
-| Lançamentos  | `GET /entries` (`accountId`, `from`, `to`, `status`, `categoryId`, `categoryStatus`, `text`, `limit`, `cursor`), `GET /entries/:id`, `GET /accounts/:id/balance-proof`                                                                                                                                                                                             |
+| Lançamentos  | `GET /entries` (`accountId`, `from`, `to`, `status`, `categoryId`, `categoryStatus`, `text`, `direction`, `minAmountCents`, `maxAmountCents`, `limit`, `cursor`), `GET /entries/:id`, `GET /accounts/:id/balance-proof`                                                                                                                                            |
 | Conciliação  | `GET /reconciliation/relations` (`status`, `kind`, `accountId`), `POST /reconciliation/decisions`, `POST /reconciliation/links`, `GET /reconciliation/orphaned-decisions`                                                                                                                                                                                          |
 | Cartões      | `GET /cards/:id/cycles`, `GET /cards/:id/installments`                                                                                                                                                                                                                                                                                                             |
 | Categorias   | `GET/POST /categories`, `PATCH /categories/:id`, `POST /categories/:id/archive`, `GET /category-store/patterns`, `POST /category-store/preview`, `POST /category-store/edits`, `GET /category-store/provider-mappings`, `GET /category-review`, `GET/PUT/DELETE /entries/:id/category`, `POST /entries/:id/category/confirm`, `POST /entries/:id/category/correct` |
