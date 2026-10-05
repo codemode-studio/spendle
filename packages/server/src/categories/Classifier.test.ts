@@ -244,6 +244,173 @@ describe('Classifier', () => {
       }),
   )
 
+  it.effect(
+    "shows the person's decisions about similar merchants as examples, never the model's answers",
+    () =>
+      Effect.gen(function* () {
+        const entryOf = yield* statement(
+          line('a', '20260901', '-12.00', 'Padaria Real') +
+            line('b', '20260902', '-30.00', 'Padaria Central') +
+            line('c', '20260903', '-55.00', 'Mercado Bom') +
+            line('d', '20260904', '-21.00', 'Mercado Bom Filial') +
+            line('e', '20260905', '-39.90', 'Netflix'),
+        )
+        const categorizer = yield* Categorizer
+        const calls = yield* FakeClassifierCalls
+        const sql = yield* SqlClient.SqlClient
+        const askedSince = (from: number) =>
+          Effect.map(Ref.get(calls), (all) =>
+            all
+              .slice(from)
+              .map((item) => [item.pattern, item.examples ?? []] as const),
+          )
+        // Nothing decided yet: every merchant is asked bare, and the
+        // model's applied answer for "Mercado Bom" is no example later.
+        assert.sameDeepMembers(yield* askedSince(0), [
+          ['padaria real', []],
+          ['padaria central', []],
+          ['mercado bom', []],
+          ['mercado bom filial', []],
+          ['netflix', []],
+        ])
+        assert.deepInclude(
+          yield* categorizer.explain(yield* entryOf('Mercado Bom')),
+          { origin: 'model', status: 'applied' },
+        )
+
+        let seen = (yield* Ref.get(calls)).length
+        yield* categorizer.decide(yield* entryOf('Padaria Real'), 'groceries')
+        yield* drain
+        // Only the merchant whose examples changed is asked again.
+        assert.deepStrictEqual(yield* askedSince(seen), [
+          [
+            'padaria central',
+            [{ description: 'Padaria Real', categoryId: 'groceries' }],
+          ],
+        ])
+        const contexts = yield* sql<{
+          pattern: string
+          context: string
+        }>`SELECT pattern, context FROM model_classifications ORDER BY pattern`
+        assert.deepStrictEqual(
+          contexts.map((row) => [row.pattern, row.context !== '']),
+          [
+            ['mercado bom', false],
+            ['mercado bom filial', false],
+            ['netflix', false],
+            ['padaria central', true],
+            ['padaria real', false],
+          ],
+        )
+
+        // A decision no open merchant resembles asks nothing.
+        seen = (yield* Ref.get(calls)).length
+        yield* categorizer.decide(yield* entryOf('Netflix'), 'subscriptions')
+        yield* drain
+        assert.deepStrictEqual(yield* askedSince(seen), [])
+
+        // Withdrawing the decision takes its example away, so the merchant
+        // is asked again without it.
+        seen = (yield* Ref.get(calls)).length
+        yield* categorizer.undo(yield* entryOf('Padaria Real'))
+        yield* drain
+        assert.includeDeepMembers(yield* askedSince(seen), [
+          ['padaria central', []],
+        ])
+        assert.notIncludeDeepMembers(
+          (yield* askedSince(0)).flatMap(([, examples]) => examples),
+          [{ description: 'Mercado Bom', categoryId: 'groceries' }],
+        )
+      }).pipe(
+        Effect.provide(
+          categoriesTestWith(
+            fakeClassifier(
+              {
+                'mercado bom': { categoryId: 'groceries', probability: 0.97 },
+                'padaria central': {
+                  categoryId: 'groceries',
+                  probability: 0.7,
+                },
+              },
+              { applyThreshold: 0.95 },
+            ),
+          ),
+        ),
+      ),
+  )
+
+  it.effect(
+    'sends each transaction its own past decisions, by category name',
+    () =>
+      Effect.gen(function* () {
+        const bodies = yield* Ref.make<ReadonlyArray<string>>([])
+        const client = HttpClient.make((request) =>
+          Effect.gen(function* () {
+            const body =
+              request.body._tag === 'Uint8Array'
+                ? new TextDecoder().decode(request.body.body)
+                : ''
+            yield* Ref.update(bodies, (all) => [...all, body])
+            const sent = yield* Schema.decodeUnknownEffect(SentRequest)(body)
+            const answers: Record<string, unknown> = {}
+            for (const id of Object.keys(sent.questions))
+              answers[id] = {
+                type: 'choice',
+                choice: 'groceries',
+                probabilities: { groceries: 0.8 },
+              }
+            const json = yield* Schema.encodeEffect(
+              Schema.fromJsonString(Schema.Unknown),
+            )({ answers })
+            return HttpClientResponse.fromWeb(
+              request,
+              new Response(json, { status: 200 }),
+            )
+          }).pipe(Effect.orDie),
+        )
+        const classifier = yield* Classifier.makeTypeSafe({
+          apiKey: Redacted.make('test-key'),
+          model: 'jev-latest',
+          baseUrl: 'https://typesafe.test',
+        }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient, client)))
+        yield* classifier.classify(
+          [
+            {
+              pattern: 'padaria central',
+              direction: 'expense',
+              description: 'Padaria Central',
+              amountCents: -1000,
+              examples: [
+                { description: 'Padaria Real', categoryId: 'groceries' },
+                // Not offered for this direction: left out.
+                { description: 'Padaria Salario', categoryId: 'salary' },
+              ],
+            },
+            {
+              pattern: 'loja',
+              direction: 'expense',
+              description: 'Loja',
+              amountCents: -2000,
+            },
+          ],
+          [
+            { id: 'groceries', name: 'Mercado', bucket: 'essential' },
+            { id: 'salary', name: 'Renda familiar', bucket: 'income' },
+          ],
+        )
+        const [sent] = yield* Effect.forEach(yield* Ref.get(bodies), (body) =>
+          Schema.decodeUnknownEffect(SentRequest)(body),
+        )
+        assert.deepStrictEqual(
+          sent!.state.transactions.map((t) => t.pastDecisions),
+          [[{ description: 'Padaria Real', category: 'Mercado' }], undefined],
+        )
+        const [first, second] = Object.values(sent!.questions)
+        assert.include(first!.instructions, '`transactions[0].pastDecisions`')
+        assert.notInclude(second!.instructions, 'pastDecisions')
+      }),
+  )
+
   it.effect('reports a refused key as rejected without retrying', () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0)
@@ -373,6 +540,14 @@ const SentRequest = Schema.fromJsonString(
           description: Schema.String,
           amount: Schema.String,
           direction: Schema.String,
+          pastDecisions: Schema.optional(
+            Schema.Array(
+              Schema.Struct({
+                description: Schema.String,
+                category: Schema.String,
+              }),
+            ),
+          ),
         }),
       ),
     }),
@@ -380,6 +555,7 @@ const SentRequest = Schema.fromJsonString(
       Schema.String,
       Schema.Struct({
         type: Schema.Literal('choice'),
+        instructions: Schema.String,
         criteria: Schema.Record(Schema.String, Schema.String),
       }),
     ),

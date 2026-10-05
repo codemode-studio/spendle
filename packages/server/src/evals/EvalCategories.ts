@@ -7,6 +7,10 @@
  *   pnpm --filter @spendle/server eval:categories                 model
  *   pnpm --filter @spendle/server eval:categories --mode policy   patterns only, free
  *   pnpm --filter @spendle/server eval:categories --mode all      both, and combined
+ *   pnpm --filter @spendle/server eval:categories --no-examples   model without past decisions
+ *
+ * The model sees the context split as the person's past decisions (few-shot
+ * examples, as the server sends them) and answers the exam split.
  */
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime'
 import * as NodeServices from '@effect/platform-node/NodeServices'
@@ -24,10 +28,9 @@ import * as Flag from 'effect/cli/Flag'
 import * as FetchHttpClient from 'effect/http/FetchHttpClient'
 
 import { Classifier } from '../categories/Classifier.ts'
-import type { ClassifyItem } from '../categories/Classifier.ts'
 import { categoryDescriptions } from '../categories/Descriptions.ts'
-import { knowledgeKey } from '../categories/Patterns.ts'
 import { MODEL_SUGGEST_FLOOR } from '../categories/Policy.ts'
+import { modelQuestions } from './ModelReplay.ts'
 import { policyOutcomes } from './PolicyReplay.ts'
 import {
   calibration,
@@ -144,8 +147,13 @@ const command = Command.make(
       ),
       Flag.optional,
     ),
+    noExamples: Flag.Boolean('no-examples').pipe(
+      Flag.withDescription(
+        'Ask the model without the context split as past decisions, to compare',
+      ),
+    ),
   },
-  Effect.fn(function* ({ mode, target, minApplied, threshold }) {
+  Effect.fn(function* ({ mode, target, minApplied, threshold, noExamples }) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const directory = yield* path.fromFileUrl(directoryUrl)
@@ -197,18 +205,15 @@ const command = Command.make(
       return
     }
     const version = classifier.modelVersion.value
+    const asked = modelQuestions(context, exam, { examples: !noExamples })
+    const withExamples = asked.filter(
+      (item) => (item.examples?.length ?? 0) > 0,
+    ).length
     yield* Console.log(
-      `\nAsking ${version} about ${exam.length} movements (paid calls)…`,
+      noExamples
+        ? `\nAsking ${version} about ${exam.length} movements without past decisions (paid calls)…`
+        : `\nAsking ${version} about ${exam.length} movements, ${withExamples} with past decisions from the context split as examples (paid calls)…`,
     )
-    const asked: ReadonlyArray<ClassifyItem> = exam.map((item) => {
-      const key = knowledgeKey(item)
-      return {
-        pattern: key?.pattern ?? item.id,
-        direction: item.amountCents < 0 ? 'expense' : 'income',
-        description: item.description,
-        amountCents: item.amountCents,
-      }
-    })
     const started = yield* DateTime.now
     const result = yield* classifier.classify(
       asked,
@@ -235,7 +240,10 @@ const command = Command.make(
       ),
       () => 0.9,
     )
-    yield* Console.log(`\n=== ${version} (${seconds.toFixed(1)}s) ===`)
+    const setup = noExamples ? 'no examples' : 'with examples'
+    yield* Console.log(
+      `\n=== ${version}, ${setup} (${seconds.toFixed(1)}s) ===`,
+    )
     yield* Console.log(
       'Applied answers at each threshold (transfers count as wrong when applied):',
     )
@@ -260,9 +268,11 @@ const command = Command.make(
     )
     const model = modelOutcomes(answers, scoredAt, MODEL_SUGGEST_FLOOR)
     const modelBoard = scoreboard(exam, model)
-    yield* printBoard(`model at ${scoredAt}`, modelBoard, names)
+    yield* printBoard(`model at ${scoredAt}, ${setup}`, modelBoard, names)
     report['model'] = {
       version,
+      examples: !noExamples,
+      itemsWithExamples: withExamples,
       seconds,
       scoredAt,
       recommended,

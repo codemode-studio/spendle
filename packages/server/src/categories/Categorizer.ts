@@ -17,6 +17,8 @@ import { categoryChanged, uncategorized } from './Categories.ts'
 import { Classifier } from './Classifier.ts'
 import type { ClassifyItem } from './Classifier.ts'
 import { categoryDescriptions } from './Descriptions.ts'
+import { exampleContext, examplePicker } from './Examples.ts'
+import type { DecidedExample } from './Examples.ts'
 import { followCategoryDecisions } from './FollowDecisions.ts'
 import { categoryStoreChanged, KnowledgeStore } from './KnowledgeStore.ts'
 import { knowledgeKey } from './Patterns.ts'
@@ -285,12 +287,15 @@ const make = Effect.gen(function* () {
       direction: Schema.String,
       categoryId: Schema.NullOr(Schema.String),
       probability: Schema.Number,
+      context: Schema.String,
     }),
     execute: (version) => sql`
-      SELECT pattern, direction, category_id AS categoryId, probability
+      SELECT pattern, direction, category_id AS categoryId, probability, context
       FROM model_classifications WHERE model_version = ${version}
     `,
   })
+  // The latest answer per merchant, whatever examples it was given: a
+  // stale answer keeps its suggestion until the new one replaces it.
   const modelAnswers = (version: string) =>
     Effect.map(
       findModelAnswers(version),
@@ -298,7 +303,11 @@ const make = Effect.gen(function* () {
         new Map(
           rows.map((row) => [
             `${row.pattern}|${row.direction}`,
-            { categoryId: row.categoryId, probability: row.probability },
+            {
+              categoryId: row.categoryId,
+              probability: row.probability,
+              context: row.context,
+            },
           ]),
         ),
     )
@@ -665,34 +674,107 @@ const make = Effect.gen(function* () {
     )
   })
 
-  // Merchants no rule covers and the model has not answered yet, one
-  // example each. Decided, reconciled and refunded entries never ask it.
+  // The person's decisions that can teach the model by example: each
+  // decision's sole current entry, in a category still offered. Decisions
+  // about a part of a split entry, `uncategorized` and confirmed transfers
+  // or card payments (which teach nothing, see `decideUnlocked`) are left
+  // out. Model answers, patterns and reconciliation are never examples.
+  const decidedExamples = Effect.gen(function* () {
+    const { entries, decisions } = yield* followed
+    const byId = new Map(entries.map((entry) => [entry.id, entry]))
+    const offered = new Set(
+      (yield* findCategories(undefined))
+        .filter(
+          (category) =>
+            category.active &&
+            !category.system &&
+            category.id !== uncategorized,
+        )
+        .map((category) => category.id),
+    )
+    const shadowed = new Set(
+      (yield* findRelations(undefined)).flatMap((relation) =>
+        relation.kind !== 'refund' && relation.status === 'confirmed'
+          ? [relation.outflowEntryId, relation.inflowEntryId]
+          : [],
+      ),
+    )
+    const pool: Array<DecidedExample> = []
+    for (const [entryId, decision] of decisions.byEntry) {
+      const entry = byId.get(entryId)
+      if (
+        entry === undefined ||
+        !offered.has(decision.categoryId) ||
+        shadowed.has(entryId)
+      )
+        continue
+      pool.push({
+        description: entry.description,
+        amountCents: entry.amountCents,
+        categoryId: decision.categoryId,
+        revision: decision.revision,
+      })
+    }
+    return pool
+  })
+
+  const contextKey = Effect.fnUntraced(function* (context: string) {
+    if (context === '') return ''
+    const digest = yield* crypto
+      .digest('SHA-256', new TextEncoder().encode(context))
+      .pipe(Effect.orDie)
+    return Array.from(digest.subarray(0, 12), (byte) =>
+      byte.toString(16).padStart(2, '0'),
+    ).join('')
+  })
+
+  // Merchants no rule covers, one example each, with the person's decisions
+  // about similar merchants. A merchant is asked when the model has not
+  // answered it, or answered it with other examples than it would get now;
+  // a decision that changes no item's examples asks nothing. Decided,
+  // reconciled and refunded entries never ask it.
   const unclassified = (version: string) =>
     Effect.gen(function* () {
       const cached = yield* modelAnswers(version)
+      // A model answer stays open too: new examples may change it.
       const open = new Set(
         (yield* findInferences(undefined))
           .filter(
             (inference) =>
-              inference.status !== 'applied' &&
-              (inference.origin === 'none' ||
-                inference.origin === 'pattern' ||
-                inference.origin === 'provider'),
+              inference.origin === 'model' ||
+              (inference.status !== 'applied' &&
+                (inference.origin === 'none' ||
+                  inference.origin === 'pattern' ||
+                  inference.origin === 'provider')),
           )
           .map((inference) => inference.entryId),
       )
-      const items = new Map<string, ClassifyItem>()
+      const pick = examplePicker(yield* decidedExamples)
+      const items = new Map<
+        string,
+        { readonly item: ClassifyItem; readonly context: string }
+      >()
       for (const entry of yield* findEntries(undefined)) {
         if (!open.has(entry.id)) continue
         const key = knowledgeKey(entry)
         if (key === null) continue
         const id = `${key.pattern}|${key.direction}`
-        if (cached.has(id) || items.has(id)) continue
-        items.set(id, {
-          pattern: key.pattern,
-          direction: key.direction,
+        if (items.has(id)) continue
+        const examples = pick({
           description: entry.description,
-          amountCents: entry.amountCents,
+          direction: key.direction,
+        })
+        const context = yield* contextKey(exampleContext(examples))
+        if (cached.get(id)?.context === context) continue
+        items.set(id, {
+          item: {
+            pattern: key.pattern,
+            direction: key.direction,
+            description: entry.description,
+            amountCents: entry.amountCents,
+            examples,
+          },
+          context,
         })
       }
       return [...items.values()]
@@ -721,7 +803,7 @@ const make = Effect.gen(function* () {
       )
       const answers = yield* classifier
         .classify(
-          items,
+          items.map(({ item }) => item),
           options.map((category) => ({
             id: category.id,
             name: names.get(category.id) ?? category.id,
@@ -737,16 +819,16 @@ const make = Effect.gen(function* () {
       const classifiedAt = DateTime.formatIso(yield* DateTime.now)
       yield* sql.withTransaction(
         Effect.gen(function* () {
-          for (const [index, item] of items.entries()) {
+          for (const [index, { item, context }] of items.entries()) {
             const answer = answers.value[index]!
             yield* sql`
             INSERT INTO model_classifications (pattern, direction, model_version, category_id,
-              probability, classified_at)
+              probability, classified_at, context)
             VALUES (${item.pattern}, ${item.direction}, ${version}, ${answer.categoryId},
-              ${answer.probability}, ${classifiedAt})
+              ${answer.probability}, ${classifiedAt}, ${context})
             ON CONFLICT (pattern, direction, model_version) DO UPDATE SET
               category_id = excluded.category_id, probability = excluded.probability,
-              classified_at = excluded.classified_at
+              classified_at = excluded.classified_at, context = excluded.context
           `
           }
           yield* log.append([

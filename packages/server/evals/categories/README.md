@@ -7,6 +7,7 @@
 pnpm --filter @spendle/server eval:categories                 # modelo (pago)
 pnpm --filter @spendle/server eval:categories --mode policy   # só a política determinística, sem chave
 pnpm --filter @spendle/server eval:categories --mode all      # os dois e a combinação, como o app roda
+pnpm --filter @spendle/server eval:categories --no-examples    # modelo sem decisões anteriores, para comparar
 pnpm --filter @spendle/server eval:categories --target 0.98 --min-applied 40 --threshold 0.95
 ```
 
@@ -21,7 +22,7 @@ Sem `TYPESAFE_API_KEY`, o modo `model` sai com código 1 e explica o que fazer. 
 
 ## Como ler o conjunto
 
-- `split: context` são decisões tratadas como já tomadas pela pessoa: no modo `policy` elas ensinam a base de padrões. `split: exam` são as perguntas. A divisão é por estabelecimento, então a política quase nunca resolve o `exam` sozinha (só por prefixo); isso é esperado e mostra o que sobra para o modelo. O conjunto não traz categoria da Pluggy, então o mapa de categorias do provedor não entra.
+- `split: context` são decisões tratadas como já tomadas pela pessoa: no modo `policy` elas ensinam a base de padrões; no modo `model` viram os exemplos (decisões anteriores) que o servidor mostra ao modelo, escolhidos por `src/categories/Examples.ts` como no app: até 8 por lançamento, da mesma direção, que compartilham uma palavra do estabelecimento, as mais recentes primeiro entre iguais. Lançamentos sem nenhuma palavra em comum vão sem exemplos. `--no-examples` pergunta sem eles; compare os dois placares com o mesmo `TYPESAFE_MODEL`. `split: exam` são as perguntas. A divisão é por estabelecimento, então a política quase nunca resolve o `exam` sozinha (só por prefixo); isso é esperado e mostra o que sobra para o modelo. O conjunto não traz categoria da Pluggy, então o mapa de categorias do provedor não entra.
 - `guessable: false` marca convenções pessoais ou descrições opacas, como um Pix para uma pessoa classificado em Saúde. Nenhum modelo acerta isso pela descrição; o placar é separado.
 - `origin: synthetic_movement` são transferências e pagamentos de fatura que não devem receber categoria. No app a conciliação costuma resolvê-los antes; aqui, categoria aplicada num deles conta como erro.
 
