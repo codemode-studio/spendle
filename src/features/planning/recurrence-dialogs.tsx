@@ -20,12 +20,11 @@ import { formatCurrency, formatMinorUnitsForInput } from '#/domain/currency'
 import { formatInstrumentName, normalizeDescription } from '#/domain/finance'
 import { formatShortDate as formatDate } from '#/domain/period'
 import { recurrenceLinkCandidateLimits } from '#/domain/recurrence-book'
-import { recurrenceLinkCandidatesOptions } from '#/features/finance/queries'
-import type {
-  PlanningSnapshot,
-  RecurrenceSnapshot,
-} from '#/features/finance/snapshot.types'
+import { recurrenceCandidatesOptions } from '#/features/v2/queries'
 import { cn } from '#/lib/utils'
+
+import { occurrenceRef } from './types'
+import type { PlanningData, RecurrenceView } from './types'
 
 function LinkPaymentDialog({
   recurrence,
@@ -35,9 +34,9 @@ function LinkPaymentDialog({
   onOpenChange,
   onLink,
 }: {
-  recurrence: RecurrenceSnapshot | null
-  categories: Array<
-    Pick<PlanningSnapshot['categories'][number], 'id' | 'name' | 'bucket'>
+  recurrence: RecurrenceView | null
+  categories: ReadonlyArray<
+    Pick<PlanningData['categories'][number], 'id' | 'name' | 'bucket'>
   >
   pending: boolean
   open: boolean
@@ -77,7 +76,9 @@ function LinkPaymentDialog({
     openOccurrences.find((item) => item.id === occurrenceId) ??
     openOccurrences.at(0)
   const candidatesQuery = useQuery(
-    recurrenceLinkCandidatesOptions(selectedOccurrence?.id),
+    recurrenceCandidatesOptions(
+      selectedOccurrence ? occurrenceRef(selectedOccurrence.id) : null,
+    ),
   )
   const candidates = useMemo(() => {
     const query = normalizeDescription(search)
@@ -86,12 +87,14 @@ function LinkPaymentDialog({
         (candidate) =>
           categoryId === 'all' ||
           (categoryId === 'uncategorized'
-            ? !candidate.categoryId || candidate.categoryId === 'uncategorized'
-            : candidate.categoryId === categoryId),
+            ? !candidate.entry.categoryId ||
+              candidate.entry.categoryId === 'uncategorized'
+            : candidate.entry.categoryId === categoryId),
       )
       .filter(
         (candidate) =>
-          !query || normalizeDescription(candidate.description).includes(query),
+          !query ||
+          normalizeDescription(candidate.entry.description).includes(query),
       )
       .slice(
         0,
@@ -183,7 +186,7 @@ function LinkPaymentDialog({
           ) : (
             <ul className="divide-y">
               {candidates.map((candidate) => {
-                const selected = selectedIds.includes(candidate.id)
+                const selected = selectedIds.includes(candidate.entryId)
                 const hints = multiple
                   ? [candidate.inWindow ? 'no período' : 'fora do período']
                   : [
@@ -193,11 +196,11 @@ function LinkPaymentDialog({
                       candidate.daysApart <= 3 ? 'data próxima' : null,
                     ].filter(Boolean)
                 return (
-                  <li key={candidate.id}>
+                  <li key={candidate.entryId}>
                     <button
                       type="button"
                       aria-pressed={selected}
-                      onClick={() => toggleTransaction(candidate.id)}
+                      onClick={() => toggleTransaction(candidate.entryId)}
                       className={cn(
                         'flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors pointer-fine:hover:bg-muted/50',
                         selected &&
@@ -205,25 +208,23 @@ function LinkPaymentDialog({
                       )}
                     >
                       <span className="w-20 shrink-0 text-xs text-muted-foreground tabular-nums">
-                        {formatDate(candidate.postedAt)}
+                        {formatDate(candidate.entry.bookedOn)}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-medium">
-                          {candidate.description}
+                          {candidate.entry.description}
                         </span>
                         <span className="block truncate text-xs text-muted-foreground">
                           {formatInstrumentName(
-                            candidate.accountLabel ??
-                              candidate.cardLabel ??
-                              '—',
+                            candidate.entry.accountName || '—',
                           )}
                           {hints.length > 0 && ` · ${hints.join(' · ')}`}
                         </span>
                       </span>
                       <span className="shrink-0 font-medium tabular-nums">
                         {formatCurrency(
-                          Math.abs(candidate.amountCents),
-                          candidate.currency,
+                          Math.abs(candidate.entry.amountCents),
+                          candidate.entry.currency,
                         )}
                       </span>
                     </button>
@@ -270,17 +271,13 @@ function RecurrenceDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  data: PlanningSnapshot
-  recurrence: RecurrenceSnapshot | undefined
+  data: PlanningData
+  recurrence: RecurrenceView | undefined
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
   pending: boolean
 }) {
-  const destination = recurrence?.accountId
-    ? `account:${recurrence.accountId}`
-    : recurrence?.creditCardId
-      ? `card:${recurrence.creditCardId}`
-      : ''
-  const recurrenceGroup = data.recurrenceGroups.find(
+  const destination = recurrence?.accountId ?? ''
+  const recurrenceGroup = data.book.groups.find(
     (group) => group.id === recurrence?.groupId,
   )
   const [direction, setDirection] = useState<'income' | 'expense'>(
@@ -326,7 +323,7 @@ function RecurrenceDialog({
                   placeholder="Ex.: Academia"
                 />
                 <datalist id="recurrence-group-options">
-                  {data.recurrenceGroups.map((group) => (
+                  {data.book.groups.map((group) => (
                     <option key={group.id} value={group.name} />
                   ))}
                 </datalist>
@@ -467,19 +464,14 @@ function RecurrenceDialog({
                   required
                 >
                   <NativeSelectOption value="">Selecione</NativeSelectOption>
-                  {data.accounts.map((account) => (
-                    <NativeSelectOption
-                      key={account.id}
-                      value={`account:${account.id}`}
-                    >
-                      Conta · {formatInstrumentName(account.name)}
-                    </NativeSelectOption>
-                  ))}
-                  {data.cards.map((card) => (
-                    <NativeSelectOption key={card.id} value={`card:${card.id}`}>
-                      Cartão · {formatInstrumentName(card.name)}
-                    </NativeSelectOption>
-                  ))}
+                  {data.accounts
+                    .filter((account) => !account.archived)
+                    .map((account) => (
+                      <NativeSelectOption key={account.id} value={account.id}>
+                        {account.kind === 'credit_card' ? 'Cartão' : 'Conta'} ·{' '}
+                        {formatInstrumentName(account.name)}
+                      </NativeSelectOption>
+                    ))}
                 </NativeSelect>
               </Field>
             )}

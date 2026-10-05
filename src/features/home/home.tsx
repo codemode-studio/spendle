@@ -53,48 +53,65 @@ import {
 import { MonthlyOverview } from './monthly-overview'
 import { ReviewCard } from './review-card'
 import { pendingReviewItems } from './review'
+import type {
+  CashProjection as ProjectionFromApi,
+  FinanceAnswer,
+  MonthView,
+} from '@spendle/server/api'
+
 import { formatCurrency } from '#/domain/currency'
-import type { FinanceSnapshot } from '#/features/finance/snapshot.types'
-import { cn } from '#/lib/utils'
+import type { FamilyTransaction } from '#/domain/ledger'
 import {
-  askFinanceQuestionFn,
-  getLatestMonthlyAnalysisFn,
-} from './analysis.functions'
-import type { ConversationMessage } from './analysis.server'
+  askAssistantFn,
+  latestAnalysisFn,
+} from '#/features/v2/planning.functions'
+import { cn } from '#/lib/utils'
 import {
   INITIAL_ANALYSIS_REFRESH_MS,
   persistedFinanceAnswerSchema,
 } from './assistant-contract'
-import type { FinanceAnswer, FinanceQuestionnaire } from './assistant-contract'
 import { AnalysisCard } from './analysis-card'
 import { CategoryBar } from './charts'
 import { ForecastOutlook } from './forecast-outlook'
 import { buildHomeView } from './insights'
 import type { HomeView } from './insights'
-import { trimCashProjection } from '#/domain/monthly-cash-flow'
-import type { CashEvent } from '#/domain/monthly-cash-flow'
+import { trimCashProjection } from './cash-projection'
+import type { CashEvent } from './cash-projection'
 import { assistantQueryKeys } from './query-keys'
+
+type ConversationMessage = { role: 'user' | 'assistant'; content: string }
+type FinanceQuestionnaire = NonNullable<FinanceAnswer['questionnaire']>
+
+/** What the overview reads, all from V2. */
+export interface HomeData {
+  month: MonthView
+  forecast: ProjectionFromApi
+  /** The family's entries as the category analysis reads them. */
+  ledger: ReadonlyArray<FamilyTransaction>
+  hasAccounts: boolean
+  /** Closed months, comma-separated, so a closing refreshes the assistant. */
+  closedMonths: string
+  assistantConfigured: boolean
+}
 
 // ─── Página ──────────────────────────────────────────────────────────────────
 
-export function Home({
-  snapshot,
-  assistantConfigured,
-}: {
-  snapshot: FinanceSnapshot
-  assistantConfigured: boolean
-}) {
+export function Home({ data }: { data: HomeData }) {
+  const { month, assistantConfigured } = data
   const [showAnalysis, setShowAnalysis] = useState(false)
   const [assistantOpen, setAssistantOpen] = useState(false)
-  const view = useMemo(() => buildHomeView(snapshot), [snapshot])
+  const view = useMemo(
+    () => buildHomeView(data.ledger, month.integrity),
+    [data.ledger, month.integrity],
+  )
   const commitments = useMemo(
-    () => trimCashProjection(snapshot.cashProjection, 30).scheduled,
-    [snapshot],
+    () => trimCashProjection(data.forecast, 30).scheduled,
+    [data.forecast],
   )
 
   return (
     <Page className="home-page max-w-[1120px]">
-      <CashHeader snapshot={snapshot} analysis={showAnalysis}>
+      <CashHeader cash={month.cashFlow.cashCents} analysis={showAnalysis}>
         <Button
           variant="outline"
           aria-label={showAnalysis ? 'Voltar à visão geral' : 'Previsão'}
@@ -126,17 +143,13 @@ export function Home({
           >
             <ActivityColumn
               open={assistantOpen}
-              closedMonths={snapshot.monthlyBudgets
-                .filter((budget) => budget.closed)
-                .map((budget) => budget.month)
-                .sort()
-                .join(',')}
+              closedMonths={data.closedMonths}
               assistantConfigured={assistantConfigured}
             />
           </SheetContent>
         </Sheet>
       </CashHeader>
-      {snapshot.accounts.length === 0 ? (
+      {!data.hasAccounts ? (
         <EmptyState
           icon={Landmark}
           title="Comece pela sua primeira conta"
@@ -152,19 +165,16 @@ export function Home({
         />
       ) : showAnalysis ? (
         <div className="flex flex-col gap-6">
-          <ForecastOutlook snapshot={snapshot} view={view} />
+          <ForecastOutlook forecast={data.forecast} month={month} view={view} />
         </div>
       ) : (
         <div className="flex flex-col gap-6">
-          <ReviewCard items={pendingReviewItems(snapshot)} />
+          <ReviewCard
+            items={pendingReviewItems(month.integrity.issues, month.month)}
+          />
           <MonthlyOverview
-            dashboard={snapshot.dashboard}
+            current={month}
             assistantConfigured={assistantConfigured}
-            currentClosed={snapshot.monthlyBudgets.some(
-              (budget) =>
-                budget.month === snapshot.dashboard.currentMonth &&
-                budget.closed,
-            )}
           />
           <div className="grid items-stretch gap-6 md:grid-cols-2">
             <CategorySummaryCard view={view} />
@@ -179,16 +189,14 @@ export function Home({
 // ─── Cabeçalho ───────────────────────────────────────────────────────────────
 
 function CashHeader({
-  snapshot,
+  cash,
   children,
   analysis,
 }: {
-  snapshot: FinanceSnapshot
+  cash: number | null
   children: React.ReactNode
   analysis: boolean
 }) {
-  const cash = snapshot.dashboard.familyMonth.cashFlow.cashCents
-
   return (
     <header className="cash-hero mb-6 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
       <div className="min-w-0">
@@ -509,8 +517,7 @@ export function ActivityColumn({
   const hasFollowUp = conversation.some((item) => item.kind === 'question')
   const analysis = useQuery({
     queryKey: assistantQueryKeys.latestAnalysis(closedMonths),
-    queryFn: () =>
-      getLatestMonthlyAnalysisFn({ data: { refreshInitial: true } }),
+    queryFn: () => latestAnalysisFn({ data: { refreshInitial: true } }),
     enabled: assistantConfigured && conversationLoaded,
     staleTime: INITIAL_ANALYSIS_REFRESH_MS,
     retry: 1,
@@ -522,7 +529,7 @@ export function ActivityColumn({
 
   const ask = useMutation({
     mutationFn: (data: { question: string; history: ConversationMessage[] }) =>
-      askFinanceQuestionFn({ data }),
+      askAssistantFn({ data }),
     onSuccess: (answer) =>
       push({ id: `answer-${Date.now()}`, kind: 'answer', answer }),
     onError: (error) => toast.error(error.message),
@@ -781,7 +788,8 @@ export function ActivityColumn({
         </InputGroup>
         {!assistantConfigured && (
           <p className="mt-2 text-[11px] text-muted-foreground">
-            Ative o assistente em Configurações para enviar perguntas.
+            Assistente desligado neste servidor: configure OPENROUTER_API_KEY e
+            OPENROUTER_MODEL para enviar perguntas.
           </p>
         )}
       </form>

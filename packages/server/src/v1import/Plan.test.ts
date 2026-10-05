@@ -45,6 +45,19 @@ const transaction = (
   ...fields,
 })
 
+const emptyPlanning = {
+  settings: null,
+  strategies: [],
+  budgets: [],
+  goals: [],
+  groups: [],
+  recurrences: [],
+  occurrences: [],
+  links: [],
+  aliases: [],
+  ignores: [],
+}
+
 const snapshot = (fields: Partial<V1Snapshot>): V1Snapshot => ({
   owners: [],
   accounts: [],
@@ -60,12 +73,11 @@ const snapshot = (fields: Partial<V1Snapshot>): V1Snapshot => ({
   positions: [],
   positionMovements: [],
   checkpoints: [],
+  planning: emptyPlanning,
   uncovered: {
     splits: 0,
-    recurrences: 0,
     cardInstruments: 0,
-    budgets: 0,
-    goals: 0,
+    goalContributions: 0,
     categorizationRules: 0,
   },
   ...fields,

@@ -9,11 +9,11 @@ import {
 } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { LinkPaymentDialog } from './recurrence-dialogs'
-import type { RecurrenceSnapshot } from '#/features/finance/snapshot.types'
+import type { RecurrenceView } from './types'
 
 const { fetchCandidates } = vi.hoisted(() => ({ fetchCandidates: vi.fn() }))
-vi.mock('#/features/finance/queries', () => ({
-  recurrenceLinkCandidatesOptions: () => ({
+vi.mock('#/features/v2/queries', () => ({
+  recurrenceCandidatesOptions: () => ({
     queryKey: ['link-test'],
     queryFn: fetchCandidates,
   }),
@@ -28,6 +28,31 @@ const categories = [
   { id: 'food', name: 'Mercado', bucket: 'essential' as const },
   { id: 'leisure', name: 'Lazer', bucket: 'lifestyle' as const },
 ]
+function candidate(
+  id: string,
+  categoryId: string | null,
+  description: string,
+  amountCents: number,
+) {
+  return {
+    entryId: id,
+    inWindow: true,
+    sameCategory: false,
+    amountDifferenceCents: 0,
+    daysApart: 1,
+    rank: 0,
+    entry: {
+      id,
+      accountId: 'checking',
+      accountName: 'Conta',
+      bookedOn: '2026-09-02',
+      description,
+      amountCents,
+      currency: 'BRL',
+      categoryId,
+    },
+  }
+}
 function mount(direction: 'income' | 'expense') {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -38,14 +63,14 @@ function mount(direction: 'income' | 'expense') {
     matchMode: 'aggregate',
     occurrences: [
       {
-        id: 'o1',
+        id: 'r1|2026-09-01',
         status: 'expected',
         expectedDate: '2026-09-01',
         expectedAmountCents: 6000000,
         currency: 'BRL',
       },
     ],
-  } as RecurrenceSnapshot
+  } as unknown as RecurrenceView
   const onLink = vi.fn()
   render(
     <QueryClientProvider client={client}>
@@ -63,24 +88,10 @@ function mount(direction: 'income' | 'expense') {
 }
 it('filters by income category and search before limiting candidates, and clears hidden selections', async () => {
   fetchCandidates.mockResolvedValue([
-    ...Array.from({ length: 210 }, (_, i) => ({
-      id: `yield-${i}`,
-      categoryId: 'yield',
-      description: `Rendimento ${i}`,
-      postedAt: '2026-09-02',
-      amountCents: 100,
-      currency: 'BRL',
-      inWindow: true,
-    })),
-    {
-      id: 'salary-1',
-      categoryId: 'salary',
-      description: 'Pagamento cliente',
-      postedAt: '2026-09-02',
-      amountCents: 6000000,
-      currency: 'BRL',
-      inWindow: true,
-    },
+    ...Array.from({ length: 210 }, (_, i) =>
+      candidate(`yield-${i}`, 'yield', `Rendimento ${i}`, 100),
+    ),
+    candidate('salary-1', 'salary', 'Pagamento cliente', 6000000),
   ])
   const { client, onLink } = mount('income')
   await screen.findByText('Rendimento 0')
@@ -92,7 +103,7 @@ it('filters by income category and search before limiting candidates, and clears
   })
   fireEvent.click(screen.getByRole('button', { name: /Pagamento cliente/ }))
   fireEvent.click(screen.getByRole('button', { name: 'Vincular e conciliar' }))
-  expect(onLink).toHaveBeenCalledWith('o1', ['salary-1'])
+  expect(onLink).toHaveBeenCalledWith('r1|2026-09-01', ['salary-1'])
   fireEvent.change(filter, { target: { value: 'yield' } })
   expect(
     screen
@@ -106,15 +117,7 @@ it('filters by income category and search before limiting candidates, and clears
 })
 it('offers expense categories and uncategorized transactions for expenses', async () => {
   fetchCandidates.mockResolvedValue([
-    {
-      id: 'unknown',
-      categoryId: null,
-      description: 'Compra sem categoria',
-      postedAt: '2026-09-02',
-      amountCents: -100,
-      currency: 'BRL',
-      inWindow: true,
-    },
+    candidate('unknown', null, 'Compra sem categoria', -100),
   ])
   const { client } = mount('expense')
   await screen.findByText('Compra sem categoria')

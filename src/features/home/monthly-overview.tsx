@@ -2,66 +2,44 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
 
+import type { MonthView } from '@spendle/server/api'
+
 import { EmptyState, Panel, ProgressBar } from '#/components/ui'
 import { Button } from '#/components/ui/button'
 import { Skeleton } from '#/components/ui/skeleton'
 import { formatCurrency, formatMonth } from '#/domain/finance'
 import { bucketLabels } from '#/domain/strategy-progress'
-import { strategyHistoryOptions } from '#/features/finance/queries'
 import { GoalRing } from '#/features/finance/strategy-progress'
-import type { StrategyDashboard } from '#/features/finance/strategy-progress'
+import { monthHistoryOptions } from '#/features/v2/queries'
 import { cn } from '#/lib/utils'
 import { MonthlyAssistant } from './monthly-assistant'
 
 const expenseBuckets = ['essential', 'lifestyle'] as const
 
 export function MonthlyOverview({
-  dashboard,
-  currentClosed = false,
+  current,
   assistantConfigured = false,
 }: {
-  dashboard: StrategyDashboard
-  currentClosed?: boolean
+  current: MonthView
   assistantConfigured?: boolean
 }) {
-  const history = useQuery(strategyHistoryOptions(11))
-  const [selectedMonth, setSelectedMonth] = useState(dashboard.currentMonth)
-  const current = {
-    month: dashboard.currentMonth,
-    incomeCents: dashboard.currentIncomeCents,
-    targets: dashboard.budgetTargets,
-    actual: dashboard.budgetActual,
-    closed: currentClosed,
-    familyMonth: dashboard.familyMonth,
-    hasData:
-      dashboard.currentIncomeCents !== 0 ||
-      Object.values(dashboard.budgetActual).some((value) => value !== 0),
-  }
+  const history = useQuery(monthHistoryOptions(11))
+  const [selectedMonth, setSelectedMonth] = useState(current.month)
   const months = [...[...(history.data ?? [])].reverse(), current].map(
-    (item) => {
-      const family = item.familyMonth
-      return {
-        ...item,
-        hasData: family?.hasData ?? item.hasData,
-        spending:
-          family?.expenseCents ?? item.actual.essential + item.actual.lifestyle,
-        chartCents: family?.cashFlow
-          ? family.cashFlow.closingCashCents
-          : (family?.expenseCents ??
-            item.actual.essential + item.actual.lifestyle),
-        incomeCents: family?.plannedIncomeCents ?? item.incomeCents,
-        actual: {
-          ...item.actual,
-          essential:
-            family?.expenses.find((b) => b.bucket === 'essential')?.cents ??
-            item.actual.essential,
-          lifestyle:
-            family?.expenses.find((b) => b.bucket === 'lifestyle')?.cents ??
-            item.actual.lifestyle,
-        },
-        other: family?.expenses.find((b) => b.bucket === 'other')?.cents ?? 0,
-      }
-    },
+    (item) => ({
+      month: item.month,
+      closed: item.closed,
+      forecasting: item.forecasting,
+      family: item.family,
+      flow: item.cashFlow,
+      hasData: item.family.hasData,
+      chartCents: item.cashFlow.closingCashCents,
+      targets: item.targets,
+      actual: item.actual,
+      other:
+        item.family.expenses.find((group) => group.bucket === 'other')?.cents ??
+        0,
+    }),
   )
   const selected =
     months.find((month) => month.month === selectedMonth) ??
@@ -71,8 +49,8 @@ export function MonthlyOverview({
     1,
     ...months.flatMap((month) => [
       Math.abs(month.chartCents ?? 0),
-      month.familyMonth?.cashFlow?.receivedCents ?? 0,
-      month.familyMonth?.cashFlow?.paidCents ?? 0,
+      month.flow.receivedCents,
+      month.flow.paidCents,
     ]),
   )
   const belowZero = Math.max(
@@ -81,17 +59,13 @@ export function MonthlyOverview({
   )
   const chartRange = maxSpending + belowZero
   const zeroPosition = (belowZero / chartRange) * 100
-  const spending = selected.spending
-  const contributions =
-    selected.familyMonth?.savedCents ??
-    selected.actual.investment + selected.actual.reserve
 
   const overspending = expenseBuckets.reduce(
     (sum, bucket) =>
       sum + Math.max(0, selected.actual[bucket] - selected.targets[bucket]),
     0,
   )
-  const flow = selected.familyMonth?.cashFlow
+  const flow = selected.flow
 
   return (
     <Panel
@@ -148,40 +122,24 @@ export function MonthlyOverview({
           >
             {months.map((month) => {
               const amount = month.chartCents ?? 0
-              const cashChart = Boolean(month.familyMonth?.cashFlow)
-              const hasChartData = cashChart
-                ? month.chartCents !== null && month.hasData
-                : month.hasData
+              const hasChartData = month.chartCents !== null && month.hasData
               const over = expenseBuckets.some(
                 (bucket) => month.actual[bucket] > month.targets[bucket],
               )
-              const series = cashChart
-                ? [
-                    {
-                      value: month.familyMonth!.cashFlow!.receivedCents,
-                      color: 'bg-emerald-600',
-                    },
-                    {
-                      value: month.familyMonth!.cashFlow!.paidCents,
-                      color: 'bg-amber-600',
-                    },
-                    {
-                      value: amount,
-                      color: amount < 0 ? 'bg-destructive' : 'bg-primary/70',
-                    },
-                  ]
-                : [
-                    {
-                      value: amount,
-                      color: over ? 'bg-destructive' : 'bg-primary/70',
-                    },
-                  ]
+              const series = [
+                { value: month.flow.receivedCents, color: 'bg-emerald-600' },
+                { value: month.flow.paidCents, color: 'bg-amber-600' },
+                {
+                  value: amount,
+                  color: amount < 0 ? 'bg-destructive' : 'bg-primary/70',
+                },
+              ]
               return (
                 <button
                   key={month.month}
                   type="button"
                   aria-pressed={selected.month === month.month}
-                  aria-label={`${formatMonth(month.month)}: ${hasChartData ? (cashChart ? `caixa ${month.familyMonth?.forecasting ? 'previsto' : 'registrado'} ${formatCurrency(amount)}` : `${formatCurrency(amount)} em despesas registradas`) : 'sem valores para comparar'}${month.hasData && over ? '; gastos acima dos limites' : ''}`}
+                  aria-label={`${formatMonth(month.month)}: ${hasChartData ? `caixa ${month.forecasting ? 'previsto' : 'registrado'} ${formatCurrency(amount)}` : 'sem valores para comparar'}${month.hasData && over ? '; gastos acima dos limites' : ''}`}
                   onClick={() => setSelectedMonth(month.month)}
                   className={cn(
                     'flex min-w-0 flex-col items-center gap-2 rounded-lg border px-2 py-3 outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring',
@@ -206,9 +164,7 @@ export function MonthlyOverview({
                             className={cn(
                               'absolute rounded-sm',
                               bar.color,
-                              index === 2 &&
-                                month.familyMonth?.forecasting &&
-                                'opacity-50',
+                              index === 2 && month.forecasting && 'opacity-50',
                             )}
                             style={{
                               width: `${80 / series.length}%`,
@@ -244,7 +200,7 @@ export function MonthlyOverview({
               )
             })}
           </div>
-          {dashboard.familyMonth?.cashFlow && (
+          {
             <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
               <span className="flex items-center gap-2">
                 <span className="size-2 rounded-sm bg-emerald-600" />
@@ -263,7 +219,7 @@ export function MonthlyOverview({
                 Gastos acima dos limites
               </span>
             </div>
-          )}
+          }
           <div
             aria-live="polite"
             aria-atomic="true"
@@ -292,8 +248,7 @@ export function MonthlyOverview({
                 {overspending > 0 && (
                   <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3">
                     <p className="text-sm font-medium text-destructive">
-                      Gastos{' '}
-                      {selected.familyMonth?.forecasting ? 'previstos ' : ''}
+                      Gastos {selected.forecasting ? 'previstos ' : ''}
                       acima dos limites
                     </p>
                     <p className="mt-1 text-sm">
@@ -307,25 +262,18 @@ export function MonthlyOverview({
                   aria-label="Movimentação do mês"
                   className="grid grid-cols-1 gap-4 text-left sm:grid-cols-2"
                 >
-                  {(flow
-                    ? [
-                        {
-                          label: 'Caixa inicial',
-                          value: flow.openingCashCents,
-                        },
-                        {
-                          label: 'Entradas recebidas',
-                          value: flow.receivedCents,
-                        },
-                        { label: 'Saídas pagas', value: flow.paidCents },
-                        { label: 'Caixa', value: flow.cashCents },
-                      ]
-                    : [
-                        { label: 'Renda', value: selected.incomeCents },
-                        { label: 'Despesas registradas', value: spending },
-                        { label: 'Aportes registrados', value: contributions },
-                      ]
-                  ).map((item) => (
+                  {[
+                    {
+                      label: 'Caixa inicial',
+                      value: flow.openingCashCents,
+                    },
+                    {
+                      label: 'Entradas recebidas',
+                      value: flow.receivedCents,
+                    },
+                    { label: 'Saídas pagas', value: flow.paidCents },
+                    { label: 'Caixa', value: flow.cashCents },
+                  ].map((item) => (
                     <div key={item.label} className="min-w-0 text-left">
                       <dt className="text-xs text-muted-foreground">
                         {item.label}
@@ -338,7 +286,7 @@ export function MonthlyOverview({
                     </div>
                   ))}
                 </dl>
-                {flow?.forecasting && (
+                {flow.forecasting && (
                   <section
                     className="border-t pt-4"
                     aria-label="Previsão do mês"
@@ -382,13 +330,13 @@ export function MonthlyOverview({
                 )}
                 <MonthlyAssistant
                   month={selected.month}
-                  closed={selected.familyMonth?.closed ?? false}
+                  closed={selected.closed}
                   configured={assistantConfigured}
                   revision={JSON.stringify({
                     flow,
-                    expenses: selected.familyMonth?.expenses,
-                    estimated: selected.familyMonth?.estimatedExpenseCents,
-                    known: selected.familyMonth?.knownExpenseCents,
+                    expenses: selected.family.expenses,
+                    estimated: selected.family.estimatedExpenseCents,
+                    known: selected.family.knownExpenseCents,
                     actual: selected.actual,
                     targets: selected.targets,
                   })}
@@ -479,7 +427,7 @@ export function MonthlyOverview({
                           </div>
                           {actual < target && (
                             <p className="text-xs text-muted-foreground">
-                              {selected.familyMonth?.forecasting
+                              {selected.forecasting
                                 ? 'Falta guardar'
                                 : 'Abaixo da meta'}
                               : {formatCurrency(target - actual)}

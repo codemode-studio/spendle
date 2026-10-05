@@ -8,7 +8,7 @@ export const getOnboardingStatusFn = createServerFn({ method: 'GET' }).handler(
   async () => {
     const [ledger, recurrences] = await Promise.all([
       v2(ledgerSetup),
-      hasActiveRecurrences(),
+      v2(hasActiveRecurrences),
     ])
     return { ...ledger, recurrences }
   },

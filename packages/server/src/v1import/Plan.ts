@@ -31,6 +31,11 @@ export type UnmappedKind =
   | 'investment_movement'
   | 'position'
   | 'checkpoint'
+  | 'recurrence_link'
+  | 'strategy'
+  | 'budget'
+  | 'goal'
+  | 'recurrence'
 
 /** A V1 record that does not move, and why. */
 export interface Unmapped {
@@ -560,6 +565,19 @@ export const planDecisions = (input: {
       v1MovementId: row.id,
       v1TransactionId: row.transactionId,
       v1PositionId: row.positionId,
+    })
+  }
+
+  // Payments the person linked to recurrences wait for their movements too.
+  for (const link of snapshot.planning.links) {
+    const found = movement(link.transactionId)
+    if (found.ok) continue
+    const transaction = byId.get(link.transactionId)
+    unmapped.push({
+      kind: 'recurrence_link',
+      v1Id: link.id,
+      label: transaction ? describe(transaction) : link.transactionId,
+      reason: found.reason,
     })
   }
 

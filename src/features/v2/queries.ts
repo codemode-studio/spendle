@@ -32,6 +32,17 @@ import {
   relationsFn,
 } from './reconciliation.functions'
 import {
+  assistantStatusFn,
+  detectedRecurrencesFn,
+  forecastFn,
+  linkCandidatesFn as recurrenceCandidatesFn,
+  monthFn,
+  monthHistoryFn,
+  planningStateFn,
+  recurrenceBookFn,
+} from './planning.functions'
+import { assistantQueryKeys } from '#/features/home/query-keys'
+import {
   connectSettingsFn,
   listConnectionsFn,
   providerAccountsFn,
@@ -120,7 +131,77 @@ export const v2QueryKeys = {
   investments: () => [...financeQueryKeys.all, 'read', 'investments'] as const,
   connectSettings: () =>
     [...financeQueryKeys.all, 'open-finance', 'connect-settings'] as const,
+  planningState: () => [...financeQueryKeys.all, 'read', 'planning'] as const,
+  /** Under the snapshot prefix, which every ledger change refreshes. */
+  month: (month?: string) => financeQueryKeys.snapshot(month),
+  monthHistory: (months: number) => financeQueryKeys.strategyHistory(months),
+  forecast: () => [...financeQueryKeys.all, 'read', 'forecast'] as const,
+  recurrenceBook: () =>
+    [...financeQueryKeys.all, 'read', 'recurrence-book'] as const,
 }
+
+export const planningStateOptions = () =>
+  queryOptions({
+    queryKey: v2QueryKeys.planningState(),
+    queryFn: () => planningStateFn(),
+    staleTime: 15_000,
+  })
+
+export const monthOptions = (month?: string) =>
+  queryOptions({
+    queryKey: v2QueryKeys.month(month),
+    queryFn: () => monthFn({ data: { month } }),
+    staleTime: 15_000,
+  })
+
+export const monthHistoryOptions = (months = 11) =>
+  queryOptions({
+    queryKey: v2QueryKeys.monthHistory(months),
+    queryFn: () => monthHistoryFn({ data: { months } }),
+    staleTime: 60_000,
+    gcTime: 30 * 60_000,
+  })
+
+export const forecastOptions = () =>
+  queryOptions({
+    queryKey: v2QueryKeys.forecast(),
+    queryFn: () => forecastFn(),
+    staleTime: 15_000,
+  })
+
+export const recurrenceBookOptions = () =>
+  queryOptions({
+    queryKey: v2QueryKeys.recurrenceBook(),
+    queryFn: () => recurrenceBookFn(),
+    staleTime: 15_000,
+  })
+
+export const detectedRecurrencesOptions = () =>
+  queryOptions({
+    queryKey: financeQueryKeys.recurrenceDetection(),
+    queryFn: () => detectedRecurrencesFn(),
+    staleTime: 15_000,
+  })
+
+export const recurrenceCandidatesOptions = (
+  occurrence: { recurrenceId: string; expectedDate: string } | null,
+) =>
+  queryOptions({
+    queryKey: financeQueryKeys.recurrenceLinkCandidates(
+      occurrence ? `${occurrence.recurrenceId}|${occurrence.expectedDate}` : '',
+    ),
+    queryFn: occurrence
+      ? () => recurrenceCandidatesFn({ data: occurrence })
+      : skipToken,
+    staleTime: 0,
+  })
+
+export const assistantStatusOptions = () =>
+  queryOptions({
+    queryKey: assistantQueryKeys.status(),
+    queryFn: () => assistantStatusFn(),
+    staleTime: 5 * 60_000,
+  })
 
 export const ownersOptions = () =>
   queryOptions({

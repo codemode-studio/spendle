@@ -32,6 +32,9 @@ import * as SyncReactor from './openfinance/SyncReactor.ts'
 import * as Webhook from './openfinance/Webhook.ts'
 import { WebhookConfig } from './openfinance/WebhookConfig.ts'
 import * as Sqlite from './persistence/Sqlite.ts'
+import { AssistantModel } from './planning/AssistantModel.ts'
+import { PlanningServices } from './planning/Services.ts'
+import * as V1PlanningImport from './v1import/PlanningImport.ts'
 import * as V1Import from './v1import/V1Import.ts'
 
 const HttpServerLive = Layer.unwrap(
@@ -74,6 +77,15 @@ const CoreLive = PersonLive.pipe(
   Layer.provideMerge(Sqlite.layer),
 )
 
+// The assistant calls its model only when `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` are set.
+const PlanningLive = V1PlanningImport.reactor.pipe(
+  Layer.provide(V1PlanningImport.V1PlanningImport.layer),
+  Layer.provideMerge(PlanningServices),
+  Layer.provideMerge(
+    AssistantModel.layer.pipe(Layer.provide(FetchHttpClient.layer)),
+  ),
+)
+
 const OpenFinanceLive = Layer.mergeAll(
   Entries.reactor,
   Reconciliation.reactor,
@@ -100,6 +112,7 @@ const Routes = Layer.mergeAll(
 )
 
 export const ServerLive = HttpRouter.serve(Routes).pipe(
+  Layer.provideMerge(PlanningLive),
   Layer.provideMerge(OpenFinanceLive),
   Layer.provide(HttpServerLive),
   Layer.provide(CoreLive),

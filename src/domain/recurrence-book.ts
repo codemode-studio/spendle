@@ -36,11 +36,11 @@ type RecurrenceShape = {
   matchMode: 'single' | 'aggregate'
   frequency: RecurrenceFrequency
   scheduleAnchor: string
-  occurrences: Array<{
+  occurrences: ReadonlyArray<{
     id: string
     expectedDate: string
     status: string
-    matches: RecurrenceMatch[]
+    matches: ReadonlyArray<RecurrenceMatch>
   }>
 }
 

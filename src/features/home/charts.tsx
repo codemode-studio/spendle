@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-import type { CashPoint } from '#/domain/monthly-cash-flow'
+import type { CashPoint } from './cash-projection'
 import type { CategoryShare } from './insights'
 
 /**

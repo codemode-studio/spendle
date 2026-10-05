@@ -1,21 +1,15 @@
 import * as Effect from 'effect/Effect'
-import { eq } from 'drizzle-orm'
-
-import { db, ensureDatabase } from '#/db/index.server'
-import { recurrences } from '#/db/schema'
 import type { V2Client } from '#/lib/v2/client.server'
 
-/** Recurrences still live in V1: whether any is active. */
-export async function hasActiveRecurrences() {
-  await ensureDatabase()
-  return Boolean(
-    db
-      .select({ id: recurrences.id })
-      .from(recurrences)
-      .where(eq(recurrences.active, true))
-      .limit(1)
-      .get(),
-  )
+/** Whether any recurrence is active. */
+export function hasActiveRecurrences(client: V2Client) {
+  return client.recurrences
+    .book()
+    .pipe(
+      Effect.map(({ recurrences }) =>
+        recurrences.some((recurrence) => recurrence.active),
+      ),
+    )
 }
 
 /**

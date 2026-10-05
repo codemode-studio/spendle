@@ -1,19 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { v2 } from '#/lib/v2/client.server'
-import { openTestDatabase } from '#/test/database'
-import type { TestDatabase } from '#/test/database'
 import { startV2Api } from '#/test/v2-api'
 import type { V2TestApi } from '#/test/v2-api'
 
 import { hasActiveRecurrences, ledgerSetup } from './onboarding.server'
 
-let database: TestDatabase | undefined
 let api: V2TestApi | undefined
 afterEach(async () => {
-  database?.close()
   await api?.close()
-  database = undefined
   api = undefined
 })
 
@@ -79,21 +74,32 @@ describe('onboarding status', () => {
     })
   })
 
-  it('does not treat inactive V1 recurrences as complete', async () => {
-    database = await openTestDatabase()
-    const { db, schema } = database
-    db.insert(schema.recurrences)
-      .values({
-        id: 'setup-recurring',
-        name: 'Internet QA',
-        amountCents: 10000,
-        frequency: 'monthly',
-        nextDate: '2026-10-01',
-        active: false,
-      })
-      .run()
-    expect(await hasActiveRecurrences()).toBe(false)
-    db.update(schema.recurrences).set({ active: true }).run()
-    expect(await hasActiveRecurrences()).toBe(true)
+  it('does not treat a paused recurrence as set up', async () => {
+    api = await startV2Api()
+    const { id } = await v2((client) =>
+      client.recurrences.create({
+        payload: {
+          name: 'Internet QA',
+          accountId: null,
+          categoryId: 'utilities',
+          amountCents: 10000,
+          currency: 'BRL',
+          direction: 'expense',
+          amountMode: 'fixed',
+          matchMode: 'single',
+          destinationMode: 'automatic',
+          frequency: 'monthly',
+          nextDate: '2026-10-01',
+        },
+      }),
+    )
+    expect(await v2(hasActiveRecurrences)).toBe(true)
+    await v2((client) =>
+      client.recurrences.active({
+        params: { recurrenceId: id },
+        payload: { active: false },
+      }),
+    )
+    expect(await v2(hasActiveRecurrences)).toBe(false)
   })
 })

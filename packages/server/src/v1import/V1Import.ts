@@ -51,7 +51,11 @@ export interface PendingTally {
 /** A decision still waiting for its movement, and why. */
 export interface Waiting {
   readonly kind:
-    'category_decision' | 'relation_decision' | 'note' | 'investment_movement'
+    | 'category_decision'
+    | 'relation_decision'
+    | 'recurrence_link'
+    | 'note'
+    | 'investment_movement'
   readonly v1Id: string
   readonly label: string
   readonly reason: 'not_observed' | 'ambiguous' | 'no_suggestion'
@@ -686,12 +690,9 @@ const make = Effect.gen(function* () {
     const knowledgeTally = tally()
     const patterns: Array<ImportedPattern> = []
     const patternLabels: Array<{ id: string; label: string }> = []
-    let recurrencePatterns = 0
     for (const row of snapshot.knowledge) {
-      if (row.kind !== 'category') {
-        recurrencePatterns++
-        continue
-      }
+      // Recurrence signatures come over with their recurrences.
+      if (row.kind !== 'category') continue
       const label = `${row.pattern} (${row.matchMode}, ${row.direction})`
       if (
         row.categoryId === null ||
@@ -1030,19 +1031,16 @@ const make = Effect.gen(function* () {
     const applied = yield* applyPending()
     const { uncovered } = snapshot
     const notMigrated = [
-      { what: 'recurrences', count: uncovered.recurrences },
-      {
-        what: 'recurrence patterns in the knowledge base',
-        count: recurrencePatterns,
-      },
       { what: 'transaction splits', count: uncovered.splits },
       {
         what: 'card instruments (physical or virtual cards)',
         count: uncovered.cardInstruments,
       },
       { what: 'categorization rules', count: uncovered.categorizationRules },
-      { what: 'monthly budgets', count: uncovered.budgets },
-      { what: 'investment goals', count: uncovered.goals },
+      {
+        what: 'goal contributions (already in each goal’s current amount)',
+        count: uncovered.goalContributions,
+      },
     ].filter((item) => item.count > 0)
 
     return {

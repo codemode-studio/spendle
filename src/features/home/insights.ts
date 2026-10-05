@@ -1,23 +1,16 @@
 /**
- * Read model da Home sobre o snapshot financeiro real.
+ * Read model da Home sobre o razão real da família (V2).
  * Tudo aqui é cálculo puro (roda no cliente e no servidor) — nenhum dado fictício.
- * Caixa e compromissos vêm de `snapshot.cashProjection` (Previsão de caixa).
+ * Caixa e compromissos vêm da previsão de caixa do V2.
  */
 import {
-  familyTransactions,
-  isFamilyScope,
   isSpending,
   OTHER_CATEGORY_COLOR,
   spendingByCategory,
 } from '#/domain/ledger'
-import type {
-  FamilyTransaction,
-  LedgerSnapshot,
-  OwnershipScopeType,
-} from '#/domain/ledger'
+import type { FamilyTransaction } from '#/domain/ledger'
 import { inPeriod, shiftDays, todayIso, trailingPeriod } from '#/domain/period'
 import type { Period } from '#/domain/period'
-import type { DashboardSnapshot } from '#/features/finance/snapshot.types'
 
 const ALLOCATION_BUCKETS = new Set(['investment', 'reserve'])
 
@@ -34,7 +27,7 @@ export interface PeriodTotals {
 }
 
 function periodTotals(
-  transactions: Array<FamilyTransaction>,
+  transactions: ReadonlyArray<FamilyTransaction>,
   period: Period,
 ): PeriodTotals {
   const totals: PeriodTotals = {
@@ -102,7 +95,7 @@ export interface CategoryBreakdown {
  * são agrupadas em "Outras".
  */
 function categoryBreakdown(
-  transactions: Array<FamilyTransaction>,
+  transactions: ReadonlyArray<FamilyTransaction>,
   period: Period,
   referenceDays = 90,
   limit = 7,
@@ -165,55 +158,37 @@ export interface HomeView {
   categories30: CategoryBreakdown
   /** Data do lançamento mais recente da família (ou null sem dados). */
   latestPostedAt: string | null
-  integrity: DashboardSnapshot['integrity']
+  integrity: { partial: boolean }
   comparisonReady: { fortnight: boolean; month: boolean; categories: boolean }
 }
 
-/** Fonte com cobertura declarada: conta ou cartão. */
-interface CoveredSource {
-  active: boolean
-  currency: string
-  scope: { type: OwnershipScopeType } | null
-  coverage: { intervals: ReadonlyArray<{ start: string; end: string }> }
-}
-
-export interface HomeViewSnapshot extends Pick<
-  LedgerSnapshot,
-  'scopes' | 'transactions' | 'reconciliations'
-> {
-  accounts: ReadonlyArray<CoveredSource>
-  cards: ReadonlyArray<CoveredSource>
-  dashboard: { integrity: DashboardSnapshot['integrity'] }
-}
-
+/**
+ * Totais e categorias dos últimos 30 dias sobre o razão da família (V2).
+ * Comparações só valem quando o histórico cobre a janela inteira e não há
+ * pendências que deixem o mês parcial.
+ */
 export function buildHomeView(
-  snapshot: HomeViewSnapshot,
+  transactions: ReadonlyArray<FamilyTransaction>,
+  integrity: { partial: boolean },
   today = todayIso(),
 ): HomeView {
-  const transactions = familyTransactions(snapshot)
   const p30 = trailingPeriod(30, 0, today)
-  const sources = [...snapshot.accounts, ...snapshot.cards].filter(
-    (source) =>
-      source.active && source.currency === 'BRL' && isFamilyScope(source.scope),
+  const earliest = transactions.reduce<string | null>(
+    (first, transaction) =>
+      first === null || transaction.postedAt < first
+        ? transaction.postedAt
+        : first,
+    null,
   )
-  const canCompare = (days: number) => {
-    const period = trailingPeriod(days, 0, today)
-    return (
-      !snapshot.dashboard.integrity.partial &&
-      sources.length > 0 &&
-      sources.every((source) =>
-        source.coverage.intervals.some(
-          (interval) =>
-            interval.start <= period.start && interval.end >= period.end,
-        ),
-      )
-    )
-  }
+  const canCompare = (days: number) =>
+    !integrity.partial &&
+    earliest !== null &&
+    earliest <= trailingPeriod(days, 0, today).start
 
   return {
     last30: periodTotals(transactions, p30),
     categories30: categoryBreakdown(transactions, p30),
-    integrity: snapshot.dashboard.integrity,
+    integrity: { partial: integrity.partial },
     comparisonReady: {
       fortnight: canCompare(28),
       month: canCompare(60),
