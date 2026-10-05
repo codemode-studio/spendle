@@ -637,9 +637,29 @@ describe('matchRelations', () => {
         institution: 'Nubank',
       }),
     ]).flatMap((relation) => [relation.status])
+    const joined = (name: string) =>
+      relations([
+        entry('out', 'itau', -50000, {
+          description: `Pix enviado ${name} Banco Inter`,
+          institution: 'Itaú',
+          ownerName: 'Donald Silveira',
+        }),
+        entry('in', 'bank-inter', 50000, {
+          description: 'Pix recebido Donald',
+          institution: 'Banco Inter',
+          ownerName: 'Donald Silveira',
+        }),
+      ]).flatMap((relation) => [relation.status])
     assert.deepStrictEqual(
-      [card, transfer, initials],
-      [['suggested'], ['suggested'], ['suggested']],
+      [card, transfer, initials, joined('D&A'), joined('E&M'), joined('O&S')],
+      [
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+        ['suggested'],
+      ],
     )
   })
 

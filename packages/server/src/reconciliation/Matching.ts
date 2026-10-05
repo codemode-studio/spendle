@@ -309,12 +309,15 @@ const nameWords = (text: string) =>
       .map(unglue),
   )
 
-// Letters joined by punctuation are one name (`C&A`, `D'Avila`), and so is
-// a corporation suffix (`S.A.`, `S/A`, `S-A` read as `sa`).
+// Letters joined by punctuation are one name (`C&A`, `D&A`, `D'Avila`),
+// kept apart from ordinary words with `_` so `D&A` never reads as the
+// stopword `da`. A corporation suffix (`S.A.`, `S/A`, `S-A`) reads as `sa`,
+// left to the corporation check.
 const joinInitials = (text: string) =>
-  text.replace(/\b[a-z0-9](?:[&.\/'-][a-z0-9])+\b\.?/g, (run) =>
-    run.replace(/[&.\/'-]/g, ''),
-  )
+  text.replace(/\b[a-z0-9](?:[&.\/'-][a-z0-9])+\b\.?/g, (run) => {
+    const letters = run.replace(/[^a-z0-9]/g, '')
+    return letters === 'sa' ? 'sa' : `_${letters}_`
+  })
 
 // One-letter words that are grammar, not names: every other letter may be an
 // initial that identifies someone.
@@ -332,7 +335,7 @@ const identityWords = (
 ) =>
   new Set(
     joinInitials(bankAliases(description))
-      .split(/[^a-z0-9]+/)
+      .split(/[^a-z0-9_]+/)
       .filter(
         (word) =>
           !articles.has(word) &&
