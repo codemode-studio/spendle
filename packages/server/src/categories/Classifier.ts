@@ -11,6 +11,7 @@ import * as HttpClient from 'effect/http/HttpClient'
 import * as HttpClientRequest from 'effect/http/HttpClientRequest'
 import * as HttpClientResponse from 'effect/http/HttpClientResponse'
 
+import type { ClassifierExample } from './Examples.ts'
 import type { Direction } from './Patterns.ts'
 import {
   fitsDirection,
@@ -25,6 +26,12 @@ export interface ClassifyItem {
   /** An example description of the merchant. */
   readonly description: string
   readonly amountCents: number
+  /**
+   * The person's own decisions about similar merchants (see `Examples.ts`);
+   * the cached answer is keyed by them, so they must be exactly what the
+   * model sees.
+   */
+  readonly examples?: ReadonlyArray<ClassifierExample> | undefined
 }
 
 /** A category the model may choose. */
@@ -156,11 +163,35 @@ export class Classifier extends Context.Service<Classifier, ClassifierShape>()(
           criteria[category.id] = category.description
             ? `${category.name}: ${category.description}`
             : category.name
+        const names = new Map(
+          categories.map((category) => [category.id, category.name]),
+        )
+        const transactions = items.map((item) => {
+          // Only categories offered for this direction, by the name the
+          // criteria begin with.
+          const pastDecisions = (item.examples ?? []).flatMap((example) => {
+            const category = names.get(example.categoryId)
+            return category === undefined
+              ? []
+              : [{ description: example.description, category }]
+          })
+          return {
+            description: item.description,
+            amount: formatAmount(item.amountCents),
+            direction:
+              item.direction === 'income' ? 'money received' : 'money spent',
+            ...(pastDecisions.length > 0 ? { pastDecisions } : {}),
+          }
+        })
         const questions: Record<string, unknown> = {}
-        items.forEach((_, index) => {
+        transactions.forEach((transaction, index) => {
+          const base = `Which category of a Brazilian family's personal finances best describes the transaction \`transactions[${index}]\`? Judge by who was paid or who paid, as the bank statement names them.`
           questions[`t${index}`] = {
             type: 'choice',
-            instructions: `Which category of a Brazilian family's personal finances best describes the transaction \`transactions[${index}]\`? Judge by who was paid or who paid, as the bank statement names them.`,
+            instructions:
+              'pastDecisions' in transaction
+                ? `${base} \`transactions[${index}].pastDecisions\` shows how this family categorized similar transactions before; when the same payee or the same kind of payment appears there, follow their choice.`
+                : base,
             criteria,
           }
         })
@@ -168,16 +199,7 @@ export class Classifier extends Context.Service<Classifier, ClassifierShape>()(
           HttpClientRequest.bearerToken(options.apiKey),
           HttpClientRequest.bodyJsonUnsafe({
             model: options.model,
-            state: {
-              transactions: items.map((item) => ({
-                description: item.description,
-                amount: formatAmount(item.amountCents),
-                direction:
-                  item.direction === 'income'
-                    ? 'money received'
-                    : 'money spent',
-              })),
-            },
+            state: { transactions },
             questions,
           }),
           http.execute,

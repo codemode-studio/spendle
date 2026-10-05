@@ -12,6 +12,7 @@ import V1Import from './Migrations/0009_v1_import.ts'
 import Planning from './Migrations/0010_planning.ts'
 import InvestmentsManual from './Migrations/0011_investments_manual.ts'
 import StatementAdvance from './Migrations/0012_statement_advance.ts'
+import ClassifierContext from './Migrations/0014_classifier_context.ts'
 
 // Keys are `<id>_<name>`; each migration runs once, in id order. Import every
 // migration statically so the server never depends on files beside the bundle.
@@ -29,6 +30,8 @@ export const migrations = {
   '0010_planning': Planning,
   '0011_investments_manual': InvestmentsManual,
   '0012_statement_advance': StatementAdvance,
+  // 0013 is taken by `0013_exchange_rates` (PR #28), which must merge first.
+  '0014_classifier_context': ClassifierContext,
 }
 
 export const runMigrations = SqliteMigrator.run({
