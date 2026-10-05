@@ -812,7 +812,7 @@ describe('matchRelations', () => {
     )
   })
 
-  it('reads the words after para or de as the counterparty', () => {
+  it('reads the words after the opening phrase as the counterparty', () => {
     const transfer = relations([
       entry('out', 'nubank', -50000, {
         description: 'Pix enviado para Deposito Joao Paulo',
@@ -835,7 +835,32 @@ describe('matchRelations', () => {
         ownerName: 'Joao Paulo Silva',
       }),
     ]).flatMap((relation) => [relation.status])
-    assert.deepStrictEqual([transfer, card], [['suggested'], ['suggested']])
+    const plain = relations([
+      entry('out', 'nubank', -50000, {
+        description: 'Pix enviado - Depósito João Paulo',
+        ownerName: 'Joao Paulo Silva',
+      }),
+      entry('in', 'inter', 50000, {
+        description: 'Pix recebido Joao Paulo Silva',
+        ownerName: 'Joao Paulo Silva',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    const plainCard = relations([
+      entry('pay', 'inter', -50000, {
+        description: 'Pagamento fatura Nubank',
+        institution: 'Banco Inter',
+        ownerName: 'Joao Paulo Silva',
+      }),
+      entry('nu', 'card-nu', 50000, {
+        description: 'Pagamento recebido - Depósito João Paulo',
+        institution: 'Nubank',
+        ownerName: 'Joao Paulo Silva',
+      }),
+    ]).flatMap((relation) => [relation.status])
+    assert.deepStrictEqual(
+      [transfer, card, plain, plainCard],
+      [['suggested'], ['suggested'], ['suggested'], ['suggested']],
+    )
   })
 
   it('confirms only when every word of every description is understood', () => {

@@ -301,10 +301,19 @@ const tokens = (text: string) =>
 // A one-letter word, dotted or not, may be someone's initial.
 const isLetter = (word: string) => word.replace(/_/g, '').length < 2
 
-// Words a description may open with to say how the money moved. They are
-// read only at the start: past the first other word, any of them may be
-// part of a name (`Pix enviado Ted`).
-const movementPhrase = new Set([
+// Card-bill wording, understood anywhere in a card payment's descriptions.
+// How a card bill wording may end (`Pagamento de fatura efetuado`).
+const statusWords = new Set([
+  'efetuado',
+  'efetuada',
+  'recebido',
+  'recebida',
+  'realizado',
+  'realizada',
+])
+
+// The parts of an opening phrase (see `read`).
+const rails = new Set([
   'pix',
   'transferencia',
   'transf',
@@ -314,6 +323,8 @@ const movementPhrase = new Set([
   'deposito',
   'envio',
   'recebimento',
+])
+const directions = new Set([
   'enviado',
   'enviada',
   'recebido',
@@ -324,6 +335,8 @@ const movementPhrase = new Set([
   'efetuada',
   'agendado',
   'agendada',
+])
+const pixKeys = new Set([
   'chave',
   'aleatoria',
   'evp',
@@ -333,27 +346,6 @@ const movementPhrase = new Set([
   'celular',
   'telefone',
   'email',
-  'de',
-  'da',
-  'do',
-  'dos',
-  'das',
-  'para',
-  'em',
-  'no',
-  'na',
-  'ao',
-])
-
-// Card-bill wording, understood anywhere in a card payment's descriptions.
-// How a card bill wording may end (`Pagamento de fatura efetuado`).
-const statusWords = new Set([
-  'efetuado',
-  'efetuada',
-  'recebido',
-  'recebida',
-  'realizado',
-  'realizada',
 ])
 
 // Words that introduce the other side of a movement.
@@ -524,19 +516,43 @@ const read = (description: string, vocabulary: Vocabulary) => {
   // wording on a card leg (and how it ends, `efetuado`) may still follow:
   // anything else is the counterparty (`para Deposito Joao Paulo`) and goes
   // to the identity check.
+  // A bounded opening phrase, each part at most once and in order: a rail
+  // (`pix`, `pagamento`, at most two words), a direction (`enviado`), a Pix
+  // key kind (`chave aleatoria`), on a card leg its bill wording and how it
+  // ends (`fatura efetuado`), then one preposition (`para`, `de`). Whatever
+  // follows the phrase (`Pix enviado - Deposito Joao Paulo`) is the
+  // counterparty and goes to the identity check.
   let billWording = false
-  let introduced = false
-  while (at < words.length && ownAccount(at) === undefined) {
-    const word = words[at]!
-    if (!introduced && movementPhrase.has(word)) {
-      introduced = prepositions.has(word)
+  const ahead = (set: ReadonlySet<string>, limit: number) => {
+    let taken = 0
+    while (
+      taken < limit &&
+      at < words.length &&
+      ownAccount(at) === undefined &&
+      set.has(words[at]!)
+    ) {
       at++
-    } else if (vocabulary.side !== 'transfer' && cardBill.has(word)) {
-      billWording = true
-      at++
-    } else if (billWording && statusWords.has(word)) at++
-    else break
+      taken++
+    }
+    return taken
   }
+  ahead(rails, 2)
+  ahead(directions, 1)
+  ahead(pixKeys, 2)
+  if (vocabulary.side !== 'transfer') {
+    // Bill wording, with `de` only between or before its words
+    // (`de fatura`, `cartao de credito`).
+    while (at < words.length) {
+      const word = words[at]!
+      if (cardBill.has(word)) {
+        billWording = true
+        at++
+      } else if (word === 'de' && cardBill.has(words[at + 1] ?? '')) at++
+      else break
+    }
+    if (billWording) ahead(statusWords, 1)
+  }
+  ahead(prepositions, 1)
   const named = new Set<string>()
   let bank = false
   let bare = false
