@@ -123,6 +123,12 @@ export interface MonthFacts {
   readonly strategies: ReadonlyArray<PlanStrategy>
   readonly budgets: ReadonlyArray<ClosedBudget>
   readonly goals: ReadonlyArray<PlanGoal>
+  /**
+   * What the investment positions marked as reserve are worth now, in
+   * reais; null while no position is marked, and the emergency goal's own
+   * amount stands in.
+   */
+  readonly reserveInvestedCents: number | null
   /** Each category's bucket. */
   readonly categoryBuckets: ReadonlyMap<string, string>
 }
@@ -594,7 +600,8 @@ export const planFor = (facts: MonthFacts, month: string) => {
       ? emergency.targetCents
       : targetsFor(baseIncomeCents, allocation).essential *
         facts.settings.reserveMonths
-  const reserveCurrentCents = emergency?.currentCents ?? 0
+  const reserveCurrentCents =
+    facts.reserveInvestedCents ?? emergency?.currentCents ?? 0
   const reserveComplete =
     reserveTargetCents > 0 && reserveCurrentCents >= reserveTargetCents
   const effective =

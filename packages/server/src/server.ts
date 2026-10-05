@@ -17,8 +17,12 @@ import { ServerConfig } from './config.ts'
 import { EventLog } from './events/EventLog.ts'
 import * as Reactor from './events/Reactor.ts'
 import { Imports } from './imports/Imports.ts'
+import { Investments } from './investments/Investments.ts'
+import { Quotes } from './investments/Quotes.ts'
 import { Accounts } from './ledger/Accounts.ts'
 import * as Entries from './ledger/Entries.ts'
+import { ManualEntries } from './ledger/Manual.ts'
+import { Notes } from './ledger/Notes.ts'
 import { Cards } from './reconciliation/Cards.ts'
 import * as Reconciliation from './reconciliation/Reconciliation.ts'
 import { Observations } from './ledger/Observations.ts'
@@ -49,15 +53,24 @@ const CategoriesLive = Categorizer.Categorizer.layer.pipe(
   ),
 )
 
+// What the person types in, and investment positions; quotes are fetched only to show foreign positions in reais.
+const PersonLive = Layer.mergeAll(ManualEntries.layer, Investments.layer).pipe(
+  Layer.provideMerge(Notes.layer),
+  Layer.provideMerge(Quotes.layer.pipe(Layer.provide(FetchHttpClient.layer))),
+)
+
 // Services every feature builds on. Feature reactors are added beside the routes.
-const CoreLive = Layer.mergeAll(
-  Reactor.Reactors.layer,
-  Imports.layer,
-  Entries.Entries.layer,
-  Reconciliation.Reconciliation.layer,
-  Cards.layer,
-  CategoriesLive,
-).pipe(
+const CoreLive = PersonLive.pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      Reactor.Reactors.layer,
+      Imports.layer,
+      Entries.Entries.layer,
+      Reconciliation.Reconciliation.layer,
+      Cards.layer,
+      CategoriesLive,
+    ),
+  ),
   Layer.provideMerge(Observations.layer),
   Layer.provideMerge(Accounts.layer),
   Layer.provideMerge(EventLog.layer),

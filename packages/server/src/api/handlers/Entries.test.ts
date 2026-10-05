@@ -215,7 +215,22 @@ describe('entries API', () => {
       const cardProof = yield* client.entries.balanceProof({
         params: { accountId: card.id },
       })
-      assert.deepStrictEqual(proof, {
+      assert.isTrue(proof.supported)
+      const { checkpoints, ...rest } = proof as Extract<
+        typeof proof,
+        { supported: true }
+      >
+      assert.deepStrictEqual(
+        checkpoints.map((checkpoint) => [
+          checkpoint.asOf,
+          checkpoint.sourceKind,
+        ]),
+        [
+          ['2026-09-30', 'file'],
+          ['2026-10-03', 'file'],
+        ],
+      )
+      assert.deepStrictEqual(rest, {
         supported: true,
         intervals: [
           {

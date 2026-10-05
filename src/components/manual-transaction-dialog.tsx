@@ -1,11 +1,10 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useServerFn } from '@tanstack/react-start'
-import { Plus } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { CategorySelect } from '#/components/category-select'
-import { TransferAccountSelect } from '#/components/transfer-account-select'
 import { Button } from '#/components/ui/button'
 import {
   Dialog,
@@ -31,155 +30,184 @@ import {
 } from '#/components/ui/native-select'
 import { Spinner } from '#/components/ui/spinner'
 import { ToggleGroup, ToggleGroupItem } from '#/components/ui/toggle-group'
-import type { CategoryOption } from '#/domain/categories'
 import {
   currencyFractionDigits,
-  toMinorUnits as toCents,
+  formatMinorUnitsForInput,
+  toMinorUnits,
 } from '#/domain/currency'
 import { formatInstrumentName } from '#/domain/finance'
-import { createManualTransactionFn } from '#/features/finance/finance.functions'
-import { invalidateFinance } from '#/features/finance/queries'
+import { todayIso } from '#/domain/period'
+import { isCard } from '#/features/v2/accounts'
+import type { AccountView } from '#/features/v2/accounts'
+import {
+  createManualTransactionFn,
+  removeManualTransactionFn,
+  reviseManualTransactionFn,
+} from '#/features/v2/manual.functions'
+import { invalidateAfterReactors } from '#/features/v2/queries'
+import { errorMessage } from '#/lib/v2/errors'
 
-interface AccountOption {
-  id: string
-  name: string
-  currency: string
-  purpose: 'operating' | 'reserve' | 'investment'
+import type { Category } from '@spendle/server/api'
+
+/** A typed-in transaction being edited: its manual id and current fields. */
+export interface ManualTransactionDraft {
+  externalId: string
+  accountId: string
+  bookedOn: string
+  amountCents: number
+  description: string
 }
 
-interface CardOption {
-  id: string
-  name: string
-  currency: string
-}
-
+/**
+ * Registers a movement no statement or bank reported, or corrects or
+ * deletes one typed in before. V2 keeps every version; once the bank
+ * reports the same movement, both become one entry.
+ */
 export function ManualTransactionDialog({
   accounts,
-  cards,
   categories,
   open: controlledOpen,
   onOpenChange,
   trigger,
   defaultDirection = 'outflow',
-  onCreated,
+  defaultAccountId,
+  editing,
+  onSaved,
 }: {
-  accounts: AccountOption[]
-  cards: CardOption[]
-  categories: CategoryOption[]
+  /** Active accounts and cards the person may type into. */
+  accounts: ReadonlyArray<AccountView>
+  /** Categories a person may choose. */
+  categories: ReadonlyArray<Category>
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /** `undefined` renders the default button; `null` renders none. */
   trigger?: React.ReactElement | null
   defaultDirection?: 'inflow' | 'outflow'
-  onCreated?: (transactionId: string) => void
+  defaultAccountId?: string
+  editing?: ManualTransactionDraft | null
+  onSaved?: (result: { entryId: string | null }) => void
 }) {
-  const targets = [
-    ...accounts.map((account) => ({
-      value: `account:${account.id}`,
-      targetType: 'account' as const,
-      id: account.id,
-      name: account.name,
-      currency: account.currency,
-    })),
-    ...cards.map((card) => ({
-      value: `card:${card.id}`,
-      targetType: 'card' as const,
-      id: card.id,
-      name: card.name,
-      currency: card.currency,
-    })),
-  ]
-  const defaultTarget = targets.at(0)?.value ?? ''
   const [internalOpen, setInternalOpen] = useState(false)
   const open = controlledOpen ?? internalOpen
   const setOpen = (nextOpen: boolean) => {
     if (controlledOpen === undefined) setInternalOpen(nextOpen)
     onOpenChange?.(nextOpen)
   }
-  const [targetValue, setTargetValue] = useState(defaultTarget)
+  const bankAccounts = accounts.filter((account) => !isCard(account))
+  const cards = accounts.filter(isCard)
+  const initialAccount =
+    editing?.accountId ??
+    defaultAccountId ??
+    bankAccounts.at(0)?.id ??
+    cards.at(0)?.id ??
+    ''
+  const [accountId, setAccountId] = useState(initialAccount)
   const [direction, setDirection] = useState<'inflow' | 'outflow'>(
-    defaultDirection,
+    editing
+      ? editing.amountCents > 0
+        ? 'inflow'
+        : 'outflow'
+      : defaultDirection,
   )
   const [categoryId, setCategoryId] = useState('uncategorized')
-  const [counterpartyAccountId, setCounterpartyAccountId] = useState<
-    string | null
-  >(null)
-  const [amount, setAmount] = useState('')
+  const account = accounts.find((item) => item.id === accountId) ?? null
+  const currency = account?.currency ?? 'BRL'
+  const [amount, setAmount] = useState(
+    editing
+      ? formatMinorUnitsForInput(Math.abs(editing.amountCents), currency)
+      : '',
+  )
   const queryClient = useQueryClient()
-  const createManualTransaction = useServerFn(createManualTransactionFn)
-  const selectedTarget =
-    targets.find((target) => target.value === targetValue) ?? null
+  const create = useServerFn(createManualTransactionFn)
+  const revise = useServerFn(reviseManualTransactionFn)
+  const remove = useServerFn(removeManualTransactionFn)
 
-  function resetForm() {
-    setTargetValue(defaultTarget)
+  function reset() {
+    setAccountId(initialAccount)
     setDirection(defaultDirection)
     setCategoryId('uncategorized')
-    setCounterpartyAccountId(null)
     setAmount('')
   }
 
-  const mutation = useMutation({
-    mutationFn: createManualTransaction,
+  const save = useMutation({
+    mutationFn: (input: {
+      bookedOn: string
+      amountCents: number
+      description: string
+      note: string
+    }) =>
+      editing
+        ? revise({
+            data: {
+              externalId: editing.externalId,
+              bookedOn: input.bookedOn,
+              amountCents: input.amountCents,
+              description: input.description,
+            },
+          })
+        : create({
+            data: {
+              accountId,
+              bookedOn: input.bookedOn,
+              amountCents: input.amountCents,
+              description: input.description,
+              categoryId:
+                categoryId === 'uncategorized' ? undefined : categoryId,
+              note: input.note || undefined,
+            },
+          }),
     onSuccess: (result) => {
-      if (result.reconciliationRefresh.status === 'deferred') {
-        toast.warning(
-          'Lançamento salvo. A atualização das conciliações ficou pendente.',
-        )
-      } else if (result.reopenedCheckpoints > 0) {
-        toast.success(
-          'Lançamento salvo. Os saldos posteriores precisam ser conferidos novamente.',
-        )
-      } else {
-        toast.success('Lançamento salvo.')
-      }
+      toast.success(editing ? 'Lançamento corrigido.' : 'Lançamento salvo.')
       setOpen(false)
-      resetForm()
-      void invalidateFinance(queryClient, 'ledger')
-      onCreated?.(result.id)
+      if (!editing) reset()
+      void invalidateAfterReactors(queryClient)
+      onSaved?.({ entryId: result.entryId })
     },
-    onError: (reason) => {
+    onError: (reason) =>
       toast.error(
-        reason instanceof Error
-          ? reason.message
-          : 'Não foi possível salvar o lançamento.',
-      )
+        errorMessage(reason, 'Não foi possível salvar o lançamento.'),
+      ),
+  })
+
+  const deletion = useMutation({
+    mutationFn: () => remove({ data: { externalId: editing!.externalId } }),
+    onSuccess: () => {
+      toast.success('Lançamento excluído. O histórico continua salvo.')
+      setOpen(false)
+      void invalidateAfterReactors(queryClient)
     },
+    onError: (reason) =>
+      toast.error(
+        errorMessage(reason, 'Não foi possível excluir o lançamento.'),
+      ),
   })
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!selectedTarget) {
+    if (!account) {
       toast.error('Selecione uma conta ou cartão.')
       return
     }
     const form = new FormData(event.currentTarget)
     try {
-      const amountCents = toCents(amount, selectedTarget.currency)
-      if (amountCents <= 0) throw new Error('Informe um valor maior que zero.')
-      if (categoryId === 'transfer' && !counterpartyAccountId) {
-        throw new Error('Selecione a outra conta da transferência.')
-      }
-      mutation.mutate({
-        data: {
-          targetType: selectedTarget.targetType,
-          targetId: selectedTarget.id,
-          postedAt: String(form.get('postedAt')),
-          description: String(form.get('description')),
-          direction,
-          amountCents,
-          categoryId,
-          counterpartyAccountId:
-            categoryId === 'transfer'
-              ? (counterpartyAccountId ?? undefined)
-              : undefined,
-          notes: String(form.get('notes') || '') || undefined,
-        },
+      const cents = toMinorUnits(amount, currency)
+      if (cents <= 0) throw new Error('Informe um valor maior que zero.')
+      const description = String(form.get('description')).trim()
+      if (description.length < 2)
+        throw new Error('Descreva o lançamento com ao menos 2 letras.')
+      save.mutate({
+        bookedOn: String(form.get('bookedOn')),
+        amountCents: direction === 'inflow' ? cents : -cents,
+        description,
+        note: String(form.get('note') ?? '').trim(),
       })
     } catch (reason) {
-      toast.error(
-        reason instanceof Error ? reason.message : 'Informe um valor válido.',
-      )
+      toast.error(errorMessage(reason, 'Informe um valor válido.'))
     }
   }
+
+  const pending = save.isPending || deletion.isPending
+  const idPrefix = editing ? `manual-${editing.externalId}` : 'manual-new'
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -194,63 +222,47 @@ export function ManualTransactionDialog({
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
         <form onSubmit={submit} className="grid gap-4">
           <DialogHeader>
-            <DialogTitle>Nova transação</DialogTitle>
+            <DialogTitle>
+              {editing ? 'Corrigir lançamento' : 'Nova transação'}
+            </DialogTitle>
             <DialogDescription>
-              Registre uma movimentação que não veio de um extrato. O saldo e as
-              conferências posteriores serão recalculados.
+              {editing
+                ? 'Digitado por você. Quando o banco informar o mesmo movimento, os dois viram um só.'
+                : 'Para o que não veio de extrato nem do banco. Quando o banco informar o mesmo movimento, os dois viram um só.'}
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="manual-transaction-target">
+              <FieldLabel htmlFor={`${idPrefix}-account`}>
                 Conta ou cartão
               </FieldLabel>
               <NativeSelect
-                id="manual-transaction-target"
-                value={targetValue}
-                onChange={(event) => {
-                  const nextTargetValue = event.target.value
-                  const nextTarget = targets.find(
-                    (target) => target.value === nextTargetValue,
-                  )
-                  setTargetValue(nextTargetValue)
-                  setCounterpartyAccountId(null)
-                  if (
-                    nextTarget?.targetType === 'card' &&
-                    categoryId === 'transfer'
-                  ) {
-                    setCategoryId('uncategorized')
-                  }
-                }}
+                id={`${idPrefix}-account`}
+                value={accountId}
+                onChange={(event) => setAccountId(event.target.value)}
                 className="w-full"
+                disabled={Boolean(editing)}
                 required
               >
-                {!targets.length ? (
+                {!accounts.length ? (
                   <NativeSelectOption value="">
                     Nenhuma conta disponível
                   </NativeSelectOption>
                 ) : null}
-                {accounts.length ? (
+                {bankAccounts.length ? (
                   <NativeSelectOptGroup label="Contas">
-                    {accounts.map((account) => (
-                      <NativeSelectOption
-                        key={account.id}
-                        value={`account:${account.id}`}
-                      >
-                        {formatInstrumentName(account.name)} ·{' '}
-                        {account.currency}
+                    {bankAccounts.map((item) => (
+                      <NativeSelectOption key={item.id} value={item.id}>
+                        {formatInstrumentName(item.name)} · {item.currency}
                       </NativeSelectOption>
                     ))}
                   </NativeSelectOptGroup>
                 ) : null}
                 {cards.length ? (
                   <NativeSelectOptGroup label="Cartões">
-                    {cards.map((card) => (
-                      <NativeSelectOption
-                        key={card.id}
-                        value={`card:${card.id}`}
-                      >
-                        {formatInstrumentName(card.name)} · {card.currency}
+                    {cards.map((item) => (
+                      <NativeSelectOption key={item.id} value={item.id}>
+                        {formatInstrumentName(item.name)} · {item.currency}
                       </NativeSelectOption>
                     ))}
                   </NativeSelectOptGroup>
@@ -258,120 +270,108 @@ export function ManualTransactionDialog({
               </NativeSelect>
             </Field>
             <Field>
-              <FieldLabel id="manual-transaction-direction">
-                Movimento
-              </FieldLabel>
+              <FieldLabel id={`${idPrefix}-direction`}>Movimento</FieldLabel>
               <ToggleGroup
-                aria-labelledby="manual-transaction-direction"
+                aria-labelledby={`${idPrefix}-direction`}
                 value={[direction]}
                 onValueChange={(values) => {
                   const value = values.at(0)
-                  if (value === 'inflow' || value === 'outflow') {
+                  if (value === 'inflow' || value === 'outflow')
                     setDirection(value)
-                  }
                 }}
                 variant="outline"
               >
                 <ToggleGroupItem value="outflow">Saída</ToggleGroupItem>
                 <ToggleGroupItem value="inflow">Entrada</ToggleGroupItem>
               </ToggleGroup>
-              <FieldDescription>
-                Entrada aumenta o saldo. Saída diminui o saldo.
-              </FieldDescription>
             </Field>
             <Field>
-              <FieldLabel htmlFor="manual-transaction-description">
+              <FieldLabel htmlFor={`${idPrefix}-description`}>
                 Descrição
               </FieldLabel>
               <Input
-                id="manual-transaction-description"
+                id={`${idPrefix}-description`}
                 name="description"
                 maxLength={200}
-                placeholder="Ex.: Serviço pago em Bitcoin"
+                minLength={2}
+                placeholder="Ex.: Feira paga em dinheiro"
+                defaultValue={editing?.description}
                 required
               />
             </Field>
             <FieldGroup className="grid gap-4 sm:grid-cols-2">
               <Field>
-                <FieldLabel htmlFor="manual-transaction-amount">
-                  Valor
-                </FieldLabel>
+                <FieldLabel htmlFor={`${idPrefix}-amount`}>Valor</FieldLabel>
                 <Input
-                  id="manual-transaction-amount"
-                  name="amount"
+                  id={`${idPrefix}-amount`}
                   value={amount}
                   onChange={(event) => setAmount(event.target.value)}
                   inputMode="decimal"
                   placeholder={
-                    selectedTarget &&
-                    currencyFractionDigits(selectedTarget.currency) === 8
+                    currencyFractionDigits(currency) === 8
                       ? '0,00000000'
                       : '0,00'
                   }
                   required
                 />
-                {selectedTarget ? (
-                  <FieldDescription>{selectedTarget.currency}</FieldDescription>
-                ) : null}
+                <FieldDescription>{currency}</FieldDescription>
               </Field>
               <Field>
-                <FieldLabel htmlFor="manual-transaction-date">Data</FieldLabel>
+                <FieldLabel htmlFor={`${idPrefix}-date`}>Data</FieldLabel>
                 <Input
-                  id="manual-transaction-date"
-                  name="postedAt"
+                  id={`${idPrefix}-date`}
+                  name="bookedOn"
                   type="date"
-                  defaultValue={new Date().toISOString().slice(0, 10)}
+                  defaultValue={editing?.bookedOn ?? todayIso()}
                   required
                 />
               </Field>
             </FieldGroup>
-            <Field>
-              <FieldLabel>Categoria</FieldLabel>
-              <CategorySelect
-                categories={categories}
-                value={categoryId}
-                onValueChange={(value) => {
-                  setCategoryId(value)
-                  if (value !== 'transfer') setCounterpartyAccountId(null)
-                }}
-                allowTransfer={selectedTarget?.targetType === 'account'}
-                required
-                aria-label="Categoria do lançamento manual"
-              />
-            </Field>
-            {categoryId === 'transfer' &&
-            selectedTarget?.targetType === 'account' ? (
-              <TransferAccountSelect
-                accounts={accounts}
-                sourceAccountId={selectedTarget.id}
-                amountCents={direction === 'outflow' ? -1 : 1}
-                value={counterpartyAccountId}
-                disabled={mutation.isPending}
-                onValueChange={setCounterpartyAccountId}
-              />
-            ) : null}
-            <Field>
-              <FieldLabel htmlFor="manual-transaction-notes">
-                Observação opcional
-              </FieldLabel>
-              <Input
-                id="manual-transaction-notes"
-                name="notes"
-                maxLength={200}
-              />
-            </Field>
+            {editing ? null : (
+              <>
+                <Field>
+                  <FieldLabel>Categoria</FieldLabel>
+                  <CategorySelect
+                    categories={[...categories]}
+                    value={categoryId}
+                    onValueChange={setCategoryId}
+                    allowTransfer={false}
+                    aria-label="Categoria do lançamento"
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor={`${idPrefix}-note`}>Nota</FieldLabel>
+                  <Input id={`${idPrefix}-note`} name="note" maxLength={500} />
+                </Field>
+              </>
+            )}
           </FieldGroup>
-          <DialogFooter>
-            <DialogClose render={<Button type="button" variant="outline" />}>
-              Cancelar
-            </DialogClose>
-            <Button
-              type="submit"
-              disabled={mutation.isPending || !targets.length}
-            >
-              {mutation.isPending ? <Spinner data-icon="inline-start" /> : null}
-              {mutation.isPending ? 'Salvando…' : 'Salvar transação'}
-            </Button>
+          <DialogFooter className={editing ? 'sm:justify-between' : undefined}>
+            {editing ? (
+              <Button
+                type="button"
+                variant="ghost"
+                className="text-destructive"
+                disabled={pending}
+                onClick={() => deletion.mutate()}
+              >
+                {deletion.isPending ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <Trash2 data-icon="inline-start" />
+                )}
+                Excluir
+              </Button>
+            ) : null}
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <DialogClose render={<Button type="button" variant="outline" />}>
+                Cancelar
+              </DialogClose>
+              <Button type="submit" disabled={pending || !accounts.length}>
+                {save.isPending ? <Spinner data-icon="inline-start" /> : null}
+                {editing ? 'Salvar correção' : 'Salvar transação'}
+              </Button>
+            </div>
           </DialogFooter>
         </form>
       </DialogContent>

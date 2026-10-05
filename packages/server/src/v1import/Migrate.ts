@@ -10,8 +10,12 @@ import { Classifier } from '../categories/Classifier.ts'
 import { KnowledgeStore } from '../categories/KnowledgeStore.ts'
 import { ServerConfig } from '../config.ts'
 import { EventLog } from '../events/EventLog.ts'
+import { Investments } from '../investments/Investments.ts'
+import { Quotes } from '../investments/Quotes.ts'
 import { Accounts } from '../ledger/Accounts.ts'
 import { Entries } from '../ledger/Entries.ts'
+import { ManualEntries } from '../ledger/Manual.ts'
+import { Notes } from '../ledger/Notes.ts'
 import { Observations } from '../ledger/Observations.ts'
 import * as Sqlite from '../persistence/Sqlite.ts'
 import { AssistantModel } from '../planning/AssistantModel.ts'
@@ -30,6 +34,9 @@ export const MigrationLive = Layer.mergeAll(
   Layer.provideMerge(
     PlanningServices.pipe(Layer.provideMerge(AssistantModel.disabled)),
   ),
+  Layer.provideMerge(Layer.mergeAll(ManualEntries.layer, Investments.layer)),
+  // The migration never shows values, so it needs no quotes.
+  Layer.provideMerge(Layer.mergeAll(Notes.layer, Quotes.fixed({}))),
   Layer.provideMerge(
     Layer.mergeAll(
       Categorizer.layer,

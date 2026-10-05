@@ -109,7 +109,7 @@ const make = Effect.gen(function* () {
       FROM accounts a
       JOIN owners o ON o.id = a.owner_id
       LEFT JOIN credit_card_terms t ON t.account_id = a.id
-      ORDER BY a.created_at, a.id
+      ORDER BY a.created_at, a.rowid
     `,
   })
   const findRelations = SqlSchema.findAll({

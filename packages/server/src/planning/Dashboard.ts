@@ -3,6 +3,7 @@ import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
 
 import { monthStart, today } from '../domain/LocalDate.ts'
+import { Investments } from '../investments/Investments.ts'
 import { Cards } from '../reconciliation/Cards.ts'
 import { LedgerReads } from './LedgerReads.ts'
 import { buildMonth, indexFacts, projectCash } from './Month.ts'
@@ -20,6 +21,7 @@ const make = Effect.gen(function* () {
   const planning = yield* Planning
   const recurrences = yield* Recurrences
   const cards = yield* Cards
+  const investments = yield* Investments
 
   const facts = Effect.gen(function* () {
     const [day, accounts, entries, relations, checkpoints, categories] =
@@ -60,11 +62,12 @@ const make = Effect.gen(function* () {
           lastBookedOn: plan.lastBookedOn,
         })
     }
-    const [settings, strategies, budgets, goals] = yield* Effect.all([
+    const [settings, strategies, budgets, goals, invested] = yield* Effect.all([
       planning.settings,
       planning.strategies,
       planning.budgets,
       planning.goalsForPlan,
+      investments.snapshot(day),
     ])
     return {
       today: day,
@@ -79,6 +82,10 @@ const make = Effect.gen(function* () {
       strategies,
       budgets,
       goals,
+      reserveInvestedCents:
+        invested.summary.reservePositionCount > 0
+          ? invested.summary.reserveBrlCents
+          : null,
       categoryBuckets: new Map(
         categories.map((category) => [category.id, category.bucket]),
       ),

@@ -45,6 +45,10 @@ export const Entry = Schema.Struct({
   sources: Schema.Int,
   /** Null until categorization reaches the entry. */
   category: Schema.NullOr(EntryCategory),
+  /** The person's note on the movement. */
+  note: Schema.NullOr(Schema.String),
+  /** Set when the person typed the movement in: the id to edit or delete it with. */
+  manualId: Schema.NullOr(Schema.String),
 })
 export type Entry = typeof Entry.Type
 
@@ -65,7 +69,7 @@ export const EntryFilters = Schema.Struct({
   categoryStatus: Schema.optional(
     Schema.Literals(['applied', 'review', 'none']),
   ),
-  /** Words in the description, case-insensitive. */
+  /** Words in the description or the note, case-insensitive. */
   text: Schema.optional(Schema.String),
   /** `inflow` keeps credits, `outflow` debits. */
   direction: Schema.optional(Schema.Literals(['inflow', 'outflow'])),
@@ -168,6 +172,16 @@ export const BalanceProof = Schema.Union([
   Schema.Struct({
     supported: Schema.Literal(true),
     intervals: Schema.Array(BalanceInterval),
+    /** The balances checked, one per day; `manual` ones the person informed and may withdraw. */
+    checkpoints: Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        asOf: Schema.String,
+        balanceCents: Schema.Int,
+        sourceId: Schema.String,
+        sourceKind: Schema.Literals(['open_finance', 'file', 'manual']),
+      }),
+    ),
     /** Days where sources report different balances. */
     conflicts: Schema.Array(
       Schema.Struct({

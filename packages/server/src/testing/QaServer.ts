@@ -19,8 +19,12 @@ import { Classifier } from '../categories/Classifier.ts'
 import { KnowledgeStore } from '../categories/KnowledgeStore.ts'
 import * as Reactor from '../events/Reactor.ts'
 import { Imports } from '../imports/Imports.ts'
+import { Investments } from '../investments/Investments.ts'
+import { Quotes } from '../investments/Quotes.ts'
 import { Accounts } from '../ledger/Accounts.ts'
 import * as Entries from '../ledger/Entries.ts'
+import { ManualEntries } from '../ledger/Manual.ts'
+import { Notes } from '../ledger/Notes.ts'
 import { OpenFinance } from '../openfinance/OpenFinance.ts'
 import type {
   PluggyAccount,
@@ -214,7 +218,18 @@ const Services = PlanningServices.pipe(
       Reconciliation.reactor,
       Categorizer.reactor,
       Categorizer.modelReactor,
+      ManualEntries.layer,
+      Investments.layer,
     ).pipe(
+      // Fixed quotes keep QA offline and its values stable.
+      Layer.provideMerge(
+        Layer.mergeAll(
+          Notes.layer,
+          Quotes.fixed({
+            USD: { rateMicros: 5_400_000, date: '2026-10-01', source: 'QA' },
+          }),
+        ),
+      ),
       Layer.provideMerge(Categorizer.Categorizer.layer),
       Layer.provideMerge(KnowledgeStore.layer),
       Layer.provideMerge(Categories.layer),

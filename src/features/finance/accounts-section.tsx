@@ -10,6 +10,7 @@ import { useServerFn } from '@tanstack/react-start'
 import { toast } from 'sonner'
 import { useState } from 'react'
 
+import { BalanceCheckpointDialog } from '#/components/balance-checkpoint-dialog'
 import { EmptyState, Panel, SectionHeader, StatusBadge } from '#/components/ui'
 import { Button } from '#/components/ui/button'
 import {
@@ -220,9 +221,10 @@ export function AccountsSection() {
                           : '—',
                         caption: balance
                           ? `${formatDate(balance.asOf)} · ${balanceSourceLabels[balance.sourceKind]}`
-                          : 'Importe um extrato ou conecte o banco',
+                          : 'Importe um extrato, conecte o banco ou informe o saldo',
                       },
                     ]}
+                    actions={<BalanceCheckpointDialog account={account} />}
                     status={<AccountStatus account={account} />}
                   />
                 )

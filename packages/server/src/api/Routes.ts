@@ -11,6 +11,8 @@ import {
 } from './handlers/Categories.ts'
 import { EntriesHandlers } from './handlers/Entries.ts'
 import { ImportsHandlers } from './handlers/Imports.ts'
+import { InvestmentsHandlers } from './handlers/Investments.ts'
+import { ManualHandlers } from './handlers/Manual.ts'
 import { OpenFinanceHandlers } from './handlers/OpenFinance.ts'
 import {
   AssistantHandlers,
@@ -36,6 +38,8 @@ export const ApiHandlers = Layer.mergeAll(
   CategoriesHandlers,
   CategoryStoreHandlers,
   CategoryDecisionsHandlers,
+  ManualHandlers,
+  InvestmentsHandlers,
   PlanningHandlers,
   DashboardHandlers,
   RecurrencesHandlers,

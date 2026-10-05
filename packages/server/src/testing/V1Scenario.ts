@@ -34,6 +34,7 @@ const transaction = (
       readonly matchKind?: string
     }
     readonly sourceKey?: string
+    readonly notes?: string
   },
 ) =>
   Effect.gen(function* () {
@@ -49,6 +50,7 @@ const transaction = (
       normalized_description: input.description.toLowerCase(),
       amount_cents: input.amountCents,
       currency: 'BRL',
+      notes: input.notes ?? null,
     })
     if (input.staged) {
       const importId = `import-${input.account ?? input.card}`
@@ -234,6 +236,7 @@ export const seedV1 = (v1: V1Writer) =>
       description: 'MERCADO CENTRAL',
       categoryId: 'groceries',
       staged: { source: 'manual', categoryId: 'groceries' },
+      notes: 'Compra do mês',
     })
     // Changed afterwards in the transaction list.
     yield* transaction(v1, {
@@ -322,7 +325,7 @@ export const seedV1 = (v1: V1Writer) =>
       reason:
         'Invalidada porque uma movimentação vinculada ainda não está confirmada.',
     })
-    // Typed in by hand: V2 has nothing to observe again.
+    // Typed in by hand: V2 records it again as a manual fact.
     yield* transaction(v1, {
       id: 'typed',
       account: 'checking',
@@ -331,6 +334,77 @@ export const seedV1 = (v1: V1Writer) =>
       description: 'CONSULTA',
       categoryId: 'health',
       sourceKey: 'manual:typed',
+      notes: 'Dra. Ana',
+    })
+    // Investments: a brokerage account, a reserve position with an opening
+    // amount and the value last entered, and a typed-in contribution in it.
+    yield* v1.insert('accounts', {
+      id: 'brokerage',
+      ownership_scope_id: 'home',
+      name: 'Corretora',
+      kind: 'investment',
+      purpose: 'investment',
+    })
+    yield* v1.insert('investment_goals', {
+      id: 'emergency',
+      name: 'Reserva de emergência',
+      type: 'emergency_reserve',
+      target_cents: 3_000_000,
+    })
+    yield* v1.insert('investment_positions', {
+      id: 'tesouro',
+      account_id: 'brokerage',
+      asset_class_id: 'fixed-income',
+      goal_id: 'emergency',
+      name: 'Tesouro Selic 2029',
+      currency: 'BRL',
+      initial_amount_minor: 10_000,
+      manual_current_amount_minor: 65_000,
+      manual_current_at: '2026-09-30',
+    })
+    yield* transaction(v1, {
+      id: 'aporte',
+      account: 'brokerage',
+      postedAt: '2026-09-20',
+      amountCents: 50_000,
+      description: 'APORTE TESOURO',
+      categoryId: null,
+      sourceKey: 'manual:aporte',
+    })
+    yield* v1.insert('investment_position_movements', {
+      id: 'movement-aporte',
+      position_id: 'tesouro',
+      transaction_id: 'aporte',
+      kind: 'contribution',
+      amount_minor: 50_000,
+    })
+    // Balances informed by hand: one on the checking account, one card
+    // statement (V2 checks cards by their cycles), one V1 invalidated.
+    yield* v1.insert('balance_checkpoints', {
+      id: 'informed',
+      account_id: 'checking',
+      kind: 'manual',
+      source: 'manual',
+      balance_cents: 120_000,
+      as_of: '2026-09-30',
+    })
+    yield* v1.insert('balance_checkpoints', {
+      id: 'card-informed',
+      credit_card_id: 'ultravioleta',
+      kind: 'manual',
+      source: 'manual',
+      balance_type: 'card_statement',
+      balance_cents: -5_000,
+      as_of: '2026-09-03',
+    })
+    yield* v1.insert('balance_checkpoints', {
+      id: 'stale',
+      account_id: 'checking',
+      kind: 'manual',
+      source: 'manual',
+      review_state: 'invalidated',
+      balance_cents: 1,
+      as_of: '2026-08-31',
     })
     yield* v1.insert('card_statement_payments', {
       id: 'bill-link',

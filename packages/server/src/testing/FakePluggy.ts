@@ -15,7 +15,11 @@ import { AssistantModel } from '../planning/AssistantModel.ts'
 import { PlanningServices } from '../planning/Services.ts'
 import * as Reactor from '../events/Reactor.ts'
 import { Imports } from '../imports/Imports.ts'
+import { Investments } from '../investments/Investments.ts'
+import { Quotes } from '../investments/Quotes.ts'
 import * as Entries from '../ledger/Entries.ts'
+import { ManualEntries } from '../ledger/Manual.ts'
+import { Notes } from '../ledger/Notes.ts'
 import { Cards } from '../reconciliation/Cards.ts'
 import * as Reconciliation from '../reconciliation/Reconciliation.ts'
 import { Accounts } from '../ledger/Accounts.ts'
@@ -265,9 +269,18 @@ export const openFinanceTest = (
     }),
   )
 
-/** `openFinanceTest` with category learning, its reactors and the given model. */
+/**
+ * `openFinanceTest` with category learning, its reactors and the given
+ * model, plus manual entries, notes and investments (without quotes).
+ */
 export const categoriesTestWith = <A, E>(classifier: Layer.Layer<A, E>) =>
-  Layer.mergeAll(Categorizer.reactor, Categorizer.modelReactor).pipe(
+  Layer.mergeAll(
+    Categorizer.reactor,
+    Categorizer.modelReactor,
+    ManualEntries.layer,
+    Investments.layer,
+  ).pipe(
+    Layer.provideMerge(Layer.mergeAll(Notes.layer, Quotes.fixed({}))),
     Layer.provideMerge(Categorizer.Categorizer.layer),
     Layer.provideMerge(KnowledgeStore.layer),
     Layer.provideMerge(Categories.layer),

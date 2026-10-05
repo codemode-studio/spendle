@@ -5,11 +5,14 @@ import { CategoriesError } from '../categories/Categories.ts'
 import { CategorizerError } from '../categories/Categorizer.ts'
 import { KnowledgeStoreError } from '../categories/KnowledgeStore.ts'
 import { ImportRejected } from '../imports/Imports.ts'
+import { InvestmentsError } from '../investments/Investments.ts'
 import {
   AccountNotFound,
   InvalidAccount,
   OwnerNotFound,
 } from '../ledger/Accounts.ts'
+import { ManualEntryError } from '../ledger/Manual.ts'
+import { NotesError } from '../ledger/Notes.ts'
 import { CurrencyMismatch, InvalidReport } from '../ledger/Observations.ts'
 import { OpenFinanceError } from '../openfinance/OpenFinance.ts'
 import { PluggyError } from '../openfinance/PluggyClient.ts'
@@ -94,6 +97,34 @@ const store: Record<KnowledgeStoreError['reason'], Status> = {
   no_prefix_candidate: Rejected,
   category_not_assignable: Rejected,
 }
+
+const manual: Record<ManualEntryError['reason'], Status> = {
+  invalid_input: InvalidRequest,
+  manual_transaction_not_found: NotFound,
+  checkpoint_not_found: NotFound,
+  not_a_manual_checkpoint: Rejected,
+  checkpoint_on_card: Rejected,
+  account_archived: Conflict,
+}
+
+const notes: Record<NotesError['reason'], Status> = {
+  entry_not_found: NotFound,
+  note_too_long: InvalidRequest,
+}
+
+const investments: Record<InvestmentsError['reason'], Status> = {
+  entry_not_found: NotFound,
+  position_not_found: NotFound,
+  asset_class_not_found: NotFound,
+  not_an_investment_account: Rejected,
+  position_account_mismatch: Rejected,
+  not_classified: NotFound,
+  invalid_input: InvalidRequest,
+}
+
+const isManualEntryError = Schema.is(ManualEntryError)
+const isNotesError = Schema.is(NotesError)
+const isInvestmentsError = Schema.is(InvestmentsError)
 
 const planningReasons: Record<PlanningError['reason'], Status> = {
   strategy_not_found: NotFound,
@@ -192,6 +223,11 @@ const known = (error: unknown): EndpointError | undefined => {
       error.reason,
       error.entryId ?? error.categoryId,
     )
+  if (isManualEntryError(error))
+    return byReason(manual, error.reason, error.detail)
+  if (isNotesError(error)) return byReason(notes, error.reason, error.entryId)
+  if (isInvestmentsError(error))
+    return byReason(investments, error.reason, error.detail)
   if (isKnowledgeStoreError(error))
     return byReason(store, error.reason, error.patternId ?? error.categoryId)
   if (isPlanningError(error))

@@ -193,7 +193,7 @@ describe('V1 planning import', () => {
             ],
           },
           {
-            moved: [1, 1, 1, 1, 1, 1, 1, 1],
+            moved: [1, 1, 1, 2, 1, 1, 1, 1],
             left: [['recurrence', 'rent']],
             settings: {
               monthlyIncomeTargetCents: 1_200_000,
@@ -207,7 +207,11 @@ describe('V1 planning import', () => {
               reserve: 1_000,
             },
             august: [true, 1_000_000, 'strategy-wealth', 300_000],
-            goal: [['Viagem', 150_000, 900_000]],
+            // The shared scenario's emergency reserve goal comes over too.
+            goal: [
+              ['Reserva de emergência', 0, 3_000_000],
+              ['Viagem', 150_000, 900_000],
+            ],
             market: [
               ['2026-08-10', 'skipped', []],
               ['2026-09-10', 'matched', [['MERCADO CENTRAL', 'confirmed']]],
