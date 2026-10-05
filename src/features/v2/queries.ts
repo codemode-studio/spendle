@@ -11,6 +11,7 @@ import {
   listAccountsFn,
   listOwnersFn,
 } from './accounts.functions'
+import { cardOverviewFn, cycleEntriesFn } from './cards.functions'
 import { listCategoriesFn } from './categories.functions'
 import {
   categoryReviewFn,
@@ -88,6 +89,17 @@ export const v2QueryKeys = {
       'candidates',
       entryId,
       text,
+    ] as const,
+  cardOverview: (accountId: string) =>
+    [...financeQueryKeys.all, 'read', 'cards', accountId, 'overview'] as const,
+  cycleEntries: (accountId: string, closingOn: string) =>
+    [
+      ...financeQueryKeys.all,
+      'read',
+      'cards',
+      accountId,
+      'cycle',
+      closingOn,
     ] as const,
   connectSettings: () =>
     [...financeQueryKeys.all, 'open-finance', 'connect-settings'] as const,
@@ -188,6 +200,24 @@ export const linkCandidatesOptions = (entryId: string | null, text = '') =>
       ? () => linkCandidatesFn({ data: { entryId, text } })
       : skipToken,
     staleTime: 0,
+  })
+
+export const cardOverviewOptions = (accountId: string) =>
+  queryOptions({
+    queryKey: v2QueryKeys.cardOverview(accountId),
+    queryFn: () => cardOverviewFn({ data: { accountId } }),
+    staleTime: 15_000,
+  })
+
+export const cycleEntriesOptions = (
+  accountId: string,
+  cycle: { closingOn: string; entryIds: ReadonlyArray<string> },
+) =>
+  queryOptions({
+    queryKey: v2QueryKeys.cycleEntries(accountId, cycle.closingOn),
+    queryFn: () =>
+      cycleEntriesFn({ data: { accountId, entryIds: cycle.entryIds } }),
+    staleTime: 15_000,
   })
 
 /**

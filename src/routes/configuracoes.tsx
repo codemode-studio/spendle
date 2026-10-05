@@ -88,11 +88,13 @@ export const Route = createFileRoute('/configuracoes')({
   loaderDeps: ({ search }) => ({ tab: resolveTab(search.tab) }),
   loader: ({ context, deps }) =>
     Promise.all([
-      deps.tab === 'geral' || deps.tab === 'cartoes'
+      deps.tab === 'geral'
         ? context.queryClient.ensureQueryData(configurationOptions())
         : null,
       context.queryClient.ensureQueryData(ownersOptions()),
-      deps.tab === 'contas' || deps.tab === 'open-finance'
+      deps.tab === 'contas' ||
+      deps.tab === 'cartoes' ||
+      deps.tab === 'open-finance'
         ? context.queryClient.ensureQueryData(accountsOptions(true))
         : null,
       deps.tab === 'open-finance'

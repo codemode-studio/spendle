@@ -1,6 +1,7 @@
-import { CreditCard, Plus } from 'lucide-react'
+import { Archive, CreditCard, Plug, Plus } from 'lucide-react'
 import {
   useMutation,
+  useQuery,
   useQueryClient,
   useSuspenseQuery,
 } from '@tanstack/react-query'
@@ -29,106 +30,95 @@ import {
 import { Input } from '#/components/ui/input'
 import { NativeSelect } from '#/components/ui/native-select'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '#/components/ui/table'
-import {
-  TEMPORARY_FIXED_MIN_INSTALLMENTS,
-  TEMPORARY_FIXED_MIN_INSTALLMENT_CENTS,
-  addMonths,
-} from '#/domain/credit-card'
-import {
   currencyOptions,
   formatCurrency,
   formatMinorUnitsForInput,
-  parseCurrency,
-  toMinorUnits as toCents,
+  toMinorUnits,
 } from '#/domain/currency'
 import { formatInstrumentName } from '#/domain/finance'
 import { formatMonthLong, formatShortDate as formatDate } from '#/domain/period'
-import { CardStatementsExplorer } from '#/features/finance/card-statements-explorer'
-import {
-  createCreditCardFn,
-  updateCreditCardFn,
-} from '#/features/finance/finance.functions'
+import { CardCyclesExplorer } from '#/features/finance/card-cycles-explorer'
 import { InstrumentCard } from '#/features/finance/instrument-card'
+import type { InstrumentMetric } from '#/features/finance/instrument-card'
 import {
-  configurationOptions,
-  invalidateFinance,
-} from '#/features/finance/queries'
-import type {
-  CardSnapshot,
-  FinanceSnapshot,
-} from '#/features/finance/snapshot.types'
-
-type CardStatusSnapshot = Pick<
-  CardSnapshot,
-  | 'coverage'
-  | 'latestCheckpoint'
-  | 'latestVerifiedCheckpoint'
-  | 'unverifiedDays'
->
-type CardFormSnapshot = Pick<
-  CardSnapshot,
-  | 'closingDay'
-  | 'currency'
-  | 'dueDay'
-  | 'id'
-  | 'institution'
-  | 'lastFour'
-  | 'limitCents'
-  | 'name'
-  | 'ownershipScopeId'
->
-type OwnershipScopeOption = Pick<
-  FinanceSnapshot['scopes'][number],
-  'id' | 'name'
->
+  archiveAccountFn,
+  openAccountFn,
+  updateAccountFn,
+} from '#/features/v2/accounts.functions'
+import { isCard } from '#/features/v2/accounts'
+import type { AccountView, Owner } from '#/features/v2/accounts'
+import { summarizeCard } from '#/features/v2/cards'
+import {
+  accountsOptions,
+  cardOverviewOptions,
+  invalidateAfterReactors,
+  ownersOptions,
+} from '#/features/v2/queries'
+import { errorMessage } from '#/lib/v2/errors'
 
 export function CardsSection() {
-  const { data } = useSuspenseQuery(configurationOptions())
+  const { data: accounts } = useSuspenseQuery(accountsOptions(true))
+  const { data: owners } = useSuspenseQuery(ownersOptions())
   const queryClient = useQueryClient()
-  const createCard = useServerFn(createCreditCardFn)
-  const updateCard = useServerFn(updateCreditCardFn)
+  const openAccount = useServerFn(openAccountFn)
+  const updateAccount = useServerFn(updateAccountFn)
+  const archiveAccount = useServerFn(archiveAccountFn)
   const [error, setError] = useState('')
   const [addOpen, setAddOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const editing = data.cards.find((card) => card.id === editingId)
-  const cardById = new Map(data.cards.map((card) => [card.id, card]))
-  const invalidate = () => invalidateFinance(queryClient, 'ledger')
+  const cards = accounts.filter(
+    (account) => isCard(account) && !account.archived,
+  )
+  const editing = cards.find((card) => card.id === editingId)
+  const invalidate = () => invalidateAfterReactors(queryClient)
   const fail = (fallback: string) => (reason: unknown) => {
-    const message = reason instanceof Error ? reason.message : fallback
+    const message = errorMessage(reason, fallback)
     setError(message)
     toast.error(message)
   }
   const createMutation = useMutation({
-    mutationFn: createCard,
+    mutationFn: openAccount,
     onSuccess: () => {
       toast.success('Cartão adicionado.')
       setAddOpen(false)
-      invalidate()
+      void invalidate()
     },
-    onError: fail('Erro ao salvar.'),
+    onError: fail('Não foi possível salvar.'),
   })
   const updateMutation = useMutation({
-    mutationFn: updateCard,
+    mutationFn: updateAccount,
     onSuccess: () => {
-      toast.success('Cartão atualizado.')
+      toast.success('Cartão atualizado. As faturas são recalculadas.')
       setEditingId(null)
-      invalidate()
+      void invalidate()
     },
-    onError: fail('Erro ao atualizar.'),
+    onError: fail('Não foi possível atualizar.'),
+  })
+  const archiveMutation = useMutation({
+    mutationFn: archiveAccount,
+    onSuccess: (card) => {
+      toast.success(`${card.name} arquivado. O histórico continua salvo.`)
+      setEditingId(null)
+      void invalidate()
+    },
+    onError: fail('Não foi possível arquivar.'),
   })
 
   function submitCreate(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError('')
+    const form = new FormData(event.currentTarget)
+    const currency = String(form.get('currency'))
     createMutation.mutate({
-      data: readCardForm(new FormData(event.currentTarget)),
+      data: {
+        ownerId: String(form.get('ownerId')),
+        name: String(form.get('name')).trim(),
+        institutionName: String(form.get('institutionName')).trim(),
+        kind: 'credit_card',
+        purpose: 'operating',
+        currency,
+        card: readTerms(form, currency),
+      },
     })
   }
 
@@ -136,10 +126,15 @@ export function CardsSection() {
     event.preventDefault()
     if (!editing) return
     setError('')
+    const form = new FormData(event.currentTarget)
     updateMutation.mutate({
       data: {
-        id: editing.id,
-        ...readCardForm(new FormData(event.currentTarget)),
+        accountId: editing.id,
+        changes: {
+          name: String(form.get('name')).trim(),
+          institutionName: String(form.get('institutionName')).trim(),
+          card: readTerms(form, editing.currency),
+        },
       },
     })
   }
@@ -161,152 +156,42 @@ export function CardsSection() {
           </Button>
         }
       />
-      {data.cards.length ? (
+      {cards.length ? (
         <div className="grid gap-4 md:grid-cols-2">
-          {data.cards.map((card) => {
-            const hasLimit = card.limitCents > 0
-            return (
-              <InstrumentCard
-                key={card.id}
-                title={formatInstrumentName(card.name)}
-                subtitle={`${card.institution?.name ?? 'Sem instituição'} · final ${card.lastFour ?? '—'}`}
-                editLabel={`Editar ${formatInstrumentName(card.name)}`}
-                onEdit={() => {
-                  setError('')
-                  setEditingId(card.id)
-                }}
-                metrics={[
-                  {
-                    label:
-                      card.currentStatement.certainty === 'installment_schedule'
-                        ? 'Parcelas conhecidas'
-                        : 'Fatura atual',
-                    value: formatCurrency(card.statementCents, card.currency),
-                    caption: card.dueDayEstimated
-                      ? 'Vencimento a confirmar'
-                      : `Vence ${formatDate(card.currentStatement.dueDate)}`,
-                  },
-                  {
-                    label:
-                      card.nextStatement?.certainty === 'installment_schedule'
-                        ? 'Saldo futuro conhecido'
-                        : 'Próxima fatura',
-                    value: formatCurrency(
-                      card.nextStatement?.amountCents ?? 0,
-                      card.currency,
-                    ),
-                    caption: card.nextStatement
-                      ? `Vence ${formatDate(card.nextStatement.dueDate)}`
-                      : 'Sem lançamentos',
-                  },
-                  ...(hasLimit
-                    ? [
-                        {
-                          label: 'Limite livre',
-                          value: formatCurrency(
-                            card.availableLimitCents,
-                            card.currency,
-                          ),
-                          caption: `de ${formatCurrency(card.limitCents, card.currency)}`,
-                        },
-                      ]
-                    : []),
-                ]}
-                status={<CardStatus card={card} />}
-              />
-            )
-          })}
+          {cards.map((card) => (
+            <CardInstrument
+              key={card.id}
+              card={card}
+              onEdit={() => {
+                setError('')
+                setEditingId(card.id)
+              }}
+            />
+          ))}
         </div>
       ) : (
         <Panel>
           <EmptyState
             icon={CreditCard}
             title="Nenhum cartão cadastrado"
-            description="Adicione um cartão para acompanhar as faturas."
+            description="Adicione o cartão ou conecte o banco para acompanhar as faturas."
+            action={
+              <Button
+                variant="outline"
+                nativeButton={false}
+                render={
+                  <Link to="/configuracoes" search={{ tab: 'open-finance' }} />
+                }
+              >
+                <Plug data-icon="inline-start" />
+                Conectar banco
+              </Button>
+            }
           />
         </Panel>
       )}
 
-      {data.cards.length > 0 && <CardStatementsExplorer cards={data.cards} />}
-
-      {data.cards
-        .filter((card) => card.unexplainedNextStatementCents > 0)
-        .map((card) => (
-          <p key={card.id} className="text-sm text-muted-foreground">
-            {formatInstrumentName(card.name)}: o saldo futuro documentado inclui{' '}
-            {formatCurrency(card.unexplainedNextStatementCents, card.currency)}{' '}
-            cuja composição não aparece nas parcelas identificadas. Esse valor
-            já está incluído na próxima fatura projetada.
-          </p>
-        ))}
-
-      {data.installmentPlans.length > 0 && (
-        <Panel
-          title="Histórico de parcelas identificadas"
-          description={`Parcelamentos com ${TEMPORARY_FIXED_MIN_INSTALLMENTS} parcelas ou mais, ou parcela a partir de ${formatCurrency(TEMPORARY_FIXED_MIN_INSTALLMENT_CENTS)}, são despesas fixas temporárias: contam em Essenciais até a última parcela.`}
-        >
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Descrição</TableHead>
-                <TableHead className="hidden sm:table-cell">Cartão</TableHead>
-                <TableHead className="text-right">Parcela</TableHead>
-                <TableHead className="hidden md:table-cell">Tipo</TableHead>
-                <TableHead className="hidden md:table-cell">Até</TableHead>
-                <TableHead className="hidden lg:table-cell">Origem</TableHead>
-                <TableHead className="text-right">Valor</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.installmentPlans.map((plan) => {
-                const card = cardById.get(plan.creditCardId)
-                const lastCharge = addMonths(
-                  plan.firstChargeDate,
-                  plan.totalInstallments - plan.currentInstallment,
-                )
-                return (
-                  <TableRow key={plan.id}>
-                    <TableCell className="max-w-[16rem] truncate">
-                      {plan.description}
-                    </TableCell>
-                    <TableCell className="hidden text-muted-foreground sm:table-cell">
-                      {card ? formatInstrumentName(card.name) : '—'}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {plan.currentInstallment}/{plan.totalInstallments}
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell">
-                      <StatusBadge
-                        tone={
-                          plan.commitmentType === 'temporary_fixed'
-                            ? 'warning'
-                            : 'neutral'
-                        }
-                      >
-                        {plan.commitmentType === 'temporary_fixed'
-                          ? 'Fixa temporária'
-                          : 'Parcelamento curto'}
-                      </StatusBadge>
-                    </TableCell>
-                    <TableCell className="hidden text-muted-foreground md:table-cell">
-                      {formatMonthLong(lastCharge, { capitalize: true })}
-                    </TableCell>
-                    <TableCell className="hidden text-muted-foreground lg:table-cell">
-                      {plan.autoDetected ? 'Detectada' : 'Manual'}
-                    </TableCell>
-                    <TableCell className="text-right font-mono tabular-nums">
-                      {formatCurrency(
-                        plan.installmentAmountCents,
-                        card?.currency,
-                      )}
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-        </Panel>
-      )}
+      {cards.length > 0 && <CardCyclesExplorer cards={cards} />}
 
       <Dialog
         open={addOpen}
@@ -320,10 +205,10 @@ export function CardsSection() {
             <DialogHeader>
               <DialogTitle>Adicionar cartão</DialogTitle>
               <DialogDescription>
-                Cadastre o cartão para importar compras e acompanhar faturas.
+                Fechamento e vencimento definem o calendário das faturas.
               </DialogDescription>
             </DialogHeader>
-            <CardFormFields scopes={data.scopes} />
+            <CardFormFields owners={owners} />
             {error && <FieldError>{error}</FieldError>}
             <DialogFooter>
               <DialogClose render={<Button type="button" variant="outline" />}>
@@ -350,20 +235,35 @@ export function CardsSection() {
               <DialogHeader>
                 <DialogTitle>Editar cartão</DialogTitle>
                 <DialogDescription>
-                  Atualize os dados usados no limite e no calendário de faturas.
+                  Mudar fechamento ou vencimento recalcula as faturas.
                 </DialogDescription>
               </DialogHeader>
-              <CardFormFields scopes={data.scopes} card={editing} />
+              <CardFormFields owners={owners} card={editing} />
               {error && <FieldError>{error}</FieldError>}
-              <DialogFooter>
-                <DialogClose
-                  render={<Button type="button" variant="outline" />}
+              <DialogFooter className="sm:justify-between">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={archiveMutation.isPending}
+                  onClick={() =>
+                    archiveMutation.mutate({ data: { accountId: editing.id } })
+                  }
                 >
-                  Cancelar
-                </DialogClose>
-                <Button type="submit" disabled={updateMutation.isPending}>
-                  {updateMutation.isPending ? 'Salvando…' : 'Salvar alterações'}
+                  <Archive data-icon="inline-start" />
+                  Arquivar
                 </Button>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row">
+                  <DialogClose
+                    render={<Button type="button" variant="outline" />}
+                  >
+                    Cancelar
+                  </DialogClose>
+                  <Button type="submit" disabled={updateMutation.isPending}>
+                    {updateMutation.isPending
+                      ? 'Salvando…'
+                      : 'Salvar alterações'}
+                  </Button>
+                </div>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -373,53 +273,99 @@ export function CardsSection() {
   )
 }
 
-function CardStatus({ card }: { card: CardStatusSnapshot }) {
-  const coverageEnd = card.coverage.latestCoverageEnd
-  const verifiedAt = card.latestVerifiedCheckpoint?.asOf ?? null
-  const freshness = card.coverage.freshness.status
-  const tone =
-    freshness === 'current'
-      ? 'success'
-      : freshness === 'recommended'
-        ? 'warning'
-        : 'neutral'
+function CardInstrument({
+  card,
+  onEdit,
+}: {
+  card: AccountView
+  onEdit: () => void
+}) {
+  const overview = useQuery(cardOverviewOptions(card.id))
+  const summary = overview.data
+    ? summarizeCard({
+        limitCents: card.card?.limitCents ?? null,
+        cycles: overview.data.cycles.cycles,
+        unappliedCents: overview.data.cycles.unappliedCents,
+        installments: overview.data.installments,
+      })
+    : null
+  const metrics: Array<InstrumentMetric> = summary
+    ? [
+        {
+          label: 'Fatura aberta',
+          value: formatCurrency(summary.open?.billedCents ?? 0, card.currency),
+          caption: summary.open
+            ? `Fecha ${formatDate(summary.open.closingOn)}${summary.open.closing === 'forecast' ? ' (previsto)' : ''}`
+            : 'Sem fatura aberta',
+        },
+        {
+          label: summary.overdue ? 'Vencido' : 'A pagar',
+          value: formatCurrency(summary.dueCents, card.currency),
+          caption: summary.nextDue
+            ? `Vence ${formatDate(summary.nextDue)}`
+            : 'Nada pendente',
+        },
+        ...(summary.availableLimitCents !== null && card.card?.limitCents
+          ? [
+              {
+                label: 'Limite livre',
+                value: formatCurrency(
+                  summary.availableLimitCents,
+                  card.currency,
+                ),
+                caption: `de ${formatCurrency(card.card.limitCents, card.currency)}`,
+              },
+            ]
+          : []),
+      ]
+    : [
+        {
+          label: 'Fatura aberta',
+          value: overview.isError ? '—' : '…',
+          caption: overview.isError
+            ? errorMessage(overview.error, 'Faturas indisponíveis')
+            : 'Calculando faturas',
+        },
+      ]
   return (
-    <>
-      {coverageEnd ? (
-        <StatusBadge tone={tone}>
-          {verifiedAt && verifiedAt >= coverageEnd ? 'Conferido' : 'Dados'} até{' '}
-          {formatDate(coverageEnd)}
-        </StatusBadge>
-      ) : (
-        <StatusBadge>Sem importações</StatusBadge>
-      )}
-      {card.latestCheckpoint?.reviewState === 'observed' ? (
-        <StatusBadge tone="warning">Fatura não conferida</StatusBadge>
-      ) : card.unverifiedDays > 0 ? (
-        <StatusBadge>
-          {card.unverifiedDays} {card.unverifiedDays === 1 ? 'dia' : 'dias'} sem
-          conferência
-        </StatusBadge>
-      ) : null}
-      {card.coverage.gaps.map((gap) => (
-        <StatusBadge
-          key={`${gap.start}-${gap.end}`}
-          tone="warning"
-          render={<Link to="/importar" search={{ view: 'upload' }} />}
-        >
-          Falta {formatDate(gap.start)} a {formatDate(gap.end)}
-        </StatusBadge>
-      ))}
-    </>
+    <InstrumentCard
+      title={formatInstrumentName(card.name)}
+      subtitle={`${card.institutionName} · final ${card.card?.lastFour ?? '—'} · fecha dia ${card.card?.closingDay ?? '—'}, vence dia ${card.card?.dueDay ?? '—'}`}
+      editLabel={`Editar ${formatInstrumentName(card.name)}`}
+      onEdit={onEdit}
+      metrics={metrics}
+      status={
+        <>
+          {card.link ? (
+            <StatusBadge tone="info">
+              <Plug />
+              Open Finance
+            </StatusBadge>
+          ) : null}
+          {summary?.overdue ? (
+            <StatusBadge tone="warning">Fatura vencida</StatusBadge>
+          ) : null}
+          {summary?.statementGaps.map((cycle) => (
+            <StatusBadge key={cycle.closingOn} tone="warning">
+              Fatura de {formatMonthLong(cycle.dueOn)} difere em{' '}
+              {formatCurrency(
+                Math.abs(cycle.statement?.differenceCents ?? 0),
+                card.currency,
+              )}
+            </StatusBadge>
+          ))}
+        </>
+      }
+    />
   )
 }
 
 function CardFormFields({
-  scopes,
+  owners,
   card,
 }: {
-  scopes: ReadonlyArray<OwnershipScopeOption>
-  card?: CardFormSnapshot
+  owners: ReadonlyArray<Owner>
+  card?: AccountView
 }) {
   const prefix = card ? `card-${card.id}` : 'card-new'
   return (
@@ -439,25 +385,43 @@ function CardFormFields({
         <Input
           id={`${prefix}-bank`}
           name="institutionName"
-          defaultValue={card?.institution?.name ?? ''}
+          defaultValue={card?.institutionName ?? ''}
           required
         />
       </Field>
-      <Field>
-        <FieldLabel htmlFor={`${prefix}-owner`}>Proprietário</FieldLabel>
-        <NativeSelect
-          id={`${prefix}-owner`}
-          name="ownershipScopeId"
-          className="w-full"
-          defaultValue={card?.ownershipScopeId}
-        >
-          {scopes.map((scope) => (
-            <option key={scope.id} value={scope.id}>
-              {scope.name}
-            </option>
-          ))}
-        </NativeSelect>
-      </Field>
+      {card ? null : (
+        <>
+          <Field>
+            <FieldLabel htmlFor={`${prefix}-owner`}>Titular</FieldLabel>
+            <NativeSelect
+              id={`${prefix}-owner`}
+              name="ownerId"
+              className="w-full"
+            >
+              {owners.map((owner) => (
+                <option key={owner.id} value={owner.id}>
+                  {owner.name}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={`${prefix}-currency`}>Moeda</FieldLabel>
+            <NativeSelect
+              id={`${prefix}-currency`}
+              name="currency"
+              className="w-full"
+              defaultValue="BRL"
+            >
+              {currencyOptions.map((currency) => (
+                <option key={currency.value} value={currency.value}>
+                  {currency.label}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
+        </>
+      )}
       <Field>
         <FieldLabel htmlFor={`${prefix}-last-four`}>
           Últimos 4 dígitos
@@ -466,8 +430,9 @@ function CardFormFields({
           id={`${prefix}-last-four`}
           name="lastFour"
           inputMode="numeric"
+          pattern="\d{4}"
           maxLength={4}
-          defaultValue={card?.lastFour ?? ''}
+          defaultValue={card?.card?.lastFour ?? ''}
         />
       </Field>
       <Field>
@@ -475,28 +440,14 @@ function CardFormFields({
         <Input
           id={`${prefix}-limit`}
           name="limit"
+          inputMode="decimal"
+          placeholder="Opcional"
           defaultValue={
-            card
-              ? formatMinorUnitsForInput(card.limitCents, card.currency)
-              : '0,00'
+            card?.card?.limitCents != null
+              ? formatMinorUnitsForInput(card.card.limitCents, card.currency)
+              : ''
           }
-          required
         />
-      </Field>
-      <Field>
-        <FieldLabel htmlFor={`${prefix}-currency`}>Moeda</FieldLabel>
-        <NativeSelect
-          id={`${prefix}-currency`}
-          name="currency"
-          className="w-full"
-          defaultValue={card?.currency}
-        >
-          {currencyOptions.map((currency) => (
-            <option key={currency.value} value={currency.value}>
-              {currency.label}
-            </option>
-          ))}
-        </NativeSelect>
       </Field>
       <Field>
         <FieldLabel htmlFor={`${prefix}-closing`}>Dia de fechamento</FieldLabel>
@@ -506,7 +457,7 @@ function CardFormFields({
           type="number"
           min="1"
           max="31"
-          defaultValue={card?.closingDay ?? 1}
+          defaultValue={card?.card?.closingDay ?? ''}
           required
         />
       </Field>
@@ -518,7 +469,7 @@ function CardFormFields({
           type="number"
           min="1"
           max="31"
-          defaultValue={card ? (card.dueDay ?? '') : 10}
+          defaultValue={card?.card?.dueDay ?? ''}
           required
         />
       </Field>
@@ -526,17 +477,13 @@ function CardFormFields({
   )
 }
 
-function readCardForm(form: FormData) {
-  const lastFour = String(form.get('lastFour') || '')
-  const currency = parseCurrency(String(form.get('currency')))
+function readTerms(form: FormData, currency: string) {
+  const limit = String(form.get('limit') ?? '').trim()
+  const lastFour = String(form.get('lastFour') ?? '').trim()
   return {
-    name: String(form.get('name')),
-    institutionName: String(form.get('institutionName')),
-    ownershipScopeId: String(form.get('ownershipScopeId')),
-    currency,
-    lastFour: lastFour || undefined,
-    limitCents: toCents(String(form.get('limit')), currency),
     closingDay: Number(form.get('closingDay')),
     dueDay: Number(form.get('dueDay')),
+    limitCents: limit ? toMinorUnits(limit, currency) : null,
+    lastFour: lastFour || null,
   }
 }

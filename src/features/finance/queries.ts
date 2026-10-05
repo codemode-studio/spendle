@@ -14,7 +14,6 @@ import {
   getImportReviewSnapshotFn,
   getKnowledgeBaseFn,
   getStrategyHistoryFn,
-  listCardStatementPaymentCandidatesFn,
   listLinkCandidatesFn,
 } from './finance.functions'
 
@@ -164,22 +163,6 @@ export const recurrenceLinkCandidatesOptions = (occurrenceId?: string) =>
     queryKey: financeQueryKeys.recurrenceLinkCandidates(occurrenceId ?? ''),
     queryFn: occurrenceId
       ? () => listLinkCandidatesFn({ data: { occurrenceId } })
-      : skipToken,
-    staleTime: 0,
-  })
-
-export const cardStatementCandidatesOptions = (input?: {
-  creditCardId: string
-  dueDate: string
-  amountCents?: number
-}) =>
-  queryOptions({
-    queryKey: financeQueryKeys.cardStatementCandidates(
-      input?.creditCardId ?? '',
-      input?.dueDate ?? '',
-    ),
-    queryFn: input
-      ? () => listCardStatementPaymentCandidatesFn({ data: input })
       : skipToken,
     staleTime: 0,
   })

@@ -7,10 +7,6 @@ import { currencySchema } from '#/domain/currency'
 import {
   createManualBalanceCheckpoint,
   createManualTransaction,
-  createCreditCard,
-  createInstallment,
-  setReconciliationStatus,
-  updateCreditCard,
   updateStagedTransactionCategory,
 } from './finance.server'
 import {
@@ -50,11 +46,6 @@ import {
   updateKnowledgePatternAndSync,
 } from './knowledge-sync.server'
 import { serverInput } from './input-errors.server'
-import {
-  linkCardStatementPayment,
-  listCardStatementPaymentCandidates,
-  unlinkCardStatementPayment,
-} from './card-statement-payment.server'
 import {
   approveDetectedRecurrence,
   completeOccurrence as completeRecurrenceOccurrence,
@@ -157,28 +148,6 @@ export const resolveStatementExclusionFn = createServerFn({ method: 'POST' })
   )
   .handler(({ data }) => resolveStatementExclusion(data))
 
-const creditCardInputSchema = z.object({
-  name: z.string().trim().min(2).max(80),
-  institutionName: z.string().trim().min(2).max(80),
-  ownershipScopeId: z.string().min(1),
-  currency: currencySchema,
-  lastFour: z
-    .string()
-    .regex(/^\d{4}$/)
-    .optional(),
-  limitCents: z.number().int().min(0),
-  closingDay: z.number().int().min(1).max(31),
-  dueDay: z.number().int().min(1).max(31).optional(),
-})
-
-export const createCreditCardFn = createServerFn({ method: 'POST' })
-  .validator(creditCardInputSchema)
-  .handler(({ data }) => createCreditCard(data))
-
-export const updateCreditCardFn = createServerFn({ method: 'POST' })
-  .validator(creditCardInputSchema.extend({ id: z.string().min(1) }))
-  .handler(({ data }) => updateCreditCard(data))
-
 export const updateSettingsFn = createServerFn({ method: 'POST' })
   .validator(
     z.object({
@@ -237,15 +206,6 @@ export const updateStagedTransactionCategoryFn = createServerFn({
     }),
   )
   .handler(({ data }) => updateStagedTransactionCategory(data))
-
-export const setReconciliationStatusFn = createServerFn({ method: 'POST' })
-  .validator(
-    z.object({
-      groupId: z.string().min(1),
-      status: z.enum(['suggested', 'confirmed', 'rejected']),
-    }),
-  )
-  .handler(({ data }) => setReconciliationStatus(data))
 
 const recurrenceInputSchema = z.object({
   name: z.string().trim().min(2).max(100),
@@ -331,49 +291,6 @@ export const completeRecurrenceOccurrenceFn = createServerFn({
 })
   .validator(z.object({ occurrenceId: z.string().min(1) }))
   .handler(({ data }) => completeRecurrenceOccurrence(data.occurrenceId))
-
-export const listCardStatementPaymentCandidatesFn = createServerFn({
-  method: 'GET',
-})
-  .validator(
-    z.object({
-      creditCardId: z.string().min(1),
-      dueDate: isoDateSchema,
-      amountCents: z.number().int().nonnegative().optional(),
-    }),
-  )
-  .handler(({ data }) =>
-    serverInput(() => listCardStatementPaymentCandidates(data)),
-  )
-
-export const linkCardStatementPaymentFn = createServerFn({ method: 'POST' })
-  .validator(
-    z.object({
-      creditCardId: z.string().min(1),
-      dueDate: isoDateSchema,
-      transactionId: z.string().min(1),
-      partial: z.boolean().optional(),
-    }),
-  )
-  .handler(({ data }) => linkCardStatementPayment(data))
-
-export const unlinkCardStatementPaymentFn = createServerFn({ method: 'POST' })
-  .validator(z.object({ id: z.string().min(1) }))
-  .handler(({ data }) => unlinkCardStatementPayment(data))
-
-export const createInstallmentFn = createServerFn({ method: 'POST' })
-  .validator(
-    z.object({
-      creditCardId: z.string().min(1),
-      description: z.string().trim().min(2),
-      categoryId: z.string().optional(),
-      installmentAmountCents: z.number().int().positive(),
-      totalInstallments: z.number().int().min(2).max(120),
-      currentInstallment: z.number().int().min(1),
-      firstChargeDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    }),
-  )
-  .handler(({ data }) => createInstallment(data))
 
 export const identifyImportFilesFn = createServerFn({ method: 'POST' })
   .validator((data: FormData) => data)

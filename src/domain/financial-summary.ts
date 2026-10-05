@@ -167,8 +167,10 @@ export function buildFinancialSummary(input: {
       !transaction.postedAt.startsWith(input.month) ||
       !isFamilyScope(transaction.scopeType) ||
       movement.baseAmountCents === null
-    ) continue
-    const bucket = movement.goalType === 'emergency_reserve' ? 'reserve' : 'investment'
+    )
+      continue
+    const bucket =
+      movement.goalType === 'emergency_reserve' ? 'reserve' : 'investment'
     actual[bucket] +=
       movement.kind === 'contribution'
         ? movement.baseAmountCents
