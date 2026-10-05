@@ -125,7 +125,7 @@ const readBody = (source: BodySource) =>
   })
 
 // Compares every byte so the time taken does not reveal how much matched.
-const constantTimeEquals = (a: string, b: string) => {
+export const constantTimeEquals = (a: string, b: string) => {
   const left = new TextEncoder().encode(a)
   const right = new TextEncoder().encode(b)
   let difference = left.length ^ right.length

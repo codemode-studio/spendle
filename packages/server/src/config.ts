@@ -6,6 +6,8 @@ import * as Path from 'effect/Path'
 
 export interface ServerConfigShape {
   readonly databasePath: string
+  /** Interface the HTTP server listens on; loopback unless set otherwise. */
+  readonly host: string
   readonly port: number
 }
 
@@ -30,12 +32,18 @@ export class ServerConfig extends Context.Service<
       const port = yield* Config.Port('SPENDLE_SERVER_PORT').pipe(
         Config.withDefault(4100),
       )
+      // The API has no accounts of its own: only this machine reaches it
+      // unless the person opts in to another interface.
+      const host = yield* Config.NonEmptyString('SPENDLE_SERVER_HOST').pipe(
+        Config.withDefault('127.0.0.1'),
+      )
       // `:memory:` is SQLite's in-memory database, not a file to resolve.
       return ServerConfig.of({
         databasePath:
           databasePath === ':memory:'
             ? databasePath
             : path.resolve(databasePath),
+        host,
         port,
       })
     }),
@@ -44,6 +52,7 @@ export class ServerConfig extends Context.Service<
   static readonly layerTest = (overrides: Partial<ServerConfigShape> = {}) =>
     Layer.succeed(ServerConfig, {
       databasePath: ':memory:',
+      host: '127.0.0.1',
       port: 0,
       ...overrides,
     })
