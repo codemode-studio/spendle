@@ -60,6 +60,7 @@ export const toReportedTransaction = (
       amount: transaction.amount,
       currencyCode: transaction.currencyCode,
       category: transaction.category ?? null,
+      categoryId: transaction.categoryId ?? null,
       providerCode: transaction.providerCode ?? null,
       operationType: transaction.operationType ?? null,
       merchant: merchant

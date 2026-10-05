@@ -20,6 +20,7 @@ The v2 backend is a fresh Effect 4 server with its own SQLite database (`data/v2
 - Facts observed from banks and files are immutable; human decisions are durable; everything else is a projection that can be rebuilt from those two. A matcher or categorizer improvement must be able to rerun over history.
 - Tests use `@effect/vitest` (`it.effect`, `layer`) with `Sqlite.layerMemory`, not mocked repositories. Async flows expose a drain or receipt to wait on; a test that needs a sleep or timeout is wrong. Backend behavior changes ship with focused tests for that behavior, testing outcomes rather than mirroring the implementation.
 - Complexity belongs at adapter boundaries (Pluggy, file parsers, AI). Matching and categorization policy stays pure and testable without I/O.
+- Category learning in V2: `KnowledgeStore` is the only writer of `category_patterns`, and only a person's decision (`Categorizer.decide`/`confirm`/`correct`) or store edit teaches it; reconciliation, refunds, provider categories and model answers never do. Inferences are a projection: change `categories/Policy.ts` and bump `POLICY_VERSION` instead of migrating them. The model classifier stays disabled without `TYPESAFE_API_KEY`; tests use `testing/FakeClassifier.ts`.
 
 ## UI e UX autoexplicativas
 

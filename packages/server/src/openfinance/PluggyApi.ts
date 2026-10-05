@@ -73,7 +73,10 @@ export const PluggyTransaction = Schema.Struct({
   balance: Schema.optional(Schema.NullOr(Schema.Number)),
   currencyCode: Schema.String,
   status: Schema.optional(Schema.Literals(['PENDING', 'POSTED'])),
+  /** Pluggy's category name, in English (`Groceries`, `Transfer - PIX`). */
   category: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Pluggy's stable category id (`05080000`); names may be reworded. */
+  categoryId: Schema.optional(Schema.NullOr(Schema.String)),
   providerCode: Schema.optional(Schema.NullOr(Schema.String)),
   operationType: Schema.optional(Schema.NullOr(Schema.String)),
   merchant: Schema.optional(

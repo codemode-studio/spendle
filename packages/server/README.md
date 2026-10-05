@@ -13,6 +13,8 @@ pnpm --filter @spendle/server verify  # typecheck, diagnósticos Effect e testes
 | `SPENDLE_SERVER_PORT`                         | Porta HTTP; padrão `4100`                                    |
 | `PLUGGY_CLIENT_ID`, `PLUGGY_CLIENT_SECRET`    | Credenciais da Pluggy; sem elas, o Open Finance fica inativo |
 | `PLUGGY_WEBHOOK_URL`, `PLUGGY_WEBHOOK_SECRET` | Webhook; os dois juntos ou nenhum                            |
+| `TYPESAFE_API_KEY`                            | Classificador por modelo; sem ela, o modelo nunca é chamado  |
+| `TYPESAFE_MODEL`, `TYPESAFE_API_URL`          | Modelo e endereço; padrão `jev-latest` em `api.typesafe.ai`  |
 
 ## Webhook da Pluggy
 
@@ -34,3 +36,17 @@ Cada entrega exige `Authorization: Bearer <segredo>`, vira um evento com o `even
 ```bash
 curl -i -X POST "$PLUGGY_WEBHOOK_URL" -d '{}'
 ```
+
+## Categorias
+
+Cada lançamento recebe uma inferência (`category_inferences`) recalculada a partir de fatos, decisões e da base de padrões; nada é editado à mão nessa tabela. A primeira regra que se aplica vence:
+
+1. Transferência ou pagamento de fatura confirmado pela conciliação: categoria de sistema, fora dos gastos.
+2. Decisão da pessoa (`Categorizer.decide`, `confirm`, `correct`). `uncategorized` deixa sem categoria e encerra a revisão.
+3. Parte de um lançamento decidido que se dividiu: revisão.
+4. Estorno confirmado: herda a categoria da compra.
+5. Transferência ou pagamento de fatura sugerido: revisão.
+6. Padrão exato do estabelecimento (98), prefixo (92), categoria da Pluggy mapeada pela pessoa (90) ou mapa embutido (60, revisão).
+7. Resposta do modelo, sempre em revisão até ser avaliado.
+
+Só decisões da pessoa e edições da base escrevem em `category_patterns`, sempre por `KnowledgeStore`. Respostas do modelo ficam em `model_classifications` e nunca viram padrão. Antes de gravar uma edição da base, `Categorizer.previewStoreEdit` mostra os lançamentos que mudariam. Ao mudar o resultado da política, incremente `POLICY_VERSION` em `src/categories/Policy.ts`: o servidor recalcula todo o histórico ao iniciar.

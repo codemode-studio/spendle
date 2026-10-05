@@ -7,6 +7,10 @@ import * as Option from 'effect/Option'
 import * as Ref from 'effect/Ref'
 import * as TestClock from 'effect/testing/TestClock'
 
+import { Categories } from '../categories/Categories.ts'
+import * as Categorizer from '../categories/Categorizer.ts'
+import { Classifier } from '../categories/Classifier.ts'
+import { KnowledgeStore } from '../categories/KnowledgeStore.ts'
 import * as Reactor from '../events/Reactor.ts'
 import { Imports } from '../imports/Imports.ts'
 import * as Entries from '../ledger/Entries.ts'
@@ -257,6 +261,19 @@ export const openFinanceTest = (
       )
     }),
   )
+
+/** `openFinanceTest` with category learning, its reactors and the given model. */
+export const categoriesTestWith = <A, E>(classifier: Layer.Layer<A, E>) =>
+  Layer.mergeAll(Categorizer.reactor, Categorizer.modelReactor).pipe(
+    Layer.provideMerge(Categorizer.Categorizer.layer),
+    Layer.provideMerge(KnowledgeStore.layer),
+    Layer.provideMerge(Categories.layer),
+    Layer.provideMerge(classifier),
+    Layer.provideMerge(openFinanceTest()),
+  )
+
+/** `openFinanceTest` with category learning and its reactors; the model is disabled. */
+export const categoriesTest = () => categoriesTestWith(Classifier.disabled)
 
 /** Connects item `item-1` with the given Pluggy data, as the widget flow would, on 2026-10-04. */
 export const connect = (
