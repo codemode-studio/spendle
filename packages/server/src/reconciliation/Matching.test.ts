@@ -723,6 +723,103 @@ describe('matchRelations', () => {
     )
   })
 
+  it('confirms only when every word of every description is understood', () => {
+    const transfer = (
+      outflow: string,
+      inflow: string,
+      fields: Partial<MatchableEntry> = {},
+      inInstitution = 'Banco Inter',
+    ) =>
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: outflow,
+          institution: 'Nubank',
+          ...fields,
+        }),
+        entry('in', 'inter', 50000, {
+          description: inflow,
+          institution: inInstitution,
+          ...fields,
+        }),
+      ]).flatMap((relation) => [relation.status])
+    const card = (
+      payment: string,
+      receipt: string,
+      fields: Partial<MatchableEntry> = {},
+      issuer = 'Nubank',
+    ) =>
+      relations([
+        entry('pay', 'inter', -50000, {
+          description: payment,
+          institution: 'Banco Inter',
+          ...fields,
+        }),
+        entry('nu', 'card-nu', 50000, {
+          description: receipt,
+          institution: issuer,
+          ...fields,
+        }),
+      ]).flatMap((relation) => [relation.status])
+    const joao = { ownerName: 'Joao Silva' }
+    const ted = { ownerName: 'Ted Silva' }
+    const suggested = [
+      // An undotted middle initial is someone's initial.
+      transfer('Pix enviado Joao A Silva', 'Pix recebido Joao Silva', joao),
+      card(
+        'Pagamento fatura Nubank',
+        'Pagamento recebido de Joao A Silva',
+        joao,
+      ),
+      // A bank's name beside a person's is part of their name.
+      transfer(
+        'Pix enviado Joao Safra',
+        'Pix recebido',
+        joao,
+        'Banco Safra S.A.',
+      ),
+      card(
+        'Pagamento fatura Banco Safra',
+        'Pagamento recebido de Joao Safra',
+        joao,
+        'Banco Safra S.A.',
+      ),
+      // A movement word past the leading phrase is a name.
+      transfer('Pix enviado Ted Banco Inter', 'Pix recebido'),
+      card('Pagamento fatura Nubank', 'Pagamento recebido de Ted'),
+      // A surname alone never proves the owner, even with an unusual first name.
+      transfer('Pix enviado Silva', 'Pix recebido Silva', ted),
+      // An unknown issuer never reads as no one.
+      card('Pagamento fatura Pag Bank', 'Pagamento recebido'),
+    ]
+    const confirmed = [
+      transfer('Pix enviado Joao Silva', 'Pix recebido Joao Silva', joao),
+      transfer('Pix enviado Ted Silva', 'Pix recebido Ted Silva', ted),
+      transfer('Pix enviado Banco Inter', 'Pix recebido'),
+      transfer('Transferencia mesma titularidade', 'Pix recebido'),
+      transfer('Pix enviado conta propria', 'Pix recebido'),
+      card('Pagamento fatura Nubank', 'Pagamento recebido'),
+    ]
+    assert.deepStrictEqual(
+      [...suggested, ...confirmed],
+      [
+        ...suggested.map(() => ['suggested']),
+        ...confirmed.map(() => ['confirmed']),
+      ],
+    )
+    assert.isTrue(
+      relations([
+        entry('out', 'nubank', -50000, {
+          description: 'Pix enviado Ted Banco Inter',
+          institution: 'Nubank',
+        }),
+        entry('in', 'inter', 50000, {
+          description: 'Pix recebido',
+          institution: 'Banco Inter',
+        }),
+      ])[0]!.reasons.includes('unrecognized_words'),
+    )
+  })
+
   it('reads alphanumeric issuers and payees as names, and codes as no one', () => {
     const pay = (description: string, card: MatchableEntry) =>
       relations([

@@ -893,6 +893,76 @@ describe('Reconciliation', () => {
       }).pipe(Effect.provide(openFinanceTest())),
   )
 
+  it.effect(
+    'keeps imported pairs suggested when a description has words it cannot account for',
+    () =>
+      Effect.gen(function* () {
+        const accounts = yield* Accounts
+        const imports = yield* Imports
+        const owner = yield* accounts.createOwner({
+          name: 'Donald Silveira',
+          kind: 'person',
+        })
+        const open = (name: string, card?: CardTerms) =>
+          accounts.open({
+            ownerId: owner.id,
+            institutionName: name,
+            name,
+            kind: card ? 'credit_card' : 'checking',
+            purpose: 'operating',
+            currency: 'BRL',
+            ...(card ? { card } : {}),
+          })
+        const nubank = yield* open('Nubank')
+        const inter = yield* open('Banco Inter')
+        const card = yield* open(
+          'Nubank',
+          new CardTerms({
+            closingDay: 3,
+            dueDay: 10,
+            limitCents: null,
+            lastFour: null,
+          }),
+        )
+        yield* imports.importFile({
+          accountId: nubank.id,
+          fileName: 'nubank.ofx',
+          bytes: ofx(
+            line('n1', '20260910', '-500.00', 'Pix enviado Ted Banco Inter'),
+          ),
+        })
+        yield* imports.importFile({
+          accountId: inter.id,
+          fileName: 'inter.ofx',
+          bytes: ofx(
+            line('i1', '20260910', '500.00', 'Pix recebido') +
+              line('i2', '20260912', '-1500.00', 'Pagamento fatura Nubank'),
+          ),
+        })
+        yield* imports.importFile({
+          accountId: card.id,
+          fileName: 'cartao.ofx',
+          bytes: ofx(
+            line('c1', '20260914', '1500.00', 'Pagamento recebido de Ted'),
+            'CCSTMTRS',
+          ),
+        })
+        yield* drain
+        const relations = yield* (yield* Reconciliation).relations
+        assert.deepStrictEqual(
+          relations.map((relation) => [
+            relation.kind,
+            relation.status,
+            relation.reasons.includes('unrecognized_words'),
+          ]),
+          [
+            ['card_payment', 'suggested', true],
+            ['internal_transfer', 'suggested', true],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
   it.effect('revisits relations when an account changes kind', () =>
     Effect.gen(function* () {
       const { reconciliation, inter } = yield* setup

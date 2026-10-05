@@ -186,63 +186,6 @@ const genericNameWords = new Set([
   'solucoes',
 ])
 
-// Words that mark a business: a description carrying one names a company,
-// never the person, even when its remaining words fit the owner's name
-// (`Silva Comercio Ltda` is not `Joao Silva`).
-const businessWords = new Set([
-  ...genericNameWords,
-  'ltda',
-  'eireli',
-  'epp',
-  'me',
-  'mei',
-  'industria',
-  'distribuidora',
-])
-
-// A corporation's suffix (`SA`, `S.A.`, `S/A`, `S-A`) with the word it
-// follows.
-const corporation = /([a-z0-9]+)?[\s.]*\bs\s?[./-]?\s?a\b/g
-
-// Words that only describe the movement or how it was sent, never who is on
-// the other side.
-const movementWords = new Set([
-  'pix',
-  'ted',
-  'doc',
-  'tev',
-  'transf',
-  'transferencia',
-  'enviado',
-  'enviada',
-  'recebido',
-  'recebida',
-  'para',
-  'pagamento',
-  'pgto',
-  'pagto',
-  'pag',
-  'credito',
-  'debito',
-  'deposito',
-  'conta',
-  'chave',
-  'aleatoria',
-  'qr',
-  'qrcode',
-  'code',
-  'celular',
-  'telefone',
-  'email',
-  'evp',
-  'fatura',
-  'final',
-  'cartao',
-  'cartoes',
-  'efetuado',
-  'obrigado',
-])
-
 // Wording that says both sides belong to the same person.
 const ownAccountWording =
   /\b(mesma titularidade|mesmo titular|entre contas|conta propria|contas proprias)\b/
@@ -273,6 +216,7 @@ const bankNames: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bcaixa economica( federal)?\b/g, 'caixa'],
   [/\bbanco do nordeste\b/g, 'bnb'],
   [/\bbanco da amazonia\b/g, 'basa'],
+  [/\bnu pagamentos\b/g, 'nubank'],
 ]
 
 /** A folded text with multi-word bank names as single tokens. */
@@ -300,7 +244,7 @@ const nameWords = (text: string) =>
 // Letters joined by punctuation are one name (`C&A`, `D&A`, `D'Avila`),
 // kept apart from ordinary words with `_` so `D&A` never reads as the
 // stopword `da`. A corporation suffix (`S.A.`, `S/A`, `S-A`) reads as `sa`,
-// left to the corporation check.
+// understood only right after a bank's name.
 const joinInitials = (text: string) =>
   text
     .replace(/\b[a-z0-9](?:[&.\/'-][a-z0-9])+\b\.?/g, (run) => {
@@ -309,35 +253,6 @@ const joinInitials = (text: string) =>
     })
     // A lone letter with a period is an initial (`A. Silva`), never an article.
     .replace(/(^|[^a-z0-9_])([a-z])\./g, '$1_$2_')
-
-// One-letter words that are grammar, not names: every other letter may be an
-// initial that identifies someone.
-const articles = new Set(['a', 'e', 'o'])
-
-/**
- * Every word of a description that could identify a party: whatever is not
- * a bank, transfer, Pix or card-bill wording, or a code may be someone else.
- * Read from the folded text, not through the shared filters that drop
- * company words such as `ltda` or `online`.
- */
-const identityWords = (
-  description: string,
-  institutions: ReadonlySet<string>,
-) =>
-  new Set(
-    joinInitials(bankAliases(description))
-      .split(/[^a-z0-9_]+/)
-      .filter(
-        (word) =>
-          !articles.has(word) &&
-          /[a-z]/.test(word) &&
-          !isCode(word) &&
-          !transferWords.has(word) &&
-          !movementWords.has(word) &&
-          !institutions.has(unglue(word)),
-      )
-      .map(unglue),
-  )
 
 /** Every description of an entry, its own first. */
 const descriptionsOf = (entry: MatchableEntry) => [
@@ -377,59 +292,269 @@ const institutionWords = (entry: MatchableEntry) =>
     ),
   )
 
-/** An account owner's name words and their first name. */
+/** A description's words: folded, bank names aliased, initials joined. */
+const tokens = (text: string) =>
+  joinInitials(bankAliases(text))
+    .split(/[^a-z0-9_]+/)
+    .filter((word) => word !== '')
+
+// A one-letter word, dotted or not, may be someone's initial.
+const isLetter = (word: string) => word.replace(/_/g, '').length < 2
+
+// Words a description may open with to say how the money moved. They are
+// read only at the start: past the first other word, any of them may be
+// part of a name (`Pix enviado Ted`).
+const movementPhrase = new Set([
+  'pix',
+  'transferencia',
+  'transf',
+  'pagamento',
+  'pgto',
+  'pagto',
+  'fatura',
+  'cartao',
+  'credito',
+  'debito',
+  'deposito',
+  'envio',
+  'recebimento',
+  'enviado',
+  'enviada',
+  'recebido',
+  'recebida',
+  'transferido',
+  'transferida',
+  'efetuado',
+  'efetuada',
+  'agendado',
+  'agendada',
+  'chave',
+  'aleatoria',
+  'evp',
+  'qr',
+  'qrcode',
+  'code',
+  'celular',
+  'telefone',
+  'email',
+  'conta',
+  'de',
+  'da',
+  'do',
+  'dos',
+  'das',
+  'para',
+  'em',
+  'no',
+  'na',
+  'ao',
+])
+
+// Card-bill wording, understood anywhere in a card payment's descriptions.
+const cardBill = new Set(['fatura', 'cartao', 'cartoes', 'credito'])
+
+// Rails that are also first names: a rail only as a description's first word.
+const railNames = new Set(['ted', 'doc', 'tev'])
+
+// Wording that says both sides belong to the same person, longest first.
+const ownAccountPhrases = [
+  'entre contas proprias',
+  'mesma titularidade',
+  'mesmo titular',
+  'entre contas',
+  'conta propria',
+  'contas proprias',
+].map((phrase) => phrase.split(' '))
+
+// Words of an institution's registered name that say what kind of company or
+// where it is, never which one.
+const legalWords = new Set([
+  ...institutionNoise,
+  'banco',
+  'bco',
+  'bank',
+  'instituicao',
+  'pagamento',
+  'pagamentos',
+  'ltda',
+  'de',
+  'do',
+  'da',
+  'dos',
+  'das',
+])
+
+// Bank names that are nobody's name, so they name the bank on their own.
+// Words that are also names (`Inter`, `Safra`) need `Banco` before them.
+const bankWords = new Set([
+  'bb',
+  'c6',
+  'caixa',
+  'bnb',
+  'basa',
+  'itau',
+  'bradesco',
+  'santander',
+  'btg',
+  'sicoob',
+  'sicredi',
+  'banrisul',
+])
+
+/** An institution's name words, without legal or geographic words. */
+const institutionCore = (institution: string) =>
+  tokens(institution)
+    .map(unglue)
+    .filter((word) => !legalWords.has(word) && !isLetter(word))
+
+/** An account owner's name words and their first name, read as written. */
 interface Owner {
   readonly words: ReadonlySet<string>
   readonly first: string | null
 }
 
-const ownerOf = (name: string, institutions: ReadonlySet<string>): Owner => {
-  const words = counterparties(name, institutions)
-  const first =
-    foldDescription(name)
-      .split(/[^a-z0-9]+/)
-      .find((word) => words.has(word)) ?? null
-  return { words, first }
+const ownerOf = (name: string): Owner => {
+  const words = tokens(name).filter((word) => !isLetter(word))
+  const [first] = tokens(name)
+  return {
+    words: new Set(words),
+    first: first === undefined || isLetter(first) ? null : first,
+  }
+}
+
+/** What a description may say and still be understood. */
+interface Vocabulary {
+  /** Whose name it may carry: a word must belong to every one of them. */
+  readonly owners: ReadonlyArray<Owner>
+  /** Which banks it may name (see `institutionCore`). */
+  readonly institutions: ReadonlyArray<ReadonlyArray<string>>
+  /** Whether card-bill wording (`fatura`, `final 1234`) is understood anywhere. */
+  readonly card: boolean
 }
 
 /**
- * Whether a description's words name the owner: all of them belong to the
- * owner's name and they include the first name. A surname alone (`Silva`,
- * `A. Silva`, `Ted Silva` once filters strip a word) is shared by relatives
- * and strangers, so it never proves the owner.
+ * How many words at `at` name one of the institutions as a bank: after
+ * `banco`/`bco`, glued to `bank` (`Nubank`, `C6BANK`), followed by `bank`
+ * (`C6 Bank`), or a bank name that is nobody's name (`Itau`). A bare word
+ * that is also a name (`Joao Safra`) is 0.
  */
-const namesOwner = (words: ReadonlySet<string>, owner: Owner) =>
-  owner.first !== null && words.has(owner.first) && within(words, owner.words)
-
-/**
- * Whether a description may name someone other than the owner: a word that
- * could identify a party and is not within every owner's name (`Donald`
- * fits `Donald Silveira`, `Joao Silva Junior` is not `Joao Silva`), a word
- * that marks a business (`Silva Comercio Ltda` is not `Joao Silva`), or a
- * corporation's suffix anywhere but right after an institution's own name
- * (`Inter S.A.` is the bank's, left to the institution evidence). Both
- * transfer legs and a card's payer are read through it.
- */
-const namesThirdParty = (
-  description: string,
-  owners: ReadonlyArray<Owner>,
-  institutions: ReadonlySet<string>,
+const bankReference = (
+  words: ReadonlyArray<string>,
+  at: number,
+  institutions: ReadonlyArray<ReadonlyArray<string>>,
 ) => {
-  const words = identityWords(description, institutions)
-  if (words.size > 0 && !owners.every((owner) => namesOwner(words, owner)))
-    return true
-  // Read from the folded text itself (shared word filters drop `ltda`), with
-  // multi-word bank names aliased like the institutions they are compared to.
-  const text = bankAliases(description)
-  return (
-    text
-      .split(/[^a-z0-9]+/)
-      .some((word) => businessWords.has(word) && !institutions.has(word)) ||
-    [...text.matchAll(corporation)].some(
-      ([, before]) => before === undefined || !institutions.has(unglue(before)),
-    )
+  const prefix = (from: number, core: ReadonlyArray<string>) => {
+    let length = 0
+    while (length < core.length && words[from + length] === core[length])
+      length++
+    return length
+  }
+  const word = words[at]!
+  return Math.max(
+    0,
+    ...institutions.map((core) => {
+      if (core.length === 0) return 0
+      if (word === 'banco' || word === 'bco') {
+        const glued = words[at + 1]
+        if (
+          glued !== undefined &&
+          unglue(glued) !== glued &&
+          unglue(glued) === core[0]
+        )
+          return 2
+        const length = prefix(at + 1, core)
+        return length > 0 ? 1 + length : 0
+      }
+      if (unglue(word) !== word && unglue(word) === core[0]) return 1
+      const length = prefix(at, core)
+      if (length === 0) return 0
+      if (words[at + length] === 'bank') return length + 1
+      return bankWords.has(word) ? length : 0
+    }),
   )
 }
+
+/**
+ * Reads a description against an allowlist: past an opening movement
+ * phrase (`Pix enviado para`), every word must be the owner's name, a bank
+ * reference to one of the accounts' institutions (with its `S.A.`),
+ * own-account wording, a code, or, for a card payment, card-bill wording.
+ * Any other word (an unknown name, an initial, a company suffix, a bank word
+ * beside a person's name) leaves it not understood, and naming the owner
+ * also needs their first name: a surname alone is relatives' and strangers'
+ * too. `bank` says whether it names one of the banks.
+ */
+const read = (description: string, vocabulary: Vocabulary) => {
+  const words = tokens(description)
+  const ownAccount = (at: number) =>
+    ownAccountPhrases.find((phrase) =>
+      phrase.every((part, index) => words[at + index] === part),
+    )
+  let at = 0
+  if (railNames.has(words[0] ?? '')) at++
+  while (
+    at < words.length &&
+    movementPhrase.has(words[at]!) &&
+    ownAccount(at) === undefined
+  )
+    at++
+  const named = new Set<string>()
+  let bank = false
+  while (at < words.length) {
+    const word = words[at]!
+    const reference = bankReference(words, at, vocabulary.institutions)
+    if (reference > 0) {
+      bank = true
+      at += reference
+      if (words[at] === 'sa') at++
+      continue
+    }
+    const own = ownAccount(at)
+    if (own !== undefined) {
+      at += own.length
+      continue
+    }
+    if (isCode(word) || (vocabulary.card && cardBill.has(word))) {
+      at++
+      continue
+    }
+    if (vocabulary.card && word === 'final' && isCode(words[at + 1] ?? '')) {
+      at += 2
+      continue
+    }
+    if (
+      !isLetter(word) &&
+      vocabulary.owners.length > 0 &&
+      vocabulary.owners.every((owner) => owner.words.has(word))
+    ) {
+      named.add(word)
+      at++
+      continue
+    }
+    return { understood: false, bank }
+  }
+  const proven = vocabulary.owners.every(
+    (owner) => owner.first !== null && named.has(owner.first),
+  )
+  return { understood: named.size === 0 || proven, bank }
+}
+
+/** What either entry of a pair may say: its owners, its two banks. */
+const vocabularyOf = (
+  kind: RelationKind,
+  outflow: MatchableEntry,
+  inflow: MatchableEntry,
+): Vocabulary => ({
+  owners: [outflow, inflow].map((entry) => ownerOf(entry.ownerName ?? '')),
+  institutions: [outflow, inflow].map((entry) =>
+    institutionCore(entry.institution ?? ''),
+  ),
+  card: kind === 'card_payment',
+})
+
+/** Whether every description of the entry is understood (see `read`). */
+const understood = (entry: MatchableEntry, vocabulary: Vocabulary) =>
+  descriptionsOf(entry).every((text) => read(text, vocabulary).understood)
 
 /** Who a text names, without generic name words or institution wording. */
 const counterparties = (text: string, institutions: ReadonlySet<string>) =>
@@ -485,15 +610,17 @@ const compareSources = (
  * accounts' owner named on both sides (see `compareSources`), own-account
  * wording, or the other account's institution named are evidence it is the
  * person's own money moving; two different counterparties contradict it.
- * Any name other than the owner's outweighs every other evidence: a bank or
- * own-account wording never makes `Maria Silva` and `Joao Silva` one person,
- * and `Maria Silva` on both sides of the owner's accounts is a payment to
- * and from her, not proof the money stayed.
+ * A description with any word `read` cannot account for may name someone
+ * else, which outweighs every other evidence: a bank or own-account wording
+ * never makes `Maria Silva` and `Joao Silva` one person, and `Maria Silva`
+ * on both sides of the owner's accounts is a payment to and from her, not
+ * proof the money stayed.
  */
 const counterpartEvidence = (
   outflow: MatchableEntry,
   inflow: MatchableEntry,
 ) => {
+  const vocabulary = vocabularyOf('internal_transfer', outflow, inflow)
   const outInstitution = institutionWords(outflow)
   const inInstitution = institutionWords(inflow)
   const institutions = new Set([...outInstitution, ...inInstitution])
@@ -502,15 +629,10 @@ const counterpartEvidence = (
     descriptionsOf(inflow).map((text) => counterparties(text, institutions)),
   )
   const different = compared === 'different'
-  const owners = [outflow, inflow].map((entry) =>
-    ownerOf(entry.ownerName ?? '', institutions),
+  const thirdParty = ![outflow, inflow].every((entry) =>
+    understood(entry, vocabulary),
   )
-  const thirdParty = [outflow, inflow].some((entry) =>
-    descriptionsOf(entry).some((text) =>
-      namesThirdParty(text, owners, institutions),
-    ),
-  )
-  const reasons: Array<string> = []
+  const reasons: Array<string> = thirdParty ? ['unrecognized_words'] : []
   if (compared === 'same')
     reasons.push(thirdParty ? 'same_third_party' : 'same_counterparty')
   if (different) reasons.push('different_counterparties')
@@ -549,9 +671,6 @@ const counterpartEvidence = (
   }
 }
 
-// Wording about the card being paid, which names no payee.
-const cardWords = new Set(['fatura', 'final', 'credito', 'cartoes'])
-
 // Wording on the paying side that says the money goes to a card bill, not
 // just that something was paid.
 const cardBillWording = /\b(fatura|cartao|cartoes)\b/
@@ -565,18 +684,21 @@ const cardBillWording = /\b(fatura|cartao|cartoes)\b/
  * payer.
  */
 const cardTarget = (outflow: MatchableEntry, card: MatchableEntry) => {
-  const issuer = institutionWords(card)
-  // Every word that could name an issuer or payee, read past the shared
-  // description filter (which drops card brands such as `master`), so
-  // `Banco Master` names someone instead of no one.
-  const named = new Set(
-    [...wordsOf(outflow, (text) => identityWords(text, new Set()))].filter(
-      (word) => !cardWords.has(word),
-    ),
+  // Read with the issuer as the only bank and no one's name, so naming the
+  // paying bank, the owner or an unknown issuer (`Pag Bank`) is `other`.
+  const readings = descriptionsOf(outflow).map((text) =>
+    read(text, {
+      owners: [],
+      institutions: [institutionCore(card.institution ?? '')],
+      card: true,
+    }),
   )
   const bill = describes(outflow, cardBillWording)
-  const target =
-    named.size === 0 ? 'unnamed' : within(named, issuer) ? 'named' : 'other'
+  const target = readings.some((reading) => !reading.understood)
+    ? 'other'
+    : readings.some((reading) => reading.bank)
+      ? 'named'
+      : 'unnamed'
   return { bill, target } as const
 }
 
@@ -690,24 +812,19 @@ const evaluate = (
 const cardEvidence = (outflow: MatchableEntry, card: MatchableEntry) => {
   const { bill, target } = cardTarget(outflow, card)
   // A card receipt naming anyone but the owner (`Pagamento recebido de Maria
-  // Souza`, `de Silva S.A.`), in any source's report, may be someone else
-  // paying the card: never confirmed alone.
-  const institutions = new Set([
-    ...institutionWords(outflow),
-    ...institutionWords(card),
-  ])
-  const owner = ownerOf(card.ownerName ?? '', institutions)
-  const thirdPartyPayer = descriptionsOf(card).some((text) =>
-    namesThirdParty(text, [owner], institutions),
-  )
-  const reasons: Array<string> = []
+  // Souza`, `de Silva S.A.`, `de Ted`), in any source's report, may be
+  // someone else paying the card: never confirmed alone.
+  const vocabulary = vocabularyOf('card_payment', outflow, card)
+  const thirdPartyPayer = !understood(card, vocabulary)
+  const unrecognized = thirdPartyPayer || !understood(outflow, vocabulary)
+  const reasons: Array<string> = unrecognized ? ['unrecognized_words'] : []
   if (target === 'named') reasons.push('names_card_institution')
   if (target === 'other') reasons.push('names_other_payee')
   if (thirdPartyPayer) reasons.push('names_third_party_payer')
   return {
     different: target === 'other',
-    evidenced: bill && target !== 'other' && !thirdPartyPayer,
-    soleCard: bill && target === 'unnamed' && !thirdPartyPayer,
+    evidenced: bill && target !== 'other' && !unrecognized,
+    soleCard: bill && target === 'unnamed' && !unrecognized,
     reasons,
   }
 }
