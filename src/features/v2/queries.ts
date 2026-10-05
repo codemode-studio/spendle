@@ -19,6 +19,7 @@ import {
   storePatternsFn,
 } from './categories.functions'
 import { listImportsFn } from './imports.functions'
+import { investmentsSnapshotFn } from './investments.functions'
 import {
   categoryReviewFn,
   entriesPageFn,
@@ -115,6 +116,8 @@ export const v2QueryKeys = {
     [...financeQueryKeys.all, 'read', 'knowledge-base'] as const,
   providerMappings: () =>
     [...financeQueryKeys.all, 'read', 'knowledge-base', 'provider'] as const,
+  /** Under `read`, so every ledger invalidation refreshes positions too. */
+  investments: () => [...financeQueryKeys.all, 'read', 'investments'] as const,
   connectSettings: () =>
     [...financeQueryKeys.all, 'open-finance', 'connect-settings'] as const,
 }
@@ -241,6 +244,13 @@ export const importsOptions = () =>
     staleTime: 15_000,
   })
 
+export const investmentsOptions = () =>
+  queryOptions({
+    queryKey: v2QueryKeys.investments(),
+    queryFn: () => investmentsSnapshotFn(),
+    staleTime: 60_000,
+  })
+
 /** Same key as the V1 category analysis, which the ledger invalidations cover. */
 export const categoryLedgerOptions = () =>
   queryOptions({
@@ -305,6 +315,37 @@ export async function patchEntryCategory(
     { queryKey: v2QueryKeys.categoryReview() },
     (items) =>
       items?.filter((item) => item.inference.entryId !== input.entryId),
+  )
+  return () => {
+    for (const [queryKey, data] of previous)
+      queryClient.setQueryData(queryKey, data)
+  }
+}
+
+/**
+ * Shows the person's note on every cached transaction page at once;
+ * returns the rollback for a failed save.
+ */
+export async function patchEntryNote(
+  queryClient: QueryClient,
+  input: { entryId: string; note: string | null },
+) {
+  const filter = { queryKey: v2QueryKeys.entriesPages() }
+  await queryClient.cancelQueries(filter)
+  const previous = queryClient.getQueriesData(filter)
+  queryClient.setQueriesData<{ entries: ReadonlyArray<Entry> }>(
+    filter,
+    (page) =>
+      page && 'entries' in page
+        ? {
+            ...page,
+            entries: page.entries.map((entry) =>
+              entry.id === input.entryId
+                ? { ...entry, note: input.note }
+                : entry,
+            ),
+          }
+        : page,
   )
   return () => {
     for (const [queryKey, data] of previous)

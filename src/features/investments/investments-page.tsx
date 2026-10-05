@@ -3,13 +3,12 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
 import { Plus, Search, Target, Trash2, WalletCards } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
-import { EmptyState, Page, PageHeader, ProgressBar } from '#/components/ui'
+import { EmptyState, Page, PageHeader, StatusBadge } from '#/components/ui'
 import { ManualTransactionDialog } from '#/components/manual-transaction-dialog'
 import {
   AlertDialog,
@@ -55,6 +54,7 @@ import {
   SheetTitle,
 } from '#/components/ui/sheet'
 import { Spinner } from '#/components/ui/spinner'
+import { Switch } from '#/components/ui/switch'
 import {
   Table,
   TableBody,
@@ -68,19 +68,24 @@ import {
   formatMinorUnitsForInput,
   toMinorUnits,
 } from '#/domain/currency'
-import { formatShortDate } from '#/domain/period'
-import { invalidateFinance } from '#/features/finance/queries'
-
+import { formatShortDate, todayIso } from '#/domain/period'
 import {
-  classifyInvestmentTransactionFn,
-  deleteInvestmentMovementFn,
-  updateInvestmentPositionValueFn,
-} from './investments.functions'
-import type { getInvestmentsSnapshotFn } from './investments.functions'
-import { investmentQueryKeys, investmentsOptions } from './queries'
+  classifyMovementFn,
+  recordValuationFn,
+  unclassifyMovementFn,
+} from '#/features/v2/investments.functions'
+import {
+  accountsOptions,
+  categoriesOptions,
+  investmentsOptions,
+  invalidateAfterReactors,
+} from '#/features/v2/queries'
+import { errorMessage } from '#/lib/v2/errors'
+import { cn } from '#/lib/utils'
 
-type Snapshot = Awaited<ReturnType<typeof getInvestmentsSnapshotFn>>
-type Position = Snapshot['positions'][number]
+import type { InvestmentsSnapshot, Position } from '@spendle/server/api'
+
+type Movement = Position['movements'][number]
 
 export function InvestmentsPage() {
   const { data } = useSuspenseQuery(investmentsOptions())
@@ -88,9 +93,10 @@ export function InvestmentsPage() {
   const [assetClassId, setAssetClassId] = useState('all')
   const [showAll, setShowAll] = useState(false)
   const [entryOpen, setEntryOpen] = useState(false)
-  const [selectedPosition, setSelectedPosition] = useState<Position | null>(
-    null,
-  )
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Follow the position through refetches, so the sheet shows fresh values.
+  const selected =
+    data.positions.find((position) => position.id === selectedId) ?? null
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase('pt-BR')
@@ -116,14 +122,15 @@ export function InvestmentsPage() {
         }
       />
 
-      <StrategyHeader data={data} />
+      <PortfolioHeader data={data} />
 
       <Card className="mt-4 min-w-0">
         <CardHeader className="border-b">
           <div>
             <CardTitle>Carteira</CardTitle>
             <CardDescription>
-              Valor atual e aportes líquidos por posição
+              Valor em {formatShortDate(data.referenceDate)} e aportes líquidos
+              por posição
             </CardDescription>
           </div>
           <div className="col-span-full mt-2 flex flex-col gap-2 sm:flex-row">
@@ -168,7 +175,7 @@ export function InvestmentsPage() {
             <EmptyState
               icon={WalletCards}
               title="Nenhuma posição cadastrada"
-              description="Classifique uma entrada de corretora para criar a primeira posição."
+              description="Classifique uma entrada da corretora para criar a primeira posição."
               action={
                 <Button onClick={() => setEntryOpen(true)}>Nova entrada</Button>
               }
@@ -179,7 +186,9 @@ export function InvestmentsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="pl-5">Ativo</TableHead>
-                    <TableHead>Classe</TableHead>
+                    <TableHead className="hidden sm:table-cell">
+                      Classe
+                    </TableHead>
                     <TableHead className="hidden lg:table-cell">
                       Conta
                     </TableHead>
@@ -197,14 +206,14 @@ export function InvestmentsPage() {
                     <PositionRow
                       key={position.id}
                       position={position}
-                      onSelect={setSelectedPosition}
+                      onSelect={() => setSelectedId(position.id)}
                     />
                   ))}
                 </TableBody>
               </Table>
               {filtered.length === 0 ? (
                 <div className="px-5 py-12 text-center text-sm text-muted-foreground">
-                  Nenhuma posição encontrada.
+                  Nenhuma posição encontrada. Limpe a busca ou troque a classe.
                 </div>
               ) : (
                 <div className="flex flex-col gap-3 border-t px-5 py-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
@@ -235,96 +244,95 @@ export function InvestmentsPage() {
         data={data}
       />
       <PositionSheet
-        position={selectedPosition}
-        onOpenChange={(open) => !open && setSelectedPosition(null)}
+        position={selected}
+        onOpenChange={(open) => !open && setSelectedId(null)}
       />
     </Page>
   )
 }
 
-function StrategyHeader({ data }: { data: Snapshot }) {
+/** Total invested, how it splits across asset classes, and the emergency reserve. */
+function PortfolioHeader({ data }: { data: InvestmentsSnapshot }) {
   const { summary } = data
-  const ratio =
-    summary.reserveTargetCents > 0
-      ? Math.min(1, summary.reserveCurrentCents / summary.reserveTargetCents)
+  const byClass = data.classes
+    .map((assetClass) => ({
+      ...assetClass,
+      cents: data.positions
+        .filter((position) => position.assetClassId === assetClass.id)
+        .reduce((sum, position) => sum + (position.currentBrlCents ?? 0), 0),
+    }))
+    .filter((item) => item.cents > 0)
+  const share = (cents: number) =>
+    summary.totalBrlCents > 0
+      ? Math.round((cents / summary.totalBrlCents) * 100)
       : 0
-  const percentage = Math.round(ratio * 100)
-  const remaining = Math.max(
-    0,
-    summary.reserveTargetCents - summary.reserveCurrentCents,
-  )
   return (
     <Card>
       <CardContent className="grid gap-5 p-5 sm:p-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-        <div>
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Target className="size-4" aria-hidden="true" />
-            Reserva de emergência
-          </div>
-          <div className="mt-2 flex flex-wrap items-end gap-x-3 gap-y-2">
-            <p className="text-3xl font-semibold tracking-tight tabular-nums sm:text-4xl">
-              {formatCurrency(summary.reserveCurrentCents)}
-            </p>
-          </div>
-          {summary.reserveTargetCents > 0 ? (
-            <p className="mt-1 text-sm text-muted-foreground">
-              Meta de {formatCurrency(summary.reserveTargetCents)} · faltam{' '}
-              {formatCurrency(remaining)}
-            </p>
-          ) : (
-            <Link
-              to="/configuracoes"
-              search={{ tab: 'orcamento' }}
-              className="mt-1 inline-block text-sm text-primary hover:underline"
-            >
-              Definir meta da reserva
-            </Link>
-          )}
-          <div className="mt-4 max-w-2xl">
-            <ProgressBar
-              value={summary.reserveCurrentCents}
-              max={summary.reserveTargetCents}
-            />
-            <div className="mt-2 flex justify-between gap-3 text-xs text-muted-foreground">
-              <span>{formatCurrency(summary.reserveCurrentCents)}</span>
-              <span>{formatCurrency(summary.reserveTargetCents)}</span>
+        <div className="min-w-0">
+          <p className="text-sm text-muted-foreground">Patrimônio investido</p>
+          <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums sm:text-4xl">
+            {formatCurrency(summary.totalBrlCents)}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {summary.positionCount}{' '}
+            {summary.positionCount === 1 ? 'ativo' : 'ativos'} ·{' '}
+            {summary.accountCount}{' '}
+            {summary.accountCount === 1 ? 'conta' : 'contas'}
+            {summary.missingQuoteCount > 0
+              ? ` · ${summary.missingQuoteCount} sem cotação, fora do total`
+              : ''}
+          </p>
+          {byClass.length > 0 ? (
+            <div className="mt-4 max-w-2xl">
+              <div
+                className="flex h-2.5 overflow-hidden rounded-full bg-muted"
+                role="img"
+                aria-label={`Divisão por classe: ${byClass
+                  .map((item) => `${item.name} ${share(item.cents)}%`)
+                  .join(', ')}`}
+              >
+                {byClass.map((item) => (
+                  <span
+                    key={item.id}
+                    style={{
+                      width: `${(item.cents / summary.totalBrlCents) * 100}%`,
+                      background: item.color,
+                    }}
+                  />
+                ))}
+              </div>
+              <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                {byClass.map((item) => (
+                  <li key={item.id} className="flex items-center gap-1.5">
+                    <span
+                      aria-hidden="true"
+                      className="size-2 rounded-full"
+                      style={{ background: item.color }}
+                    />
+                    {item.name}{' '}
+                    <span className="tabular-nums">{share(item.cents)}%</span>
+                  </li>
+                ))}
+              </ul>
             </div>
-          </div>
+          ) : null}
         </div>
-        <div className="flex items-center gap-5 rounded-2xl bg-muted/35 px-5 py-4">
-          <div
-            aria-label={`${percentage}% da reserva concluída`}
-            className="grid size-28 shrink-0 place-items-center rounded-full"
-            style={{
-              background: `conic-gradient(var(--primary) ${percentage * 3.6}deg, var(--muted) 0)`,
-            }}
-          >
-            <div className="grid size-20 place-items-center rounded-full bg-card text-center">
-              <span>
-                <strong className="block text-xl tabular-nums">
-                  {percentage}%
-                </strong>
-                <small className="text-muted-foreground">concluído</small>
-              </span>
-            </div>
+        <div className="flex items-start gap-3 rounded-2xl bg-muted/35 px-5 py-4 lg:min-w-64">
+          <Target className="mt-0.5 size-4 text-primary" aria-hidden="true" />
+          <div>
+            <p className="text-sm text-muted-foreground">
+              Reserva de emergência
+            </p>
+            <p className="text-xl font-semibold tabular-nums">
+              {formatCurrency(summary.reserveBrlCents)}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {summary.reservePositionCount > 0
+                ? `${summary.reservePositionCount} ${summary.reservePositionCount === 1 ? 'posição' : 'posições'} · ${share(summary.reserveBrlCents)}% da carteira`
+                : 'Marque uma posição como reserva ao criá-la'}
+            </p>
           </div>
-          <dl className="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-1">
-            <div>
-              <dt className="text-xs text-muted-foreground">Patrimônio</dt>
-              <dd className="font-semibold tabular-nums">
-                {formatCurrency(summary.totalCents)}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Carteira</dt>
-              <dd>
-                {summary.positionCount}{' '}
-                {summary.positionCount === 1 ? 'ativo' : 'ativos'} ·{' '}
-                {summary.accountCount}{' '}
-                {summary.accountCount === 1 ? 'conta' : 'contas'}
-              </dd>
-            </div>
-          </dl>
         </div>
       </CardContent>
     </Card>
@@ -336,14 +344,14 @@ function PositionRow({
   onSelect,
 }: {
   position: Position
-  onSelect: (position: Position) => void
+  onSelect: () => void
 }) {
   return (
     <TableRow>
       <TableCell className="pl-5">
         <button
           type="button"
-          onClick={() => onSelect(position)}
+          onClick={onSelect}
           className="flex max-w-64 items-center gap-3 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <span
@@ -354,14 +362,14 @@ function PositionRow({
           <span className="min-w-0">
             <span className="block truncate font-medium">{position.name}</span>
             <span className="block truncate text-xs text-muted-foreground sm:hidden">
-              {position.accountName}
+              {position.assetClassName} · {position.accountName}
             </span>
           </span>
         </button>
       </TableCell>
-      <TableCell>
+      <TableCell className="hidden sm:table-cell">
         <span className="text-muted-foreground">{position.assetClassName}</span>
-        {position.goalName ? (
+        {position.reserve ? (
           <Badge variant="info" className="ml-2 hidden xl:inline-flex">
             Reserva
           </Badge>
@@ -371,30 +379,33 @@ function PositionRow({
         {position.accountName}
       </TableCell>
       <TableCell className="hidden text-right text-muted-foreground tabular-nums md:table-cell">
-        {formatCurrency(position.contributionAmountMinor, position.currency)}
+        {formatCurrency(position.contributedCents, position.currency)}
       </TableCell>
       <TableCell className="text-right tabular-nums">
         <span className="block font-medium">
-          {formatCurrency(position.currentAmountMinor, position.currency)}
+          {formatCurrency(position.currentCents, position.currency)}
         </span>
-        {position.currency !== 'BRL' && position.currentBaseCents !== null ? (
+        {position.currency !== 'BRL' && position.currentBrlCents !== null ? (
           <span className="block text-xs text-muted-foreground">
-            ≈ {formatCurrency(position.currentBaseCents)}
+            ≈ {formatCurrency(position.currentBrlCents)}
           </span>
         ) : null}
-        {position.valueKind === 'estimated' ? (
-          <span className="block text-[11px] text-muted-foreground">
-            estimado pelos aportes
-          </span>
-        ) : null}
+        <span className="block text-[11px] text-muted-foreground">
+          {position.valueKind === 'valuation' && position.valuedOn
+            ? `informado em ${formatShortDate(position.valuedOn)}`
+            : 'estimado pelos aportes'}
+        </span>
       </TableCell>
       <TableCell
-        className={`hidden pr-5 text-right font-medium tabular-nums sm:table-cell ${position.resultBaseCents !== null && position.resultBaseCents < 0 ? 'text-destructive' : 'text-success'}`}
+        className={cn(
+          'hidden pr-5 text-right font-medium tabular-nums sm:table-cell',
+          position.resultCents < 0 ? 'text-destructive' : 'text-success',
+        )}
       >
-        {position.resultBaseCents === null ? (
+        {position.valueKind === 'contributions' ? (
           <span className="text-muted-foreground">—</span>
         ) : (
-          `${position.resultBaseCents >= 0 ? '+' : '−'}${formatCurrency(Math.abs(position.resultBaseCents))}`
+          `${position.resultCents >= 0 ? '+' : '−'}${formatCurrency(Math.abs(position.resultCents), position.currency)}`
         )}
       </TableCell>
     </TableRow>
@@ -408,113 +419,151 @@ function NewEntryDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  data: Snapshot
+  data: InvestmentsSnapshot
 }) {
-  const [transactionId, setTransactionId] = useState('')
+  const [entryId, setEntryId] = useState('')
   const [positionId, setPositionId] = useState('new')
-  const [manualTransactionOpen, setManualTransactionOpen] = useState(false)
+  const [reserve, setReserve] = useState(false)
+  const [manualOpen, setManualOpen] = useState(false)
+  // Swapping dialogs waits for this one to finish closing, or the new one
+  // takes the closing click as a press outside and closes too.
+  const [manualNext, setManualNext] = useState(false)
   const queryClient = useQueryClient()
-  const classify = useServerFn(classifyInvestmentTransactionFn)
-  const transaction =
-    data.availableTransactions.find((item) => item.id === transactionId) ?? null
-  const compatiblePositions = transaction
+  const classify = useServerFn(classifyMovementFn)
+  const { data: accounts } = useSuspenseQuery(accountsOptions())
+  const { data: categories } = useSuspenseQuery(categoriesOptions())
+  const brokerageIds = new Set(data.accounts.map((account) => account.id))
+  const brokerage = accounts.filter((account) => brokerageIds.has(account.id))
+  const movement =
+    data.available.find((item) => item.entryId === entryId) ?? null
+  const compatible = movement
     ? data.positions.filter(
-        (position) =>
-          position.accountId === transaction.accountId &&
-          position.currency === transaction.currency,
+        (position) => position.accountId === movement.accountId,
       )
     : []
+  const accountName = (id: string) =>
+    data.accounts.find((account) => account.id === id)?.name ?? 'Conta'
+  const reset = () => {
+    setEntryId('')
+    setPositionId('new')
+    setReserve(false)
+  }
   const mutation = useMutation({
     mutationFn: classify,
     onSuccess: () => {
       toast.success('Entrada classificada na carteira.')
       onOpenChange(false)
-      setTransactionId('')
-      setPositionId('new')
-      void Promise.all([
-        queryClient.invalidateQueries({ queryKey: investmentQueryKeys.all }),
-        invalidateFinance(queryClient, 'ledger'),
-      ])
+      reset()
+      void invalidateAfterReactors(queryClient)
     },
     onError: (error) =>
       toast.error(
-        error instanceof Error
-          ? error.message
-          : 'Não foi possível classificar a entrada.',
+        errorMessage(error, 'Não foi possível classificar a entrada.'),
       ),
   })
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!transaction) return
+    if (!movement) return
     const form = new FormData(event.currentTarget)
     mutation.mutate({
       data:
         positionId === 'new'
           ? {
-              transactionId,
+              entryId,
               newPosition: {
-                name: String(form.get('name')),
+                name: String(form.get('name')).trim(),
                 assetClassId: String(form.get('assetClassId')),
-                goalId: String(form.get('goalId') || '') || undefined,
+                reserve,
               },
             }
-          : { transactionId, positionId },
+          : { entryId, positionId },
     })
   }
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
+      <Dialog
+        open={open}
+        onOpenChange={onOpenChange}
+        onOpenChangeComplete={(isOpen) => {
+          if (isOpen || !manualNext) return
+          setManualNext(false)
+          setManualOpen(true)
+        }}
+      >
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
           <form onSubmit={submit} className="grid gap-4">
             <DialogHeader>
               <DialogTitle>Nova entrada</DialogTitle>
               <DialogDescription>
-                Vincule uma movimentação real da corretora à posição que recebeu
-                o dinheiro.
+                Coloque uma movimentação da corretora na posição que recebeu o
+                dinheiro.
               </DialogDescription>
             </DialogHeader>
-            {data.availableTransactions.length === 0 ? (
+            {data.available.length === 0 ? (
               <EmptyState
                 icon={WalletCards}
-                title="Nenhuma movimentação disponível"
-                description="Registre uma entrada ou um resgate em uma conta de investimentos."
+                title="Nenhuma movimentação livre"
+                description={
+                  brokerage.length
+                    ? 'Registre o aporte ou o resgate na corretora, ou importe o extrato dela.'
+                    : 'Cadastre uma conta do tipo corretora em Configurações.'
+                }
                 action={
-                  <Button
-                    type="button"
-                    onClick={() => {
-                      onOpenChange(false)
-                      setManualTransactionOpen(true)
-                    }}
-                  >
-                    Nova transação
-                  </Button>
+                  brokerage.length ? (
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        setManualNext(true)
+                        onOpenChange(false)
+                      }}
+                    >
+                      Registrar movimentação
+                    </Button>
+                  ) : undefined
                 }
               />
             ) : (
               <FieldGroup>
                 <Field>
-                  <FieldLabel htmlFor="investment-transaction">
+                  <FieldLabel htmlFor="investment-movement">
                     Movimentação
                   </FieldLabel>
                   <NativeSelect
-                    id="investment-transaction"
-                    value={transactionId}
+                    id="investment-movement"
+                    value={entryId}
                     onChange={(event) => {
-                      setTransactionId(event.target.value)
+                      setEntryId(event.target.value)
                       setPositionId('new')
                     }}
                     required
                   >
                     <NativeSelectOption value="">Selecione</NativeSelectOption>
-                    {data.availableTransactions.map((item) => (
-                      <NativeSelectOption key={item.id} value={item.id}>
-                        {item.postedAt} · {item.description} ·{' '}
-                        {formatCurrency(item.amountMinor, item.currency)}
+                    {data.available.map((item) => (
+                      <NativeSelectOption
+                        key={item.entryId}
+                        value={item.entryId}
+                      >
+                        {formatShortDate(item.bookedOn)} · {item.description} ·{' '}
+                        {formatCurrency(item.amountCents, item.currency)}
                       </NativeSelectOption>
                     ))}
                   </NativeSelect>
+                  {brokerage.length ? (
+                    <Button
+                      type="button"
+                      variant="link"
+                      size="sm"
+                      className="h-auto justify-start px-0"
+                      onClick={() => {
+                        setManualNext(true)
+                        onOpenChange(false)
+                      }}
+                    >
+                      Não está na lista? Registrar movimentação
+                    </Button>
+                  ) : null}
                 </Field>
-                {transaction ? (
+                {movement ? (
                   <>
                     <Field>
                       <FieldLabel htmlFor="investment-position">
@@ -528,7 +577,7 @@ function NewEntryDialog({
                         <NativeSelectOption value="new">
                           Nova posição
                         </NativeSelectOption>
-                        {compatiblePositions.map((position) => (
+                        {compatible.map((position) => (
                           <NativeSelectOption
                             key={position.id}
                             value={position.id}
@@ -538,11 +587,12 @@ function NewEntryDialog({
                         ))}
                       </NativeSelect>
                       <FieldDescription>
-                        {transaction.accountName} ·{' '}
-                        {transaction.kind === 'contribution'
-                          ? 'Aporte'
-                          : 'Resgate'}{' '}
-                        em {transaction.currency}
+                        {accountName(movement.accountId)} ·{' '}
+                        {movement.amountCents > 0 ? 'Aporte' : 'Resgate'} em{' '}
+                        {movement.currency}
+                        {movement.status === 'pending'
+                          ? ' · conta quando o banco confirmar'
+                          : ''}
                       </FieldDescription>
                     </Field>
                     {positionId === 'new' ? (
@@ -554,49 +604,41 @@ function NewEntryDialog({
                           <Input
                             id="investment-name"
                             name="name"
+                            minLength={2}
+                            maxLength={100}
                             placeholder="Ex.: Tesouro Selic 2029"
                             required
                           />
                         </Field>
-                        <FieldGroup className="grid gap-4 sm:grid-cols-2">
-                          <Field>
-                            <FieldLabel htmlFor="investment-class">
-                              Classe
-                            </FieldLabel>
-                            <NativeSelect
-                              id="investment-class"
-                              name="assetClassId"
-                              required
-                            >
-                              {data.classes.map((assetClass) => (
-                                <NativeSelectOption
-                                  key={assetClass.id}
-                                  value={assetClass.id}
-                                >
-                                  {assetClass.name}
-                                </NativeSelectOption>
-                              ))}
-                            </NativeSelect>
-                          </Field>
-                          <Field>
-                            <FieldLabel htmlFor="investment-goal">
-                              Objetivo
-                            </FieldLabel>
-                            <NativeSelect id="investment-goal" name="goalId">
-                              <NativeSelectOption value="">
-                                Sem objetivo
+                        <Field>
+                          <FieldLabel htmlFor="investment-class">
+                            Classe
+                          </FieldLabel>
+                          <NativeSelect
+                            id="investment-class"
+                            name="assetClassId"
+                            required
+                          >
+                            {data.classes.map((assetClass) => (
+                              <NativeSelectOption
+                                key={assetClass.id}
+                                value={assetClass.id}
+                              >
+                                {assetClass.name}
                               </NativeSelectOption>
-                              {data.goals.map((goal) => (
-                                <NativeSelectOption
-                                  key={goal.id}
-                                  value={goal.id}
-                                >
-                                  {goal.name}
-                                </NativeSelectOption>
-                              ))}
-                            </NativeSelect>
-                          </Field>
-                        </FieldGroup>
+                            ))}
+                          </NativeSelect>
+                        </Field>
+                        <Field orientation="horizontal">
+                          <Switch
+                            id="investment-reserve"
+                            checked={reserve}
+                            onCheckedChange={setReserve}
+                          />
+                          <FieldLabel htmlFor="investment-reserve">
+                            Faz parte da reserva de emergência
+                          </FieldLabel>
+                        </Field>
                       </>
                     ) : null}
                   </>
@@ -607,10 +649,10 @@ function NewEntryDialog({
               <DialogClose render={<Button type="button" variant="outline" />}>
                 Cancelar
               </DialogClose>
-              {data.availableTransactions.length ? (
+              {data.available.length ? (
                 <Button
                   type="submit"
-                  disabled={!transaction || mutation.isPending}
+                  disabled={!movement || mutation.isPending}
                 >
                   {mutation.isPending ? (
                     <Spinner data-icon="inline-start" />
@@ -623,22 +665,17 @@ function NewEntryDialog({
         </DialogContent>
       </Dialog>
       <ManualTransactionDialog
-        accounts={data.brokerageAccounts}
-        cards={[]}
-        categories={data.categories}
-        open={manualTransactionOpen}
-        onOpenChange={(nextOpen) => {
-          setManualTransactionOpen(nextOpen)
-          if (!nextOpen) onOpenChange(true)
-        }}
+        accounts={brokerage}
+        categories={categories.filter((category) => !category.system)}
+        open={manualOpen}
+        onOpenChange={setManualOpen}
         trigger={null}
         defaultDirection="inflow"
-        onCreated={(createdTransactionId) => {
-          setTransactionId(createdTransactionId)
+        onSaved={({ entryId: created }) => {
+          // Back to classifying, with the movement just registered chosen.
+          if (created) setEntryId(created)
           setPositionId('new')
-          void queryClient.invalidateQueries({
-            queryKey: investmentQueryKeys.all,
-          })
+          onOpenChange(true)
         }}
       />
     </>
@@ -653,42 +690,33 @@ function PositionSheet({
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
-  const updateValue = useServerFn(updateInvestmentPositionValueFn)
-  const deleteMovement = useServerFn(deleteInvestmentMovementFn)
-  const [deletingMovement, setDeletingMovement] = useState<
-    Position['movements'][number] | null
-  >(null)
+  const recordValuation = useServerFn(recordValuationFn)
+  const unclassify = useServerFn(unclassifyMovementFn)
+  const [removing, setRemoving] = useState<Movement | null>(null)
   const mutation = useMutation({
-    mutationFn: updateValue,
+    mutationFn: recordValuation,
     onSuccess: () => {
       toast.success('Valor atual atualizado.')
-      onOpenChange(false)
-      void Promise.all([
-        queryClient.invalidateQueries({ queryKey: investmentQueryKeys.all }),
-        invalidateFinance(queryClient, 'ledger'),
-      ])
+      void invalidateAfterReactors(queryClient)
     },
     onError: (error) =>
-      toast.error(
-        error instanceof Error ? error.message : 'Não foi possível atualizar.',
-      ),
+      toast.error(errorMessage(error, 'Não foi possível atualizar.')),
   })
-  const deleteMutation = useMutation({
-    mutationFn: deleteMovement,
-    onSuccess: () => {
-      toast.success('Lançamento removido da carteira.')
-      setDeletingMovement(null)
-      onOpenChange(false)
-      void Promise.all([
-        queryClient.invalidateQueries({ queryKey: investmentQueryKeys.all }),
-        invalidateFinance(queryClient, 'ledger'),
-      ])
+  const removal = useMutation({
+    mutationFn: unclassify,
+    onSuccess: (result) => {
+      toast.success(
+        result.positionDeleted
+          ? 'Lançamento e posição removidos da carteira.'
+          : 'Lançamento removido da carteira.',
+      )
+      setRemoving(null)
+      if (result.positionDeleted) onOpenChange(false)
+      void invalidateAfterReactors(queryClient)
     },
     onError: (error) =>
       toast.error(
-        error instanceof Error
-          ? error.message
-          : 'Não foi possível excluir o lançamento.',
+        errorMessage(error, 'Não foi possível remover o lançamento.'),
       ),
   })
   function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -699,7 +727,7 @@ function PositionSheet({
       mutation.mutate({
         data: {
           positionId: position.id,
-          amountMinor: toMinorUnits(
+          amountCents: toMinorUnits(
             String(form.get('amount')),
             position.currency,
           ),
@@ -707,9 +735,7 @@ function PositionSheet({
         },
       })
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : 'Informe um valor válido.',
-      )
+      toast.error(errorMessage(error, 'Informe um valor válido.'))
     }
   }
   return (
@@ -725,93 +751,126 @@ function PositionSheet({
                 <SheetTitle>{position.name}</SheetTitle>
                 <SheetDescription>
                   {position.assetClassName} · {position.accountName}
+                  {position.reserve ? ' · Reserva' : ''}
                 </SheetDescription>
               </SheetHeader>
-              <div className="grid min-w-0 grid-cols-1 gap-5 px-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Valor atual</p>
-                  <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">
-                    {formatCurrency(
-                      position.currentAmountMinor,
-                      position.currency,
-                    )}
-                  </p>
-                  {position.currency !== 'BRL' &&
-                  position.currentBaseCents !== null ? (
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      ≈ {formatCurrency(position.currentBaseCents)}
-                    </p>
-                  ) : null}
-                </div>
+              <div className="grid min-w-0 grid-cols-1 gap-5 px-4 pb-6">
+                <dl className="grid grid-cols-2 gap-3">
+                  <div>
+                    <dt className="text-sm text-muted-foreground">
+                      Valor atual
+                    </dt>
+                    <dd className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">
+                      {formatCurrency(position.currentCents, position.currency)}
+                    </dd>
+                    <dd className="text-xs text-muted-foreground">
+                      {position.valueKind === 'valuation' && position.valuedOn
+                        ? `informado em ${formatShortDate(position.valuedOn)}`
+                        : 'estimado pelos aportes'}
+                      {position.currency !== 'BRL' &&
+                      position.currentBrlCents !== null
+                        ? ` · ≈ ${formatCurrency(position.currentBrlCents)}`
+                        : ''}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-sm text-muted-foreground">
+                      Aportes líquidos
+                    </dt>
+                    <dd className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-muted-foreground">
+                      {formatCurrency(
+                        position.contributedCents,
+                        position.currency,
+                      )}
+                    </dd>
+                    {position.openingCents ? (
+                      <dd className="text-xs text-muted-foreground">
+                        inclui{' '}
+                        {formatCurrency(
+                          position.openingCents,
+                          position.currency,
+                        )}{' '}
+                        de abertura
+                      </dd>
+                    ) : null}
+                  </div>
+                </dl>
                 <form
+                  key={`${position.id}-${position.valuedOn ?? ''}-${position.currentCents}`}
                   onSubmit={submit}
                   className="grid gap-4 rounded-xl border p-4"
                 >
-                  <div>
-                    <h3 className="font-medium">Atualizar valor</h3>
-                    <p className="text-sm text-muted-foreground">
-                      Informe o total atual da posição em {position.currency}.
-                    </p>
+                  <h3 className="font-medium">Informar valor atual</h3>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field>
+                      <FieldLabel htmlFor="position-current-value">
+                        Total em {position.currency}
+                      </FieldLabel>
+                      <Input
+                        id="position-current-value"
+                        name="amount"
+                        inputMode="decimal"
+                        defaultValue={formatMinorUnitsForInput(
+                          position.currentCents,
+                          position.currency,
+                        )}
+                        required
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="position-current-date">
+                        Em
+                      </FieldLabel>
+                      <Input
+                        id="position-current-date"
+                        name="asOf"
+                        type="date"
+                        defaultValue={todayIso()}
+                        required
+                      />
+                    </Field>
                   </div>
-                  <Field>
-                    <FieldLabel htmlFor="position-current-value">
-                      Valor em {position.currency}
-                    </FieldLabel>
-                    <Input
-                      id="position-current-value"
-                      name="amount"
-                      inputMode="decimal"
-                      defaultValue={formatMinorUnitsForInput(
-                        position.currentAmountMinor,
-                        position.currency,
-                      )}
-                      required
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="position-current-date">
-                      Data
-                    </FieldLabel>
-                    <Input
-                      id="position-current-date"
-                      name="asOf"
-                      type="date"
-                      defaultValue={
-                        position.currentAt ??
-                        new Date().toISOString().slice(0, 10)
-                      }
-                      required
-                    />
-                  </Field>
                   <Button type="submit" disabled={mutation.isPending}>
                     {mutation.isPending ? (
                       <Spinner data-icon="inline-start" />
                     ) : null}
-                    Salvar valor atual
+                    Salvar valor
                   </Button>
                 </form>
                 {position.movements.length ? (
-                  <div>
+                  <section>
                     <h3 className="mb-2 font-medium">Movimentações</h3>
-                    <div className="grid grid-cols-1 gap-2">
+                    <ul className="grid grid-cols-1 gap-2">
                       {position.movements.map((movement) => (
-                        <div
-                          key={movement.id}
+                        <li
+                          key={movement.entryId}
                           className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2"
                         >
                           <span className="min-w-0">
                             <span className="block truncate text-sm font-medium">
-                              {movement.transaction.description}
+                              {movement.description}
                             </span>
-                            <span className="text-xs text-muted-foreground">
-                              {formatShortDate(movement.transaction.postedAt)}
+                            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                              {formatShortDate(movement.bookedOn)}
+                              {movement.counted ? null : (
+                                <StatusBadge tone="warning">
+                                  {movement.status === 'pending'
+                                    ? 'Provisória'
+                                    : 'Agendada'}
+                                </StatusBadge>
+                              )}
                             </span>
                           </span>
                           <span className="flex shrink-0 items-center gap-1">
-                            <span className="font-medium tabular-nums">
-                              {movement.kind === 'contribution' ? '+' : '−'}
+                            <span
+                              className={cn(
+                                'font-medium tabular-nums',
+                                !movement.counted && 'text-muted-foreground',
+                              )}
+                            >
+                              {movement.amountCents > 0 ? '+' : '−'}
                               {formatCurrency(
-                                movement.amountMinor,
+                                Math.abs(movement.amountCents),
                                 position.currency,
                               )}
                             </span>
@@ -819,17 +878,42 @@ function PositionSheet({
                               type="button"
                               variant="ghost"
                               size="icon-sm"
-                              aria-label={`Excluir lançamento ${movement.transaction.description}`}
-                              title="Excluir lançamento"
-                              onClick={() => setDeletingMovement(movement)}
+                              aria-label={`Tirar ${movement.description} da carteira`}
+                              title="Tirar da carteira"
+                              onClick={() => setRemoving(movement)}
                             >
                               <Trash2 aria-hidden="true" />
                             </Button>
                           </span>
-                        </div>
+                        </li>
                       ))}
-                    </div>
-                  </div>
+                    </ul>
+                  </section>
+                ) : null}
+                {position.valuations.length ? (
+                  <section>
+                    <h3 className="mb-2 font-medium">Valores informados</h3>
+                    <ul className="divide-y rounded-lg border text-sm">
+                      {position.valuations
+                        .slice(0, 6)
+                        .map((valuation, index) => (
+                          <li
+                            key={`${valuation.asOf}-${index}`}
+                            className="flex justify-between px-3 py-2"
+                          >
+                            <span className="text-muted-foreground">
+                              {formatShortDate(valuation.asOf)}
+                            </span>
+                            <span className="tabular-nums">
+                              {formatCurrency(
+                                valuation.amountCents,
+                                position.currency,
+                              )}
+                            </span>
+                          </li>
+                        ))}
+                    </ul>
+                  </section>
                 ) : null}
               </div>
             </>
@@ -837,34 +921,29 @@ function PositionSheet({
         </SheetContent>
       </Sheet>
       <AlertDialog
-        open={Boolean(deletingMovement)}
-        onOpenChange={(open) => !open && setDeletingMovement(null)}
+        open={Boolean(removing)}
+        onOpenChange={(open) => !open && setRemoving(null)}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Excluir lançamento?</AlertDialogTitle>
+            <AlertDialogTitle>Tirar da carteira?</AlertDialogTitle>
             <AlertDialogDescription>
-              O vínculo com a carteira será removido. A transação continuará em
-              Transações e poderá ser classificada novamente. Se este for o
-              único lançamento, a posição também será removida.
+              O lançamento continua em Transações e pode ser classificado de
+              novo. Uma posição sem lançamentos, valores ou abertura também sai.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
-              disabled={deleteMutation.isPending}
+              disabled={removal.isPending}
               onClick={() =>
-                deletingMovement &&
-                deleteMutation.mutate({
-                  data: { movementId: deletingMovement.id },
-                })
+                removing &&
+                removal.mutate({ data: { entryId: removing.entryId } })
               }
             >
-              {deleteMutation.isPending ? (
-                <Spinner data-icon="inline-start" />
-              ) : null}
-              Excluir
+              {removal.isPending ? <Spinner data-icon="inline-start" /> : null}
+              Tirar
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

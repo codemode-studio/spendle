@@ -2,11 +2,19 @@ import { useSuspenseQuery } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 
 import { InvestmentsPage } from '#/features/investments/investments-page'
-import { investmentsOptions } from '#/features/investments/queries'
+import {
+  accountsOptions,
+  categoriesOptions,
+  investmentsOptions,
+} from '#/features/v2/queries'
 
 export const Route = createFileRoute('/investimentos')({
   loader: ({ context }) =>
-    context.queryClient.ensureQueryData(investmentsOptions()),
+    Promise.all([
+      context.queryClient.ensureQueryData(investmentsOptions()),
+      context.queryClient.ensureQueryData(accountsOptions()),
+      context.queryClient.ensureQueryData(categoriesOptions()),
+    ]),
   component: InvestmentsRoute,
 })
 

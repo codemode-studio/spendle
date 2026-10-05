@@ -3,7 +3,6 @@ import { z } from 'zod'
 
 import { currencySchema } from '#/domain/currency'
 
-import { createManualTransaction } from './finance.server'
 import {
   getFinanceSnapshot,
   getConfigurationSnapshot,
@@ -50,22 +49,6 @@ export const getFinanceSnapshotFn = createServerFn({ method: 'GET' })
     }),
   )
   .handler(({ data }) => getFinanceSnapshot(data.month))
-
-export const createManualTransactionFn = createServerFn({ method: 'POST' })
-  .validator(
-    z.object({
-      targetType: z.enum(['account', 'card']),
-      targetId: z.string().min(1),
-      postedAt: isoDateSchema,
-      description: z.string().trim().min(2).max(200),
-      direction: z.enum(['inflow', 'outflow']),
-      amountCents: z.number().int().positive(),
-      categoryId: z.string().min(1).optional(),
-      counterpartyAccountId: z.string().min(1).optional(),
-      notes: z.string().trim().max(200).optional(),
-    }),
-  )
-  .handler(({ data }) => serverInput(() => createManualTransaction(data)))
 
 export const updateSettingsFn = createServerFn({ method: 'POST' })
   .validator(
