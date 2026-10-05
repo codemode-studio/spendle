@@ -41,11 +41,11 @@ O classificador por modelo usa escolha tipada com probabilidade (avaliar TypeSaf
 
 1. Fundação: pacote, runtime, configuração, SQLite e migrações, testes, documentação para agentes
 2. Registro de eventos e reatores drenáveis
-3. Núcleo do razão: instituições, contas, cartões, observações, lançamentos, checkpoints
+3. Núcleo do razão: titulares, instituições, contas e cartões, fontes, observações imutáveis de transações e saldos
 4. Ingestão Pluggy: conexão, contas, sincronização com janela de 90 dias, saldos
 5. Webhooks Pluggy: endpoint autenticado, caixa de entrada idempotente, reator de sincronização, registro na Pluggy e exposição pública só desse caminho
 6. Importação manual: OFX e CSV, depois PDF
-7. Resolução de entidades e prova de saldo
+7. Lançamentos canônicos: resolução de entidades e prova de saldo entre checkpoints
 8. Reconciliação: transferências, faturas, estornos, parcelamentos
 9. Aprendizado de categorias
 10. API para o app web e troca do V1

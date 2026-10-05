@@ -9,11 +9,14 @@ import { ServerConfig } from '../config.ts'
 import { runMigrations } from './Migrations.ts'
 
 // The client opens one serialized connection with WAL and a busy timeout.
-// Foreign keys are a per-connection setting, so they are enabled here.
+// Foreign keys and recursive triggers are per-connection settings, so they
+// are enabled here. Recursive triggers make the implicit delete of an
+// `INSERT OR REPLACE` fire delete triggers, which guard immutable facts.
 const setup = Layer.effectDiscard(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
     yield* sql`PRAGMA foreign_keys = ON`
+    yield* sql`PRAGMA recursive_triggers = ON`
     yield* runMigrations
   }),
 )
