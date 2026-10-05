@@ -105,3 +105,36 @@ Cada lançamento recebe uma inferência (`category_inferences`) recalculada a pa
 7. Resposta do modelo, sempre em revisão até ser avaliado.
 
 Só decisões da pessoa e edições da base escrevem em `category_patterns`, sempre por `KnowledgeStore`. Respostas do modelo ficam em `model_classifications` e nunca viram padrão. Antes de gravar uma edição da base, `Categorizer.previewStoreEdit` mostra os lançamentos que mudariam. Ao mudar o resultado da política, incremente `POLICY_VERSION` em `src/categories/Policy.ts`: o servidor recalcula todo o histórico ao iniciar.
+
+## Migração do V1
+
+`migrate-v1` traz do banco do V1 o que a pessoa configurou e decidiu, sem copiar fatos importados: o V2 volta a observá-los nas fontes ([ADR 003](../../plans/adrs/003-backend-v2-effect.md)).
+
+```bash
+# Da raiz do repositório; o banco do V1 fica em DATABASE_URL, por padrão data/financas.db
+pnpm --filter @spendle/server migrate-v1 --from "$PWD/data/financas.db" --dry-run  # mostra o que mudaria
+pnpm --filter @spendle/server migrate-v1 --from "$PWD/data/financas.db"            # grava no banco do V2
+```
+
+O caminho é relativo a `packages/server`, por isso o `$PWD`. O banco do V1 é aberto só para leitura. O do V2 é o de `SPENDLE_DATABASE_PATH`. `--dry-run` executa a migração numa cópia do banco do V2 (feita com o backup do SQLite) e imprime o resumo: contagens por tipo, o que fica para trás e por quê, e as decisões que ainda esperam lançamentos. Rodar de novo não muda nada: cada registro trazido fica em `v1_import_map` e só é criado uma vez; depois disso, editá-lo é com a pessoa, no V2.
+
+| V1                                                                                 | V2                                                                                                                                                          |
+| ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Escopos de titularidade                                                            | Titulares (`company_br` e `company_us` viram `company`)                                                                                                     |
+| Contas e cartões, instituição, limite, fechamento e vencimento                     | Contas por `Accounts.open`; inativas ficam arquivadas. Sem instituição, `Sem instituição`. Cartão sem vencimento fica para trás                             |
+| Categorias                                                                         | Mesmos ids, nomes, cores, ícones, buckets, pai e estado. `transfer` e `card_payment` continuam do V2                                                        |
+| `knowledge_base` de categoria                                                      | `category_patterns` por `KnowledgeStore.importV1`, origem `v1_import`, com modo, direção, confirmações e correções. Padrão que o V2 já tem prevalece        |
+| Categoria escolhida na revisão de um lote                                          | Decisão (`v1_import`) quando o lançamento chega ao V2                                                                                                       |
+| Categoria trocada depois na lista de transações                                    | Idem. Reconhecida como na migração 0034 do V1: difere da sugestão concreta da importação. Se os padrões trazidos já dão a mesma categoria, não vira decisão |
+| Transferência, pagamento de fatura e estorno confirmados ou rejeitados pela pessoa | Decisão de vínculo quando as duas pontas chegam. Os que o V1 confirmou ou invalidou sozinho ficam para o conciliador do V2                                  |
+
+**Decisões esperando lançamentos.** O V1 não guarda uma identidade que o V2 reproduza (o V1 nunca usou a Pluggy, e os ids de linha dos arquivos dependem do leitor), então cada decisão guarda a conta, o dia, o valor e a descrição normalizada do movimento (`v1_import_movements`). Quando os lançamentos de uma conta mudam, o reator `v1-import` procura o único lançamento com o mesmo dia, valor e descrição, ou, se a descrição vier escrita de outro jeito, o único com o mesmo dia e valor. Só aplica quando o movimento também era único assim no V1; com dois candidatos, a decisão espera e aparece no resumo. A categoria entra por `Categorizer.decide` sem ensinar a base (o padrão já veio); o vínculo, por `Reconciliation.decide` ou `link`. Se a pessoa já decidiu aquele lançamento no V2, a decisão do V1 fica `superseded`. Uma rejeição espera até o conciliador sugerir o par.
+
+**O que não vem.** Lançamentos e saldos importados (o V2 os observa de novo), lançamentos digitados à mão, recorrências e seus padrões, divisões de lançamento, instrumentos de cartão, regras de categorização, orçamentos, metas, posições de investimento, vínculos manuais de débito com fatura (o V2 liga o pagamento ao crédito no cartão; confirme o vínculo quando os dois lados chegarem) e grupos de câmbio ou distribuição de lucros. O resumo lista cada item com o motivo.
+
+**Depois da migração.**
+
+1. Inicie o servidor (`pnpm --filter @spendle/server dev`).
+2. Pluggy: conecte cada banco no V2 (`POST /api/v2/open-finance/connect-token` e `POST /api/v2/open-finance/connections/:id/item`), ligue cada conta da Pluggy à conta migrada em vez de abrir outra (`PUT /api/v2/open-finance/provider-accounts/:id/link`) e sincronize (`POST /api/v2/open-finance/connections/:id/sync`).
+3. Arquivos: importe os mesmos OFX, CSV e PDF nas contas migradas (`POST /api/v2/imports`).
+4. As decisões se aplicam conforme os lançamentos chegam. `migrate-v1 --dry-run` de novo mostra o que ainda espera.
