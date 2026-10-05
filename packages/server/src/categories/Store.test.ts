@@ -94,6 +94,15 @@ describe('applyEdit', () => {
     ])
   })
 
+  it('promotes a short aggregator token to a prefix', () => {
+    let rows = teach([], 'MP *BELIVE', 'shopping')
+    rows = edit(rows, { _tag: 'PromoteToPrefix', id: rows[0]!.id })
+    assert.deepStrictEqual(
+      summary(rows).map(([pattern, mode]) => [pattern, mode]),
+      [['mp', 'prefix']],
+    )
+  })
+
   it('refuses patterns that are too short, taken or not an aggregator’s', () => {
     let rows = teach([], 'Padaria Real', 'groceries')
     rows = teach(rows, 'Mercado Bom', 'groceries')

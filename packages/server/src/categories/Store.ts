@@ -1,5 +1,6 @@
 import {
   isValidKnowledgePattern,
+  knowledgeAggregators,
   knowledgeKey,
   knowledgePrefixCandidate,
   matchesKnowledgePrefix,
@@ -254,7 +255,10 @@ const editPattern = (
   const row = merchantRow(rows, id)
   if (typeof row === 'string') return { ok: false, reason: row }
   const pattern = normalizeKnowledgePattern(typed)
-  if (!isValidKnowledgePattern(pattern))
+  // A known aggregator's token is a valid prefix even when short (`mp`).
+  const aggregatorPrefix =
+    matchMode === 'prefix' && knowledgeAggregators.has(pattern)
+  if (!aggregatorPrefix && !isValidKnowledgePattern(pattern))
     return { ok: false, reason: 'invalid_pattern' }
   if (
     rows.some(
