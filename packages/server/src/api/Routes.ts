@@ -11,6 +11,7 @@ import {
 } from './handlers/Categories.ts'
 import { EntriesHandlers } from './handlers/Entries.ts'
 import { ImportsHandlers } from './handlers/Imports.ts'
+import { InvestmentsHandlers } from './handlers/Investments.ts'
 import { ManualHandlers } from './handlers/Manual.ts'
 import { OpenFinanceHandlers } from './handlers/OpenFinance.ts'
 import { ReconciliationHandlers } from './handlers/Reconciliation.ts'
@@ -32,6 +33,7 @@ export const ApiHandlers = Layer.mergeAll(
   CategoryStoreHandlers,
   CategoryDecisionsHandlers,
   ManualHandlers,
+  InvestmentsHandlers,
 ).pipe(Layer.provide(ReadModel.layer), Layer.provideMerge(SecurityLive))
 
 /** `SpendleApi` as routes, with its OpenAPI document at `/api/v2/openapi.json`. */

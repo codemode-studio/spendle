@@ -10,6 +10,7 @@ import {
 } from './Categories.ts'
 import { EntriesApi } from './Entries.ts'
 import { ImportsApi } from './Imports.ts'
+import { InvestmentsApi } from './Investments.ts'
 import { ManualApi } from './Manual.ts'
 import { OpenFinanceApi } from './OpenFinance.ts'
 import { ReconciliationApi } from './Reconciliation.ts'
@@ -34,6 +35,7 @@ export class V2Api extends HttpApi.make('spendle-v2')
     CategoryStoreApi,
     CategoryDecisionsApi,
     ManualApi,
+    InvestmentsApi,
   )
   .middleware(ApiAuthorization) {}
 

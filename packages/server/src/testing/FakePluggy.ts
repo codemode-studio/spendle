@@ -13,6 +13,8 @@ import { Classifier } from '../categories/Classifier.ts'
 import { KnowledgeStore } from '../categories/KnowledgeStore.ts'
 import * as Reactor from '../events/Reactor.ts'
 import { Imports } from '../imports/Imports.ts'
+import { Investments } from '../investments/Investments.ts'
+import { Quotes } from '../investments/Quotes.ts'
 import * as Entries from '../ledger/Entries.ts'
 import { ManualEntries } from '../ledger/Manual.ts'
 import { Notes } from '../ledger/Notes.ts'
@@ -267,15 +269,16 @@ export const openFinanceTest = (
 
 /**
  * `openFinanceTest` with category learning, its reactors and the given
- * model, plus manual entries and notes.
+ * model, plus manual entries, notes and investments (without quotes).
  */
 export const categoriesTestWith = <A, E>(classifier: Layer.Layer<A, E>) =>
   Layer.mergeAll(
     Categorizer.reactor,
     Categorizer.modelReactor,
     ManualEntries.layer,
+    Investments.layer,
   ).pipe(
-    Layer.provideMerge(Notes.layer),
+    Layer.provideMerge(Layer.mergeAll(Notes.layer, Quotes.fixed({}))),
     Layer.provideMerge(Categorizer.Categorizer.layer),
     Layer.provideMerge(KnowledgeStore.layer),
     Layer.provideMerge(Categories.layer),

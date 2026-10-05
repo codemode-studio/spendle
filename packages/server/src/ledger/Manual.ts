@@ -216,18 +216,16 @@ const make = Effect.gen(function* () {
           ? undefined
           : input.categoryId
       if (categoryId !== undefined) {
-        const category = yield* categories
-          .get(categoryId)
-          .pipe(
-            Effect.catchTag('CategoriesError', () =>
-              Effect.fail(
-                new CategorizerError({
-                  reason: 'category_not_found',
-                  categoryId,
-                }),
-              ),
+        const category = yield* categories.get(categoryId).pipe(
+          Effect.catchTag('CategoriesError', () =>
+            Effect.fail(
+              new CategorizerError({
+                reason: 'category_not_found',
+                categoryId,
+              }),
             ),
-          )
+          ),
+        )
         if (category.system || !category.active)
           return yield* new CategorizerError({
             reason: 'category_not_assignable',

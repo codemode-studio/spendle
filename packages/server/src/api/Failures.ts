@@ -5,6 +5,7 @@ import { CategoriesError } from '../categories/Categories.ts'
 import { CategorizerError } from '../categories/Categorizer.ts'
 import { KnowledgeStoreError } from '../categories/KnowledgeStore.ts'
 import { ImportRejected } from '../imports/Imports.ts'
+import { InvestmentsError } from '../investments/Investments.ts'
 import {
   AccountNotFound,
   InvalidAccount,
@@ -108,8 +109,19 @@ const notes: Record<NotesError['reason'], Status> = {
   note_too_long: InvalidRequest,
 }
 
+const investments: Record<InvestmentsError['reason'], Status> = {
+  entry_not_found: NotFound,
+  position_not_found: NotFound,
+  asset_class_not_found: NotFound,
+  not_an_investment_account: Rejected,
+  position_account_mismatch: Rejected,
+  not_classified: NotFound,
+  invalid_input: InvalidRequest,
+}
+
 const isManualEntryError = Schema.is(ManualEntryError)
 const isNotesError = Schema.is(NotesError)
+const isInvestmentsError = Schema.is(InvestmentsError)
 const isAccountNotFound = Schema.is(AccountNotFound)
 const isCardsError = Schema.is(CardsError)
 const isCategoriesError = Schema.is(CategoriesError)
@@ -179,6 +191,8 @@ const known = (error: unknown): EndpointError | undefined => {
   if (isManualEntryError(error))
     return byReason(manual, error.reason, error.detail)
   if (isNotesError(error)) return byReason(notes, error.reason, error.entryId)
+  if (isInvestmentsError(error))
+    return byReason(investments, error.reason, error.detail)
   if (isKnowledgeStoreError(error))
     return byReason(store, error.reason, error.patternId ?? error.categoryId)
   return undefined
