@@ -12,7 +12,11 @@ import { EventLog } from '../events/EventLog.ts'
 import * as Reactor from '../events/Reactor.ts'
 import { entriesResolved } from '../ledger/Entries.ts'
 import { followDecisions } from './Decisions.ts'
-import { parseRelationKey, relationKey } from './Keys.ts'
+import {
+  parseRelationKey,
+  relationKey,
+  supersedingDecisionKey,
+} from './Keys.ts'
 import { matchRelations } from './Matching.ts'
 import type { Decision, MatchedRelation } from './Matching.ts'
 import { validRefund } from './Refunds.ts'
@@ -366,7 +370,10 @@ const make = Effect.gen(function* () {
   // comes from, when they apply to that relation alone, instead of sitting
   // beside them: the stored one keeps its observations, so its old verdict
   // cannot resurface once entries diverge again. A relation no stored
-  // decision maps to alone gets its own.
+  // decision maps to alone gets its own, under a superseding key when an
+  // earlier decision already has the relation's: that one keeps every
+  // observation it covered and its verdict on them, so reusing it would
+  // decide the other branches too (a link would split again).
   const writeDecision = Effect.fnUntraced(function* (
     key: string,
     decision: Decision,
@@ -375,18 +382,24 @@ const make = Effect.gen(function* () {
     const sources = [...followed.currentKeys]
       .filter(([, keys]) => keys.length === 1 && keys[0] === key)
       .map(([stored]) => stored)
-    if (sources.length === 0) return yield* write(key, decision)
-    for (const stored of sources) yield* write(stored, decision, key)
+    if (sources.length > 0) {
+      for (const stored of sources) yield* write(stored, decision, key)
+      return
+    }
+    const [taken] = yield* sql<{ revision: number }>`
+      SELECT (SELECT max(revision) FROM relation_decisions) + 1 AS revision
+      FROM relation_decisions WHERE key = ${key}
+    `
+    yield* taken
+      ? write(supersedingDecisionKey(key, taken.revision), decision, key)
+      : write(key, decision)
   })
 
   // The decision and the relations it changes commit together: a failed
   // rebuild leaves no decision behind that relations do not reflect.
-  const record = (key: string, decision: Decision) =>
+  const record = <E, R>(decided: Effect.Effect<void, E, R>) =>
     sql.withTransaction(
-      Effect.gen(function* () {
-        yield* writeDecision(key, decision)
-        yield* replaceRelations
-      }),
+      Effect.andThen(decided, Effect.asVoid(replaceRelations)),
     )
 
   /**
@@ -403,24 +416,22 @@ const make = Effect.gen(function* () {
     decision: Decision,
   ) {
     const known = (yield* relations).some((relation) => relation.key === key)
-    if (!known) {
-      const orphan = (yield* orphanedDecisions).find(
-        (found) => found.key === key,
-      )
-      if (!orphan)
-        return yield* new ReconciliationError({
-          reason: 'relation_not_found',
-          detail: key,
-        })
-      if (decision === 'confirmed')
-        return yield* orphan.reason === 'overlapping_confirmation'
-          ? new ReconciliationError({ reason: 'already_linked', detail: key })
-          : new ReconciliationError({
-              reason: 'entry_not_found',
-              detail: orphan.missing.join(', '),
-            })
-    }
-    yield* record(key, decision)
+    if (known) return yield* record(writeDecision(key, decision))
+    const orphan = (yield* orphanedDecisions).find((found) => found.key === key)
+    if (!orphan)
+      return yield* new ReconciliationError({
+        reason: 'relation_not_found',
+        detail: key,
+      })
+    if (decision === 'confirmed')
+      return yield* orphan.reason === 'overlapping_confirmation'
+        ? new ReconciliationError({ reason: 'already_linked', detail: key })
+        : new ReconciliationError({
+            reason: 'entry_not_found',
+            detail: orphan.missing.join(', '),
+          })
+    // An orphan is a stored decision: the person's verdict replaces its own.
+    yield* record(write(key, decision))
   })
 
   /**

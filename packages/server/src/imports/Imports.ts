@@ -260,11 +260,12 @@ const make = Effect.gen(function* () {
         })
         yield* sql`
           INSERT INTO import_files (id, sha256, account_id, source_id, file_name, format, content,
-            period_start, period_end, due_on, charges_only, floors_at_zero, line_count, rejected_rows, imported_at)
+            period_start, period_end, due_on, charges_only, floors_at_zero, advance_cents, line_count, rejected_rows,
+            imported_at)
           VALUES (${importId}, ${sha}, ${account.id}, ${source.id}, ${input.fileName}, ${statement.format},
             ${input.bytes}, ${statement.period?.start ?? null}, ${statement.period?.end ?? null},
             ${statement.dueOn ?? null}, ${statement.chargesOnly ? 1 : 0}, ${statement.floorsAtZero ? 1 : 0},
-            ${statement.lines.length}, ${statement.rejectedRows}, ${importedAt})
+            ${statement.advanceCents ?? null}, ${statement.lines.length}, ${statement.rejectedRows}, ${importedAt})
         `
         const recorded = yield* observations.recordTransactions({
           sourceId: source.id,

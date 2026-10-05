@@ -7,8 +7,16 @@ export const relationKey = (
   inflowId: string,
 ) => `${kind}:${outflowId}+${inflowId}`
 
+/**
+ * A decision about a pair that an earlier decision of the same key no longer
+ * covers alone gets its own key, `relationKey#revision`; it parses as the
+ * relation it decides.
+ */
+export const supersedingDecisionKey = (key: string, revision: number) =>
+  `${key}#${revision}`
+
 export const parseRelationKey = (key: string) => {
-  const [kind = '', pair = ''] = key.split(':')
+  const [kind = '', pair = ''] = (key.split('#')[0] ?? '').split(':')
   const [outflowId = '', inflowId = ''] = pair.split('+')
   return { kind, outflowId, inflowId }
 }

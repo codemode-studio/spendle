@@ -94,6 +94,7 @@ const issued = (
   dueOn: null,
   netOfPayments: true,
   floorsAtZero: false,
+  advanceCents: null,
   ...fields,
 })
 
@@ -989,6 +990,32 @@ describe('cardCycles', () => {
           ['2026-09-03', 0, 'open', null],
         ],
         0,
+        0,
+      ],
+    )
+    // Nothing due because R$ 450,00 was paid: the R$ 250,00 Inter prints as
+    // anticipated is the advance, and the rest paid the previous bill.
+    const floored = issued('2026-07-04', '2026-08-03', 0, {
+      floorsAtZero: true,
+      advanceCents: 25000,
+    })
+    assert.deepStrictEqual(outcome(45000, floored), [
+      [
+        ['2026-08-03', 0, 'paid', 0],
+        ['2026-09-03', 0, 'open', null],
+      ],
+      5000,
+      20000,
+    ])
+    assert.deepStrictEqual(
+      outcome(45000, floored, issued('2026-06-04', '2026-07-03', -20000)),
+      [
+        [
+          ['2026-07-03', 20000, 'paid', 0],
+          ['2026-08-03', 0, 'paid', 0],
+          ['2026-09-03', 0, 'open', null],
+        ],
+        5000,
         0,
       ],
     )
