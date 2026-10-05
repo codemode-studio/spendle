@@ -3,42 +3,28 @@ import * as Effect from 'effect/Effect'
 import * as FileSystem from 'effect/FileSystem'
 import * as Layer from 'effect/Layer'
 import * as Path from 'effect/Path'
-import * as Schema from 'effect/Schema'
 import * as SqlClient from 'effect/sql/SqlClient'
 
 /**
- * Synthetic V1 databases for migration tests, built with V1's own Drizzle
- * migrations (`drizzle/` at the repository root) so they have exactly the
- * schema the V1 app writes. Never point a test at a real V1 database.
+ * Synthetic V1 databases for migration tests, built from the frozen schema
+ * of the last V1 release (`v1import/fixtures/v1-schema.sql`, V1's Drizzle
+ * migrations applied to an empty file) so they have exactly the tables and
+ * seed rows the V1 app wrote. Never point a test at a real V1 database.
  */
 
-const drizzle = new URL('../../../../drizzle/', import.meta.url)
-
-const Journal = Schema.fromJsonString(
-  Schema.Struct({
-    entries: Schema.Array(Schema.Struct({ tag: Schema.String })),
-  }),
+const schemaFile = new URL(
+  '../v1import/fixtures/v1-schema.sql',
+  import.meta.url,
 )
-
-// SQL functions V1 registers for data backfills; on an empty database
-// those statements change nothing, and the client here cannot register them.
-const backfill =
-  /\b(?:normalize_description|merchant_signature|knowledge_pattern)\s*\(/
 
 const migrate = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const sql = yield* SqlClient.SqlClient
-  const dir = yield* path.fromFileUrl(drizzle)
-  const journal = yield* Schema.decodeEffect(Journal)(
-    yield* fs.readFileString(path.join(dir, 'meta', '_journal.json')),
-  )
-  for (const { tag } of journal.entries) {
-    const text = yield* fs.readFileString(path.join(dir, `${tag}.sql`))
-    for (const statement of text.split('--> statement-breakpoint')) {
-      if (statement.trim() === '' || backfill.test(statement)) continue
-      yield* sql.unsafe(statement)
-    }
+  const text = yield* fs.readFileString(yield* path.fromFileUrl(schemaFile))
+  for (const statement of text.split('--> statement-breakpoint')) {
+    if (statement.replace(/^--.*$/gm, '').trim() === '') continue
+    yield* sql.unsafe(statement)
   }
 })
 
