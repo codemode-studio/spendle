@@ -6,6 +6,7 @@ import { EventLog } from '../events/EventLog.ts'
 import { Accounts, CardTerms } from '../ledger/Accounts.ts'
 import { Observations } from '../ledger/Observations.ts'
 import { ImportsTest } from '../testing/layers.ts'
+import { mercadoPagoStatement, syntheticPdf } from '../testing/SyntheticPdf.ts'
 import { Imports } from './Imports.ts'
 
 const utf8 = (text: string) => new TextEncoder().encode(text)
@@ -155,6 +156,11 @@ describe('Imports', () => {
             { accountId: account.id, bytes: ofx('USD') },
             { accountId: account.id, bytes: utf8('%PDF-1.7 binary') },
             {
+              accountId: account.id,
+              bytes: syntheticPdf(['Recibo de entrega', 'Obrigado']),
+            },
+            { accountId: card.id, bytes: syntheticPdf(mercadoPagoStatement) },
+            {
               accountId: card.id,
               bytes:
                 utf8(`<OFX><CREDITCARDMSGSRSV1><CCSTMTTRNRS><CCSTMTRS><CURDEF>BRL
@@ -174,6 +180,8 @@ describe('Imports', () => {
         assert.deepStrictEqual(reasons, [
           'currency_mismatch',
           'unsupported_format',
+          'unsupported_format',
+          'account_mismatch',
           'account_mismatch',
         ])
         assert.strictEqual((yield* observations.current(account.id)).length, 0)
@@ -202,6 +210,88 @@ describe('Imports', () => {
         ],
       )
     }).pipe(Effect.provide(ImportsTest)),
+  )
+
+  it.effect('imports a PDF account statement with its closing balance', () =>
+    Effect.gen(function* () {
+      const { imports, observations, open } = yield* setup
+      const account = yield* open('Mercado Pago')
+      const result = yield* imports.importFile({
+        accountId: account.id,
+        fileName: 'extrato-2026-08.pdf',
+        bytes: syntheticPdf(mercadoPagoStatement),
+      })
+      assert.deepStrictEqual(
+        [result.format, result.recorded, result.period, result.closingBalance],
+        [
+          'pdf',
+          2,
+          { start: '2026-08-01', end: '2026-08-02' },
+          { asOf: '2026-08-02', cents: 90000 },
+        ],
+      )
+      const current = yield* observations.current(account.id)
+      assert.deepStrictEqual(
+        current.map((observation) => [
+          observation.externalId,
+          observation.bookedOn,
+          observation.amountCents,
+        ]),
+        [
+          ['id:90000001@1', '2026-08-01', 100000],
+          ['id:90000002@1', '2026-08-02', -10000],
+        ],
+      )
+      const sql = yield* SqlClient.SqlClient
+      const files = yield* sql<{ format: string }>`
+        SELECT format FROM import_files
+      `
+      assert.deepStrictEqual(files, [{ format: 'pdf' }])
+    }).pipe(Effect.provide(ImportsTest)),
+  )
+
+  it.effect(
+    'imports a PDF card bill with purchases out and the payment in',
+    () =>
+      Effect.gen(function* () {
+        const { imports, observations, card } = yield* setup
+        const result = yield* imports.importFile({
+          accountId: card.id,
+          fileName: 'fatura-2026-10.pdf',
+          bytes: syntheticPdf([
+            'Nu Pagamentos S.A.',
+            'RESUMO DA FATURA ATUAL',
+            'Data de vencimento: 10 OUT 2026',
+            'Periodo vigente: 03 SET a 03 OUT',
+            'Total de compras de todos os cartoes R$ 139,90',
+            'Total a pagar R$ 139,90',
+            'TRANSACOES DE 03 SET A 03 OUT',
+            '05 SET **** 1889 Mercado R$ 89,90',
+            '12 SET Plano celular R$ 50,00',
+            '20 SET Pagamento em 20 SET -R$ 300,00',
+          ]),
+        })
+        assert.deepStrictEqual(
+          [result.period, result.closingBalance],
+          [
+            { start: '2026-09-03', end: '2026-10-03' },
+            { asOf: '2026-10-03', cents: -13990 },
+          ],
+        )
+        const current = yield* observations.current(card.id)
+        assert.deepStrictEqual(
+          current.map((observation) => [
+            observation.bookedOn,
+            observation.description,
+            observation.amountCents,
+          ]),
+          [
+            ['2026-09-05', 'Mercado', -8990],
+            ['2026-09-12', 'Plano celular', -5000],
+            ['2026-09-20', 'Pagamento em 20 SET', 30000],
+          ],
+        )
+      }).pipe(Effect.provide(ImportsTest)),
   )
 
   it.effect('previews a file without storing it', () =>
