@@ -1,6 +1,6 @@
 # @spendle/server
 
-Backend V2 ([ADR 003](../../plans/adrs/003-backend-v2-effect.md)), o único backend do Spendle: o app web em `src/` o chama pelas server functions. Banco próprio em `data/v2/`.
+Backend V2 ([ADR 003](../../plans/adrs/003-backend-v2-effect.md)), o único backend do Spendle: o app web em `src/` o chama pelas server functions. Cada espaço familiar tem o próprio banco SQLite em `data/v2/spaces/`; `data/v2/control.sqlite` guarda os espaços e seus membros.
 
 ```bash
 vp run --filter @spendle/server dev     # http://localhost:4100
@@ -12,7 +12,8 @@ vp run --filter @spendle/server qa      # API em memória com dados sintéticos 
 
 | Variável                                      | Uso                                                                                                  |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `SPENDLE_DATABASE_PATH`                       | Banco SQLite; padrão `data/v2/spendle.sqlite`                                                        |
+| `SPENDLE_DATA_DIR`                            | Pasta do banco de controle e dos bancos dos espaços; padrão `data/v2`                                |
+| `SPENDLE_DATABASE_PATH`                       | Banco de antes dos espaços, usado por `claim-space` e `migrate-v1`; padrão `data/v2/spendle.sqlite`  |
 | `SPENDLE_SERVER_PORT`                         | Porta HTTP; padrão `4100`                                                                            |
 | `SPENDLE_SERVER_HOST`                         | Interface; padrão `127.0.0.1` (só esta máquina)                                                      |
 | `SPENDLE_API_TOKEN`                           | Token Bearer exigido em `/api/v2`; 32+ caracteres; opcional                                          |
@@ -22,6 +23,21 @@ vp run --filter @spendle/server qa      # API em memória com dados sintéticos 
 | `TYPESAFE_MODEL`, `TYPESAFE_API_URL`          | Modelo e endereço; padrão `jev-1.13.0` (versão fixa) em `api.typesafe.ai`                            |
 | `TYPESAFE_APPLY_THRESHOLD`                    | Probabilidade (0,5 a 1) a partir da qual a resposta do modelo é aplicada; vazio, tudo vai à revisão  |
 | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`      | Assistente (análise mensal e perguntas); sem os dois, desligado. Modelo no formato `provedor/modelo` |
+
+## Espaços familiares
+
+Todos os dados pertencem a um espaço: contas, lançamentos, categorias, planejamento e conexões. Cada espaço tem o próprio banco e os próprios serviços e reatores; nenhuma consulta cruza espaços.
+
+- O app web envia o e-mail de quem entrou no cabeçalho `x-spendle-member`. Com `SPENDLE_API_TOKEN`, o token é verificado antes, e só ele torna o cabeçalho confiável.
+- O primeiro pedido de um e-mail sem espaço cria um espaço vazio para ele.
+- O webhook da Pluggy vai ao espaço cuja conexão tem o item ou, para um item novo, ao espaço da conexão que o pediu. Exclusões de item vão a todos os espaços.
+- Saúde (`/api/v2/health`) e o documento OpenAPI respondem sem token nem membro.
+
+Os dados de antes dos espaços continuam em `SPENDLE_DATABASE_PATH`. Enquanto ninguém os reivindica, a API não cria espaços e responde `unclaimed_database`. Rode uma vez, antes de entrar no app:
+
+```bash
+vp run --filter @spendle/server claim-space --email voce@gmail.com
+```
 
 ## Webhook da Pluggy
 

@@ -5,6 +5,7 @@ import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
 import * as Redacted from 'effect/Redacted'
+import * as Result from 'effect/Result'
 import * as Schema from 'effect/Schema'
 import * as Stream from 'effect/Stream'
 import * as HttpRouter from 'effect/http/HttpRouter'
@@ -149,94 +150,139 @@ export const authorizeWebhook = Effect.fn('PluggyWebhook.authorize')(function* (
     : Option.some({ status: 401, body: { error: 'unauthorized' } })
 })
 
+/** What a delivery is answered with. */
+export interface WebhookResult {
+  readonly status: number
+  readonly body: object
+}
+
 /**
- * Validates a delivery and stores it as an event. Pluggy's `eventId` is the
- * event id, so a retried delivery is stored once. The work happens in the
- * reactor; Pluggy only needs a fast 2xx.
+ * Validates a delivery: the secret, the size and the event shape. A refusal
+ * comes back as the answer to send; a valid event as its stored JSON.
  */
+export const parseWebhook = Effect.fn('PluggyWebhook.parse')(function* (input: {
+  readonly authorization: string | undefined
+  readonly body: string
+}) {
+  const refused = yield* authorizeWebhook(input.authorization)
+  if (Option.isSome(refused)) return Result.fail<WebhookResult>(refused.value)
+  if (new TextEncoder().encode(input.body).length > maximumBodyBytes) {
+    return Result.fail<WebhookResult>({
+      status: 413,
+      body: { error: 'too_large' },
+    })
+  }
+  // Store the body as Pluggy sent it, once it is known to be a valid event.
+  const json = yield* decodeJson(input.body).pipe(Effect.option)
+  const webhook = Option.isSome(json)
+    ? yield* decodeStored(json.value).pipe(Effect.option)
+    : Option.none<PluggyWebhook>()
+  if (Option.isNone(json) || Option.isNone(webhook)) {
+    return Result.fail<WebhookResult>({
+      status: 400,
+      body: { error: 'invalid_event' },
+    })
+  }
+  return Result.succeed({ json: json.value, webhook: webhook.value })
+})
+
+/**
+ * Stores a valid event. Pluggy's `eventId` is the event id, so a retried
+ * delivery is stored once. The work happens in the reactor; Pluggy only
+ * needs a fast 2xx.
+ */
+export const storeWebhook = Effect.fn('PluggyWebhook.store')(function* (event: {
+  readonly json: Schema.Json
+  readonly webhook: PluggyWebhook
+}) {
+  const log = yield* EventLog
+  const stored = yield* log.append([
+    {
+      type: webhookReceived,
+      streamId: event.webhook.itemId ?? event.webhook.event,
+      eventId: `pluggy:${event.webhook.eventId}`,
+      payload: event.json,
+    },
+  ])
+  return stored.length > 0
+})
+
+/** Validates a delivery and stores it in this database's event log. */
 export const acceptWebhook = Effect.fn('PluggyWebhook.accept')(
   function* (input: {
     readonly authorization: string | undefined
     readonly body: string
   }) {
-    const refused = yield* authorizeWebhook(input.authorization)
-    if (Option.isSome(refused)) return refused.value
-    if (new TextEncoder().encode(input.body).length > maximumBodyBytes) {
-      return { status: 413, body: { error: 'too_large' } }
-    }
-    // Store the body as Pluggy sent it, once it is known to be a valid event.
-    const json = yield* decodeJson(input.body).pipe(Effect.option)
-    const webhook = Option.isSome(json)
-      ? yield* decodeStored(json.value).pipe(Effect.option)
-      : Option.none<PluggyWebhook>()
-    if (Option.isNone(json) || Option.isNone(webhook)) {
-      return { status: 400, body: { error: 'invalid_event' } }
-    }
-
-    const log = yield* EventLog
-    const stored = yield* log.append([
-      {
-        type: webhookReceived,
-        streamId: webhook.value.itemId ?? webhook.value.event,
-        eventId: `pluggy:${webhook.value.eventId}`,
-        payload: json.value,
-      },
-    ])
+    const parsed = yield* parseWebhook(input)
+    if (Result.isFailure(parsed)) return parsed.failure
+    const stored = yield* storeWebhook(parsed.success)
     return {
       status: 202,
-      body: { accepted: true, duplicate: stored.length === 0 },
-    }
+      body: { accepted: true, duplicate: !stored },
+    } satisfies WebhookResult
   },
 )
 
-/** `POST /api/pluggy/webhook`, the only route meant to be reachable from the internet. */
-export const routes = HttpRouter.use(
-  Effect.fn(function* (router) {
-    yield* router.add(
-      'POST',
-      webhookPath,
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest
-        // Nothing is read from an unauthenticated caller.
-        const refused = yield* authorizeWebhook(request.headers.authorization)
-        if (Option.isSome(refused)) {
-          return HttpServerResponse.jsonUnsafe(refused.value.body, {
-            status: refused.value.status,
+/**
+ * `POST /api/pluggy/webhook`, the only route meant to be reachable from the
+ * internet. `accept` validates and stores a delivery read within the limits.
+ */
+export const routesWith = <E, R>(
+  accept: (input: {
+    readonly authorization: string | undefined
+    readonly body: string
+  }) => Effect.Effect<WebhookResult, E, R>,
+) =>
+  HttpRouter.use(
+    Effect.fn(function* (router) {
+      yield* router.add(
+        'POST',
+        webhookPath,
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest
+          // Nothing is read from an unauthenticated caller.
+          const refused = yield* authorizeWebhook(request.headers.authorization)
+          if (Option.isSome(refused)) {
+            return HttpServerResponse.jsonUnsafe(refused.value.body, {
+              status: refused.value.status,
+            })
+          }
+          const declared = Number(request.headers['content-length'] ?? '0')
+          if (declared > maximumBodyBytes) {
+            return HttpServerResponse.jsonUnsafe(
+              { error: 'too_large' },
+              { status: 413 },
+            )
+          }
+          // The limit also applies while streaming, for bodies without Content-Length.
+          const read = yield* readBody(bodySource(request)).pipe(Effect.result)
+          if (read._tag === 'Failure') {
+            return HttpServerResponse.jsonUnsafe(
+              { error: 'invalid_event' },
+              { status: 400 },
+            )
+          }
+          const body = read.success
+          if (Option.isNone(body)) {
+            return HttpServerResponse.jsonUnsafe(
+              { error: 'too_large' },
+              { status: 413 },
+            )
+          }
+          const result = yield* accept({
+            authorization: request.headers.authorization,
+            body: body.value,
           })
-        }
-        const declared = Number(request.headers['content-length'] ?? '0')
-        if (declared > maximumBodyBytes) {
-          return HttpServerResponse.jsonUnsafe(
-            { error: 'too_large' },
-            { status: 413 },
-          )
-        }
-        // The limit also applies while streaming, for bodies without Content-Length.
-        const read = yield* readBody(bodySource(request)).pipe(Effect.result)
-        if (read._tag === 'Failure') {
-          return HttpServerResponse.jsonUnsafe(
-            { error: 'invalid_event' },
-            { status: 400 },
-          )
-        }
-        const body = read.success
-        if (Option.isNone(body)) {
-          return HttpServerResponse.jsonUnsafe(
-            { error: 'too_large' },
-            { status: 413 },
-          )
-        }
-        const result = yield* acceptWebhook({
-          authorization: request.headers.authorization,
-          body: body.value,
-        })
-        return HttpServerResponse.jsonUnsafe(result.body, {
-          status: result.status,
-        })
-      }),
-    )
-  }),
-)
+          return HttpServerResponse.jsonUnsafe(result.body, {
+            status: result.status,
+          })
+        }),
+      )
+    }),
+  )
+
+/** The webhook route of a server with a single database. */
+export const routes = routesWith(acceptWebhook)
 
 /**
  * Turns Pluggy events into ledger work:
