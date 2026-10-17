@@ -10,7 +10,9 @@ jobs:
       - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: .node-version
-          cache: true
+          # The self-hosted runner keeps its pnpm store between runs; an
+          # Actions cache would upload and restore that whole store (GBs).
+          cache: false
           run-install: true
       - name: Setup check
         run: vp run setup:check
