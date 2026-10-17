@@ -154,10 +154,9 @@ const make = Effect.gen(function* () {
         UPDATE spaces SET written_at = ${at}
         WHERE id = ${space.id} AND written_at IS NULL
       `
-      written.add(space.id)
       return space
     })
-    return yield* sql.withTransaction(
+    const space = yield* sql.withTransaction(
       Effect.gen(function* () {
         const found = yield* findByMember(member)
         if (Option.isSome(found)) return yield* markWritten(found.value)
@@ -171,6 +170,9 @@ const make = Effect.gen(function* () {
         return yield* markWritten(space)
       }),
     )
+    // Remembered only once committed: a rolled-back mark must be made again.
+    if (options.write) written.add(space.id)
+    return space
   }, Effect.orDie)
 
   /** Registers an existing database as a new space owned by `email`. */
