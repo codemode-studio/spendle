@@ -124,7 +124,9 @@ if (command === 'inspect') {
   const child = spawn(
     process.execPath,
     [
-      resolve('node_modules/vite/bin/vite.js'),
+      // The project's Vite+; `vite` itself resolves to its core, which ships
+      // no CLI.
+      resolve('node_modules/vite-plus/bin/vp'),
       'dev',
       '--host',
       '127.0.0.1',
