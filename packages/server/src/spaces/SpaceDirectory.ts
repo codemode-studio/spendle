@@ -14,10 +14,14 @@ import * as SqlSchema from 'effect/sql/SqlSchema'
 
 import { ServerConfig } from '../config.ts'
 import Spaces from './Migrations/0001_spaces.ts'
+import SpaceWrites from './Migrations/0002_space_writes.ts'
 
 // The control database has its own migrations, separate from the ones every
 // space database runs. Append-only, like those.
-const migrations = { '0001_spaces': Spaces }
+const migrations = {
+  '0001_spaces': Spaces,
+  '0002_space_writes': SpaceWrites,
+}
 
 export const Space = Schema.Struct({
   id: Schema.String,
@@ -25,6 +29,12 @@ export const Space = Schema.Struct({
   databaseFile: Schema.String,
 })
 export type Space = typeof Space.Type
+
+export const Member = Schema.Struct({
+  email: Schema.String,
+  role: Schema.Literals(['owner', 'member']),
+})
+export type Member = typeof Member.Type
 
 /** A Pluggy delivery waiting to reach the spaces it belongs to. */
 export const PendingWebhook = Schema.Struct({
@@ -37,7 +47,14 @@ export type PendingWebhook = typeof PendingWebhook.Type
 export class SpaceDirectoryError extends Schema.TaggedError<SpaceDirectoryError>()(
   'SpaceDirectoryError',
   {
-    reason: Schema.Literals(['already_member', 'database_claimed']),
+    reason: Schema.Literals([
+      'already_member',
+      'database_claimed',
+      'not_owner',
+      'member_elsewhere',
+      'member_not_found',
+      'owner_stays',
+    ]),
     detail: Schema.String,
   },
 ) {}
@@ -100,11 +117,15 @@ const make = Effect.gen(function* () {
       sql`SELECT ${columns} FROM spaces s ORDER BY s.created_at, s.rowid`,
   })
 
-  const insert = Effect.fnUntraced(function* (space: Space, owner: string) {
+  const insert = Effect.fnUntraced(function* (
+    space: Space,
+    owner: string,
+    written: boolean,
+  ) {
     const at = yield* now
     yield* sql`
-      INSERT INTO spaces (id, name, database_file, created_at)
-      VALUES (${space.id}, ${space.name}, ${space.databaseFile}, ${at})
+      INSERT INTO spaces (id, name, database_file, created_at, written_at)
+      VALUES (${space.id}, ${space.name}, ${space.databaseFile}, ${at}, ${written ? at : null})
     `
     yield* sql`
       INSERT INTO space_members (email, space_id, role, added_at)
@@ -112,28 +133,46 @@ const make = Effect.gen(function* () {
     `
   })
 
+  // Known written spaces, so only a space's first write reaches the database.
+  const written = new Set<string>()
+
   /**
    * The space an email belongs to. The first request of an email nobody has
-   * added creates a space for it, with an empty database.
+   * added creates a space for it, with an empty database. A request that
+   * writes marks the space written in the same transaction, so a membership
+   * change (also a transaction) is either seen by it or refuses the move.
    */
   const spaceOf = Effect.fn('SpaceDirectory.spaceOf')(function* (
     email: string,
+    options: { readonly write?: boolean } = {},
   ) {
     const member = normalize(email)
-    return yield* sql.withTransaction(
+    const markWritten = Effect.fnUntraced(function* (space: Space) {
+      if (!options.write || written.has(space.id)) return space
+      const at = yield* now
+      yield* sql`
+        UPDATE spaces SET written_at = ${at}
+        WHERE id = ${space.id} AND written_at IS NULL
+      `
+      return space
+    })
+    const space = yield* sql.withTransaction(
       Effect.gen(function* () {
         const found = yield* findByMember(member)
-        if (Option.isSome(found)) return found.value
+        if (Option.isSome(found)) return yield* markWritten(found.value)
         const id = yield* crypto.randomUUIDv7
         const space: Space = {
           id,
           name: 'Família',
           databaseFile: `spaces/${id}.sqlite`,
         }
-        yield* insert(space, member)
-        return space
+        yield* insert(space, member, false)
+        return yield* markWritten(space)
       }),
     )
+    // Remembered only once committed: a rolled-back mark must be made again.
+    if (options.write) written.add(space.id)
+    return space
   }, Effect.orDie)
 
   /** Registers an existing database as a new space owned by `email`. */
@@ -163,7 +202,8 @@ const make = Effect.gen(function* () {
             name: 'Família',
             databaseFile,
           }
-          yield* insert(space, owner)
+          // Its data is what people had before spaces.
+          yield* insert(space, owner, true)
           return space
         }),
       )
@@ -196,6 +236,122 @@ const make = Effect.gen(function* () {
     if (claimed) legacyClaimed = true
     return claimed ? Option.none<string>() : Option.some(legacyPath)
   }).pipe(Effect.orDie)
+
+  const findCaller = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({
+      ...Space.fields,
+      role: Member.fields.role,
+      writtenAt: Schema.NullOr(Schema.String),
+      members: Schema.Number,
+    }),
+    execute: (email) => sql`
+      SELECT ${columns}, m.role,
+        s.written_at AS writtenAt,
+        (SELECT count(*) FROM space_members o WHERE o.space_id = s.id) AS members
+      FROM spaces s JOIN space_members m ON m.space_id = s.id
+      WHERE m.email = ${email}
+    `,
+  })
+  const findMembers = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: Member,
+    execute: (spaceId) => sql`
+      SELECT email, role FROM space_members WHERE space_id = ${spaceId}
+      ORDER BY role = 'owner' DESC, added_at, rowid
+    `,
+  })
+
+  /** An email's space and role, read together; the space is created on first use. */
+  const memberOf = Effect.fn('SpaceDirectory.memberOf')(function* (
+    email: string,
+  ) {
+    const space = yield* spaceOf(email)
+    const caller = yield* findCaller(normalize(email)).pipe(Effect.orDie)
+    // Read in one query, so the role always belongs to the space returned.
+    return Option.match(caller, {
+      onNone: () => ({ space, role: 'owner' as const }),
+      onSome: ({ id, name, databaseFile, role }) => ({
+        space: { id, name, databaseFile },
+        role,
+      }),
+    })
+  })
+
+  // The owner's space, checked inside the change's own transaction so a role
+  // read earlier can never authorize a change to another space.
+  const ownedBy = Effect.fnUntraced(function* (email: string) {
+    const caller = yield* findCaller(normalize(email))
+    if (Option.isNone(caller) || caller.value.role !== 'owner') {
+      return yield* new SpaceDirectoryError({
+        reason: 'not_owner',
+        detail: email,
+      })
+    }
+    return caller.value
+  })
+
+  const failure = (reason: SpaceDirectoryError['reason'], detail: string) =>
+    new SpaceDirectoryError({ reason, detail })
+
+  /**
+   * Adds `email` to the space `by` owns. Someone whose own space was never
+   * written to moves in; that space keeps its record and file, unused.
+   */
+  const addMember = Effect.fn('SpaceDirectory.addMember')(
+    function* (input: { readonly by: string; readonly email: string }) {
+      const email = normalize(input.email)
+      return yield* sql.withTransaction(
+        Effect.gen(function* () {
+          const owner = yield* ownedBy(input.by)
+          const at = yield* now
+          const current = yield* findCaller(email)
+          if (Option.isNone(current)) {
+            yield* sql`
+              INSERT INTO space_members (email, space_id, role, added_at)
+              VALUES (${email}, ${owner.id}, 'member', ${at})
+            `
+          } else if (current.value.id === owner.id) {
+            return yield* failure('already_member', email)
+          } else if (
+            current.value.members > 1 ||
+            current.value.writtenAt !== null
+          ) {
+            return yield* failure('member_elsewhere', email)
+          } else {
+            yield* sql`
+              UPDATE space_members SET space_id = ${owner.id}, role = 'member', added_at = ${at}
+              WHERE email = ${email}
+            `
+          }
+          return owner
+        }),
+      )
+    },
+    Effect.catchTag(['SqlError', 'SchemaError'], Effect.die),
+  )
+
+  /** Removes `email` from the space `by` owns; the owner stays. */
+  const removeMember = Effect.fn('SpaceDirectory.removeMember')(
+    function* (input: { readonly by: string; readonly email: string }) {
+      const email = normalize(input.email)
+      return yield* sql.withTransaction(
+        Effect.gen(function* () {
+          const owner = yield* ownedBy(input.by)
+          const current = yield* findCaller(email)
+          if (Option.isNone(current) || current.value.id !== owner.id) {
+            return yield* failure('member_not_found', email)
+          }
+          if (current.value.role === 'owner') {
+            return yield* failure('owner_stays', email)
+          }
+          yield* sql`DELETE FROM space_members WHERE email = ${email}`
+          return owner
+        }),
+      )
+    },
+    Effect.catchTag(['SqlError', 'SchemaError'], Effect.die),
+  )
 
   /** Stores a delivery once; false when its event was already received. */
   const receiveWebhook = Effect.fn('SpaceDirectory.receiveWebhook')(function* (
@@ -241,6 +397,10 @@ const make = Effect.gen(function* () {
     unclaimedLegacy,
     space: (id: string) => findById(id).pipe(Effect.orDie),
     list: findAll(undefined).pipe(Effect.orDie),
+    memberOf,
+    members: (spaceId: string) => findMembers(spaceId).pipe(Effect.orDie),
+    addMember,
+    removeMember,
     receiveWebhook,
     /** Deliveries not yet routed, oldest first. */
     pendingWebhooks: findPendingWebhooks(undefined).pipe(Effect.orDie),

@@ -6,6 +6,7 @@ import type { Entry } from '@spendle/server/api'
 import { financeQueryKeys, invalidateFinance } from '#/features/finance/queries'
 import type { FinanceInvalidationScope } from '#/features/finance/queries'
 
+import { getSpaceFn } from './space.functions'
 import {
   balanceProofFn,
   listAccountsFn,
@@ -201,6 +202,14 @@ export const assistantStatusOptions = () =>
     queryKey: assistantQueryKeys.status(),
     queryFn: () => assistantStatusFn(),
     staleTime: 5 * 60_000,
+  })
+
+/** The caller's family space and who belongs to it. */
+export const spaceOptions = () =>
+  queryOptions({
+    queryKey: ['space'] as const,
+    queryFn: () => getSpaceFn(),
+    staleTime: 60_000,
   })
 
 export const ownersOptions = () =>

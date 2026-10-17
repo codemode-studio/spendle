@@ -12,6 +12,7 @@ import { ServerConfig } from './config.ts'
 import { PluggyClient } from './openfinance/PluggyClient.ts'
 import * as Webhook from './openfinance/Webhook.ts'
 import { WebhookConfig } from './openfinance/WebhookConfig.ts'
+import { memberRoutes } from './spaces/Members.ts'
 import { spaceRoutes } from './spaces/Routes.ts'
 import { SpaceApps, warmSpaces } from './spaces/Space.ts'
 import { SpaceDirectory } from './spaces/SpaceDirectory.ts'
@@ -36,7 +37,7 @@ const SharedLive = Layer.mergeAll(
  * space, and Pluggy's webhook reaches the spaces its items belong to.
  */
 export const ServerLive = HttpRouter.serve(
-  Layer.mergeAll(spaceRoutes, webhookRoutes),
+  Layer.mergeAll(spaceRoutes, memberRoutes, webhookRoutes),
 ).pipe(
   Layer.provideMerge(Layer.mergeAll(warmSpaces, Webhook.registration)),
   Layer.provideMerge(SpaceWebhooks.layer),
