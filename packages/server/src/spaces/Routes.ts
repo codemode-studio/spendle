@@ -86,11 +86,10 @@ export const spaceRoutes = HttpRouter.use(
             { status: 503 },
           )
         }
-        const space = yield* directory.spaceOf(member)
         // Any write may record something a person decided; see `addMember`.
-        if (request.method !== 'GET' && request.method !== 'HEAD') {
-          yield* directory.markWritten(space.id)
-        }
+        const space = yield* directory.spaceOf(member, {
+          write: request.method !== 'GET' && request.method !== 'HEAD',
+        })
         const handle = yield* withSpace(
           space.id,
           SpaceApp.useSync((app) => app),

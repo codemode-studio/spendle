@@ -13,7 +13,7 @@ const reasonMessages: Record<string, string | undefined> = {
   not_owner: 'Só quem criou o espaço adiciona ou remove pessoas.',
   already_member: 'Essa pessoa já faz parte do espaço.',
   member_elsewhere:
-    'Essa conta já tem dados em outro espaço. Peça para a pessoa remover os dados de lá antes.',
+    'Essa conta já registrou algo no próprio espaço, por isso não pode entrar neste automaticamente.',
   member_not_found: 'Essa pessoa não faz parte do espaço. Recarregue a página.',
   owner_stays: 'Quem criou o espaço não pode ser removido.',
   qa_fixed_members: 'Na QA, as pessoas do espaço não mudam.',

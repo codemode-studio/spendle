@@ -133,18 +133,34 @@ const make = Effect.gen(function* () {
     `
   })
 
+  // Known written spaces, so only a space's first write reaches the database.
+  const written = new Set<string>()
+
   /**
    * The space an email belongs to. The first request of an email nobody has
-   * added creates a space for it, with an empty database.
+   * added creates a space for it, with an empty database. A request that
+   * writes marks the space written in the same transaction, so a membership
+   * change (also a transaction) is either seen by it or refuses the move.
    */
   const spaceOf = Effect.fn('SpaceDirectory.spaceOf')(function* (
     email: string,
+    options: { readonly write?: boolean } = {},
   ) {
     const member = normalize(email)
+    const markWritten = Effect.fnUntraced(function* (space: Space) {
+      if (!options.write || written.has(space.id)) return space
+      const at = yield* now
+      yield* sql`
+        UPDATE spaces SET written_at = ${at}
+        WHERE id = ${space.id} AND written_at IS NULL
+      `
+      written.add(space.id)
+      return space
+    })
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         const found = yield* findByMember(member)
-        if (Option.isSome(found)) return found.value
+        if (Option.isSome(found)) return yield* markWritten(found.value)
         const id = yield* crypto.randomUUIDv7
         const space: Space = {
           id,
@@ -152,7 +168,7 @@ const make = Effect.gen(function* () {
           databaseFile: `spaces/${id}.sqlite`,
         }
         yield* insert(space, member, false)
-        return space
+        return yield* markWritten(space)
       }),
     )
   }, Effect.orDie)
@@ -335,21 +351,6 @@ const make = Effect.gen(function* () {
     Effect.catchTag(['SqlError', 'SchemaError'], Effect.die),
   )
 
-  // Known written spaces, so only a space's first write reaches the database.
-  const written = new Set<string>()
-  /** Records that a space received a write; see `addMember`. */
-  const markWritten = Effect.fn('SpaceDirectory.markWritten')(function* (
-    spaceId: string,
-  ) {
-    if (written.has(spaceId)) return
-    const at = yield* now
-    yield* sql`
-        UPDATE spaces SET written_at = ${at}
-        WHERE id = ${spaceId} AND written_at IS NULL
-      `
-    written.add(spaceId)
-  }, Effect.orDie)
-
   /** Stores a delivery once; false when its event was already received. */
   const receiveWebhook = Effect.fn('SpaceDirectory.receiveWebhook')(function* (
     delivery: PendingWebhook,
@@ -398,7 +399,6 @@ const make = Effect.gen(function* () {
     members: (spaceId: string) => findMembers(spaceId).pipe(Effect.orDie),
     addMember,
     removeMember,
-    markWritten,
     receiveWebhook,
     /** Deliveries not yet routed, oldest first. */
     pendingWebhooks: findPendingWebhooks(undefined).pipe(Effect.orDie),
