@@ -70,7 +70,8 @@ const run = (input: Partial<PolicyInput>) =>
 
 const outcome = (
   inference:
-    { categoryId: string | null; origin: string; status: string } | undefined,
+    | { categoryId: string | null; origin: string; status: string }
+    | undefined,
 ) => inference && [inference.categoryId, inference.origin, inference.status]
 
 describe('categorize: provider categories', () => {

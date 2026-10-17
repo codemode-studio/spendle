@@ -4,7 +4,8 @@ import * as Predicate from 'effect/Predicate'
 
 import { EventLog } from '../events/EventLog.ts'
 import { CategoriesTest } from '../testing/layers.ts'
-import { Categories, CategoriesError, categoryChanged } from './Categories.ts'
+import type { CategoriesError } from './Categories.ts'
+import { Categories, categoryChanged } from './Categories.ts'
 
 // The domain reason a call fails with; other failures fail the test.
 const failure = <A, E, R>(effect: Effect.Effect<A, E | CategoriesError, R>) =>

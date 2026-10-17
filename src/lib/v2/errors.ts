@@ -86,7 +86,7 @@ const reasonMessages: Record<string, string | undefined> = {
   assistant_unavailable: 'O assistente não respondeu. Tente de novo.',
   invalid_report: 'A análise não fechou com os gastos. Tente de novo.',
   v2_unreachable:
-    'O servidor da API não respondeu. Inicie `pnpm --filter @spendle/server dev` e tente de novo.',
+    'O servidor da API não respondeu. Inicie `vp run --filter @spendle/server dev` e tente de novo.',
 }
 
 const tagMessages: Record<string, string | undefined> = {

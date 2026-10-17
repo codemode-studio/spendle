@@ -280,9 +280,7 @@ export function MonthlyOverview({
                         {item.label}
                       </dt>
                       <dd className="mt-1 text-2xl font-medium tracking-tight tabular-nums">
-                        {item.value === null
-                          ? 'Sem saldo registrado'
-                          : formatCurrency(item.value)}
+                        {formatCurrency(item.value ?? 0)}
                       </dd>
                     </div>
                   ))}
@@ -324,9 +322,7 @@ export function MonthlyOverview({
                                 'text-destructive',
                             )}
                           >
-                            {item.value === null
-                              ? 'Sem saldo registrado'
-                              : formatCurrency(item.value)}
+                            {formatCurrency(item.value ?? 0)}
                           </dd>
                         </div>
                       ))}

@@ -1,10 +1,10 @@
 # Working in this repository
 
-Spendle is V2-only: the web app in `src/` (TanStack Start routes, components, hooks and server functions) reads and writes everything through the V2 API in `packages/server`. The V1 server, its Drizzle database and its domain logic were removed; do not reintroduce financial rules, database access or provider calls in `src/`. A V1 SQLite file only enters through `pnpm --filter @spendle/server migrate-v1`.
+Spendle is V2-only: the web app in `src/` (TanStack Start routes, components, hooks and server functions) reads and writes everything through the V2 API in `packages/server`. The V1 server, its Drizzle database and its domain logic were removed; do not reintroduce financial rules, database access or provider calls in `src/`. A V1 SQLite file only enters through `vp run --filter @spendle/server migrate-v1`.
 
-- For UI, navigation, import-flow or query-invalidation changes, read [browser QA](.agents/skills/browser-qa/SKILL.md) and use the integrated browser against an isolated QA run. Browser automation is agent-driven; do not add an E2E framework just to run these checks.
-- Use `pnpm setup:check` after setup, focused Vitest files while editing, and `pnpm verify` (web and server) before delivery. Record skipped checks separately.
-- For concurrent worktrees, run `node scripts/setup-worktree.ts` (or let the t3.json "Setup Worktree" action run it) to install with `pnpm install --frozen-lockfile` and link the main checkout's `.env.local`. Start `pnpm qa:start <unused-port>`. It runs the app against an in-memory V2 QA API with synthetic data and a fake Pluggy. Do not share `data/`, SQLite WAL files, or imported sources between runs.
+- Browser or computer-use verification is opt-in: run it only when the developer explicitly requests or agrees to it. For an authorized pass, follow [browser QA](.agents/skills/browser-qa/SKILL.md). Do not add an E2E framework just to run these checks.
+- Use `vp run setup:check` after setup. Follow the focused verification guidance below; CI owns `vp run verify`.
+- For concurrent worktrees, run `node scripts/setup-worktree.ts` (or let the t3.json "Setup Worktree" action run it) to install with `vp install --frozen-lockfile` and link the main checkout's `.env.local`. When an authorized browser pass needs isolated state, use `vp run qa:start <unused-port>`. It runs the app against an in-memory V2 QA API with synthetic data and a fake Pluggy. Do not share `data/`, SQLite WAL files, or imported sources between runs.
 - Server functions in `src/features/v2/*.functions.ts` validate input with `Schema.toStandardSchemaV1` and call the API through `src/lib/v2/client.server.ts`; the browser never reaches the API. Their validators and query keys are functional boundaries, not redundant wrappers. Tests that need the API use `src/test/v2-api.ts`, which serves the real V2 routes in memory.
 - When a screen needs data the API does not expose, add the endpoint in `packages/server` with a server test instead of computing it in `src/`. `src/lib` holds presentation helpers only (formatting, periods, presets).
 - Preserve centavo precision, immutable imported facts, zero-difference import gating, both transfer sides, and frozen closed-budget allocations; those rules live in the server and are tested there.
@@ -12,14 +12,36 @@ Spendle is V2-only: the web app in `src/` (TanStack Start routes, components, ho
 - Scope UI types to the read model they need. Invalidation of financial reads includes configuration, planning, categories and paginated transactions; optimistic category edits must also cover cached transaction pages.
 - AI features (assistant, model classifier) are on by default when the server has their keys; there is no separate consent step. Model output never unlocks an import or teaches categories.
 
+## Development and process safety
+
+- Inspect existing dev servers before starting another. Reuse a suitable running instance for authorized read-only checks when its worktree and data are appropriate; do not restart or reconfigure the developer's active environment.
+- Mutating verification uses isolated synthetic data and fake providers. Never point a QA server at the developer's database or import sources. Start a separate QA run only when the authorized check needs it.
+- Track processes when starting them. Stop only your own captured process or a port owner whose working directory you have confirmed. Never kill processes by name or worktree pattern. Stop what you started before delivery unless asked to leave it running.
+- Use the `vp` CLI ([Vite+](https://viteplus.dev)) for every project command: `vp install`, `vp run <script>` (or `vpr <script>`), `vp test`, `vp lint`, `vp fmt` and `vp build`. Do not call `pnpm`, `npx`, `vitest`, `oxlint` or `oxfmt` directly; pnpm is only the package manager `vp` drives. Keep pinned dependencies. Development scripts should make required services clear; do not silently change ports, origins or shared environment files.
+
+## Verification
+
+- Choose the smallest proof that covers the change: `vp test run <files>` from the root for web tests, and from `packages/server` for server tests.
+- Lint and format with Oxc through Vite+; the `lint` and `fmt` sections of `vite.config.ts` cover the web app and `packages/server`. Check changed files with `vp lint <files>` and `vp fmt --check <files>`; `vp run fmt` formats and applies lint fixes. Run `git diff --check` before delivery. For code changes, run the affected package's typecheck: `vp run typecheck` for web or `vp run --filter @spendle/server typecheck` for server. Shared API contract changes need both.
+- Do not run repo-wide tests, builds or `vp run verify` unless the developer asks. CI runs the full gate. Broaden focused checks only when failures or a concrete cross-module risk require it, and explain why.
+- Test meaningful behavior and independent contracts. Backend behavior changes ship with focused tests. Do not add static-markup, prop, callback-wiring or source-text assertions that merely mirror the implementation. A logo, copy or styling change normally needs no new unit test.
+- Check all affected entry points and states, including desktop and mobile layouts, loading, empty, error and reverse actions where relevant. For an authorized browser pass, the primary agent checks the integrated result once; delegated workers do not each start servers.
+- Report checks actually run, failures and unverified behavior separately. Do not describe automated tests as browser coverage.
+
+## Implementation and documentation
+
+- Prefer the smallest model that makes correct behavior clear. Keep policy in pure domain code, complexity at adapters, transports thin and UI concerned with presentation. Preserve performance when fetching, invalidating, rendering lists or adding motion.
+- Shared UI components own their appearance. Use their variants and sizes; add a shared variant only for a shared concept. Feature-specific styling stays with the feature. Prefer inferred types and avoid `any`.
+- Update documentation when usage, a durable decision or a constraint changes. Do not add feature inventories, implementation transcripts or PR summaries. Explain local reasoning in a nearby comment; rewrite outdated guidance instead of appending a competing account.
+
 ## Backend V2 (`packages/server`)
 
 The V2 backend is an Effect 4 server with its own SQLite database (`data/v2/`) and the only backend; see [ADR 003](plans/adrs/003-backend-v2-effect.md). The V1 import (`src/v1import`) reads a V1 SQLite file; its tests build synthetic V1 databases from the frozen schema in `src/v1import/fixtures/v1-schema.sql`, which never changes.
 
-- Run `pnpm sync:effect-docs` once, then read `.repos/effect/LLMS.md` before writing Effect code. `.repos/` holds read-only references matching the pinned version; prefer their patterns over invented ones, never import from them, and resync when bumping `effect`.
+- Run `vp run sync:effect-docs` once, then read `.repos/effect/LLMS.md` before writing Effect code. `.repos/` holds read-only references matching the pinned version; prefer their patterns over invented ones, never import from them, and resync when bumping `effect`.
 - Effect 4 stable ships SQL, HTTP and testing as `effect/sql`, `effect/http`, `effect/http-api` and `effect/testing`. Older `effect/unstable/*` examples (including T3 Code's) need translating.
 - Import modules by namespace: `import * as Effect from 'effect/Effect'`. Services are `class X extends Context.Service<X, Shape>()('@spendle/server/<path>/X')` with a static `layer`; implement methods with `Effect.fn('X.method')`. Errors are `Schema.TaggedError` with the context needed to act on them.
-- Use `Clock`/`DateTime`, `Random`, `HttpClient`, `FileSystem` and `Path` services instead of globals or Node built-ins, and `Schema` instead of `JSON.parse` or hand-written guards. `pnpm --filter @spendle/server typecheck` runs the Effect diagnostics that enforce this.
+- Use `Clock`/`DateTime`, `Random`, `HttpClient`, `FileSystem` and `Path` services instead of globals or Node built-ins, and `Schema` instead of `JSON.parse` or hand-written guards. `vp run --filter @spendle/server typecheck` runs the Effect diagnostics that enforce this.
 - Persistence uses `SqlClient` with tagged-template queries and `SqlSchema` decoding. Migrations are statically imported in `src/persistence/Migrations.ts`, append-only, and never edited after merge.
 - Facts observed from banks and files are immutable; human decisions are durable; everything else is a projection that can be rebuilt from those two. A matcher or categorizer improvement must be able to rerun over history.
 - Tests use `@effect/vitest` (`it.effect`, `layer`) with `Sqlite.layerMemory`, not mocked repositories. Async flows expose a drain or receipt to wait on; a test that needs a sleep or timeout is wrong. Backend behavior changes ship with focused tests for that behavior, testing outcomes rather than mirroring the implementation.
@@ -33,7 +55,7 @@ The V2 backend is an Effect 4 server with its own SQLite database (`data/v2/`) a
 - Prefira gráficos e indicadores para comparações, progresso, limites e metas. Use rótulos curtos para distinguir valores, períodos e realizado versus previsto; remova legendas e parágrafos que apenas repetem o que o elemento já comunica.
 - Análises do assistente aparecem junto ao conteúdo relevante com o ícone de brilhos, sem rótulos como `Análise do assistente · IA` e sem um card interno só para o texto. Use espaçamento e tipografia para organizar o conteúdo.
 - Preserve nomes acessíveis nos controles de ícone, navegação por teclado e identificação dos estados além da cor. Mensagens de erro ou ausência de dados devem indicar uma ação útil.
-- Ao verificar uma mudança de UI, confira cada elemento afetado em desktop e celular: propósito, ação, estado e resultado precisam ser compreensíveis sem uma explicação externa. Corrija a apresentação antes de acrescentar texto de ajuda.
+- Quando a verificação de UI for autorizada, confira cada elemento afetado em desktop e celular: propósito, ação, estado e resultado precisam ser compreensíveis sem uma explicação externa. Corrija a apresentação antes de acrescentar texto de ajuda.
 
 <!-- intent-skills:start -->
 

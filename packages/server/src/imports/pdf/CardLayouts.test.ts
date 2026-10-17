@@ -284,14 +284,15 @@ describe('Inter card bill', () => {
       [
         advance(gross),
         advance(
-          gross.filter((item) => !/^Valor antecipado/.test(item.text)).map(
-            (item) =>
+          gross
+            .filter((item) => !/^Valor antecipado/.test(item.text))
+            .map((item) =>
               /^Fatura atual/.test(item.text)
                 ? { ...item, text: 'Fatura atual R$ 130,00' }
                 : /^Despesas do m/.test(item.text)
                   ? { ...item, text: 'Despesas do mês R$ 130,00' }
                   : item,
-          ),
+            ),
         ),
       ],
       [1_000, null],

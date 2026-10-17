@@ -64,7 +64,7 @@ if (command === 'inspect') {
 } else if (command === 'start') {
   const port = Number(argument ?? 3100)
   if (!Number.isInteger(port) || port < 1024 || port > 65535)
-    throw new Error('Usage: pnpm qa:start [port]')
+    throw new Error('Usage: vp run qa:start [port]')
   mkdirSync(root, { recursive: true })
   const directory = mkdtempSync(join(root, 'run-'))
   const url = `http://127.0.0.1:${port}`

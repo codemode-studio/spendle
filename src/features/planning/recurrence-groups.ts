@@ -27,11 +27,14 @@ export type RecurrenceDisplayRow =
       openOccurrences: RecurrenceSnapshot['occurrences']
       occurrence: RecurrenceSnapshot['occurrences'][number] | null
       acceptedMatch:
-        RecurrenceSnapshot['occurrences'][number]['matches'][number] | undefined
+        | RecurrenceSnapshot['occurrences'][number]['matches'][number]
+        | undefined
       latestAcceptedOccurrence:
-        RecurrenceSnapshot['occurrences'][number] | undefined
+        | RecurrenceSnapshot['occurrences'][number]
+        | undefined
       suggestedMatch:
-        RecurrenceSnapshot['occurrences'][number]['matches'][number] | null
+        | RecurrenceSnapshot['occurrences'][number]['matches'][number]
+        | null
     }
 
 export function buildRecurrenceGroups(

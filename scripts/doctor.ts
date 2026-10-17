@@ -4,9 +4,8 @@ import { resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { pathToFileURL } from 'node:url'
 
-console.log(
-  `Node ${process.version}; pnpm ${execFileSync('pnpm', ['--version'], { encoding: 'utf8' }).trim()}`,
-)
+const vp = execFileSync('vp', ['--version'], { encoding: 'utf8' })
+console.log(`Node ${process.version}; ${vp.split('\n')[0]}`)
 
 // The V2 server stores everything in SQLite through `node:sqlite`.
 const sqlite = new DatabaseSync(':memory:')

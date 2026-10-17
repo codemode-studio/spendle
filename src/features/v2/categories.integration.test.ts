@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it } from 'vite-plus/test'
 
 import { analyzeCategories } from '#/features/categories/analysis'
 import { v2 } from '#/lib/v2/client.server'

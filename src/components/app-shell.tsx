@@ -8,7 +8,6 @@ import {
   LayoutDashboard,
   Menu,
   PiggyBank,
-  PlugZap,
   Settings,
   Tags,
   Upload,
@@ -38,6 +37,7 @@ import { TooltipProvider } from '#/components/ui/tooltip'
 import { Toaster } from '#/components/ui/sonner'
 import { OnboardingCard } from '#/features/home/onboarding-card'
 import { SpendleLockup } from '#/components/spendle-logo'
+import { OpenFinanceLogo } from '#/components/open-finance-logo'
 
 const overviewNavigation = [
   { to: '/', label: 'Visão geral', icon: LayoutDashboard },
@@ -63,7 +63,7 @@ const managementNavigation = [
     to: '/configuracoes',
     search: { tab: 'open-finance' },
     label: 'Open Finance',
-    icon: PlugZap,
+    icon: OpenFinanceLogo,
   },
   {
     to: '/configuracoes',

@@ -11,7 +11,7 @@ import { toast } from 'sonner'
 import { useState } from 'react'
 
 import { BalanceCheckpointDialog } from '#/components/balance-checkpoint-dialog'
-import { EmptyState, Panel, SectionHeader, StatusBadge } from '#/components/ui'
+import { EmptyState, Panel, PageHeader, StatusBadge } from '#/components/ui'
 import { Button } from '#/components/ui/button'
 import {
   Dialog,
@@ -162,10 +162,10 @@ export function AccountsSection() {
   ].filter((group) => group.accounts.length > 0)
 
   return (
-    <div className="grid gap-6">
-      <SectionHeader
+    <>
+      <PageHeader
         title="Contas"
-        action={
+        actions={
           <Button
             type="button"
             onClick={() => {
@@ -178,193 +178,204 @@ export function AccountsSection() {
           </Button>
         }
       />
-      {groups.length ? (
-        groups.map((group) => (
-          <section key={group.title} className="grid gap-3">
-            {groups.length > 1 && (
-              <div className="flex items-baseline justify-between gap-3">
-                <h3 className="text-sm font-medium">{group.title}</h3>
-                <span className="font-mono text-xs text-muted-foreground tabular-nums">
-                  {sumByCurrency(group.accounts)
-                    .map(([currency, cents]) => formatCurrency(cents, currency))
-                    .join(' · ')}
-                </span>
-              </div>
-            )}
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {group.accounts.map((account) => {
-                const balance = currentBalance(account)
-                return (
-                  <InstrumentCard
-                    key={account.id}
-                    title={formatInstrumentName(account.name)}
-                    subtitle={[
-                      account.institutionName,
-                      ownerName.get(account.ownerId),
-                      currencies.size > 1 ? account.currency : null,
-                    ]
-                      .filter(Boolean)
+      <div className="grid gap-6">
+        {groups.length ? (
+          groups.map((group) => (
+            <section key={group.title} className="grid gap-3">
+              {groups.length > 1 && (
+                <div className="flex items-baseline justify-between gap-3">
+                  <h3 className="text-sm font-medium">{group.title}</h3>
+                  <span className="font-mono text-xs text-muted-foreground tabular-nums">
+                    {sumByCurrency(group.accounts)
+                      .map(([currency, cents]) =>
+                        formatCurrency(cents, currency),
+                      )
                       .join(' · ')}
-                    editLabel={`Editar ${formatInstrumentName(account.name)}`}
-                    onEdit={() => {
-                      setError('')
-                      setEditingId(account.id)
-                    }}
-                    metrics={[
-                      {
-                        label: 'Saldo',
-                        value: balance
-                          ? formatCurrency(
-                              balance.balanceCents,
-                              account.currency,
-                            )
-                          : '—',
-                        caption: balance
-                          ? `${formatDate(balance.asOf)} · ${balanceSourceLabels[balance.sourceKind]}`
-                          : 'Importe um extrato, conecte o banco ou informe o saldo',
-                      },
-                    ]}
-                    actions={<BalanceCheckpointDialog account={account} />}
-                    status={<AccountStatus account={account} />}
-                  />
-                )
-              })}
-            </div>
-          </section>
-        ))
-      ) : (
-        <Panel>
-          <EmptyState
-            icon={Building2}
-            title="Cadastre sua primeira conta"
-            description="Adicione a conta aqui ou conecte o banco pelo Open Finance."
-            action={
-              <Button
-                variant="outline"
-                nativeButton={false}
-                render={
-                  <Link to="/configuracoes" search={{ tab: 'open-finance' }} />
-                }
-              >
-                <Plug data-icon="inline-start" />
-                Conectar banco
-              </Button>
-            }
-          />
-        </Panel>
-      )}
-
-      {archived.length > 0 && (
-        <Panel title="Arquivadas">
-          <ul className="divide-y rounded-lg border">
-            {archived.map((account) => (
-              <li
-                key={account.id}
-                className="flex items-center justify-between gap-3 px-3 py-2"
-              >
-                <span className="min-w-0 truncate text-sm">
-                  {formatInstrumentName(account.name)}
-                  <span className="text-muted-foreground">
-                    {' '}
-                    · {account.institutionName}
                   </span>
-                </span>
+                </div>
+              )}
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {group.accounts.map((account) => {
+                  const balance = currentBalance(account)
+                  return (
+                    <InstrumentCard
+                      key={account.id}
+                      title={formatInstrumentName(account.name)}
+                      subtitle={[
+                        account.institutionName,
+                        ownerName.get(account.ownerId),
+                        currencies.size > 1 ? account.currency : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                      editLabel={`Editar ${formatInstrumentName(account.name)}`}
+                      onEdit={() => {
+                        setError('')
+                        setEditingId(account.id)
+                      }}
+                      metrics={[
+                        {
+                          label: 'Saldo',
+                          value: balance
+                            ? formatCurrency(
+                                balance.balanceCents,
+                                account.currency,
+                              )
+                            : '—',
+                          caption: balance
+                            ? `${formatDate(balance.asOf)} · ${balanceSourceLabels[balance.sourceKind]}`
+                            : 'Importe um extrato, conecte o banco ou informe o saldo',
+                        },
+                      ]}
+                      actions={<BalanceCheckpointDialog account={account} />}
+                      status={<AccountStatus account={account} />}
+                    />
+                  )
+                })}
+              </div>
+            </section>
+          ))
+        ) : (
+          <Panel>
+            <EmptyState
+              icon={Building2}
+              title="Cadastre sua primeira conta"
+              description="Adicione a conta aqui ou conecte o banco pelo Open Finance."
+              action={
                 <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={restoreMutation.isPending}
-                  onClick={() =>
-                    restoreMutation.mutate({ data: { accountId: account.id } })
+                  variant="outline"
+                  nativeButton={false}
+                  render={
+                    <Link
+                      to="/configuracoes"
+                      search={{ tab: 'open-finance' }}
+                    />
                   }
                 >
-                  <ArchiveRestore data-icon="inline-start" />
-                  Restaurar
+                  <Plug data-icon="inline-start" />
+                  Conectar banco
                 </Button>
-              </li>
-            ))}
-          </ul>
-        </Panel>
-      )}
+              }
+            />
+          </Panel>
+        )}
 
-      <Dialog
-        open={addOpen}
-        onOpenChange={(open) => {
-          if (!createMutation.isPending) setAddOpen(open)
-          if (!open) setError('')
-        }}
-      >
-        <DialogContent className="sm:max-w-lg">
-          <form onSubmit={submitCreate} className="grid gap-4">
-            <DialogHeader>
-              <DialogTitle>Adicionar conta</DialogTitle>
-              <DialogDescription>
-                Cadastre a conta antes de importar o extrato.
-              </DialogDescription>
-            </DialogHeader>
-            <AccountFormFields owners={owners} />
-            {error && <FieldError>{error}</FieldError>}
-            <DialogFooter>
-              <DialogClose render={<Button type="button" variant="outline" />}>
-                Cancelar
-              </DialogClose>
-              <Button type="submit" disabled={createMutation.isPending}>
-                {createMutation.isPending ? 'Salvando…' : 'Salvar conta'}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+        {archived.length > 0 && (
+          <Panel title="Arquivadas">
+            <ul className="divide-y rounded-lg border">
+              {archived.map((account) => (
+                <li
+                  key={account.id}
+                  className="flex items-center justify-between gap-3 px-3 py-2"
+                >
+                  <span className="min-w-0 truncate text-sm">
+                    {formatInstrumentName(account.name)}
+                    <span className="text-muted-foreground">
+                      {' '}
+                      · {account.institutionName}
+                    </span>
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={restoreMutation.isPending}
+                    onClick={() =>
+                      restoreMutation.mutate({
+                        data: { accountId: account.id },
+                      })
+                    }
+                  >
+                    <ArchiveRestore data-icon="inline-start" />
+                    Restaurar
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </Panel>
+        )}
 
-      <Dialog
-        open={Boolean(editing)}
-        onOpenChange={(open) => {
-          if (!open && !updateMutation.isPending) setEditingId(null)
-          if (!open) setError('')
-        }}
-      >
-        {editing && (
+        <Dialog
+          open={addOpen}
+          onOpenChange={(open) => {
+            if (!createMutation.isPending) setAddOpen(open)
+            if (!open) setError('')
+          }}
+        >
           <DialogContent className="sm:max-w-lg">
-            <form onSubmit={submitEdit} className="grid gap-4">
+            <form onSubmit={submitCreate} className="grid gap-4">
               <DialogHeader>
-                <DialogTitle>Editar conta</DialogTitle>
+                <DialogTitle>Adicionar conta</DialogTitle>
                 <DialogDescription>
-                  O saldo e o histórico importado não mudam.
+                  Cadastre a conta antes de importar o extrato.
                 </DialogDescription>
               </DialogHeader>
-              <AccountFormFields owners={owners} account={editing} />
+              <AccountFormFields owners={owners} />
               {error && <FieldError>{error}</FieldError>}
-              <DialogFooter className="sm:justify-between">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={archiveMutation.isPending}
-                  onClick={() =>
-                    archiveMutation.mutate({
-                      data: { accountId: editing.id },
-                    })
-                  }
+              <DialogFooter>
+                <DialogClose
+                  render={<Button type="button" variant="outline" />}
                 >
-                  <Archive data-icon="inline-start" />
-                  Arquivar
+                  Cancelar
+                </DialogClose>
+                <Button type="submit" disabled={createMutation.isPending}>
+                  {createMutation.isPending ? 'Salvando…' : 'Salvar conta'}
                 </Button>
-                <div className="flex flex-col-reverse gap-2 sm:flex-row">
-                  <DialogClose
-                    render={<Button type="button" variant="outline" />}
-                  >
-                    Cancelar
-                  </DialogClose>
-                  <Button type="submit" disabled={updateMutation.isPending}>
-                    {updateMutation.isPending
-                      ? 'Salvando…'
-                      : 'Salvar alterações'}
-                  </Button>
-                </div>
               </DialogFooter>
             </form>
           </DialogContent>
-        )}
-      </Dialog>
-    </div>
+        </Dialog>
+
+        <Dialog
+          open={Boolean(editing)}
+          onOpenChange={(open) => {
+            if (!open && !updateMutation.isPending) setEditingId(null)
+            if (!open) setError('')
+          }}
+        >
+          {editing && (
+            <DialogContent className="sm:max-w-lg">
+              <form onSubmit={submitEdit} className="grid gap-4">
+                <DialogHeader>
+                  <DialogTitle>Editar conta</DialogTitle>
+                  <DialogDescription>
+                    O saldo e o histórico importado não mudam.
+                  </DialogDescription>
+                </DialogHeader>
+                <AccountFormFields owners={owners} account={editing} />
+                {error && <FieldError>{error}</FieldError>}
+                <DialogFooter className="sm:justify-between">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={archiveMutation.isPending}
+                    onClick={() =>
+                      archiveMutation.mutate({
+                        data: { accountId: editing.id },
+                      })
+                    }
+                  >
+                    <Archive data-icon="inline-start" />
+                    Arquivar
+                  </Button>
+                  <div className="flex flex-col-reverse gap-2 sm:flex-row">
+                    <DialogClose
+                      render={<Button type="button" variant="outline" />}
+                    >
+                      Cancelar
+                    </DialogClose>
+                    <Button type="submit" disabled={updateMutation.isPending}>
+                      {updateMutation.isPending
+                        ? 'Salvando…'
+                        : 'Salvar alterações'}
+                    </Button>
+                  </div>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          )}
+        </Dialog>
+      </div>
+    </>
   )
 }
 

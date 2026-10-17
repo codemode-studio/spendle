@@ -215,7 +215,10 @@ export function usePlanningController(data: PlanningData) {
         data: {
           name: String(form.get('name')),
           type: String(form.get('type')) as
-            'emergency_reserve' | 'medium_term' | 'retirement' | 'other',
+            | 'emergency_reserve'
+            | 'medium_term'
+            | 'retirement'
+            | 'other',
           targetCents: toCents(String(form.get('target'))),
           currentCents: toCents(String(form.get('current') || '0')),
           targetDate: String(form.get('targetDate') || '') || null,
@@ -230,7 +233,8 @@ export function usePlanningController(data: PlanningData) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
     const destinationMode = String(form.get('destinationMode')) as
-      'automatic' | 'fixed'
+      | 'automatic'
+      | 'fixed'
     const accountId =
       destinationMode === 'fixed'
         ? String(form.get('destination') || '') || null
@@ -260,7 +264,8 @@ export function usePlanningController(data: PlanningData) {
           direction: String(form.get('direction')) as 'income' | 'expense',
           amountMode: String(form.get('amountMode')) as 'fixed' | 'variable',
           matchMode: String(form.get('matchMode') || 'single') as
-            'single' | 'aggregate',
+            | 'single'
+            | 'aggregate',
           destinationMode,
           frequency: String(form.get('frequency')) as 'monthly' | 'yearly',
           nextDate: String(form.get('nextDate')),

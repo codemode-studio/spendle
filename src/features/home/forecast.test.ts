@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { shiftDays } from '#/lib/period'
 import type { CashProjection } from './cash-projection'
 import { simulateRecovery } from './forecast'

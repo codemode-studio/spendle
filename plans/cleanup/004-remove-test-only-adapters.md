@@ -15,9 +15,11 @@ Before editing, run `git status --short` and save the baseline outside the track
 If dependencies are missing, run `pnpm install --frozen-lockfile`, then `pnpm setup:check`. Otherwise run `pnpm setup:check` directly. Expected result: exit 0. No database integration test may fall back to local financial data. Existing tests use `openTestDatabase()` from `src/test/database.ts`; temporary uploads belong to its directory.
 
 Use existing Vitest imports and assertion style:
+
 ```ts
 import { describe, expect, it } from 'vitest'
 ```
+
 Run the focused command before and after editing. Record an existing failure separately; never change unrelated code to make the baseline green. Finish with `pnpm verify`, which runs typecheck, ESLint, tests and build. Record skipped/private-fixture checks separately. Do not claim private statements or browser flows were tested by unit tests.
 
 Keep centavo precision, immutable imported facts, zero-difference import gating, both transfer sides and frozen closed budgets. Do not modify knowledge-base learning, server validators, query keys, migrations or financial calculations.
@@ -27,6 +29,7 @@ Update this plan's row in `plans/cleanup/README.md` only after verification. Rev
 ## Scope and current state
 
 Modify only:
+
 - `src/domain/import-audit.ts`
 - `src/domain/import-audit.test.ts`
 - `src/domain/canonicalization.ts`
@@ -34,6 +37,7 @@ Modify only:
 - This plan's status.
 
 At import-audit.ts:281:
+
 ```ts
 export function effectiveValidationReason(
   row: ImportValidationReasonRow & { hasDestinationConflict?: boolean },
@@ -46,6 +50,7 @@ export function effectiveValidationReason(
 ```
 
 At line 360:
+
 ```ts
 export function resolveImportReviewReason(input: {
   stored: ImportAuditReasonCode | null
@@ -58,6 +63,7 @@ export function resolveImportReviewReason(input: {
 The live API is `getEffectiveImportValidationState(row, live)`. It calls both private helpers directly and returns status, reason, message, committable and remediation flags. Keep the private helpers and all production state logic unchanged.
 
 At canonicalization.ts:390:
+
 ```ts
 export function assignStatementValueMatches<
   TObservation extends StatementValue,
@@ -92,4 +98,3 @@ Do not change helper bodies, import validators, review precedence, database beha
 ## Maintenance and stop conditions
 
 Stop if any scenario requires changing the production calculation, or cannot be represented by legitimate row/live facts. Report the mismatch with the original case rather than casting around types or restoring an adapter. No browser mutation is needed when only unused exports and tests change; if production import flow changes, it is outside this plan and requires separate scope and browser QA.
-

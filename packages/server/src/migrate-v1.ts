@@ -9,7 +9,7 @@ import { ServerConfig } from './config.ts'
 import { migrateV1 } from './v1import/Migrate.ts'
 import { formatSummary } from './v1import/Report.ts'
 
-// `pnpm --filter @spendle/server migrate-v1 --from <v1.sqlite> [--dry-run]`
+// `vp run --filter @spendle/server migrate-v1 --from <v1.sqlite> [--dry-run]`
 const command = Command.make(
   'migrate-v1',
   {

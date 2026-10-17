@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 
 import { v2 } from '#/lib/v2/client.server'
 import { startV2Api } from '#/test/v2-api'

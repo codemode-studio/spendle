@@ -1,14 +1,14 @@
 # Avaliação das categorias
 
-`pnpm --filter @spendle/server eval:categories` reproduz decisões humanas congeladas pelo classificador do V2 (`src/categories/Classifier.ts`, o Jev da TypeSafe) e imprime o placar usado para escolher `TYPESAFE_APPLY_THRESHOLD`. Faz chamadas pagas e fica fora de `pnpm verify`.
+`vp run --filter @spendle/server eval:categories` reproduz decisões humanas congeladas pelo classificador do V2 (`src/categories/Classifier.ts`, o Jev da TypeSafe) e imprime o placar usado para escolher `TYPESAFE_APPLY_THRESHOLD`. Faz chamadas pagas e fica fora de `vp run verify`.
 
 ```bash
 # Da raiz; a chave vem do ambiente ou de .env.local na raiz
-pnpm --filter @spendle/server eval:categories                 # modelo (pago)
-pnpm --filter @spendle/server eval:categories --mode policy   # só a política determinística, sem chave
-pnpm --filter @spendle/server eval:categories --mode all      # os dois e a combinação, como o app roda
-pnpm --filter @spendle/server eval:categories --no-examples    # modelo sem decisões anteriores, para comparar
-pnpm --filter @spendle/server eval:categories --target 0.98 --min-applied 40 --threshold 0.95
+vp run --filter @spendle/server eval:categories                 # modelo (pago)
+vp run --filter @spendle/server eval:categories --mode policy   # só a política determinística, sem chave
+vp run --filter @spendle/server eval:categories --mode all      # os dois e a combinação, como o app roda
+vp run --filter @spendle/server eval:categories --no-examples    # modelo sem decisões anteriores, para comparar
+vp run --filter @spendle/server eval:categories --target 0.98 --min-applied 40 --threshold 0.95
 ```
 
 Sem `TYPESAFE_API_KEY`, o modo `model` sai com código 1 e explica o que fazer. O modelo avaliado é o de `TYPESAFE_MODEL` (padrão `jev-1.13.0`), com as mesmas descrições de categoria (`src/categories/Descriptions.ts`) e o mesmo pedido que o servidor envia.
