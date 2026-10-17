@@ -140,6 +140,8 @@ if (command === 'inspect') {
         SPENDLE_API_TOKEN: '',
         // The fake Pluggy issues fake tokens: open the simulated widget instead.
         SPENDLE_PLUGGY_CONNECT: 'simulated',
+        // Synthetic data only: skip Google sign-in so browser QA can run.
+        SPENDLE_AUTH_DISABLED: '1',
       },
     },
   )

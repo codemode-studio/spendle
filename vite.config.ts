@@ -7,9 +7,13 @@ import viteReact from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 const config = defineConfig(({ mode }) => {
-  // Server functions read SPENDLE_* from process.env; Vite only exposes
-  // .env files to import.meta.env, so copy the server-side ones over.
-  const env = loadEnv(mode, process.cwd(), 'SPENDLE_')
+  // Server code reads these from process.env; Vite only exposes .env files to
+  // import.meta.env, so copy the server-side ones over. None reach the client.
+  const env = loadEnv(mode, process.cwd(), [
+    'SPENDLE_',
+    'BETTER_AUTH_',
+    'GOOGLE_',
+  ])
   for (const [key, value] of Object.entries(env)) process.env[key] ??= value
   return {
     fmt: {

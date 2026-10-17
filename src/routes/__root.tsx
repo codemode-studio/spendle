@@ -3,6 +3,7 @@ import {
   Link,
   Scripts,
   createRootRouteWithContext,
+  redirect,
   useRouter,
 } from '@tanstack/react-router'
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
@@ -14,6 +15,7 @@ import { AppShell } from '../components/app-shell'
 import { EmptyState, Page } from '../components/ui'
 import { Button } from '../components/ui/button'
 import { onboardingOptions } from '../features/finance/queries'
+import { viewerOptions } from '../features/auth/viewer'
 
 import appCss from '../styles.css?url'
 
@@ -24,8 +26,18 @@ interface MyRouterContext {
 }
 
 export const Route = createRootRouteWithContext<MyRouterContext>()({
+  // Page guard only; server functions check the session in `src/start.ts`.
+  beforeLoad: async ({ context, location }) => {
+    const viewer = await context.queryClient.ensureQueryData(viewerOptions())
+    if (!viewer && location.pathname !== '/entrar') {
+      throw redirect({ to: '/entrar', search: { redirect: location.href } })
+    }
+    return { viewer }
+  },
   loader: ({ context }) =>
-    context.queryClient.prefetchQuery(onboardingOptions()),
+    context.viewer
+      ? context.queryClient.prefetchQuery(onboardingOptions())
+      : undefined,
   head: () => ({
     meta: [
       {

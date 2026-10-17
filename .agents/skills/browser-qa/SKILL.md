@@ -19,6 +19,8 @@ For mutations, imports, provider flows, or checks requiring controlled state, us
 
 Run `vp run setup:check`, then `vp run qa:start 3100` from the checkout being verified. Choose another explicit port for concurrent worktrees. The command starts the app on that port and an in-memory V2 QA API on the port plus 1200, and prints both URLs and the run directory. It refuses an occupied port. Use only the printed app URL for mutations.
 
+QA runs skip Google sign-in (`SPENDLE_AUTH_DISABLED=1`) and act as the `QA` user. Check the sign-in page and redirects only on a run started without that flag, and never complete a real Google sign-in.
+
 The QA API seeds owner `Família QA`, account `Conta BRL de teste`, card `Cartão BRL de teste` and the default categories, and fakes Pluggy: connecting a bank in Configurações opens a simulated widget whose item brings synthetic movements. AI calls are disabled. The run directory contains `balanced.ofx`, `unbalanced.ofx`, `volume-121.ofx`, `server.log` (app) and `server-v2.log` (API). The API keeps its data in memory, so stopping the run discards it; do not copy or symlink a user's `data/` into QA.
 
 For transaction pagination use a separate run and import `volume-121.ofx` (121 expenses of R$ 1,00) into the synthetic account. It changes balances; use another fresh run for import assertions.

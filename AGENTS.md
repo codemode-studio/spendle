@@ -10,6 +10,7 @@ Spendle is V2-only: the web app in `src/` (TanStack Start routes, components, ho
 - Preserve centavo precision, immutable imported facts, zero-difference import gating, both transfer sides, and frozen closed-budget allocations; those rules live in the server and are tested there.
 - Category learning comes only from a person's decision; in the UI, route category choices and recurrence confirmations to the V2 decision endpoints, never to heuristics or model output.
 - Scope UI types to the read model they need. Invalidation of financial reads includes configuration, planning, categories and paginated transactions; optimistic category edits must also cover cached transaction pages.
+- Sign-in is Google through Better Auth in `src/features/auth`, stateless (no database: the session lives in an encrypted cookie) and limited to `SPENDLE_ALLOWED_EMAILS`. `src/start.ts` requires an allowed session for every server function; route `beforeLoad` only guards pages. A new server route that touches data must call `readViewer()` itself. Only `vp run qa:start` sets `SPENDLE_AUTH_DISABLED=1`.
 - AI features (assistant, model classifier) are on by default when the server has their keys; there is no separate consent step. Model output never unlocks an import or teaches categories.
 
 ## Development and process safety

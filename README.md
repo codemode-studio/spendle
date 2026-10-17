@@ -18,6 +18,8 @@ vp run dev                            # app web
 
 `vp run dev` escuta em `http://localhost:3000`, sem depender do Tailscale.
 
+O app exige entrar com Google. Em `.env.local`, preencha `BETTER_AUTH_SECRET` (`openssl rand -base64 32`), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` e, em `SPENDLE_ALLOWED_EMAILS`, as contas Google que podem entrar; lista vazia não deixa ninguém entrar. O cliente OAuth do Google precisa do redirecionamento `http://localhost:3000/api/auth/callback/google`. A sessão fica num cookie criptografado, sem banco; trocar o segredo encerra todas as sessões.
+
 O app lê `SPENDLE_API_URL` (padrão `http://127.0.0.1:4100`) e o token opcional `SPENDLE_API_TOKEN`. O servidor guarda o banco em `data/v2/`, fora da pasta pública e do Git; suas variáveis (Pluggy, OpenRouter, TypeSafe) estão no [README do servidor](./packages/server/README.md).
 
 Os recursos de IA (assistente e classificador de categorias) ficam ligados por padrão quando o servidor tem as chaves, sem consentimento separado. Sem chave, nunca chamam o modelo. A resposta de um modelo nunca libera uma importação nem ensina a base de categorias.
