@@ -16,6 +16,13 @@ export class ApiAuthorization extends HttpApiMiddleware.Service<ApiAuthorization
   },
 ) {}
 
+/**
+ * The signed-in person's email, set by the web server on every call. It picks
+ * the family space the request reads and writes; the bearer token is what
+ * makes the header trustworthy.
+ */
+export const memberHeader = 'x-spendle-member'
+
 /** Answers a request that fails its schema with `InvalidRequest` instead of an empty 400. */
 export class RequestValidation extends HttpApiMiddleware.Service<RequestValidation>()(
   '@spendle/server/api/RequestValidation',

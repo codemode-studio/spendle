@@ -4,9 +4,11 @@ import * as HttpClient from 'effect/http/HttpClient'
 import * as HttpClientRequest from 'effect/http/HttpClientRequest'
 import * as HttpApiClient from 'effect/http-api/HttpApiClient'
 import * as Predicate from 'effect/Predicate'
-import { setResponseStatus } from '@tanstack/react-start/server'
+import { getRequest, setResponseStatus } from '@tanstack/react-start/server'
 
-import { SpendleApi } from '@spendle/server/api'
+import { SpendleApi, memberHeader } from '@spendle/server/api'
+
+import { readViewer } from '#/features/auth/auth.server'
 
 import { apiFailureMessage } from './errors'
 
@@ -60,6 +62,19 @@ function v2Settings() {
   }
 }
 
+/**
+ * The signed-in email the API scopes the call to. Outside a request (tests,
+ * scripts) there is none and the call goes without it.
+ */
+async function memberEmail() {
+  try {
+    getRequest()
+  } catch {
+    return undefined
+  }
+  return (await readViewer())?.email
+}
+
 const toV2ApiError = (error: unknown): V2ApiError => {
   if (
     Predicate.hasProperty(error, '_tag') &&
@@ -88,10 +103,14 @@ export async function v2<TResult, TError>(
   use: (client: V2Client) => Effect.Effect<TResult, TError>,
 ): Promise<TResult> {
   const { baseUrl, token } = v2Settings()
+  const member = await memberEmail()
   const program = Effect.gen(function* () {
     const client = yield* HttpApiClient.make(SpendleApi, {
       transformClient: HttpClient.mapRequest((request) => {
-        const located = HttpClientRequest.prependUrl(request, baseUrl)
+        let located = HttpClientRequest.prependUrl(request, baseUrl)
+        if (member !== undefined) {
+          located = HttpClientRequest.setHeader(located, memberHeader, member)
+        }
         return token === undefined
           ? located
           : HttpClientRequest.bearerToken(located, token)
