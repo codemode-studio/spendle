@@ -8,6 +8,9 @@ const ViewerSchema = Schema.Struct({
   image: Schema.NullOr(Schema.String),
 })
 
+/** Why a server function refused a call; the browser then signs in again. */
+export const signedOutMessage = 'Sua sessão terminou. Entre novamente.'
+
 /** The signed-in person, as the UI needs them. */
 export type Viewer = typeof ViewerSchema.Type
 

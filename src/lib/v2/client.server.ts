@@ -9,6 +9,7 @@ import { getRequest, setResponseStatus } from '@tanstack/react-start/server'
 import { SpendleApi, memberHeader } from '@spendle/server/api'
 
 import { readViewer } from '#/features/auth/auth.server'
+import { signedOutMessage } from '#/features/auth/viewer'
 
 import { apiFailureMessage } from './errors'
 
@@ -64,7 +65,8 @@ function v2Settings() {
 
 /**
  * The signed-in email the API scopes the call to. Outside a request (tests,
- * scripts) there is none and the call goes without it.
+ * scripts) there is none and the call goes without it; inside one, a session
+ * that ended since the middleware's check signs the person out.
  */
 async function memberEmail() {
   try {
@@ -72,7 +74,9 @@ async function memberEmail() {
   } catch {
     return undefined
   }
-  return (await readViewer())?.email
+  const viewer = await readViewer()
+  if (viewer === null) throw new Error(signedOutMessage)
+  return viewer.email
 }
 
 const toV2ApiError = (error: unknown): V2ApiError => {

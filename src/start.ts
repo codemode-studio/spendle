@@ -1,6 +1,6 @@
 import { createMiddleware, createStart } from '@tanstack/react-start'
 
-const signedOut = 'Sua sessão terminou. Entre novamente.'
+import { signedOutMessage } from '#/features/auth/viewer'
 
 /**
  * Every server function reads or writes financial data through the V2 API, so
@@ -11,7 +11,7 @@ const requireViewer = createMiddleware({ type: 'function' })
     try {
       return await next()
     } catch (error) {
-      if (error instanceof Error && error.message === signedOut) {
+      if (error instanceof Error && error.message === signedOutMessage) {
         window.location.assign('/entrar')
       }
       throw error
@@ -20,7 +20,7 @@ const requireViewer = createMiddleware({ type: 'function' })
   .server(async ({ next }) => {
     const { readViewer } = await import('#/features/auth/auth.server')
     const viewer = await readViewer()
-    if (!viewer) throw new Error(signedOut)
+    if (!viewer) throw new Error(signedOutMessage)
     return next({ context: { viewer } })
   })
 
