@@ -31,17 +31,22 @@ const makeLayer = (filename: string) =>
     ),
   )
 
+/** Opens (creating its directory) and migrates the database at `filename`. */
+export const layerFile = (filename: string) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      if (filename !== ':memory:') {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        yield* fs.makeDirectory(path.dirname(filename), { recursive: true })
+      }
+      return makeLayer(filename)
+    }),
+  )
+
 /** Opens the database at `ServerConfig.databasePath` and migrates it. */
 export const layer = Layer.unwrap(
-  Effect.gen(function* () {
-    const { databasePath } = yield* ServerConfig
-    if (databasePath !== ':memory:') {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true })
-    }
-    return makeLayer(databasePath)
-  }),
+  Effect.map(ServerConfig, ({ databasePath }) => layerFile(databasePath)),
 )
 
 /** A fresh, migrated in-memory database. Each build is isolated. */

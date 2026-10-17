@@ -9,6 +9,7 @@
     "dev": "node --env-file-if-exists=../../.env.local --watch src/bin.ts",
     "start": "node --env-file-if-exists=../../.env.local src/bin.ts",
     "migrate-v1": "node --env-file-if-exists=../../.env.local src/migrate-v1.ts",
+    "claim-space": "node --env-file-if-exists=../../.env.local src/claim-space.ts",
     "qa": "node src/testing/QaServer.ts",
     "typecheck": "tsc-rs --noEmit",
     "test": "vp test run",

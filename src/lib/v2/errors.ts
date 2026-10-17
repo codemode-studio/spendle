@@ -9,6 +9,9 @@ const reasonMessages: Record<string, string | undefined> = {
   invalid_cursor: 'A página mudou. Volte para a primeira página.',
   card_terms_required: 'Informe os dias de fechamento e vencimento do cartão.',
   invalid_token: 'O app não tem acesso à API. Confira SPENDLE_API_TOKEN.',
+  member_required: 'O app não informou quem entrou. Entre novamente.',
+  unclaimed_database:
+    'Os dados de antes dos espaços ainda não têm dono. Rode `vp run --filter @spendle/server claim-space --email <seu e-mail>`.',
   account_not_found: 'Conta não encontrada. Recarregue a página.',
   entry_not_found: 'Lançamento não encontrado. Recarregue a página.',
   connection_not_found: 'Conexão não encontrada. Recarregue a página.',
