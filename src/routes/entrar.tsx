@@ -7,14 +7,10 @@ import { SpendleLockup } from '#/components/spendle-logo'
 import { Button } from '#/components/ui/button'
 import { Spinner } from '#/components/ui/spinner'
 import { authClient } from '#/features/auth/auth-client'
+import { safeRedirect } from '#/features/auth/redirect'
 
 const signInSearchSchema = z.object({
-  // Only paths inside the app: `//host` would leave it after sign-in.
-  redirect: z
-    .string()
-    .regex(/^\/(?!\/)/)
-    .optional()
-    .catch(undefined),
+  redirect: z.string().transform(safeRedirect).optional().catch(undefined),
   error: z.string().optional().catch(undefined),
 })
 
