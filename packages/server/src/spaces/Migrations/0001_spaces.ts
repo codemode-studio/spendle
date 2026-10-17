@@ -25,4 +25,18 @@ export default Effect.gen(function* () {
     )
   `
   yield* sql`CREATE INDEX space_members_space ON space_members (space_id)`
+
+  // Pluggy deliveries, stored before anything else so a delivery that cannot
+  // be routed yet (Pluggy or a space unavailable, data not claimed) is kept
+  // and retried. `routed_at` is set once every space it belongs to has it.
+  yield* sql`
+    CREATE TABLE webhook_inbox (
+      event_id TEXT PRIMARY KEY,
+      item_id TEXT,
+      payload TEXT NOT NULL,
+      received_at TEXT NOT NULL,
+      routed_at TEXT
+    )
+  `
+  yield* sql`CREATE INDEX webhook_inbox_pending ON webhook_inbox (routed_at)`
 })

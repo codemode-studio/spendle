@@ -12,9 +12,10 @@ import { ServerConfig } from './config.ts'
 import { PluggyClient } from './openfinance/PluggyClient.ts'
 import * as Webhook from './openfinance/Webhook.ts'
 import { WebhookConfig } from './openfinance/WebhookConfig.ts'
-import { spaceRoutes, webhookRoutes } from './spaces/Routes.ts'
+import { spaceRoutes } from './spaces/Routes.ts'
 import { SpaceApps, warmSpaces } from './spaces/Space.ts'
 import { SpaceDirectory } from './spaces/SpaceDirectory.ts'
+import { SpaceWebhooks, webhookRoutes } from './spaces/SpaceWebhooks.ts'
 
 const HttpServerLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -38,6 +39,7 @@ export const ServerLive = HttpRouter.serve(
   Layer.mergeAll(spaceRoutes, webhookRoutes),
 ).pipe(
   Layer.provideMerge(Layer.mergeAll(warmSpaces, Webhook.registration)),
+  Layer.provideMerge(SpaceWebhooks.layer),
   Layer.provideMerge(SpaceApps.layer),
   Layer.provideMerge(SpaceDirectory.layer),
   Layer.provideMerge(SharedLive),

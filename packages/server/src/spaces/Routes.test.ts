@@ -1,120 +1,21 @@
-import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer'
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import { assert, describe, it } from '@effect/vitest'
 import * as Effect from 'effect/Effect'
 import * as FileSystem from 'effect/FileSystem'
 import * as Layer from 'effect/Layer'
-import * as Option from 'effect/Option'
 import * as Path from 'effect/Path'
-import * as Redacted from 'effect/Redacted'
-import * as Ref from 'effect/Ref'
 import * as HttpClient from 'effect/http/HttpClient'
 import * as HttpClientRequest from 'effect/http/HttpClientRequest'
-import * as HttpRouter from 'effect/http/HttpRouter'
-import * as HttpApiClient from 'effect/http-api/HttpApiClient'
-import * as SqlClient from 'effect/sql/SqlClient'
 
-import { ApiConfig } from '../api/ApiConfig.ts'
-import { SpendleApi } from '../api/definition/Api.ts'
 import { memberHeader } from '../api/definition/Security.ts'
-import { ServerConfig } from '../config.ts'
-import type { ServerConfigShape } from '../config.ts'
 import { EventLog } from '../events/EventLog.ts'
 import { Accounts } from '../ledger/Accounts.ts'
-import { OpenFinance } from '../openfinance/OpenFinance.ts'
-import { PluggyClient } from '../openfinance/PluggyClient.ts'
-import { webhookReceived } from '../openfinance/Webhook.ts'
-import { WebhookConfig } from '../openfinance/WebhookConfig.ts'
 import * as Sqlite from '../persistence/Sqlite.ts'
-import { FakePluggyState, makeFake } from '../testing/FakePluggy.ts'
-import type { FakePluggyData } from '../testing/FakePluggy.ts'
 import { rawJson } from '../testing/ApiTest.ts'
-import { routeWebhook, spaceRoutes, webhookRoutes } from './Routes.ts'
-import { SpaceApps } from './Space.ts'
-import type { Space } from './SpaceDirectory.ts'
+import { clientFor, spacesTest } from '../testing/SpacesTest.ts'
 import { SpaceDirectory } from './SpaceDirectory.ts'
 
 const token = 'a-local-token-long-enough-to-count-0123456789'
-const secret = 'whsec-0123456789abcdef0123456789abcdef'
-
-const fakePluggy = Layer.unwrap(
-  Effect.gen(function* () {
-    const state = yield* Ref.make<FakePluggyData>({
-      clientUserId: '',
-      accounts: [],
-      transactions: {},
-      deleted: [],
-      webhooks: [],
-      connectTokens: [],
-    })
-    return Layer.mergeAll(
-      Layer.succeed(PluggyClient, makeFake(state)),
-      Layer.succeed(FakePluggyState, state),
-    )
-  }),
-)
-
-// The multi-space server over a real socket, every space in memory.
-const spacesTest = (
-  options: {
-    readonly token?: string
-    readonly config?: Partial<ServerConfigShape>
-  } = {},
-) =>
-  HttpRouter.serve(Layer.mergeAll(spaceRoutes, webhookRoutes), {
-    disableListenLog: true,
-    disableLogger: true,
-  }).pipe(
-    Layer.provideMerge(SpaceApps.layer),
-    Layer.provideMerge(SpaceDirectory.layer),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        ApiConfig.layerTest(options.token),
-        WebhookConfig.layerTest(
-          Option.some({
-            url: 'https://spendle.example/api/pluggy/webhook',
-            secret: Redacted.make(secret),
-          }),
-        ),
-        fakePluggy,
-        ServerConfig.layerTest(options.config),
-      ),
-    ),
-    Layer.provideMerge(NodeHttpServer.layerTest),
-    Layer.provideMerge(NodeServices.layer),
-  )
-
-// The typed client the web server uses, naming `email` as the member.
-const clientFor = (email: string, bearer?: string) =>
-  HttpApiClient.make(SpendleApi, {
-    transformClient: HttpClient.mapRequest((request) => {
-      const named = HttpClientRequest.setHeader(request, memberHeader, email)
-      return bearer === undefined
-        ? named
-        : HttpClientRequest.bearerToken(named, bearer)
-    }),
-  })
-
-const inSpace = <A, E, R>(space: Space, effect: Effect.Effect<A, E, R>) =>
-  effect.pipe(Effect.provide(SpaceApps.get(space.id)))
-
-const webhookCount = (space: Space) =>
-  inSpace(
-    space,
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient
-      const rows = yield* sql<{ readonly count: number }>`
-        SELECT count(*) AS count FROM domain_events WHERE type = ${webhookReceived}
-      `
-      return rows[0]?.count ?? 0
-    }),
-  )
-
-const deliver = (body: object) =>
-  routeWebhook({
-    authorization: `Bearer ${secret}`,
-    body: JSON.stringify(body),
-  })
 
 describe('family spaces API', () => {
   it.effect("serves each member only their own space's data", () =>
@@ -226,73 +127,5 @@ describe('family spaces API', () => {
       )
       assert.deepStrictEqual([health.status, document.status], [204, 200])
     }).pipe(Effect.provide(spacesTest({ token }))),
-  )
-})
-
-describe('Pluggy webhooks across spaces', () => {
-  // Two spaces; Ana's has a pending connection that Pluggy's item names.
-  const twoSpaces = Effect.gen(function* () {
-    const directory = yield* SpaceDirectory
-    const ana = yield* directory.spaceOf('ana@example.com')
-    const beto = yield* directory.spaceOf('beto@example.com')
-    const connectionId = yield* inSpace(
-      ana,
-      Effect.gen(function* () {
-        const owner = yield* (yield* Accounts).createOwner({
-          name: 'Ana',
-          kind: 'person',
-        })
-        const openFinance = yield* OpenFinance
-        return (yield* openFinance.createConnectToken({ ownerId: owner.id }))
-          .connectionId
-      }),
-    )
-    const state = yield* FakePluggyState
-    yield* Ref.update(state, (current) => ({
-      ...current,
-      clientUserId: connectionId,
-    }))
-    return { ana, beto }
-  })
-
-  it.effect(
-    'stores an item event only in the space that requested the item',
-    () =>
-      Effect.gen(function* () {
-        const { ana, beto } = yield* twoSpaces
-        const answer = yield* deliver({
-          eventId: 'event-1',
-          event: 'item/created',
-          itemId: 'item-1',
-        })
-
-        assert.strictEqual(answer.status, 202)
-        assert.deepStrictEqual(
-          [yield* webhookCount(ana), yield* webhookCount(beto)],
-          [1, 0],
-        )
-      }).pipe(Effect.provide(spacesTest())),
-  )
-
-  it.effect(
-    'keeps deletions in every space and drops events without an item',
-    () =>
-      Effect.gen(function* () {
-        const { ana, beto } = yield* twoSpaces
-        yield* deliver({
-          eventId: 'event-2',
-          event: 'item/deleted',
-          itemId: 'x',
-        })
-        yield* deliver({
-          eventId: 'event-3',
-          event: 'connector/status_updated',
-        })
-
-        assert.deepStrictEqual(
-          [yield* webhookCount(ana), yield* webhookCount(beto)],
-          [1, 1],
-        )
-      }).pipe(Effect.provide(spacesTest())),
   )
 })

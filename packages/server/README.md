@@ -30,7 +30,7 @@ Todos os dados pertencem a um espaço: contas, lançamentos, categorias, planeja
 
 - O app web envia o e-mail de quem entrou no cabeçalho `x-spendle-member`. Com `SPENDLE_API_TOKEN`, o token é verificado antes, e só ele torna o cabeçalho confiável.
 - O primeiro pedido de um e-mail sem espaço cria um espaço vazio para ele.
-- O webhook da Pluggy vai ao espaço cuja conexão tem o item ou, para um item novo, ao espaço da conexão que o pediu. Exclusões de item vão a todos os espaços.
+- O webhook da Pluggy é guardado primeiro no banco de controle e respondido na hora; depois vai ao espaço cuja conexão tem o item ou, para um item novo, ao espaço da conexão que o pediu. Exclusões de item vão a todos os espaços. O que não dá para entregar ainda (Pluggy ou um espaço indisponível, dados não reivindicados) fica guardado e é tentado de novo, na ordem de cada item.
 - Saúde (`/api/v2/health`) e o documento OpenAPI respondem sem token nem membro.
 
 Os dados de antes dos espaços continuam em `SPENDLE_DATABASE_PATH`. Enquanto ninguém os reivindica, a API não cria espaços e responde `unclaimed_database`. Rode uma vez, antes de entrar no app:

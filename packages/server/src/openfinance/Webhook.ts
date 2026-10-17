@@ -150,6 +150,16 @@ export const authorizeWebhook = Effect.fn('PluggyWebhook.authorize')(function* (
     : Option.some({ status: 401, body: { error: 'unauthorized' } })
 })
 
+/** A delivery body as its JSON and the event it carries, if it is one. */
+export const decodeDelivery = Effect.fn('PluggyWebhook.decode')(function* (
+  body: string,
+) {
+  const json = yield* decodeJson(body).pipe(Effect.option)
+  if (Option.isNone(json)) return Option.none()
+  const webhook = yield* decodeStored(json.value).pipe(Effect.option)
+  return Option.map(webhook, (value) => ({ json: json.value, webhook: value }))
+})
+
 /** What a delivery is answered with. */
 export interface WebhookResult {
   readonly status: number
@@ -173,17 +183,14 @@ export const parseWebhook = Effect.fn('PluggyWebhook.parse')(function* (input: {
     })
   }
   // Store the body as Pluggy sent it, once it is known to be a valid event.
-  const json = yield* decodeJson(input.body).pipe(Effect.option)
-  const webhook = Option.isSome(json)
-    ? yield* decodeStored(json.value).pipe(Effect.option)
-    : Option.none<PluggyWebhook>()
-  if (Option.isNone(json) || Option.isNone(webhook)) {
+  const delivery = yield* decodeDelivery(input.body)
+  if (Option.isNone(delivery)) {
     return Result.fail<WebhookResult>({
       status: 400,
       body: { error: 'invalid_event' },
     })
   }
-  return Result.succeed({ json: json.value, webhook: webhook.value })
+  return Result.succeed(delivery.value)
 })
 
 /**

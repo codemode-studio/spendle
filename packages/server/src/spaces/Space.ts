@@ -152,6 +152,21 @@ export class SpaceApps extends LayerMap.Service<SpaceApps>()(
   },
 ) {}
 
+/**
+ * Runs `effect` with a space's services. A space that fails to build (its
+ * database locked or unreadable) is dropped from the map, so the next use
+ * builds it again instead of repeating the failure until a restart.
+ */
+export const withSpace = <A, E, R>(
+  spaceId: string,
+  effect: Effect.Effect<A, E, R>,
+) =>
+  Effect.void.pipe(
+    Effect.provide(SpaceApps.get(spaceId)),
+    Effect.tapCause(() => SpaceApps.invalidate(spaceId)),
+    Effect.andThen(effect.pipe(Effect.provide(SpaceApps.get(spaceId)))),
+  )
+
 /** Builds every known space at startup so their reactors run from the start. */
 export const warmSpaces = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -160,8 +175,7 @@ export const warmSpaces = Layer.effectDiscard(
     yield* Effect.forEach(
       spaces,
       (space) =>
-        Effect.void.pipe(
-          Effect.provide(SpaceApps.get(space.id)),
+        withSpace(space.id, Effect.void).pipe(
           Effect.catchCause((cause) =>
             Effect.logError(`Space ${space.id} failed to start`, cause),
           ),

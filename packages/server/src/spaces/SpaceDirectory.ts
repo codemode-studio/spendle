@@ -26,6 +26,14 @@ export const Space = Schema.Struct({
 })
 export type Space = typeof Space.Type
 
+/** A Pluggy delivery waiting to reach the spaces it belongs to. */
+export const PendingWebhook = Schema.Struct({
+  eventId: Schema.String,
+  itemId: Schema.NullOr(Schema.String),
+  payload: Schema.String,
+})
+export type PendingWebhook = typeof PendingWebhook.Type
+
 export class SpaceDirectoryError extends Schema.TaggedError<SpaceDirectoryError>()(
   'SpaceDirectoryError',
   {
@@ -189,6 +197,34 @@ const make = Effect.gen(function* () {
     return claimed ? Option.none<string>() : Option.some(legacyPath)
   }).pipe(Effect.orDie)
 
+  /** Stores a delivery once; false when its event was already received. */
+  const receiveWebhook = Effect.fn('SpaceDirectory.receiveWebhook')(function* (
+    delivery: PendingWebhook,
+  ) {
+    const at = yield* now
+    const stored = yield* sql`
+        INSERT INTO webhook_inbox (event_id, item_id, payload, received_at)
+        VALUES (${delivery.eventId}, ${delivery.itemId}, ${delivery.payload}, ${at})
+        ON CONFLICT (event_id) DO NOTHING
+        RETURNING event_id
+      `
+    return stored.length > 0
+  }, Effect.orDie)
+  const findPendingWebhooks = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: PendingWebhook,
+    execute: () => sql`
+      SELECT event_id AS eventId, item_id AS itemId, payload
+      FROM webhook_inbox WHERE routed_at IS NULL ORDER BY rowid
+    `,
+  })
+  const webhookRouted = Effect.fn('SpaceDirectory.webhookRouted')(function* (
+    eventId: string,
+  ) {
+    const at = yield* now
+    yield* sql`UPDATE webhook_inbox SET routed_at = ${at} WHERE event_id = ${eventId}`
+  }, Effect.orDie)
+
   /** Where a space's database lives; `:memory:` when the directory is in memory. */
   const databasePath = (space: Space) =>
     inMemory
@@ -205,6 +241,10 @@ const make = Effect.gen(function* () {
     unclaimedLegacy,
     space: (id: string) => findById(id).pipe(Effect.orDie),
     list: findAll(undefined).pipe(Effect.orDie),
+    receiveWebhook,
+    /** Deliveries not yet routed, oldest first. */
+    pendingWebhooks: findPendingWebhooks(undefined).pipe(Effect.orDie),
+    webhookRouted,
     databasePath,
   }
 })
