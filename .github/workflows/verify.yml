@@ -1,17 +1,40 @@
 name: Verify
+# Pull requests run once per commit; `main` runs after each merge.
 on:
-  push:
   pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+# A new commit on a pull request cancels its older run, so the single
+# self-hosted runner never works through superseded commits.
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify:
     runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: .node-version
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm setup:check
-      - run: pnpm verify
+          # The self-hosted runner keeps its pnpm store between runs; an
+          # Actions cache would upload and restore that whole store (GBs).
+          cache: false
+          run-install: true
+      - name: Setup check
+        run: vp run setup:check
+      # Same steps as `vp run verify`, split so a failure names its check.
+      - name: Check (format and lint)
+        run: vp check
+      - name: Typecheck
+        run: vp run -r --parallel typecheck
+      - name: Test
+        run: vp run -r --parallel test
+      - name: Build
+        run: vp run build

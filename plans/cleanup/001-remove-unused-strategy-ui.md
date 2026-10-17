@@ -15,9 +15,11 @@ Before editing, run `git status --short` and save the baseline outside the track
 If dependencies are missing, run `pnpm install --frozen-lockfile`, then `pnpm setup:check`. Otherwise run `pnpm setup:check` directly. Expected result: exit 0. No database integration test may fall back to local financial data. Existing tests use `openTestDatabase()` from `src/test/database.ts`; temporary uploads belong to its directory.
 
 Use existing Vitest imports and assertion style:
+
 ```ts
 import { describe, expect, it } from 'vitest'
 ```
+
 Run the focused command before and after editing. Record an existing failure separately; never change unrelated code to make the baseline green. Finish with `pnpm verify`, which runs typecheck, ESLint, tests and build. Record skipped/private-fixture checks separately. Do not claim private statements or browser flows were tested by unit tests.
 
 Keep centavo precision, immutable imported facts, zero-difference import gating, both transfer sides and frozen closed budgets. Do not modify knowledge-base learning, server validators, query keys, migrations or financial calculations.
@@ -29,6 +31,7 @@ Update this plan's row in `plans/cleanup/README.md` only after verification. Rev
 Modify only `src/features/finance/strategy-progress.tsx`, this plan's status, and `plans/cleanup/001-qa.md` for browser evidence.
 
 At line 62:
+
 ```ts
 export function StrategyProgressView({
   dashboard,
@@ -38,12 +41,14 @@ export function StrategyProgressView({
 ```
 
 At line 806:
+
 ```ts
 export function StrategyHistory({ months = 3 }: { months?: number }) {
   const history = useQuery(strategyHistoryOptions(months))
 ```
 
 The live consumer `src/features/home/monthly-overview.tsx` imports:
+
 ```ts
 import { GoalRing } from '#/features/finance/strategy-progress'
 import type { StrategyDashboard } from '#/features/finance/strategy-progress'
@@ -70,4 +75,3 @@ Do not rename the file, move the exports, change MonthlyOverview, delete domain 
 ## Maintenance
 
 No new test is needed for deleted, unreachable UI. Do not extend this deletion to domain algorithms just because they become unused; review those separately. Stop if a new screen caller has appeared or the ring requires visual changes.
-

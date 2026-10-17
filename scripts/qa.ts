@@ -64,7 +64,7 @@ if (command === 'inspect') {
 } else if (command === 'start') {
   const port = Number(argument ?? 3100)
   if (!Number.isInteger(port) || port < 1024 || port > 65535)
-    throw new Error('Usage: pnpm qa:start [port]')
+    throw new Error('Usage: vp run qa:start [port]')
   mkdirSync(root, { recursive: true })
   const directory = mkdtempSync(join(root, 'run-'))
   const url = `http://127.0.0.1:${port}`
@@ -140,6 +140,8 @@ if (command === 'inspect') {
         SPENDLE_API_TOKEN: '',
         // The fake Pluggy issues fake tokens: open the simulated widget instead.
         SPENDLE_PLUGGY_CONNECT: 'simulated',
+        // Synthetic data only: skip Google sign-in so browser QA can run.
+        SPENDLE_AUTH_DISABLED: '1',
       },
     },
   )

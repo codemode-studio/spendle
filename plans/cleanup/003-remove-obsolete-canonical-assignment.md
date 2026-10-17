@@ -15,9 +15,11 @@ Before editing, run `git status --short` and save the baseline outside the track
 If dependencies are missing, run `pnpm install --frozen-lockfile`, then `pnpm setup:check`. Otherwise run `pnpm setup:check` directly. Expected result: exit 0. No database integration test may fall back to local financial data. Existing tests use `openTestDatabase()` from `src/test/database.ts`; temporary uploads belong to its directory.
 
 Use existing Vitest imports and assertion style:
+
 ```ts
 import { describe, expect, it } from 'vitest'
 ```
+
 Run the focused command before and after editing. Record an existing failure separately; never change unrelated code to make the baseline green. Finish with `pnpm verify`, which runs typecheck, ESLint, tests and build. Record skipped/private-fixture checks separately. Do not claim private statements or browser flows were tested by unit tests.
 
 Keep centavo precision, immutable imported facts, zero-difference import gating, both transfer sides and frozen closed budgets. Do not modify knowledge-base learning, server validators, query keys, migrations or financial calculations.
@@ -29,6 +31,7 @@ Update this plan's row in `plans/cleanup/README.md` only after verification. Rev
 Modify only `src/domain/canonicalization.ts`, `src/domain/canonicalization.test.ts` and this plan's status.
 
 At line 493:
+
 ```ts
 export function resolveCanonicalAssignments<
   TObservation extends CanonicalIdentity & { id: string },
@@ -40,9 +43,11 @@ export function resolveCanonicalAssignments<
   preassigned?: ReadonlyMap<string, string>
 })
 ```
+
 The body constructs assignments from bank IDs and fingerprint overlaps.
 
 At line 546:
+
 ```ts
 export function canonicalEvidenceKind(input: {
   controlled: boolean
@@ -53,6 +58,7 @@ export function canonicalEvidenceKind(input: {
 The first describe block in `canonicalization.test.ts`, named `canonical transaction assignments`, contains their only two tests. Later blocks test live identity and matching functions and must remain.
 
 The real commit module imports:
+
 ```ts
 import {
   applyImportOutcome,
@@ -81,4 +87,3 @@ Do not delete `CanonicalIdentity`, `DuplicateReason`, live matching functions, c
 ## Maintenance
 
 No new tests are required for unreachable code deletion. Preserve zero-difference gating, original facts and statement evidence by leaving the active commit path alone. If caller searches find a production consumer, stop and revise the premise rather than changing that consumer.
-

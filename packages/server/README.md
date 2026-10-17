@@ -3,12 +3,12 @@
 Backend V2 ([ADR 003](../../plans/adrs/003-backend-v2-effect.md)), o único backend do Spendle: o app web em `src/` o chama pelas server functions. Banco próprio em `data/v2/`.
 
 ```bash
-pnpm --filter @spendle/server dev     # http://localhost:4100
-pnpm --filter @spendle/server verify  # typecheck, diagnósticos Effect e testes
-pnpm --filter @spendle/server qa      # API em memória com dados sintéticos e Pluggy falsa
+vp run --filter @spendle/server dev     # http://localhost:4100
+vp run --filter @spendle/server verify  # typecheck, diagnósticos Effect e testes
+vp run --filter @spendle/server qa      # API em memória com dados sintéticos e Pluggy falsa
 ```
 
-`pnpm qa:start <porta>` na raiz sobe essa API de QA na porta `<porta> + 1200` junto com o app web.
+`vp run qa:start <porta>` na raiz sobe essa API de QA na porta `<porta> + 1200` junto com o app web.
 
 | Variável                                      | Uso                                                                                                  |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
@@ -118,7 +118,7 @@ Cada lançamento recebe uma inferência (`category_inferences`) recalculada a pa
 4. Estorno confirmado: herda a categoria da compra.
 5. Transferência ou pagamento de fatura sugerido: revisão.
 6. Padrão exato do estabelecimento (98), prefixo (92), categoria da Pluggy mapeada pela pessoa (90) ou mapa embutido (60, revisão).
-7. Resposta do modelo (Jev), em revisão; aplicada a partir de `TYPESAFE_APPLY_THRESHOLD`, escolhido com `pnpm --filter @spendle/server eval:categories` (veja [`evals/categories`](evals/categories/README.md)).
+7. Resposta do modelo (Jev), em revisão; aplicada a partir de `TYPESAFE_APPLY_THRESHOLD`, escolhido com `vp run --filter @spendle/server eval:categories` (veja [`evals/categories`](evals/categories/README.md)).
 
 Só decisões da pessoa e edições da base escrevem em `category_patterns`, sempre por `KnowledgeStore`. Respostas do modelo ficam em `model_classifications` e nunca viram padrão. Antes de gravar uma edição da base, `Categorizer.previewStoreEdit` mostra os lançamentos que mudariam. Ao mudar o resultado da política, incremente `POLICY_VERSION` em `src/categories/Policy.ts`: o servidor recalcula todo o histórico ao iniciar.
 
@@ -138,8 +138,8 @@ O assistente usa o OpenRouter, atrás de `AssistantModel`; sem `OPENROUTER_API_K
 
 ```bash
 # Da raiz do repositório, com o arquivo SQLite do V1 (o V1 o gravava em data/financas.db)
-pnpm --filter @spendle/server migrate-v1 --from "$PWD/data/financas.db" --dry-run  # mostra o que mudaria
-pnpm --filter @spendle/server migrate-v1 --from "$PWD/data/financas.db"            # grava no banco do V2
+vp run --filter @spendle/server migrate-v1 --from "$PWD/data/financas.db" --dry-run  # mostra o que mudaria
+vp run --filter @spendle/server migrate-v1 --from "$PWD/data/financas.db"            # grava no banco do V2
 ```
 
 O caminho é relativo a `packages/server`, por isso o `$PWD`. O banco do V1 é aberto só para leitura; o código do V1 já foi removido e a migração depende só desse arquivo. Os testes montam bancos V1 sintéticos com o esquema congelado em `src/v1import/fixtures/v1-schema.sql`. O do V2 é o de `SPENDLE_DATABASE_PATH`. `--dry-run` executa a migração numa cópia do banco do V2 (feita com o backup do SQLite) e imprime o resumo: contagens por tipo, o que fica para trás e por quê, e as decisões que ainda esperam lançamentos. Rodar de novo não muda nada: cada registro trazido fica em `v1_import_map` e só é criado uma vez; depois disso, editá-lo é com a pessoa, no V2.
@@ -171,7 +171,7 @@ O caminho é relativo a `packages/server`, por isso o `$PWD`. O banco do V1 é a
 
 **Depois da migração.**
 
-1. Inicie o servidor (`pnpm --filter @spendle/server dev`).
+1. Inicie o servidor (`vp run --filter @spendle/server dev`).
 2. Pluggy: conecte cada banco no V2 (`POST /api/v2/open-finance/connect-token` e `POST /api/v2/open-finance/connections/:id/item`), ligue cada conta da Pluggy à conta migrada em vez de abrir outra (`PUT /api/v2/open-finance/provider-accounts/:id/link`) e sincronize (`POST /api/v2/open-finance/connections/:id/sync`).
 3. Arquivos: importe os mesmos OFX, CSV e PDF nas contas migradas (`POST /api/v2/imports`).
 4. As decisões se aplicam conforme os lançamentos chegam. `migrate-v1 --dry-run` de novo mostra o que ainda espera.

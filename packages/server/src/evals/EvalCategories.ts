@@ -2,12 +2,12 @@
  * Replays the frozen category evaluation (`evals/categories`) through the
  * V2 classifier and the deterministic policy, and prints the scoreboard
  * used to choose `TYPESAFE_APPLY_THRESHOLD`. The model mode makes paid
- * TypeSafe calls, so it stays out of `pnpm verify`.
+ * TypeSafe calls, so it stays out of `vp run verify`.
  *
- *   pnpm --filter @spendle/server eval:categories                 model
- *   pnpm --filter @spendle/server eval:categories --mode policy   patterns only, free
- *   pnpm --filter @spendle/server eval:categories --mode all      both, and combined
- *   pnpm --filter @spendle/server eval:categories --no-examples   model without past decisions
+ *   vp run --filter @spendle/server eval:categories                 model
+ *   vp run --filter @spendle/server eval:categories --mode policy   patterns only, free
+ *   vp run --filter @spendle/server eval:categories --mode all      both, and combined
+ *   vp run --filter @spendle/server eval:categories --no-examples   model without past decisions
  *
  * The model sees the context split as the person's past decisions (few-shot
  * examples, as the server sends them) and answers the exam split.

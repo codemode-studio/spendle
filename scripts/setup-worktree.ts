@@ -35,10 +35,11 @@ if (!mainCheckout || realpathSync(mainCheckout) === realpathSync(worktree)) {
   mainCheckout = undefined
 }
 
-const install = spawnSync(
-  'pnpm install --frozen-lockfile',
-  { cwd: worktree, shell: true, stdio: 'inherit' },
-)
+const install = spawnSync('vp install --frozen-lockfile', {
+  cwd: worktree,
+  shell: true,
+  stdio: 'inherit',
+})
 if (install.status !== 0) process.exit(install.status ?? 1)
 
 if (mainCheckout) {

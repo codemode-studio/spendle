@@ -128,7 +128,7 @@ export const formatSummary = (
   lines.push(
     '',
     'Next steps (imported facts are not copied; V2 observes them again):',
-    '  1. Start the V2 server: pnpm --filter @spendle/server dev',
+    '  1. Start the V2 server: vp run --filter @spendle/server dev',
     '  2. Pluggy (V1 never connected to it): connect each bank in V2 (POST /api/v2/open-finance/',
     '     connect-token, then POST /api/v2/open-finance/connections/:id/item), link each provider',
     '     account to its migrated account instead of opening a new one (PUT /api/v2/open-finance/',

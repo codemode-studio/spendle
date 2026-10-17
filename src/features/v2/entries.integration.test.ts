@@ -1,5 +1,5 @@
 import { QueryClient } from '@tanstack/react-query'
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it } from 'vite-plus/test'
 
 import { v2 } from '#/lib/v2/client.server'
 import { startV2Api } from '#/test/v2-api'

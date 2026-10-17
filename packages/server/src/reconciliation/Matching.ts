@@ -19,7 +19,11 @@ export interface MatchableEntry {
   readonly id: string
   readonly accountId: string
   readonly accountKind:
-    'checking' | 'savings' | 'cash' | 'investment' | 'credit_card'
+    | 'checking'
+    | 'savings'
+    | 'cash'
+    | 'investment'
+    | 'credit_card'
   readonly bookedOn: string
   readonly amountCents: number
   readonly currency: string
@@ -245,7 +249,7 @@ const nameWords = (text: string) =>
 // understood only right after a bank's name.
 const joinInitials = (text: string) =>
   text
-    .replace(/\b[a-z0-9](?:[&.\/'-][a-z0-9])+\b\.?/g, (run) => {
+    .replace(/\b[a-z0-9](?:[&./'-][a-z0-9])+\b\.?/g, (run) => {
       const letters = run.replace(/[^a-z0-9]/g, '')
       return letters === 'sa' ? 'sa' : `_${letters}_`
     })

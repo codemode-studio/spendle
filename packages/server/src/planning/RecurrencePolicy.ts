@@ -132,7 +132,8 @@ export interface Learning {
   readonly medianDateOffsetDays: number | undefined
   readonly dateSpreadDays: number | undefined
   readonly amountRangeCents:
-    { readonly min: number; readonly max: number } | undefined
+    | { readonly min: number; readonly max: number }
+    | undefined
   readonly rejectionCount: number
   readonly descriptions: ReadonlyArray<string>
 }

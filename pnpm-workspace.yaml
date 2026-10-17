@@ -4,11 +4,41 @@ packages:
 allowBuilds:
   esbuild: true
   lightningcss: true
+  tsc-rs: true
   unrs-resolver: false
 
 catalog:
-  '@effect/language-service': 0.87.3
   '@effect/platform-node': 4.0.0
   '@effect/sql-sqlite-node': 4.0.0
+  # tsc-rs ports this effect-tsgo version; keep them in step.
+  '@effect/tsgo': 0.51.1
   '@effect/vitest': 4.0.0
+  '@types/node': ^22.10.2
   effect: 4.0.0
+  typescript: 7.0.2
+  vite: npm:@voidzero-dev/vite-plus-core@1.3.0
+  vitest: 5.0.5
+  vite-plus: 1.3.0
+minimumReleaseAgeExclude:
+  - tsc-rs
+  - '@tsc-rs/*'
+  - '@voidzero-dev/vite-plus-core@1.3.0'
+  - '@voidzero-dev/vite-plus-darwin-arm64@1.3.0'
+  - '@voidzero-dev/vite-plus-darwin-x64@1.3.0'
+  - '@voidzero-dev/vite-plus-linux-arm64-gnu@1.3.0'
+  - '@voidzero-dev/vite-plus-linux-arm64-musl@1.3.0'
+  - '@voidzero-dev/vite-plus-linux-x64-gnu@1.3.0'
+  - '@voidzero-dev/vite-plus-linux-x64-musl@1.3.0'
+  - '@voidzero-dev/vite-plus-win32-arm64-msvc@1.3.0'
+  - '@voidzero-dev/vite-plus-win32-x64-msvc@1.3.0'
+  - vite-plus@1.3.0
+overrides:
+  vite@*: 'catalog:'
+  vitest@*: 'catalog:'
+peerDependencyRules:
+  allowAny:
+    - vite
+    - vitest
+  allowedVersions:
+    vite: '*'
+    vitest: '*'

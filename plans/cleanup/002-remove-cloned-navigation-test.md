@@ -15,9 +15,11 @@ Before editing, run `git status --short` and save the baseline outside the track
 If dependencies are missing, run `pnpm install --frozen-lockfile`, then `pnpm setup:check`. Otherwise run `pnpm setup:check` directly. Expected result: exit 0. No database integration test may fall back to local financial data. Existing tests use `openTestDatabase()` from `src/test/database.ts`; temporary uploads belong to its directory.
 
 Use existing Vitest imports and assertion style:
+
 ```ts
 import { describe, expect, it } from 'vitest'
 ```
+
 Run the focused command before and after editing. Record an existing failure separately; never change unrelated code to make the baseline green. Finish with `pnpm verify`, which runs typecheck, ESLint, tests and build. Record skipped/private-fixture checks separately. Do not claim private statements or browser flows were tested by unit tests.
 
 Keep centavo precision, immutable imported facts, zero-difference import gating, both transfer sides and frozen closed budgets. Do not modify knowledge-base learning, server validators, query keys, migrations or financial calculations.
@@ -29,18 +31,21 @@ Update this plan's row in `plans/cleanup/README.md` only after verification. Rev
 Modify only `src/features/finance/transactions.search.test.tsx`, this plan's status and `plans/cleanup/002-qa.md`.
 
 At line 53 the obsolete test starts:
+
 ```ts
 it('keeps URL state, loader dependencies and back/forward navigation in sync', async () => {
   function Controls() {
 ```
 
 It creates a separate route whose loader is:
+
 ```ts
 loader: ({ deps }) => deps,
 component: Controls,
 ```
 
 The real page at `src/routes/transacoes.tsx:135` instead uses:
+
 ```ts
 const setSearch = (value: string) =>
   void setUrlState({ search: value, page: 1 }, { replace: true })
@@ -66,4 +71,3 @@ Keep the first test, including invalid pages, legacy uncategorized links, decima
 ## Maintenance
 
 Future automated navigation coverage should mount the actual route with synthetic data. A route recreated inside a test cannot detect production handler regressions. If browser behavior differs, report it separately; this plan does not authorize changing navigation semantics.
-

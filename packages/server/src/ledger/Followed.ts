@@ -1,6 +1,6 @@
 import * as Effect from 'effect/Effect'
 import * as Schema from 'effect/Schema'
-import * as SqlClient from 'effect/sql/SqlClient'
+import type * as SqlClient from 'effect/sql/SqlClient'
 import * as SqlSchema from 'effect/sql/SqlSchema'
 
 /**
@@ -12,7 +12,8 @@ import * as SqlSchema from 'effect/sql/SqlSchema'
  * merges, pending-to-posted updates and an entry losing its first source.
  */
 export type EndpointsTable =
-  'entry_note_endpoints' | 'investment_movement_endpoints'
+  | 'entry_note_endpoints'
+  | 'investment_movement_endpoints'
 
 const Holder = Schema.Struct({ key: Schema.String, entryId: Schema.String })
 

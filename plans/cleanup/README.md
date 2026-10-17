@@ -2,12 +2,12 @@
 
 Written and implemented 2026-09-09 against commit `fef0d59` and the existing dirty working tree. These plans cover audit findings 1–4. Existing unrelated edits were preserved.
 
-| Order | Plan | Effort | Risk | Depends on | Status |
-| --- | --- | --- | --- | --- | --- |
-| 1 | [Remove unused strategy screens](001-remove-unused-strategy-ui.md) | S | Low | None | DONE |
-| 2 | [Remove the cloned navigation test](002-remove-cloned-navigation-test.md) | S | Low | None | DONE |
-| 3 | [Remove obsolete canonical assignment](003-remove-obsolete-canonical-assignment.md) | S | Low | None | DONE |
-| 4 | [Remove test-only adapters](004-remove-test-only-adapters.md) | S | Low | 003 | DONE |
+| Order | Plan                                                                                | Effort | Risk | Depends on | Status |
+| ----- | ----------------------------------------------------------------------------------- | ------ | ---- | ---------- | ------ |
+| 1     | [Remove unused strategy screens](001-remove-unused-strategy-ui.md)                  | S      | Low  | None       | DONE   |
+| 2     | [Remove the cloned navigation test](002-remove-cloned-navigation-test.md)           | S      | Low  | None       | DONE   |
+| 3     | [Remove obsolete canonical assignment](003-remove-obsolete-canonical-assignment.md) | S      | Low  | None       | DONE   |
+| 4     | [Remove test-only adapters](004-remove-test-only-adapters.md)                       | S      | Low  | 003        | DONE   |
 
 Execute in order. Plan 004 follows 003 because both edit canonicalization.ts. Each plan contains its own context, scope and verification commands. Preserve pre-existing edits and keep verification results separate from the static audit.
 

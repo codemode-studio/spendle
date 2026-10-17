@@ -26,3 +26,4 @@ todos.json
 # Local outputs of the category evaluation
 packages/server/evals/categories/results/
 .claude/worktrees/
+.vitest/

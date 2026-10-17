@@ -1,15 +1,25 @@
 ---
 name: browser-qa
-description: Verify Spendle changes through an available integrated browser using isolated synthetic data. Use after changes to screens, navigation, mutations, import flows, or query invalidation.
+description: Verify Spendle screens and flows through the integrated browser when the developer requests or agrees to browser verification. Reuse suitable running instances for read-only checks; use isolated synthetic data for mutations.
 ---
 
 # Browser QA
 
 Use the available integrated browser tool. No Playwright installation is required. Read its tool documentation before operating the browser; do not assume APIs for upload, screenshots or console access exist.
 
-## Start an isolated run
+## Choose the running instance
 
-Run `pnpm setup:check`, then `pnpm qa:start 3100` from the checkout being verified. Choose another explicit port for concurrent worktrees. The command starts the app on that port and an in-memory V2 QA API on the port plus 1200, and prints both URLs and the run directory. It refuses an occupied port. Use only the printed app URL for mutations.
+Browser verification is opt-in. Start only after the developer requests or agrees to it; a UI edit alone does not authorize a browser pass.
+
+Inspect existing servers first. Reuse a suitable running instance for read-only checks when its checkout and data are appropriate. Do not restart the developer's server or mutate personal data. If an isolated QA run is already available for this checkout and flow, reuse it. The primary agent verifies the integrated result once; delegated workers do not each start a server.
+
+For mutations, imports, provider flows, or checks requiring controlled state, use an isolated run with synthetic data and fake providers. If no suitable run exists, start one as below.
+
+## Start an isolated run when needed
+
+Run `vp run setup:check`, then `vp run qa:start 3100` from the checkout being verified. Choose another explicit port for concurrent worktrees. The command starts the app on that port and an in-memory V2 QA API on the port plus 1200, and prints both URLs and the run directory. It refuses an occupied port. Use only the printed app URL for mutations.
+
+QA runs skip Google sign-in (`SPENDLE_AUTH_DISABLED=1`) and act as the `QA` user. Check the sign-in page and redirects only on a run started without that flag, and never complete a real Google sign-in.
 
 The QA API seeds owner `Família QA`, account `Conta BRL de teste`, card `Cartão BRL de teste` and the default categories, and fakes Pluggy: connecting a bank in Configurações opens a simulated widget whose item brings synthetic movements. AI calls are disabled. The run directory contains `balanced.ofx`, `unbalanced.ofx`, `volume-121.ofx`, `server.log` (app) and `server-v2.log` (API). The API keeps its data in memory, so stopping the run discards it; do not copy or symlink a user's `data/` into QA.
 
@@ -29,8 +39,8 @@ Perform import checks before manual transaction checks, or start a fresh run; ch
 
 ## Evidence and cleanup
 
-Record URL, commit/worktree, run directory, flows actually exercised, expected versus observed values, and pass/fail. Save screenshots with the browser tool when supported, especially on failure. Consult `server.log` and `server-v2.log` for errors, and browser console/network errors when the tool exposes them. `pnpm qa:inspect <run-directory>` prints the run's accounts, entries and imports from the running QA API without changing them.
+Record URL, commit/worktree, run directory, flows actually exercised, expected versus observed values, and pass/fail. Save screenshots with the browser tool when supported, especially on failure. Consult `server.log` and `server-v2.log` for errors, and browser console/network errors when the tool exposes them. `vp run qa:inspect <run-directory>` prints the run's accounts, entries and imports from the running QA API without changing them.
 
 If file upload or another required browser capability is unavailable, mark that flow unverified and run its integration test as separate evidence. Do not claim a browser pass based on a server test.
 
-Stop the spawned server before `pnpm qa:clean <run-directory>`. Preserve a failing run until its evidence is recorded. The cleanup command checks ownership and refuses an active run.
+Stop only servers you started, using the captured process. Leave reused servers running. Stop the spawned server before `vp run qa:clean <run-directory>`. Preserve a failing run until its evidence is recorded. The cleanup command checks ownership and refuses an active run.

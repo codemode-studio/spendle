@@ -211,11 +211,7 @@ function CashHeader({
           {analysis ? 'Visão geral' : 'Caixa atual'}
         </p>
         <h1 className="text-2xl font-semibold tracking-tight tabular-nums md:text-[2rem]">
-          {analysis
-            ? 'Previsão'
-            : cash == null
-              ? 'Sem saldo registrado'
-              : formatCurrency(cash)}
+          {analysis ? 'Previsão' : formatCurrency(cash ?? 0)}
         </h1>
         {!analysis && <ExchangeNote exchange={exchange} className="mt-1" />}
       </div>

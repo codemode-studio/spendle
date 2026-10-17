@@ -38,7 +38,12 @@ type RecurrenceShape = {
 }
 
 export type RecurrencePresentationStatus =
-  'in_progress' | 'suggested' | 'overdue' | 'pending' | 'done' | 'paused'
+  | 'in_progress'
+  | 'suggested'
+  | 'overdue'
+  | 'pending'
+  | 'done'
+  | 'paused'
 
 export function describeRecurrence<const TRecurrence extends RecurrenceShape>(
   recurrence: TRecurrence,

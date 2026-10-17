@@ -2,7 +2,10 @@ import { formatCurrency as formatCurrencyValue } from './currency'
 import { formatMonthLong } from './period'
 
 export type AllocationBucket =
-  'essential' | 'lifestyle' | 'investment' | 'reserve'
+  | 'essential'
+  | 'lifestyle'
+  | 'investment'
+  | 'reserve'
 
 export type BucketAmounts = Record<AllocationBucket, number>
 

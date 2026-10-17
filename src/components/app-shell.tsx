@@ -6,14 +6,15 @@ import {
   CreditCard,
   Landmark,
   LayoutDashboard,
+  LogOut,
   Menu,
   PiggyBank,
-  PlugZap,
   Settings,
   Tags,
   Upload,
   X,
 } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { Link, useRouterState } from '@tanstack/react-router'
 
 import {
@@ -38,6 +39,9 @@ import { TooltipProvider } from '#/components/ui/tooltip'
 import { Toaster } from '#/components/ui/sonner'
 import { OnboardingCard } from '#/features/home/onboarding-card'
 import { SpendleLockup } from '#/components/spendle-logo'
+import { OpenFinanceLogo } from '#/components/open-finance-logo'
+import { authClient } from '#/features/auth/auth-client'
+import { viewerOptions } from '#/features/auth/viewer'
 
 const overviewNavigation = [
   { to: '/', label: 'Visão geral', icon: LayoutDashboard },
@@ -63,7 +67,7 @@ const managementNavigation = [
     to: '/configuracoes',
     search: { tab: 'open-finance' },
     label: 'Open Finance',
-    icon: PlugZap,
+    icon: OpenFinanceLogo,
   },
   {
     to: '/configuracoes',
@@ -105,7 +109,7 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
 
   const search = useRouterState({ select: (state) => state.location.search })
 
-  if (pathname === '/marca') {
+  if (pathname === '/marca' || pathname === '/entrar') {
     return (
       <main className="brand-guide-shell min-h-svh overflow-y-auto">
         {children}
@@ -205,6 +209,7 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
                 <span>Configurações</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
+            <SignOutItem />
           </SidebarMenu>
         </SidebarFooter>
       </Sidebar>
@@ -274,5 +279,27 @@ export function AppShell({
       </SidebarProvider>
       <Toaster position="top-right" />
     </TooltipProvider>
+  )
+}
+
+function SignOutItem() {
+  const { data: viewer } = useQuery(viewerOptions())
+
+  async function signOut() {
+    await authClient.signOut()
+    // A full load drops every cached financial read.
+    window.location.assign('/entrar')
+  }
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        tooltip={viewer ? `Sair (${viewer.email})` : 'Sair'}
+        onClick={() => void signOut()}
+      >
+        <LogOut />
+        <span>Sair</span>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
   )
 }

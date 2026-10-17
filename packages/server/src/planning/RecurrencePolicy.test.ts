@@ -1,12 +1,10 @@
 import { assert, describe, it } from '@effect/vitest'
 
-import {
-  buildBook,
-  detect,
-  planApproval,
-  type LinkVerdict,
-  type RecurrenceEntry,
-  type RecurrenceRule,
+import { buildBook, detect, planApproval } from './RecurrencePolicy.ts'
+import type {
+  LinkVerdict,
+  RecurrenceEntry,
+  RecurrenceRule,
 } from './RecurrencePolicy.ts'
 import { addPeriod } from './Schedule.ts'
 

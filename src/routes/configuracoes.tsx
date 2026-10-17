@@ -24,7 +24,6 @@ import {
 import { Field, FieldGroup, FieldLabel } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '#/components/ui/native-select'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import { AccountsSection } from '#/features/finance/accounts-section'
 import { CardsSection } from '#/features/finance/cards-section'
 import { KnowledgeBaseSection } from '#/features/finance/knowledge-base-section'
@@ -122,79 +121,35 @@ export const Route = createFileRoute('/configuracoes')({
 function SettingsPage() {
   const { tab } = Route.useSearch()
   const activeTab = resolveTab(tab)
-  const navigate = Route.useNavigate()
+
+  // Each area has its own sidebar entry, so the page shows only the selected
+  // one. Contas, Cartões and Open Finance render their own header to keep their
+  // primary action next to the title.
+  const ownsHeader =
+    activeTab === 'contas' ||
+    activeTab === 'cartoes' ||
+    activeTab === 'open-finance'
 
   return (
     <Page>
-      <PageHeader
-        title={
-          activeTab === 'geral' ? 'Configurações' : settingsLabels[activeTab]
-        }
-      />
-      <Tabs
-        value={activeTab}
-        onValueChange={(value) =>
-          void navigate({
-            search: {
-              tab: value === 'geral' ? undefined : (value as SettingsTab),
-            },
-          })
-        }
-        className="gap-6"
-      >
-        <NativeSelect
-          aria-label="Área das configurações"
-          value={activeTab}
-          onChange={(event) =>
-            void navigate({
-              search: { tab: event.target.value as SettingsTab },
-            })
+      {!ownsHeader && (
+        <PageHeader
+          title={
+            activeTab === 'geral' ? 'Configurações' : settingsLabels[activeTab]
           }
-          className="w-full md:hidden"
-        >
-          {settingsTabs.map((value) => (
-            <NativeSelectOption key={value} value={value}>
-              {settingsLabels[value]}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-        <TabsList
-          variant="line"
-          aria-label="Áreas das configurações"
-          className="hidden h-11 w-full justify-start overflow-x-auto overflow-y-hidden border-b md:flex"
-        >
-          {settingsTabs.map((value) => (
-            <TabsTrigger
-              key={value}
-              value={value}
-              className="min-h-11 flex-none px-3"
-            >
-              {settingsLabels[value]}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-        <TabsContent value="geral">
-          <GeneralSettings />
-        </TabsContent>
-        <TabsContent value="contas">
-          <AccountsSection />
-        </TabsContent>
-        <TabsContent value="cartoes">
-          <CardsSection />
-        </TabsContent>
-        <TabsContent value="open-finance">
-          <OpenFinanceSection />
-        </TabsContent>
-        <TabsContent value="recorrencias">
-          <PlanningSettings activeSection="recurrences" />
-        </TabsContent>
-        <TabsContent value="orcamento">
-          <PlanningSettings activeSection="planning" />
-        </TabsContent>
-        <TabsContent value="conhecimento">
-          <KnowledgeBaseSection />
-        </TabsContent>
-      </Tabs>
+        />
+      )}
+      {activeTab === 'geral' && <GeneralSettings />}
+      {activeTab === 'contas' && <AccountsSection />}
+      {activeTab === 'cartoes' && <CardsSection />}
+      {activeTab === 'open-finance' && <OpenFinanceSection />}
+      {activeTab === 'recorrencias' && (
+        <PlanningSettings activeSection="recurrences" />
+      )}
+      {activeTab === 'orcamento' && (
+        <PlanningSettings activeSection="planning" />
+      )}
+      {activeTab === 'conhecimento' && <KnowledgeBaseSection />}
     </Page>
   )
 }

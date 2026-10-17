@@ -22,7 +22,7 @@ import { useServerFn } from '@tanstack/react-start'
 import { useState } from 'react'
 import { toast } from 'sonner'
 
-import { EmptyState, Panel, SectionHeader, StatusBadge } from '#/components/ui'
+import { EmptyState, Panel, PageHeader, StatusBadge } from '#/components/ui'
 import { SegmentedControl } from '#/components/segmented-control'
 import {
   AlertDialog,
@@ -201,11 +201,11 @@ export function OpenFinanceSection() {
     connectMutation.isPending || registerMutation.isPending || opening
 
   return (
-    <div className="grid gap-6">
-      <SectionHeader
+    <>
+      <PageHeader
         title="Open Finance"
         description="Conecte bancos e cartões pela Pluggy para sincronizar lançamentos e saldos."
-        action={
+        actions={
           owners.length ? (
             <div className="flex flex-wrap items-center gap-2">
               {owners.length > 1 ? (
@@ -237,90 +237,93 @@ export function OpenFinanceSection() {
           ) : undefined
         }
       />
-
-      {!owners.length ? (
-        <Panel>
-          <EmptyState
-            icon={Plug}
-            title="Adicione um titular primeiro"
-            description="Cada conexão pertence a uma pessoa, família ou empresa."
-            action={
-              <Button
-                nativeButton={false}
-                render={<Link to="/configuracoes" search={{ tab: 'geral' }} />}
-              >
-                Adicionar titular
-              </Button>
-            }
-          />
-        </Panel>
-      ) : live.length ? (
-        <div className="grid gap-4">
-          {live.map((connection) => (
-            <ConnectionCard
-              key={connection.id}
-              connection={connection}
-              onLink={setLinking}
-              onOpenWidget={openWidget}
-              onRegistered={(itemId) =>
-                registerMutation.mutate({
-                  data: { connectionId: connection.id, itemId },
-                })
+      <div className="grid gap-6">
+        {!owners.length ? (
+          <Panel>
+            <EmptyState
+              icon={Plug}
+              title="Adicione um titular primeiro"
+              description="Cada conexão pertence a uma pessoa, família ou empresa."
+              action={
+                <Button
+                  nativeButton={false}
+                  render={
+                    <Link to="/configuracoes" search={{ tab: 'geral' }} />
+                  }
+                >
+                  Adicionar titular
+                </Button>
               }
             />
-          ))}
-        </div>
-      ) : (
-        <Panel>
-          <EmptyState
-            icon={Plug}
-            title="Nenhum banco conectado"
-            description="Use Conectar banco e autorize o acesso na Pluggy. Você escolhe quais contas copiar."
-          />
-        </Panel>
-      )}
-
-      {disconnected.length > 0 && (
-        <Panel title="Desconectadas">
-          <ul className="divide-y rounded-lg border text-sm">
-            {disconnected.map((connection) => (
-              <li
+          </Panel>
+        ) : live.length ? (
+          <div className="grid gap-4">
+            {live.map((connection) => (
+              <ConnectionCard
                 key={connection.id}
-                className="flex items-center justify-between gap-3 px-3 py-2"
-              >
-                <span className="truncate">
-                  {connection.connectorName ?? 'Conexão sem banco'}
-                </span>
-                <StatusBadge>
-                  {connection.lastSyncedAt
-                    ? `Última sincronização ${formatLongDate(connection.lastSyncedAt.slice(0, 10))}`
-                    : 'Nunca sincronizada'}
-                </StatusBadge>
-              </li>
+                connection={connection}
+                onLink={setLinking}
+                onOpenWidget={openWidget}
+                onRegistered={(itemId) =>
+                  registerMutation.mutate({
+                    data: { connectionId: connection.id, itemId },
+                  })
+                }
+              />
             ))}
-          </ul>
-        </Panel>
-      )}
+          </div>
+        ) : (
+          <Panel>
+            <EmptyState
+              icon={Plug}
+              title="Nenhum banco conectado"
+              description="Use Conectar banco e autorize o acesso na Pluggy. Você escolhe quais contas copiar."
+            />
+          </Panel>
+        )}
 
-      <LinkAccountDialog
-        providerAccount={linking}
-        onClose={() => setLinking(null)}
-        onLinked={async (connectionId) => {
-          setLinking(null)
-          const remaining = await queryClient.fetchQuery({
-            ...providerAccountsOptions(connectionId),
-            staleTime: 0,
-          })
-          const next = remaining.find((account) => account.accountId === null)
-          if (next) setLinking(next)
-        }}
-      />
+        {disconnected.length > 0 && (
+          <Panel title="Desconectadas">
+            <ul className="divide-y rounded-lg border text-sm">
+              {disconnected.map((connection) => (
+                <li
+                  key={connection.id}
+                  className="flex items-center justify-between gap-3 px-3 py-2"
+                >
+                  <span className="truncate">
+                    {connection.connectorName ?? 'Conexão sem banco'}
+                  </span>
+                  <StatusBadge>
+                    {connection.lastSyncedAt
+                      ? `Última sincronização ${formatLongDate(connection.lastSyncedAt.slice(0, 10))}`
+                      : 'Nunca sincronizada'}
+                  </StatusBadge>
+                </li>
+              ))}
+            </ul>
+          </Panel>
+        )}
 
-      <SimulatedConnectDialog
-        request={simulated}
-        onDone={() => setSimulated(null)}
-      />
-    </div>
+        <LinkAccountDialog
+          providerAccount={linking}
+          onClose={() => setLinking(null)}
+          onLinked={async (connectionId) => {
+            setLinking(null)
+            const remaining = await queryClient.fetchQuery({
+              ...providerAccountsOptions(connectionId),
+              staleTime: 0,
+            })
+            const next = remaining.find((account) => account.accountId === null)
+            if (next) setLinking(next)
+          }}
+        />
+
+        <SimulatedConnectDialog
+          request={simulated}
+          onDone={() => setSimulated(null)}
+        />
+      </div>
+    </>
   )
 }
 

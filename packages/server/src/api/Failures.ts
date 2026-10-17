@@ -42,7 +42,10 @@ export type EndpointError =
   | InternalError
 
 type Status =
-  typeof NotFound | typeof InvalidRequest | typeof Conflict | typeof Rejected
+  | typeof NotFound
+  | typeof InvalidRequest
+  | typeof Conflict
+  | typeof Rejected
 
 const byReason = (
   table: Readonly<Record<string, Status>>,

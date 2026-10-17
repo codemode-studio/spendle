@@ -10,7 +10,8 @@ import * as SqlSchema from 'effect/sql/SqlSchema'
 
 import { Cents, Currency, LocalDate } from '../domain/Money.ts'
 import { EventLog } from '../events/EventLog.ts'
-import { Accounts, AccountNotFound, LedgerStoreError } from './Accounts.ts'
+import type { AccountNotFound } from './Accounts.ts'
+import { Accounts, LedgerStoreError } from './Accounts.ts'
 
 export const SourceKind = Schema.Literals(['open_finance', 'file', 'manual'])
 export const TransactionStatus = Schema.Literals([

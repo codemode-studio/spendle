@@ -207,7 +207,10 @@ export const cents = (token: string) =>
 
 /** Removes accents and uppercases, for matching month names. */
 export const fold = (value: string) =>
-  value.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase()
+  value
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toUpperCase()
 
 export const monthAbbreviations = [
   'JAN',

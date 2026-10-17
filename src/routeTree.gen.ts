@@ -12,11 +12,14 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CategoriasRouteImport } from './routes/categorias'
 import { Route as ConfiguracoesRouteImport } from './routes/configuracoes'
+import { Route as EntrarRouteImport } from './routes/entrar'
 import { Route as ImportarRouteImport } from './routes/importar'
 import { Route as InvestimentosRouteImport } from './routes/investimentos'
 import { Route as MarcaRouteImport } from './routes/marca'
 import { Route as PlanejamentoRouteImport } from './routes/planejamento'
 import { Route as TransacoesRouteImport } from './routes/transacoes'
+import { Route as ApiViewerRouteImport } from './routes/api/viewer'
+import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -31,6 +34,11 @@ const CategoriasRoute = CategoriasRouteImport.update({
 const ConfiguracoesRoute = ConfiguracoesRouteImport.update({
   id: '/configuracoes',
   path: '/configuracoes',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EntrarRoute = EntrarRouteImport.update({
+  id: '/entrar',
+  path: '/entrar',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ImportarRoute = ImportarRouteImport.update({
@@ -58,37 +66,56 @@ const TransacoesRoute = TransacoesRouteImport.update({
   path: '/transacoes',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiViewerRoute = ApiViewerRouteImport.update({
+  id: '/api/viewer',
+  path: '/api/viewer',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/categorias': typeof CategoriasRoute
   '/configuracoes': typeof ConfiguracoesRoute
+  '/entrar': typeof EntrarRoute
   '/importar': typeof ImportarRoute
   '/investimentos': typeof InvestimentosRoute
   '/marca': typeof MarcaRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
+  '/api/viewer': typeof ApiViewerRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/categorias': typeof CategoriasRoute
   '/configuracoes': typeof ConfiguracoesRoute
+  '/entrar': typeof EntrarRoute
   '/importar': typeof ImportarRoute
   '/investimentos': typeof InvestimentosRoute
   '/marca': typeof MarcaRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
+  '/api/viewer': typeof ApiViewerRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/categorias': typeof CategoriasRoute
   '/configuracoes': typeof ConfiguracoesRoute
+  '/entrar': typeof EntrarRoute
   '/importar': typeof ImportarRoute
   '/investimentos': typeof InvestimentosRoute
   '/marca': typeof MarcaRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
+  '/api/viewer': typeof ApiViewerRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -96,42 +123,54 @@ export interface FileRouteTypes {
     | '/'
     | '/categorias'
     | '/configuracoes'
+    | '/entrar'
     | '/importar'
     | '/investimentos'
     | '/marca'
     | '/planejamento'
     | '/transacoes'
+    | '/api/viewer'
+    | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/categorias'
     | '/configuracoes'
+    | '/entrar'
     | '/importar'
     | '/investimentos'
     | '/marca'
     | '/planejamento'
     | '/transacoes'
+    | '/api/viewer'
+    | '/api/auth/$'
   id:
     | '__root__'
     | '/'
     | '/categorias'
     | '/configuracoes'
+    | '/entrar'
     | '/importar'
     | '/investimentos'
     | '/marca'
     | '/planejamento'
     | '/transacoes'
+    | '/api/viewer'
+    | '/api/auth/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   CategoriasRoute: typeof CategoriasRoute
   ConfiguracoesRoute: typeof ConfiguracoesRoute
+  EntrarRoute: typeof EntrarRoute
   ImportarRoute: typeof ImportarRoute
   InvestimentosRoute: typeof InvestimentosRoute
   MarcaRoute: typeof MarcaRoute
   PlanejamentoRoute: typeof PlanejamentoRoute
   TransacoesRoute: typeof TransacoesRoute
+  ApiViewerRoute: typeof ApiViewerRoute
+  ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -155,6 +194,13 @@ declare module '@tanstack/react-router' {
       path: '/configuracoes'
       fullPath: '/configuracoes'
       preLoaderRoute: typeof ConfiguracoesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/entrar': {
+      id: '/entrar'
+      path: '/entrar'
+      fullPath: '/entrar'
+      preLoaderRoute: typeof EntrarRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/importar': {
@@ -192,6 +238,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TransacoesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/viewer': {
+      id: '/api/viewer'
+      path: '/api/viewer'
+      fullPath: '/api/viewer'
+      preLoaderRoute: typeof ApiViewerRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -199,21 +259,25 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   CategoriasRoute: CategoriasRoute,
   ConfiguracoesRoute: ConfiguracoesRoute,
+  EntrarRoute: EntrarRoute,
   ImportarRoute: ImportarRoute,
   InvestimentosRoute: InvestimentosRoute,
   MarcaRoute: MarcaRoute,
   PlanejamentoRoute: PlanejamentoRoute,
   TransacoesRoute: TransacoesRoute,
+  ApiViewerRoute: ApiViewerRoute,
+  ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
 
 import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
+import type { startInstance } from './start.ts'
 declare module '@tanstack/react-start' {
   interface Register {
     ssr: true
     router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
   }
 }

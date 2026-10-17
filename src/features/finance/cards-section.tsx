@@ -10,7 +10,7 @@ import { useServerFn } from '@tanstack/react-start'
 import { toast } from 'sonner'
 import { useState } from 'react'
 
-import { EmptyState, Panel, SectionHeader, StatusBadge } from '#/components/ui'
+import { EmptyState, Panel, PageHeader, StatusBadge } from '#/components/ui'
 import { Button } from '#/components/ui/button'
 import {
   Dialog,
@@ -140,10 +140,10 @@ export function CardsSection() {
   }
 
   return (
-    <div className="grid gap-6">
-      <SectionHeader
-        title="Cartões de crédito"
-        action={
+    <>
+      <PageHeader
+        title="Cartões"
+        actions={
           <Button
             type="button"
             onClick={() => {
@@ -156,120 +156,129 @@ export function CardsSection() {
           </Button>
         }
       />
-      {cards.length ? (
-        <div className="grid gap-4 md:grid-cols-2">
-          {cards.map((card) => (
-            <CardInstrument
-              key={card.id}
-              card={card}
-              onEdit={() => {
-                setError('')
-                setEditingId(card.id)
-              }}
-            />
-          ))}
-        </div>
-      ) : (
-        <Panel>
-          <EmptyState
-            icon={CreditCard}
-            title="Nenhum cartão cadastrado"
-            description="Adicione o cartão ou conecte o banco para acompanhar as faturas."
-            action={
-              <Button
-                variant="outline"
-                nativeButton={false}
-                render={
-                  <Link to="/configuracoes" search={{ tab: 'open-finance' }} />
-                }
-              >
-                <Plug data-icon="inline-start" />
-                Conectar banco
-              </Button>
-            }
-          />
-        </Panel>
-      )}
-
-      {cards.length > 0 && <CardCyclesExplorer cards={cards} />}
-
-      <Dialog
-        open={addOpen}
-        onOpenChange={(open) => {
-          if (!createMutation.isPending) setAddOpen(open)
-          if (!open) setError('')
-        }}
-      >
-        <DialogContent className="sm:max-w-lg">
-          <form onSubmit={submitCreate} className="grid gap-4">
-            <DialogHeader>
-              <DialogTitle>Adicionar cartão</DialogTitle>
-              <DialogDescription>
-                Fechamento e vencimento definem o calendário das faturas.
-              </DialogDescription>
-            </DialogHeader>
-            <CardFormFields owners={owners} />
-            {error && <FieldError>{error}</FieldError>}
-            <DialogFooter>
-              <DialogClose render={<Button type="button" variant="outline" />}>
-                Cancelar
-              </DialogClose>
-              <Button type="submit" disabled={createMutation.isPending}>
-                {createMutation.isPending ? 'Salvando…' : 'Salvar cartão'}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={Boolean(editing)}
-        onOpenChange={(open) => {
-          if (!open && !updateMutation.isPending) setEditingId(null)
-          if (!open) setError('')
-        }}
-      >
-        {editing && (
-          <DialogContent className="sm:max-w-lg">
-            <form onSubmit={submitEdit} className="grid gap-4">
-              <DialogHeader>
-                <DialogTitle>Editar cartão</DialogTitle>
-                <DialogDescription>
-                  Mudar fechamento ou vencimento recalcula as faturas.
-                </DialogDescription>
-              </DialogHeader>
-              <CardFormFields owners={owners} card={editing} />
-              {error && <FieldError>{error}</FieldError>}
-              <DialogFooter className="sm:justify-between">
+      <div className="grid gap-6">
+        {cards.length ? (
+          <div className="grid gap-4 md:grid-cols-2">
+            {cards.map((card) => (
+              <CardInstrument
+                key={card.id}
+                card={card}
+                onEdit={() => {
+                  setError('')
+                  setEditingId(card.id)
+                }}
+              />
+            ))}
+          </div>
+        ) : (
+          <Panel>
+            <EmptyState
+              icon={CreditCard}
+              title="Nenhum cartão cadastrado"
+              description="Adicione o cartão ou conecte o banco para acompanhar as faturas."
+              action={
                 <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={archiveMutation.isPending}
-                  onClick={() =>
-                    archiveMutation.mutate({ data: { accountId: editing.id } })
+                  variant="outline"
+                  nativeButton={false}
+                  render={
+                    <Link
+                      to="/configuracoes"
+                      search={{ tab: 'open-finance' }}
+                    />
                   }
                 >
-                  <Archive data-icon="inline-start" />
-                  Arquivar
+                  <Plug data-icon="inline-start" />
+                  Conectar banco
                 </Button>
-                <div className="flex flex-col-reverse gap-2 sm:flex-row">
-                  <DialogClose
-                    render={<Button type="button" variant="outline" />}
-                  >
-                    Cancelar
-                  </DialogClose>
-                  <Button type="submit" disabled={updateMutation.isPending}>
-                    {updateMutation.isPending
-                      ? 'Salvando…'
-                      : 'Salvar alterações'}
-                  </Button>
-                </div>
+              }
+            />
+          </Panel>
+        )}
+
+        {cards.length > 0 && <CardCyclesExplorer cards={cards} />}
+
+        <Dialog
+          open={addOpen}
+          onOpenChange={(open) => {
+            if (!createMutation.isPending) setAddOpen(open)
+            if (!open) setError('')
+          }}
+        >
+          <DialogContent className="sm:max-w-lg">
+            <form onSubmit={submitCreate} className="grid gap-4">
+              <DialogHeader>
+                <DialogTitle>Adicionar cartão</DialogTitle>
+                <DialogDescription>
+                  Fechamento e vencimento definem o calendário das faturas.
+                </DialogDescription>
+              </DialogHeader>
+              <CardFormFields owners={owners} />
+              {error && <FieldError>{error}</FieldError>}
+              <DialogFooter>
+                <DialogClose
+                  render={<Button type="button" variant="outline" />}
+                >
+                  Cancelar
+                </DialogClose>
+                <Button type="submit" disabled={createMutation.isPending}>
+                  {createMutation.isPending ? 'Salvando…' : 'Salvar cartão'}
+                </Button>
               </DialogFooter>
             </form>
           </DialogContent>
-        )}
-      </Dialog>
-    </div>
+        </Dialog>
+
+        <Dialog
+          open={Boolean(editing)}
+          onOpenChange={(open) => {
+            if (!open && !updateMutation.isPending) setEditingId(null)
+            if (!open) setError('')
+          }}
+        >
+          {editing && (
+            <DialogContent className="sm:max-w-lg">
+              <form onSubmit={submitEdit} className="grid gap-4">
+                <DialogHeader>
+                  <DialogTitle>Editar cartão</DialogTitle>
+                  <DialogDescription>
+                    Mudar fechamento ou vencimento recalcula as faturas.
+                  </DialogDescription>
+                </DialogHeader>
+                <CardFormFields owners={owners} card={editing} />
+                {error && <FieldError>{error}</FieldError>}
+                <DialogFooter className="sm:justify-between">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={archiveMutation.isPending}
+                    onClick={() =>
+                      archiveMutation.mutate({
+                        data: { accountId: editing.id },
+                      })
+                    }
+                  >
+                    <Archive data-icon="inline-start" />
+                    Arquivar
+                  </Button>
+                  <div className="flex flex-col-reverse gap-2 sm:flex-row">
+                    <DialogClose
+                      render={<Button type="button" variant="outline" />}
+                    >
+                      Cancelar
+                    </DialogClose>
+                    <Button type="submit" disabled={updateMutation.isPending}>
+                      {updateMutation.isPending
+                        ? 'Salvando…'
+                        : 'Salvar alterações'}
+                    </Button>
+                  </div>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          )}
+        </Dialog>
+      </div>
+    </>
   )
 }
 

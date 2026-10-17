@@ -4,7 +4,7 @@ import * as Duration from 'effect/Duration'
 import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
-import * as Redacted from 'effect/Redacted'
+import type * as Redacted from 'effect/Redacted'
 import * as Schedule from 'effect/Schedule'
 import * as Schema from 'effect/Schema'
 import * as HttpClient from 'effect/http/HttpClient'
@@ -109,7 +109,7 @@ const requestTimeout = Duration.seconds(30)
 export const defaultModel = 'jev-1.13.0'
 
 /**
- * Raised only after `pnpm --filter @spendle/server eval:categories` shows
+ * Raised only after `vp run --filter @spendle/server eval:categories` shows
  * answers at or above it right often enough; never below the suggest floor.
  */
 const ApplyThreshold = Config.schema(
