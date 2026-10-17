@@ -24,7 +24,7 @@
   "devDependencies": {
     "@effect/language-service": "catalog:",
     "@effect/vitest": "catalog:",
-    "@types/node": "^24.0.0",
+    "@types/node": "catalog:",
     "typescript": "^6.0.2",
     "vitest": "catalog:",
     "vite-plus": "catalog:"
