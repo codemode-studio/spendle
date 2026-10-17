@@ -7,7 +7,6 @@ import * as HttpApiClient from 'effect/http-api/HttpApiClient'
 import { memberHeader } from '../api/definition/Security.ts'
 import { SpaceApi } from '../api/definition/Space.ts'
 import { clientFor, spacesTest } from '../testing/SpacesTest.ts'
-import { SpaceDirectory } from './SpaceDirectory.ts'
 
 // The space client the web server uses, naming `email` as the member.
 const spaceClientFor = (email: string) =>
@@ -60,31 +59,40 @@ describe('family space members', () => {
       }).pipe(Effect.provide(spacesTest())),
   )
 
-  it.effect('moves in someone whose own space is still empty', () =>
+  it.effect('moves in someone whose own space was never written to', () =>
     Effect.gen(function* () {
       const ana = yield* anasSpace
-      // Beto signed in before being added: a space of his own, empty.
+      // Beto signed in and only looked around: a space of his own, unwritten.
       yield* ownerNames('beto@example.com')
+      const anas = yield* ana.get()
       yield* ana.addMember({ payload: { email: 'beto@example.com' } })
 
-      const spaces = yield* SpaceDirectory.use((directory) => directory.list)
-      assert.strictEqual(spaces.length, 1)
+      const betos = yield* (yield* spaceClientFor(
+        'beto@example.com',
+      )).space.get()
+      assert.strictEqual(betos.id, anas.id)
       assert.deepStrictEqual(yield* ownerNames('beto@example.com'), ['Família'])
     }).pipe(Effect.provide(spacesTest())),
   )
 
-  it.effect('refuses someone whose own space already holds data', () =>
+  it.effect('refuses someone who recorded anything in their own space', () =>
     Effect.gen(function* () {
       const ana = yield* anasSpace
-      yield* (yield* clientFor('beto@example.com')).owners.create({
-        payload: { name: 'Beto', kind: 'person' },
+      // A goal alone, without owners or accounts, is still Beto's data.
+      yield* (yield* clientFor('beto@example.com')).planning.saveGoal({
+        payload: {
+          name: 'Reserva',
+          type: 'emergency_reserve',
+          targetCents: 100_000,
+          currentCents: 0,
+        },
       })
       const refused = yield* ana
         .addMember({ payload: { email: 'beto@example.com' } })
         .pipe(Effect.flip)
 
       assert.strictEqual(failureReason(refused), 'member_elsewhere')
-      assert.deepStrictEqual(yield* ownerNames('beto@example.com'), ['Beto'])
+      assert.deepStrictEqual(yield* ownerNames('beto@example.com'), [])
     }).pipe(Effect.provide(spacesTest())),
   )
 
@@ -103,9 +111,16 @@ describe('family space members', () => {
         removed.members.map((member) => member.email),
         ['ana@example.com'],
       )
-      // Back to a space of his own, without Ana's data.
+      // Back to a space of his own, without Ana's data; owning it gives him
+      // no say over Ana's space.
       assert.deepStrictEqual(yield* ownerNames('beto@example.com'), [])
+      const betoRemovingAna = yield* (yield* spaceClientFor(
+        'beto@example.com',
+      )).space
+        .removeMember({ payload: { email: 'ana@example.com' } })
+        .pipe(Effect.flip)
       assert.strictEqual(failureReason(ownerRemoval), 'owner_stays')
+      assert.strictEqual(failureReason(betoRemovingAna), 'member_not_found')
     }).pipe(Effect.provide(spacesTest())),
   )
 })

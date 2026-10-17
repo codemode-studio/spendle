@@ -17,6 +17,7 @@ export type SpaceMember = typeof SpaceMember.Type
 
 /** The caller's family space: who belongs to it and the caller's own email. */
 export const SpaceView = Schema.Struct({
+  id: Schema.String,
   name: Schema.String,
   you: Schema.String,
   members: Schema.Array(SpaceMember),
@@ -33,7 +34,7 @@ export class SpaceGroupApi extends HttpApiGroup.make('space')
       success: SpaceView,
       error: EndpointErrors,
     }),
-    /** Owner only. Someone with an empty space of their own moves in. */
+    /** Owner only. Someone whose own space was never written to moves in. */
     HttpApiEndpoint.post('addMember', '/members', {
       payload: MemberEmail,
       success: SpaceView,

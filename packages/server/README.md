@@ -30,7 +30,7 @@ Todos os dados pertencem a um espaço: contas, lançamentos, categorias, planeja
 
 - O app web envia o e-mail de quem entrou no cabeçalho `x-spendle-member`. Com `SPENDLE_API_TOKEN`, o token é verificado antes, e só ele torna o cabeçalho confiável.
 - O primeiro pedido de um e-mail sem espaço cria um espaço vazio para ele.
-- `/api/v2/space` (contrato `SpaceApi`, respondido pelo servidor, não por um espaço) mostra quem faz parte do espaço; quem o criou adiciona e remove pessoas. Uma pessoa que já entrou e tem um espaço próprio vazio muda para o novo espaço, e o vazio é apagado; com dados lá, o pedido é recusado (`member_elsewhere`).
+- `/api/v2/space` (contrato `SpaceApi`, respondido pelo servidor, não por um espaço) mostra quem faz parte do espaço; quem o criou adiciona e remove pessoas. Uma pessoa que já entrou, mas nunca gravou nada no próprio espaço, muda para o novo espaço; o antigo fica sem membros, com o arquivo intacto. Se ela gravou qualquer coisa lá, o pedido é recusado (`member_elsewhere`). As mudanças de membros conferem, na mesma transação, que quem pede é quem criou o espaço.
 - O webhook da Pluggy é guardado primeiro no banco de controle e respondido na hora; depois vai ao espaço cuja conexão tem o item ou, para um item novo, ao espaço da conexão que o pediu. Exclusões de item vão a todos os espaços. O que não dá para entregar ainda (Pluggy ou um espaço indisponível, dados não reivindicados) fica guardado e é tentado de novo, na ordem de cada item.
 - Saúde (`/api/v2/health`) e o documento OpenAPI respondem sem token nem membro.
 

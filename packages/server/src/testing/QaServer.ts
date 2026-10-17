@@ -313,6 +313,7 @@ const QaMembers = HttpApiBuilder.layer(SpaceApi).pipe(
         const request = yield* HttpServerRequest.HttpServerRequest
         const you = request.headers[memberHeader] ?? 'qa@spendle.local'
         return {
+          id: 'qa',
           name: 'Família QA',
           you,
           members: [{ email: you, role: 'owner' as const }],

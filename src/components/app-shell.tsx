@@ -14,6 +14,7 @@ import {
   Upload,
   X,
 } from 'lucide-react'
+import { useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useRouterState } from '@tanstack/react-router'
 
@@ -101,7 +102,27 @@ function menuTab(tab: unknown) {
   return tab === 'metas' ? 'orcamento' : tab
 }
 
+/**
+ * Reloads when the tab learns, on refocus, that its person signed out or was
+ * moved to another family space: cached reads belong to the space it showed.
+ */
+function useReloadOnSpaceChange() {
+  const { data: viewer } = useQuery(viewerOptions())
+  const shown = useRef(viewer)
+  useEffect(() => {
+    const before = shown.current
+    if (before == null) {
+      shown.current = viewer
+      return
+    }
+    if (viewer === null || (viewer && viewer.spaceId !== before.spaceId)) {
+      window.location.reload()
+    }
+  }, [viewer])
+}
+
 function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  useReloadOnSpaceChange()
   const { openMobile, setOpenMobile } = useSidebar()
   const pathname = useRouterState({
     select: (state) => state.location.pathname,

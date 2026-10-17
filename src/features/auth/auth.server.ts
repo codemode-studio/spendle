@@ -4,7 +4,7 @@ import { APIError } from 'better-auth/api'
 import { tanstackStartCookies } from 'better-auth/tanstack-start'
 
 import { isAllowedEmail, parseAllowedEmails } from './allowlist'
-import type { Viewer } from './viewer'
+import type { Person } from './viewer'
 
 function requiredEnv(name: string) {
   const value = process.env[name]
@@ -58,7 +58,7 @@ export function getAuth() {
   return auth
 }
 
-const qaViewer: Viewer = {
+const qaViewer: Person = {
   name: 'QA',
   email: 'qa@spendle.local',
   image: null,
@@ -66,13 +66,13 @@ const qaViewer: Viewer = {
 
 // One lookup per request: the middleware, SSR loaders and every API call of
 // a request share it instead of decrypting the session cookie each time.
-const viewers = new WeakMap<Request, Promise<Viewer | null>>()
+const viewers = new WeakMap<Request, Promise<Person | null>>()
 
 /**
  * The signed-in person for the current request, or null. The allowlist is
  * checked again here so removing an email takes effect for live sessions.
  */
-export function readViewer(): Promise<Viewer | null> {
+export function readViewer(): Promise<Person | null> {
   // Set only by `vp run qa:start`, whose API holds synthetic data.
   if (process.env.SPENDLE_AUTH_DISABLED === '1') {
     return Promise.resolve(qaViewer)
@@ -86,7 +86,7 @@ export function readViewer(): Promise<Viewer | null> {
   return viewer
 }
 
-async function lookUpViewer(headers: Headers): Promise<Viewer | null> {
+async function lookUpViewer(headers: Headers): Promise<Person | null> {
   const session = await getAuth().api.getSession({ headers })
   if (!session || !isAllowedEmail(session.user.email, allowedEmails())) {
     return null
