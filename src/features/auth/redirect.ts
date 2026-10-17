@@ -8,6 +8,8 @@ const base = 'http://spendle.invalid'
 export function safeRedirect(value: string) {
   if (!value.startsWith('/')) return undefined
   const url = new URL(value, base)
-  if (url.origin !== base) return undefined
+  // Dot segments can normalize to `//host`, which a Location header would
+  // also read as another origin.
+  if (url.origin !== base || url.pathname.startsWith('//')) return undefined
   return `${url.pathname}${url.search}${url.hash}`
 }

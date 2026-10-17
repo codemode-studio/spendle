@@ -15,6 +15,9 @@ it('rejects destinations that leave the app', () => {
     '/\\/example.org',
     'https://example.org',
     'example.org',
+    '/.//example.org',
+    '/%2e//example.org',
+    '/foo/..//example.org',
   ]) {
     expect(safeRedirect(value)).toBeUndefined()
   }
