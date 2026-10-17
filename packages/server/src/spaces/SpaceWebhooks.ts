@@ -1,3 +1,4 @@
+import * as Cause from 'effect/Cause'
 import * as Context from 'effect/Context'
 import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
@@ -76,15 +77,20 @@ const make = Effect.gen(function* () {
     )
     // Item ids are Pluggy's, so a holder found is the only one.
     if (holding.yes.length > 0) return { spaces: holding.yes, final: true }
-    if (!holding.complete) return { spaces: [], final: false }
 
+    // Asked even when a space could not answer: a healthy space's pending
+    // connection must still receive its new item.
     const item = yield* pluggy.getItem(itemId).pipe(Effect.result)
     if (Result.isFailure(item)) {
-      // Gone or never Pluggy's: nothing to route. Unavailable: ask again.
-      return { spaces: [], final: item.failure.reason !== 'unavailable' }
+      // Only a missing item is a final answer; credentials, configuration
+      // and outages can recover, so the event waits for them.
+      return {
+        spaces: [],
+        final: holding.complete && item.failure.reason === 'not_found',
+      }
     }
     const requester = item.success.clientUserId
-    if (!requester) return { spaces: [], final: true }
+    if (!requester) return { spaces: [], final: holding.complete }
     const requesting = yield* ask(
       spaces,
       OpenFinance.use((openFinance) => openFinance.connection(requester)).pipe(
@@ -92,9 +98,11 @@ const make = Effect.gen(function* () {
         Effect.catchTag('OpenFinanceError', () => Effect.succeed(false)),
       ),
     )
+    // Connection ids are unique, so a requester found is the only one.
     return {
       spaces: requesting.yes,
-      final: requesting.yes.length > 0 || requesting.complete,
+      final:
+        requesting.yes.length > 0 || (holding.complete && requesting.complete),
     }
   })
 
@@ -169,8 +177,15 @@ const make = Effect.gen(function* () {
     } satisfies Webhook.WebhookResult
   })
 
-  // Routes on each delivery, and again every minute for what had to wait.
+  // Routes on each delivery, and again every minute for what had to wait. A
+  // pass that fails (the control database busy, say) is logged and the next
+  // one runs as usual; only interruption stops the loop.
   yield* drain.pipe(
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.failCause(cause)
+        : Effect.logError('Webhook routing failed; retrying', cause),
+    ),
     Effect.andThen(Queue.take(wake).pipe(Effect.timeoutOption('1 minute'))),
     Effect.forever,
     Effect.forkScoped,

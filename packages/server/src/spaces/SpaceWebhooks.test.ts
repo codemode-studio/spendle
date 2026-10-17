@@ -112,6 +112,28 @@ describe('Pluggy webhooks across spaces', () => {
       }).pipe(Effect.provide(spacesTest())),
   )
 
+  it.effect('drops an event for an item Pluggy no longer has', () =>
+    Effect.gen(function* () {
+      const { ana, beto } = yield* twoSpaces
+      const state = yield* FakePluggyState
+      yield* Ref.update(state, (current) => ({
+        ...current,
+        deleted: [...current.deleted, 'x'],
+      }))
+      yield* deliver({ eventId: 'event-6', event: 'item/updated', itemId: 'x' })
+      yield* drain
+
+      assert.deepStrictEqual(
+        [yield* storedIn(ana), yield* storedIn(beto)],
+        [0, 0],
+      )
+      assert.deepStrictEqual(
+        yield* SpaceDirectory.use((directory) => directory.pendingWebhooks),
+        [],
+      )
+    }).pipe(Effect.provide(spacesTest())),
+  )
+
   it.effect('accepts a retried delivery once', () =>
     Effect.gen(function* () {
       const event = { eventId: 'event-4', event: 'item/deleted', itemId: 'x' }
