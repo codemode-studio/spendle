@@ -12,5 +12,14 @@ jobs:
           node-version-file: .node-version
           cache: true
           run-install: true
-      - run: vp run setup:check
-      - run: vp run verify
+      - name: Setup check
+        run: vp run setup:check
+      # Same steps as `vp run verify`, split so a failure names its check.
+      - name: Check (format and lint)
+        run: vp check
+      - name: Typecheck
+        run: vp run -r --parallel typecheck
+      - name: Test
+        run: vp run -r --parallel test
+      - name: Build
+        run: vp run build

@@ -26,7 +26,6 @@
           "@effect/sql-sqlite-node"
         ],
         "diagnosticSeverity": {
-          "importFromBarrel": "error",
           "anyUnknownInErrorContext": "error",
           "unsafeEffectTypeAssertion": "error",
           "instanceOfSchema": "error",
@@ -52,6 +51,10 @@
           "globalFetch": "error",
           "globalFetchInEffect": "error",
           "strictEffectProvide": "off",
+          // effect/sql and effect/http are used on purpose; they are still
+          // marked unstable in Effect 4.
+          "unstableApiUsage": "off",
+          "experimentalApiUsage": "off",
           "strictBooleanExpressions": "off",
           "lazyEffect": "off",
           "schemaNumber": "off"

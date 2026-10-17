@@ -12,17 +12,18 @@
     "build": "vp build .",
     "preview": "vp preview --host 127.0.0.1",
     "lint": "vp lint",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc-rs --noEmit",
     "test": "vp test run --exclude 'data/**' --exclude 'packages/**' --exclude '.repos/**'",
     "test:watch": "vp test --exclude 'data/**' --exclude 'packages/**' --exclude '.repos/**'",
-    "verify": "vp run typecheck && vp lint && vp fmt --check && vp run test && vp run build && vp run --filter @spendle/server verify",
+    "verify": "vp check && vp run -r --parallel typecheck && vp run -r --parallel test && vp run build",
     "fmt": "vp fmt && vp lint --fix",
     "fmt:check": "vp fmt --check",
     "setup:check": "tsx scripts/doctor.ts",
     "sync:effect-docs": "scripts/sync-effect-docs.sh",
     "qa:start": "tsx scripts/qa.ts start",
     "qa:inspect": "tsx scripts/qa.ts inspect",
-    "qa:clean": "tsx scripts/qa.ts clean"
+    "qa:clean": "tsx scripts/qa.ts clean",
+    "prepare": "effect-tsgo patch"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -54,6 +55,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@effect/tsgo": "catalog:",
     "@tanstack/devtools-vite": "0.8.3",
     "@tanstack/router-cli": "^1.132.0",
     "@testing-library/jest-dom": "^7.0.0",
@@ -63,8 +65,9 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.1",
     "jsdom": "^30.0.1",
+    "tsc-rs": "0.7.0",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.2",
+    "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:"
   },

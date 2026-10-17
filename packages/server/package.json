@@ -10,7 +10,7 @@
     "start": "node --env-file-if-exists=../../.env.local src/bin.ts",
     "migrate-v1": "node --env-file-if-exists=../../.env.local src/migrate-v1.ts",
     "qa": "node src/testing/QaServer.ts",
-    "typecheck": "tsc --noEmit && effect-language-service diagnostics --project tsconfig.json --strict --format text",
+    "typecheck": "tsc-rs --noEmit",
     "test": "vp test run",
     "verify": "vp run typecheck && vp run test",
     "eval:categories": "node --env-file-if-exists=../../.env.local src/evals/EvalCategories.ts"
@@ -22,10 +22,9 @@
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect/language-service": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
-    "typescript": "^6.0.2",
+    "typescript": "catalog:",
     "vitest": "catalog:",
     "vite-plus": "catalog:"
   },

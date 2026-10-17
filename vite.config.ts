@@ -83,18 +83,14 @@ const config = defineConfig(({ mode }) => {
         'react/react-in-jsx-scope': 'off',
         'react/purity': 'warn',
         'react/set-state-in-effect': 'warn',
-        // Type-aware rules that only flag safe patterns here: `String()` on
-        // FormData fields and spreading Schema.Class values into read models.
-        'typescript/no-base-to-string': 'off',
-        'typescript/no-duplicate-type-constituents': 'off',
-        'typescript/no-misused-spread': 'off',
-        'typescript/require-array-sort-compare': 'off',
-        'typescript/restrict-template-expressions': 'off',
         'vite-plus/prefer-vite-plus-imports': 'error',
       },
+      // Type checking belongs to `tsc-rs` (`vp run typecheck`), which is much
+      // faster; linting stays syntactic.
       options: {
-        typeAware: true,
-        typeCheck: true,
+        reportUnusedDisableDirectives: 'error',
+        typeAware: false,
+        typeCheck: false,
       },
       jsPlugins: [
         {
