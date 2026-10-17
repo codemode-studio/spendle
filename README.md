@@ -20,7 +20,7 @@ vp run dev                            # app web
 
 O app exige entrar com Google. Em `.env.local`, preencha `BETTER_AUTH_SECRET` (`openssl rand -base64 32`), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` e, em `SPENDLE_ALLOWED_EMAILS`, as contas Google que podem entrar; lista vazia não deixa ninguém entrar. O cliente OAuth do Google precisa do redirecionamento `http://localhost:3000/api/auth/callback/google`. A sessão fica num cookie criptografado, sem banco; trocar o segredo encerra todas as sessões.
 
-Cada conta Google enxerga só os dados do seu espaço familiar. Se você já tinha dados antes dos espaços, rode uma vez, antes de entrar: `vp run --filter @spendle/server claim-space --email <seu e-mail>`.
+Cada conta Google enxerga só os dados do seu espaço familiar; quem criou o espaço adiciona as outras pessoas da família em Configurações, que também precisam estar em `SPENDLE_ALLOWED_EMAILS`. Se você já tinha dados antes dos espaços, rode uma vez, antes de entrar: `vp run --filter @spendle/server claim-space --email <seu e-mail>`.
 
 O app lê `SPENDLE_API_URL` (padrão `http://127.0.0.1:4100`) e o token opcional `SPENDLE_API_TOKEN`. O servidor guarda um banco por espaço familiar em `data/v2/`, fora da pasta pública e do Git; suas variáveis (Pluggy, OpenRouter, TypeSafe) estão no [README do servidor](./packages/server/README.md).
 

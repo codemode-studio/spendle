@@ -17,6 +17,7 @@ import { ServerConfig } from '../config.ts'
 import type { ServerConfigShape } from '../config.ts'
 import { PluggyClient } from '../openfinance/PluggyClient.ts'
 import { WebhookConfig } from '../openfinance/WebhookConfig.ts'
+import { memberRoutes } from '../spaces/Members.ts'
 import { spaceRoutes } from '../spaces/Routes.ts'
 import { SpaceApps } from '../spaces/Space.ts'
 import { SpaceDirectory } from '../spaces/SpaceDirectory.ts'
@@ -53,7 +54,7 @@ export const spacesTest = (
     readonly config?: Partial<ServerConfigShape>
   } = {},
 ) =>
-  HttpRouter.serve(Layer.mergeAll(spaceRoutes, webhookRoutes), {
+  HttpRouter.serve(Layer.mergeAll(spaceRoutes, memberRoutes, webhookRoutes), {
     disableListenLog: true,
     disableLogger: true,
   }).pipe(

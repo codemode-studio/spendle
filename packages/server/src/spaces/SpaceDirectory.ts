@@ -26,6 +26,12 @@ export const Space = Schema.Struct({
 })
 export type Space = typeof Space.Type
 
+export const Member = Schema.Struct({
+  email: Schema.String,
+  role: Schema.Literals(['owner', 'member']),
+})
+export type Member = typeof Member.Type
+
 /** A Pluggy delivery waiting to reach the spaces it belongs to. */
 export const PendingWebhook = Schema.Struct({
   eventId: Schema.String,
@@ -197,6 +203,73 @@ const make = Effect.gen(function* () {
     return claimed ? Option.none<string>() : Option.some(legacyPath)
   }).pipe(Effect.orDie)
 
+  const findRole = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ role: Member.fields.role }),
+    execute: (email) =>
+      sql`SELECT role FROM space_members WHERE email = ${email}`,
+  })
+  const findMembers = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: Member,
+    execute: (spaceId) => sql`
+      SELECT email, role FROM space_members WHERE space_id = ${spaceId}
+      ORDER BY role = 'owner' DESC, added_at, rowid
+    `,
+  })
+
+  /** The space an email belongs to and its role there, without creating one. */
+  const membership = Effect.fn('SpaceDirectory.membership')(function* (
+    email: string,
+  ) {
+    const member = normalize(email)
+    const space = yield* findByMember(member)
+    const role = yield* findRole(member)
+    return Option.all({ space, role: Option.map(role, (row) => row.role) })
+  }, Effect.orDie)
+
+  const addMember = Effect.fn('SpaceDirectory.addMember')(function* (
+    spaceId: string,
+    email: string,
+  ) {
+    const at = yield* now
+    yield* sql`
+        INSERT INTO space_members (email, space_id, role, added_at)
+        VALUES (${normalize(email)}, ${spaceId}, 'member', ${at})
+      `
+  }, Effect.orDie)
+
+  const removeMember = Effect.fn('SpaceDirectory.removeMember')(function* (
+    email: string,
+  ) {
+    yield* sql`DELETE FROM space_members WHERE email = ${normalize(email)}`
+  }, Effect.orDie)
+
+  /**
+   * Moves a member into another space. The space they leave is removed when
+   * nobody is left in it, and returned so its database can be deleted.
+   */
+  const moveMember = Effect.fn('SpaceDirectory.moveMember')(function* (
+    email: string,
+    spaceId: string,
+  ) {
+    const member = normalize(email)
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const left = yield* findByMember(member)
+        yield* sql`
+            UPDATE space_members SET space_id = ${spaceId}, role = 'member'
+            WHERE email = ${member}
+          `
+        if (Option.isNone(left)) return Option.none<Space>()
+        const remaining = yield* findMembers(left.value.id)
+        if (remaining.length > 0) return Option.none<Space>()
+        yield* sql`DELETE FROM spaces WHERE id = ${left.value.id}`
+        return left
+      }),
+    )
+  }, Effect.orDie)
+
   /** Stores a delivery once; false when its event was already received. */
   const receiveWebhook = Effect.fn('SpaceDirectory.receiveWebhook')(function* (
     delivery: PendingWebhook,
@@ -241,6 +314,11 @@ const make = Effect.gen(function* () {
     unclaimedLegacy,
     space: (id: string) => findById(id).pipe(Effect.orDie),
     list: findAll(undefined).pipe(Effect.orDie),
+    membership,
+    members: (spaceId: string) => findMembers(spaceId).pipe(Effect.orDie),
+    addMember,
+    removeMember,
+    moveMember,
     receiveWebhook,
     /** Deliveries not yet routed, oldest first. */
     pendingWebhooks: findPendingWebhooks(undefined).pipe(Effect.orDie),

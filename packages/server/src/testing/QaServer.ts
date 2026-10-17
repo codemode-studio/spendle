@@ -7,6 +7,8 @@ import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
 import * as Ref from 'effect/Ref'
 import * as HttpRouter from 'effect/http/HttpRouter'
+import * as HttpServerRequest from 'effect/http/HttpServerRequest'
+import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder'
 // NodeHttpServer adapts a Node server; there is no Effect equivalent to import instead.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createServer } from 'node:http'
@@ -37,6 +39,10 @@ import * as Reconciliation from '../reconciliation/Reconciliation.ts'
 import { AssistantModel } from '../planning/AssistantModel.ts'
 import { PlanningServices } from '../planning/Services.ts'
 import { addDays } from '../domain/LocalDate.ts'
+import { Rejected } from '../api/definition/Errors.ts'
+import { memberHeader } from '../api/definition/Security.ts'
+import { SpaceApi } from '../api/definition/Space.ts'
+import { SecurityLive } from '../api/Security.ts'
 import { makeFake } from './FakePluggy.ts'
 import { fakeExchangeRates } from './FakeRates.ts'
 import type { FakePluggyData } from './FakePluggy.ts'
@@ -298,7 +304,38 @@ const HttpServer = Layer.unwrap(
   }),
 )
 
-HttpRouter.serve(ApiRoutes.pipe(Layer.provide(ApiConfig.layerTest()))).pipe(
+// QA serves a single space: the QA member owns it, and its members do not
+// change. The full member flow is covered by `spaces/Members.test.ts`.
+const QaMembers = HttpApiBuilder.layer(SpaceApi).pipe(
+  Layer.provide(
+    HttpApiBuilder.group(SpaceApi, 'space', (handlers) => {
+      const view = Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        const you = request.headers[memberHeader] ?? 'qa@spendle.local'
+        return {
+          name: 'Família QA',
+          you,
+          members: [{ email: you, role: 'owner' as const }],
+        }
+      })
+      const fixed = new Rejected({ reason: 'qa_fixed_members', detail: null })
+      return Effect.succeed(
+        handlers.handleAll({
+          get: () => view,
+          addMember: () => Effect.fail(fixed),
+          removeMember: () => Effect.fail(fixed),
+        }),
+      )
+    }),
+  ),
+  Layer.provide(SecurityLive),
+)
+
+HttpRouter.serve(
+  Layer.mergeAll(ApiRoutes, QaMembers).pipe(
+    Layer.provide(ApiConfig.layerTest()),
+  ),
+).pipe(
   Layer.provideMerge(Seed),
   Layer.provideMerge(Services),
   Layer.provide(HttpServer),

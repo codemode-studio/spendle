@@ -6,7 +6,7 @@ import * as HttpApiClient from 'effect/http-api/HttpApiClient'
 import * as Predicate from 'effect/Predicate'
 import { getRequest, setResponseStatus } from '@tanstack/react-start/server'
 
-import { SpendleApi, memberHeader } from '@spendle/server/api'
+import { SpaceApi, SpendleApi, memberHeader } from '@spendle/server/api'
 
 import { readViewer } from '#/features/auth/auth.server'
 import { signedOutMessage } from '#/features/auth/viewer'
@@ -98,32 +98,30 @@ const toV2ApiError = (error: unknown): V2ApiError => {
   return new V2ApiError('Unavailable', 'v2_unreachable', null)
 }
 
-/**
- * Runs one or more typed V2 calls from a server function handler. Failures
- * reject with a `V2ApiError` and set the response status, so a mutation's
- * `onError` shows a message the person can act on.
- */
-export async function v2<TResult, TError>(
-  use: (client: V2Client) => Effect.Effect<TResult, TError>,
-): Promise<TResult> {
+// Points a client's requests at the API, naming the member and the token.
+function locate(member: string | undefined) {
   const { baseUrl, token } = v2Settings()
-  const member = await memberEmail()
-  const program = Effect.gen(function* () {
-    const client = yield* HttpApiClient.make(SpendleApi, {
-      transformClient: HttpClient.mapRequest((request) => {
-        let located = HttpClientRequest.prependUrl(request, baseUrl)
-        if (member !== undefined) {
-          located = HttpClientRequest.setHeader(located, memberHeader, member)
-        }
-        return token === undefined
-          ? located
-          : HttpClientRequest.bearerToken(located, token)
-      }),
-    })
-    return yield* use(client)
-  }).pipe(Effect.mapError(toV2ApiError), Effect.provide(FetchHttpClient.layer))
+  return HttpClient.mapRequest((request) => {
+    let located = HttpClientRequest.prependUrl(request, baseUrl)
+    if (member !== undefined) {
+      located = HttpClientRequest.setHeader(located, memberHeader, member)
+    }
+    return token === undefined
+      ? located
+      : HttpClientRequest.bearerToken(located, token)
+  })
+}
+
+async function run<TResult, TError>(
+  program: Effect.Effect<TResult, TError, HttpClient.HttpClient>,
+): Promise<TResult> {
   try {
-    return await Effect.runPromise(program)
+    return await Effect.runPromise(
+      program.pipe(
+        Effect.mapError(toV2ApiError),
+        Effect.provide(FetchHttpClient.layer),
+      ),
+    )
   } catch (error) {
     const failure = error instanceof V2ApiError ? error : toV2ApiError(error)
     try {
@@ -133,6 +131,38 @@ export async function v2<TResult, TError>(
     }
     throw failure
   }
+}
+
+/**
+ * Runs one or more typed V2 calls from a server function handler. Failures
+ * reject with a `V2ApiError` and set the response status, so a mutation's
+ * `onError` shows a message the person can act on.
+ */
+export async function v2<TResult, TError>(
+  use: (client: V2Client) => Effect.Effect<TResult, TError>,
+): Promise<TResult> {
+  const member = await memberEmail()
+  return run(
+    Effect.flatMap(
+      HttpApiClient.make(SpendleApi, { transformClient: locate(member) }),
+      use,
+    ),
+  )
+}
+
+/** `v2` for the caller's family space and its members (`SpaceApi`). */
+export async function v2Space<TResult, TError>(
+  use: (
+    client: HttpApiClient.ForApi<typeof SpaceApi>,
+  ) => Effect.Effect<TResult, TError>,
+): Promise<TResult> {
+  const member = await memberEmail()
+  return run(
+    Effect.flatMap(
+      HttpApiClient.make(SpaceApi, { transformClient: locate(member) }),
+      use,
+    ),
+  )
 }
 
 /** Every entry matching the filters, following cursors in pages of 200. */

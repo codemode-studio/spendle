@@ -10,6 +10,15 @@ const reasonMessages: Record<string, string | undefined> = {
   card_terms_required: 'Informe os dias de fechamento e vencimento do cartão.',
   invalid_token: 'O app não tem acesso à API. Confira SPENDLE_API_TOKEN.',
   member_required: 'O app não informou quem entrou. Entre novamente.',
+  not_owner: 'Só quem criou o espaço adiciona ou remove pessoas.',
+  already_member: 'Essa pessoa já faz parte do espaço.',
+  member_elsewhere:
+    'Essa conta já tem dados em outro espaço. Peça para a pessoa remover os dados de lá antes.',
+  member_not_found: 'Essa pessoa não faz parte do espaço. Recarregue a página.',
+  owner_stays: 'Quem criou o espaço não pode ser removido.',
+  qa_fixed_members: 'Na QA, as pessoas do espaço não mudam.',
+  not_allowed:
+    'Esse e-mail não pode entrar no Spendle. Inclua-o em SPENDLE_ALLOWED_EMAILS e tente de novo.',
   unclaimed_database:
     'Os dados de antes dos espaços ainda não têm dono. Rode `vp run --filter @spendle/server claim-space --email <seu e-mail>`.',
   account_not_found: 'Conta não encontrada. Recarregue a página.',

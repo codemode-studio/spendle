@@ -42,8 +42,10 @@ import {
   ownersOptions,
   planningStateOptions,
   recurrenceBookOptions,
+  spaceOptions,
 } from '#/features/v2/queries'
 import { OpenFinanceSection } from '#/features/finance/open-finance-section'
+import { MembersPanel } from '#/features/space/members-panel'
 import { errorMessage } from '#/lib/v2/errors'
 
 import { PlanningSettings } from '#/features/planning/planning-settings'
@@ -87,6 +89,9 @@ export const Route = createFileRoute('/configuracoes')({
   loader: ({ context, deps }) =>
     Promise.all([
       context.queryClient.ensureQueryData(ownersOptions()),
+      deps.tab === 'geral'
+        ? context.queryClient.ensureQueryData(spaceOptions())
+        : null,
       deps.tab === 'contas' ||
       deps.tab === 'cartoes' ||
       deps.tab === 'open-finance'
@@ -221,6 +226,7 @@ function GeneralSettings() {
             </p>
           )}
         </Panel>
+        <MembersPanel />
       </div>
 
       <Dialog open={ownerDialogOpen} onOpenChange={setOwnerDialogOpen}>
