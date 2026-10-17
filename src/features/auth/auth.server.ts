@@ -1,4 +1,4 @@
-import { getRequestHeaders } from '@tanstack/react-start/server'
+import { getRequest } from '@tanstack/react-start/server'
 import { betterAuth } from 'better-auth'
 import { APIError } from 'better-auth/api'
 import { tanstackStartCookies } from 'better-auth/tanstack-start'
@@ -64,16 +64,30 @@ const qaViewer: Viewer = {
   image: null,
 }
 
+// One lookup per request: the middleware, SSR loaders and every API call of
+// a request share it instead of decrypting the session cookie each time.
+const viewers = new WeakMap<Request, Promise<Viewer | null>>()
+
 /**
  * The signed-in person for the current request, or null. The allowlist is
  * checked again here so removing an email takes effect for live sessions.
  */
-export async function readViewer(): Promise<Viewer | null> {
+export function readViewer(): Promise<Viewer | null> {
   // Set only by `vp run qa:start`, whose API holds synthetic data.
-  if (process.env.SPENDLE_AUTH_DISABLED === '1') return qaViewer
-  const session = await getAuth().api.getSession({
-    headers: getRequestHeaders(),
-  })
+  if (process.env.SPENDLE_AUTH_DISABLED === '1') {
+    return Promise.resolve(qaViewer)
+  }
+  const request = getRequest()
+  let viewer = viewers.get(request)
+  if (viewer === undefined) {
+    viewer = lookUpViewer(request.headers)
+    viewers.set(request, viewer)
+  }
+  return viewer
+}
+
+async function lookUpViewer(headers: Headers): Promise<Viewer | null> {
+  const session = await getAuth().api.getSession({ headers })
   if (!session || !isAllowedEmail(session.user.email, allowedEmails())) {
     return null
   }
