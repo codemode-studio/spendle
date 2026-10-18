@@ -23,6 +23,7 @@
     "qa:start": "tsx scripts/qa.ts start",
     "qa:inspect": "tsx scripts/qa.ts inspect",
     "qa:clean": "tsx scripts/qa.ts clean",
+    "qa:mcp": "tsx scripts/qa-mcp.ts",
     "prepare": "effect-tsgo patch"
   },
   "dependencies": {
@@ -60,6 +61,7 @@
   },
   "devDependencies": {
     "@effect/tsgo": "catalog:",
+    "@modelcontextprotocol/client": "2.3.1",
     "@tanstack/devtools-vite": "0.8.3",
     "@tanstack/router-cli": "^1.132.0",
     "@testing-library/jest-dom": "^7.0.0",

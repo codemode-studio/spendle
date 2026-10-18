@@ -8,7 +8,7 @@ vp run --filter @spendle/server verify  # typecheck, diagnósticos Effect e test
 vp run --filter @spendle/server qa      # API em memória com dados sintéticos e Pluggy falsa
 ```
 
-`vp run qa:start <porta>` na raiz sobe essa API de QA na porta `<porta> + 1200` junto com o app web.
+`vp run qa:start [porta]` na raiz sobe essa API de QA na porta `<porta> + 1200` junto com o app web.
 
 | Variável                                      | Uso                                                                                                  |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |

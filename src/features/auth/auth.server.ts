@@ -13,6 +13,7 @@ import { jwt } from 'better-auth/plugins'
 import { tanstackStartCookies } from 'better-auth/tanstack-start'
 
 import { isAllowedEmail, parseAllowedEmails } from './allowlist'
+import { qaSignIn } from './qa-sign-in.server'
 import type { Person } from './viewer'
 
 function requiredEnv(name: string) {
@@ -38,17 +39,17 @@ export const mcpResource = () =>
 /**
  * Better Auth's own SQLite file: people, sessions and the OAuth clients,
  * consents and signing keys behind the MCP. Financial data never lives here.
- * QA runs keep it in memory, beside their in-memory API.
+ * QA runs keep theirs in the run directory.
  */
 function openDatabase() {
-  if (process.env.SPENDLE_AUTH_DISABLED === '1')
-    return new DatabaseSync(':memory:')
   const path = process.env.SPENDLE_AUTH_DATABASE_PATH || 'data/auth/auth.sqlite'
   mkdirSync(dirname(path), { recursive: true })
   return new DatabaseSync(path)
 }
 
 function createAuth() {
+  // Set only by `vp run qa:start`, whose API holds synthetic data.
+  const qaToken = process.env.SPENDLE_QA_SIGN_IN_TOKEN
   return betterAuth({
     secret: requiredEnv('BETTER_AUTH_SECRET'),
     baseURL: requiredEnv('BETTER_AUTH_URL'),
@@ -96,6 +97,7 @@ function createAuth() {
         clientRegistrationDefaultApplicationType: 'infer',
       }),
       cimd({ fetchClientMetadataResource, metadataProfile: 'mcp-2026-07-28' }),
+      ...(qaToken ? [qaSignIn(qaToken)] : []),
       // Must stay last: it applies cookies Better Auth sets inside Start.
       tanstackStartCookies(),
     ],
@@ -129,12 +131,6 @@ export async function getAuth() {
   return instance
 }
 
-const qaViewer: Person = {
-  name: 'QA',
-  email: 'qa@spendle.local',
-  image: null,
-}
-
 // One lookup per request: the middleware, SSR loaders and every API call of
 // a request share it instead of reading the session each time.
 const viewers = new WeakMap<Request, Promise<Person | null>>()
@@ -144,10 +140,6 @@ const viewers = new WeakMap<Request, Promise<Person | null>>()
  * checked again here so removing an email takes effect for live sessions.
  */
 export function readViewer(): Promise<Person | null> {
-  // Set only by `vp run qa:start`, whose API holds synthetic data.
-  if (process.env.SPENDLE_AUTH_DISABLED === '1') {
-    return Promise.resolve(qaViewer)
-  }
   const request = getRequest()
   let viewer = viewers.get(request)
   if (viewer === undefined) {

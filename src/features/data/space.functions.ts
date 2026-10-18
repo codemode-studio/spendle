@@ -20,7 +20,6 @@ export const addMemberFn = createServerFn({ method: 'POST' })
     // Sign-in still checks the allowlist: someone outside it could be added
     // but never get in.
     if (
-      process.env.SPENDLE_AUTH_DISABLED !== '1' &&
       !isAllowedEmail(
         data.email,
         parseAllowedEmails(process.env.SPENDLE_ALLOWED_EMAILS),

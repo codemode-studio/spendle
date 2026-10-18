@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { createHash, randomBytes } from 'node:crypto'
 import {
   createWriteStream,
   mkdirSync,
@@ -8,6 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
+import { createServer } from 'node:net'
 import { resolve, join, sep } from 'node:path'
 
 const root = resolve('.qa')
@@ -62,8 +64,8 @@ if (command === 'inspect') {
   rmSync(directory, { recursive: true })
   console.log(`Removed ${directory}`)
 } else if (command === 'start') {
-  const port = Number(argument ?? 3100)
-  if (!Number.isInteger(port) || port < 1024 || port > 65535)
+  const port = argument === undefined ? await freePort() : Number(argument)
+  if (!Number.isInteger(port) || port < 1024 || port > 64335)
     throw new Error('Usage: vp run qa:start [port]')
   mkdirSync(root, { recursive: true })
   const directory = mkdtempSync(join(root, 'run-'))
@@ -73,6 +75,10 @@ if (command === 'inspect') {
   const apiUrl = `http://127.0.0.1:${apiPort}`
   const month = new Date().toISOString().slice(0, 7)
   const date = `${month}-01`
+  // Opening this link signs the browser in as the QA person (see
+  // `src/features/auth/qa-sign-in.server.ts`), as Google sign-in would.
+  const signInToken = randomBytes(24).toString('base64url')
+  const signInUrl = `${url}/api/auth/qa/sign-in?token=${signInToken}`
   const ofx = (closing: string, suffix: string) =>
     `OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECURITY:NONE\nENCODING:USASCII\nCHARSET:1252\nCOMPRESSION:NONE\nOLDFILEUID:NONE\nNEWFILEUID:NONE\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><CURDEF>BRL</CURDEF><BANKTRANLIST><DTSTART>${month.replace('-', '')}01</DTSTART><DTEND>${month.replace('-', '')}02</DTEND><STMTTRN><TRNTYPE>CREDIT</TRNTYPE><DTPOSTED>${month.replace('-', '')}01120000[-3:BRT]</DTPOSTED><TRNAMT>1000.00</TRNAMT><FITID>qa-income-${suffix}</FITID><NAME>Receita QA</NAME></STMTTRN><STMTTRN><TRNTYPE>DEBIT</TRNTYPE><DTPOSTED>${month.replace('-', '')}02120000[-3:BRT]</DTPOSTED><TRNAMT>-100.00</TRNAMT><FITID>qa-expense-${suffix}</FITID><NAME>Mercado QA</NAME></STMTTRN></BANKTRANLIST><LEDGERBAL><BALAMT>${closing}</BALAMT><DTASOF>${month.replace('-', '')}02</DTASOF></LEDGERBAL></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>`
   writeFileSync(join(directory, 'balanced.ofx'), ofx('900.00', 'balanced'))
@@ -92,7 +98,15 @@ if (command === 'inspect') {
   writeFileSync(
     join(directory, 'run.json'),
     JSON.stringify(
-      { kind: marker, pid: process.pid, url, apiUrl, directory, date },
+      {
+        kind: marker,
+        pid: process.pid,
+        url,
+        apiUrl,
+        signInUrl,
+        directory,
+        date,
+      },
       null,
       2,
     ),
@@ -101,6 +115,7 @@ if (command === 'inspect') {
     JSON.stringify(
       {
         url,
+        signInUrl,
         apiUrl,
         directory,
         date,
@@ -142,8 +157,15 @@ if (command === 'inspect') {
         SPENDLE_API_TOKEN: '',
         // The fake Pluggy issues fake tokens: open the simulated widget instead.
         SPENDLE_PLUGGY_CONNECT: 'simulated',
-        // Synthetic data only: skip Google sign-in so browser QA can run.
-        SPENDLE_AUTH_DISABLED: '1',
+        // Real Better Auth with its own database in the run; Google never
+        // signs anyone in here, the QA sign-in link does.
+        BETTER_AUTH_URL: url,
+        BETTER_AUTH_SECRET: randomBytes(32).toString('hex'),
+        SPENDLE_AUTH_DATABASE_PATH: join(directory, 'auth.sqlite'),
+        SPENDLE_ALLOWED_EMAILS: 'qa@spendle.local',
+        SPENDLE_QA_SIGN_IN_TOKEN: signInToken,
+        GOOGLE_CLIENT_ID: 'qa-not-configured',
+        GOOGLE_CLIENT_SECRET: 'qa-not-configured',
       },
     },
   )
@@ -160,6 +182,7 @@ if (command === 'inspect') {
       child.kill(signal)
       api.kill(signal)
     })
+  void announceReady(url, signInUrl)
   child.on('exit', (code) => {
     api.kill('SIGTERM')
     log.end()
@@ -167,4 +190,39 @@ if (command === 'inspect') {
   })
 } else {
   throw new Error('Expected start, inspect or clean.')
+}
+
+/**
+ * A port for this checkout whose API port (+1200) is also free, so
+ * concurrent worktrees each get their own without choosing one.
+ */
+async function freePort() {
+  const isFree = (port: number) =>
+    new Promise<boolean>((done) => {
+      const probe = createServer()
+      probe.once('error', () => done(false))
+      probe.listen(port, '127.0.0.1', () => probe.close(() => done(true)))
+    })
+  const start =
+    3100 +
+    (createHash('sha256').update(process.cwd()).digest().readUInt16BE() % 800)
+  for (let port = start; port < start + 200; port += 1) {
+    if ((await isFree(port)) && (await isFree(port + 1200))) return port
+  }
+  throw new Error('No free QA port; pass one: vp run qa:start <port>')
+}
+
+/** Prints `QA ready` once the app serves pages, for agents waiting on output. */
+async function announceReady(url: string, signInUrl: string) {
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    const ok = await fetch(`${url}/entrar`)
+      .then((response) => response.ok)
+      .catch(() => false)
+    if (ok) {
+      console.log(`QA ready: ${signInUrl}`)
+      return
+    }
+    await new Promise((wait) => setTimeout(wait, 500))
+  }
+  console.error('QA app did not answer within two minutes; see server.log.')
 }

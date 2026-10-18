@@ -69,12 +69,13 @@ O mapa do código está em [`plans/architecture.md`](./plans/architecture.md); e
 
 ## Verificação com agentes
 
-Quando solicitar ou autorizar a verificação com o navegador integrado, siga a [skill browser-qa](.agents/skills/browser-qa/SKILL.md):
+Agentes verificam de ponta a ponta sozinhos, com o navegador do T3 Code, seguindo a [skill browser-qa](.agents/skills/browser-qa/SKILL.md):
 
 ```bash
-vp run qa:start 3100       # app na 3100 e API de QA em memória na 4300, numa nova pasta .qa/
+vp run qa:start            # app e API de QA em memória em portas livres, numa nova pasta .qa/
+vp run qa:mcp <pasta>      # cliente MCP real: autoriza em /autorizar e chama as ferramentas
 vp run qa:inspect <pasta>  # contas, lançamentos e importações do run, enquanto ele roda
 vp run qa:clean <pasta>    # remover um run depois de parar seu servidor
 ```
 
-Para verificações somente de leitura, reutilize um servidor adequado já em execução. Verificações que alteram dados usam um run isolado por worktree e uma porta explícita. Não é preciso copiar `.env.local` ou dados reais: a API de QA semeia dados sintéticos, usa uma Pluggy falsa e mantém a IA desligada. O run grava `server.log` (app) e `server-api.log` (API).
+O run usa o Better Auth de verdade, com banco próprio na pasta do run: o link `signInUrl` que ele imprime entra como `qa@spendle.local`, sem Google. Cada worktree tem seus próprios runs. Não é preciso copiar `.env.local` ou dados reais: a API de QA semeia dados sintéticos, usa uma Pluggy falsa e mantém a IA desligada. O run grava `server.log` (app) e `server-api.log` (API).
