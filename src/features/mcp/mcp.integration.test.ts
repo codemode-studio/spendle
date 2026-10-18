@@ -38,7 +38,6 @@ beforeAll(async () => {
     SPENDLE_ALLOWED_EMAILS: 'ana@example.com',
     SPENDLE_AUTH_DATABASE_PATH: ':memory:',
   })
-  delete process.env.SPENDLE_AUTH_DISABLED
   testApi = await startTestApi()
 })
 afterAll(async () => {

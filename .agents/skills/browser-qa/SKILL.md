@@ -1,34 +1,34 @@
 ---
 name: browser-qa
-description: Verify Spendle screens and flows through the integrated browser when the developer requests or agrees to browser verification. Reuse suitable running instances for read-only checks; use isolated synthetic data for mutations.
+description: Verify Spendle changes end to end without the developer. Start an isolated QA run, sign in through its QA link, drive the app in T3 Code's Browser panel (preview_* tools) and, for MCP changes, connect the real MCP client with qa:mcp. Use after any user-visible, auth or MCP change, before reporting it done.
 ---
 
 # Browser QA
 
-Use the available integrated browser tool. No Playwright installation is required. Read its tool documentation before operating the browser; do not assume APIs for upload, screenshots or console access exist.
+Verify the change yourself; do not leave "not checked in a browser" for the developer. Use T3 Code's Browser panel tools (`preview_open`, `preview_navigate`, `preview_snapshot`, `preview_click`, `preview_type`, `preview_resize`, `preview_wait_for`). Load them with ToolSearch if they are deferred. If they are unavailable, say so and stop the browser part; do not install Playwright or another automation tool.
 
-## Choose the running instance
+Never point a check at the developer's running server, `.env.local` data or `data/`. The primary agent runs one pass on the integrated result; delegated workers do not each start servers.
 
-Browser verification is opt-in. Start only after the developer requests or agrees to it; a UI edit alone does not authorize a browser pass.
+## Start an isolated run
 
-Inspect existing servers first. Reuse a suitable running instance for read-only checks when its checkout and data are appropriate. Do not restart the developer's server or mutate personal data. If an isolated QA run is already available for this checkout and flow, reuse it. The primary agent verifies the integrated result once; delegated workers do not each start a server.
+Run `vp run qa:start` in the background from the checkout being verified. It picks free ports for this worktree (pass a port to choose one), starts the app and an in-memory QA API on the app port plus 1200, and prints `url`, `signInUrl`, `apiUrl` and the run `directory`. Wait for the `QA ready: <signInUrl>` line before opening the browser. Reuse a run you already started for this checkout; a new one is cheap.
 
-For mutations, imports, provider flows, or checks requiring controlled state, use an isolated run with synthetic data and fake providers. If no suitable run exists, start one as below.
+The run uses real Better Auth with its own database in the run directory. Opening `signInUrl` signs the browser in as `qa@spendle.local`, the only allowed email, and accepts `&next=/path`. Google is not configured: check that `/entrar` renders and redirects, never complete a Google sign-in.
 
-## Start an isolated run when needed
-
-Run `vp run setup:check`, then `vp run qa:start 3100` from the checkout being verified. Choose another explicit port for concurrent worktrees. The command starts the app on that port and an in-memory QA API on the port plus 1200, and prints both URLs and the run directory. It refuses an occupied port. Use only the printed app URL for mutations.
-
-QA runs skip Google sign-in (`SPENDLE_AUTH_DISABLED=1`) and act as the `QA` user, the only member of a single space whose members cannot change. Check the sign-in page and redirects only on a run started without that flag, and never complete a real Google sign-in.
-
-The QA API seeds owner `Família QA`, account `Conta BRL de teste`, card `Cartão BRL de teste` and the default categories, and fakes Pluggy: connecting a bank in Configurações opens a simulated widget whose item brings synthetic movements. AI calls are disabled. The run directory contains `balanced.ofx`, `unbalanced.ofx`, `volume-121.ofx`, `server.log` (app) and `server-api.log` (API). The API keeps its data in memory, so stopping the run discards it; do not copy or symlink a user's `data/` into QA.
+The QA API seeds owner `Família QA`, account `Conta BRL de teste`, card `Cartão BRL de teste` and the default categories, and fakes Pluggy: connecting a bank in Configurações opens a simulated widget whose item brings synthetic movements. AI calls are disabled. The run directory contains `balanced.ofx`, `unbalanced.ofx`, `volume-121.ofx`, `server.log` (app) and `server-api.log` (API). The space's members cannot change. Stopping the run discards the API's data.
 
 For transaction pagination use a separate run and import `volume-121.ofx` (121 expenses of R$ 1,00) into the synthetic account. It changes balances; use another fresh run for import assertions.
+
+## Check the MCP
+
+`vp run qa:mcp <run-directory>` (in the background) connects with the official MCP client SDK, as Claude Code does: discovery, registration, PKCE authorization. It prints `authorizeUrl:`; open it in the signed-in browser, check `/autorizar`, and click Permitir or Recusar. On Permitir it lists the tools and calls `list_accounts`, `search_transactions` and `list_open_finance_connections`, printing the results, and exits 0; on Recusar it prints `refused: access_denied` and exits 1. Run it once per decision you need to check.
 
 ## Select checks by the change
 
 | Change                           | Browser assertions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sign-in or route guards          | Before signing in, open `/` and confirm the redirect to `/entrar`. Open `signInUrl`; confirm the overview loads. Sign out with “Sair” and confirm `/entrar`.                                                                                                                                                                                                                                                                                                                                                            |
+| MCP, consent or OAuth            | Run `qa:mcp`, open its `authorizeUrl` signed in, and check `/autorizar` on desktop and phone (`preview_resize` preset): app name with its verification note, destination, access list, account. Permitir must end with the client printing tool results; Recusar with `refused: access_denied`.                                                                                                                                                                                                                         |
 | Routes or shell                  | Open `/`, `/transacoes`, `/configuracoes`, `/categorias`, `/planejamento`, `/investimentos` and `/importar`; confirm the intended page renders. Open `/qa-missing`; verify the not-found message and follow “Ir para visão geral”.                                                                                                                                                                                                                                                                                      |
 | Transactions or invalidation     | Create a manual BRL expense of R$ 10,00 on the synthetic account. Confirm description, negative amount, category, and account. Change the category, navigate away and back, then reload to verify persistence. Check category totals reflect it.                                                                                                                                                                                                                                                                        |
 | Import staging/commit            | On `/importar`, select the synthetic account and upload `balanced.ofx` through the browser. Resolve any required coverage review using its declared dates. Confirm two movements, +R$ 1.000,00 and -R$ 100,00, closing balance R$ 900,00 and zero difference before committing. Commit, then inspect the transaction list. Upload the identical file again; confirm no additional transactions. Use a separate fresh run for `unbalanced.ofx`; confirm its R$ 999,00 control cannot be committed against net R$ 900,00. |
@@ -41,6 +41,6 @@ Perform import checks before manual transaction checks, or start a fresh run; ch
 
 Record URL, commit/worktree, run directory, flows actually exercised, expected versus observed values, and pass/fail. Save screenshots with the browser tool when supported, especially on failure. Consult `server.log` and `server-api.log` for errors, and browser console/network errors when the tool exposes them. `vp run qa:inspect <run-directory>` prints the run's accounts, entries and imports from the running QA API without changing them.
 
-If file upload or another required browser capability is unavailable, mark that flow unverified and run its integration test as separate evidence. Do not claim a browser pass based on a server test.
+If file upload or another required browser capability is unavailable, mark that flow unverified and run its integration test as separate evidence. Do not claim a browser pass based on a server test. Save screenshots with `preview_snapshot` (`save: true`) and embed the ones that show the result in your report.
 
-Stop only servers you started, using the captured process. Leave reused servers running. Stop the spawned server before `vp run qa:clean <run-directory>`. Preserve a failing run until its evidence is recorded. The cleanup command checks ownership and refuses an active run.
+Before delivery, stop the runs you started (the background task, or the PID in `run.json`) and close your browser tab, unless the developer wants to inspect them. Stop only processes you started. Stop the spawned server before `vp run qa:clean <run-directory>`. Preserve a failing run until its evidence is recorded. The cleanup command checks ownership and refuses an active run.
