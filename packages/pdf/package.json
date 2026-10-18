@@ -1,0 +1,11 @@
+{
+  "name": "@spendle/pdf",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "scripts": {
+    "build:wasm": "node build.ts"
+  }
+}

@@ -29,6 +29,7 @@ const config = defineConfig(({ mode }) => {
         '.agents/skills/pluggy-*/**',
         'packages/server/evals/**/baselines/**',
         'plans/**/*.html',
+        'packages/pdf/wasm/**',
       ],
     },
     lint: {
@@ -44,6 +45,7 @@ const config = defineConfig(({ mode }) => {
         '.repos/**',
         'data/**',
         'dist/**',
+        'packages/pdf/wasm/**',
         'src/routeTree.gen.ts',
       ],
       rules: {

@@ -19,7 +19,7 @@
   "dependencies": {
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
-    "@firecrawl/pdf-inspector": "1.17.0",
+    "@spendle/pdf": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

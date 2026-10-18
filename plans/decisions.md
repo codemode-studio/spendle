@@ -54,7 +54,7 @@ Decisões de produto não implicam que todos os recortes já estejam implementad
 - shadcn preset `base-nova` sobre Base UI; componentes locais podem ser adaptados sem trocar os primitives.
 - Todo banco, arquivo, segredo e chamada a provedor fica em código de servidor.
 - Banco e originais ficam em `data/`, fora de `public/` e do Git.
-- OFX e CSV são fontes estruturadas. PDF usa `@firecrawl/pdf-inspector` para classificação, Markdown e coordenadas.
+- OFX e CSV são fontes estruturadas. PDF usa o núcleo Rust do `@firecrawl/pdf-inspector`, compilado para WebAssembly em `packages/pdf`, para classificação, texto e coordenadas.
 - Um CSV pode usar o PDF equivalente como controle quando todas as datas, valores, moedas e multiplicidades conferem. Só uma fonte gera transações.
 - Originais e extrações são imutáveis. Falhas, divergências e PDFs usados apenas como evidência permanecem auditáveis.
 - A IA fica ligada por padrão quando o servidor tem a chave configurada, sem consentimento separado. A resposta nunca torna um lote automaticamente confiável nem ensina a base de categorias.

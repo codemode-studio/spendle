@@ -1,0 +1,23 @@
+[package]
+name = "spendle-pdf"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The Rust core of @firecrawl/pdf-inspector. Its WASM package does not export
+# positioned text, which every statement layout reads, so this crate binds the
+# few calls the server makes.
+pdf-inspector = "=1.17.0"
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+wasm-bindgen = "=0.2.129"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
