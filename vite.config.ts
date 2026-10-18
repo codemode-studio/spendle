@@ -102,9 +102,9 @@ const config = defineConfig(({ mode }) => {
       ],
     },
     resolve: { tsconfigPaths: true },
-    // `vp run dev` binds to the Tailscale address. Allow the MagicDNS name too;
-    // Vite rejects unknown Host headers by default.
-    server: { allowedHosts: ['.ts.net'] },
+    // `vp run dev` binds to the Tailscale address. Allow the MagicDNS name and
+    // Cloudflare quick tunnels too; Vite rejects unknown Host headers by default.
+    server: { allowedHosts: ['.ts.net', '.trycloudflare.com'] },
     plugins: lazyPlugins(() => [
       // Vite forwards browser errors to the terminal. Piping server logs back to
       // the browser creates a feedback loop that can fill the disk with logs.

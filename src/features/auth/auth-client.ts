@@ -1,4 +1,5 @@
 import { oauthProviderClient } from '@better-auth/oauth-provider/client'
+import { sentinelClient } from '@better-auth/infra/client'
 import { createAuthClient } from 'better-auth/react'
 
 /**
@@ -8,5 +9,5 @@ import { createAuthClient } from 'better-auth/react'
  * continues where it started.
  */
 export const authClient = createAuthClient({
-  plugins: [oauthProviderClient()],
+  plugins: [oauthProviderClient(), sentinelClient()],
 })

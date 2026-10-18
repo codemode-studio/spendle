@@ -3,6 +3,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 import { cimd } from '@better-auth/cimd'
+import { dash } from '@better-auth/infra'
 import { fetchClientMetadataResource } from '@better-auth/cimd/node'
 import { mcp } from '@better-auth/mcp'
 import { getRequest } from '@tanstack/react-start/server'
@@ -100,6 +101,7 @@ function createAuth() {
       ...(qaToken ? [qaSignIn(qaToken)] : []),
       // Must stay last: it applies cookies Better Auth sets inside Start.
       tanstackStartCookies(),
+      dash(),
     ],
   })
 }
