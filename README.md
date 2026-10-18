@@ -1,81 +1,70 @@
 # Spendle
 
-Aplicativo local para consolidar contas PF/PJ brasileiras, investimentos e cartões, provar saldos contra extratos bancários e reconciliar transferências.
+Spendle reúne as finanças de uma família brasileira num só lugar: contas PF e PJ, cartões e investimentos. Ele confere cada saldo contra o extrato do banco, liga as duas pontas de transferências e pagamentos de fatura e mostra o mês contra o planejado.
 
-São duas partes: o app web em `src/` (TanStack Start) e o backend em [`packages/server`](./packages/server/README.md) (Effect 4 e SQLite). O app só fala com o backend pelas server functions; o navegador nunca acessa a API diretamente. O backend V1 foi aposentado ([ADR 003](./plans/adrs/003-backend-v2-effect.md)).
+É um projeto pessoal que roda na sua máquina. Os dados ficam em SQLite local, e só entra quem você autoriza com uma conta Google.
 
 ## Executar
 
-Use Node.js 22.22.0 (`.node-version`) e o CLI `vp` do [Vite+](https://viteplus.dev), instalado com `curl -fsSL https://vite.plus | bash`. Ele usa o pnpm 12.4.2 de `packageManager`; rode os comandos do projeto pelo `vp`, não pelo `pnpm`.
+Você precisa do Node.js 22.22.0 (`.node-version`) e do CLI `vp` do [Vite+](https://viteplus.dev):
+
+```bash
+curl -fsSL https://vite.plus | bash
+```
+
+Depois:
 
 ```bash
 cp .env.example .env.local
 vp install --frozen-lockfile
 vp run setup:check
 vp run --filter @spendle/server dev   # API em http://127.0.0.1:4100
-vp run dev                            # app web
+vp run dev                            # app em http://localhost:3000
 ```
 
-`vp run dev` escuta em `http://localhost:3000`, sem depender do Tailscale.
+### Entrar com Google
 
-O app exige entrar com Google. Em `.env.local`, preencha `BETTER_AUTH_SECRET` (`openssl rand -base64 32`), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` e, em `SPENDLE_ALLOWED_EMAILS`, as contas Google que podem entrar; lista vazia não deixa ninguém entrar. O cliente OAuth do Google precisa do redirecionamento `http://localhost:3000/api/auth/callback/google`. Pessoas, sessões e os aplicativos conectados por MCP ficam no banco do Better Auth em `data/auth/auth.sqlite` (`SPENDLE_AUTH_DATABASE_PATH`), separado dos dados financeiros; as tabelas são criadas no primeiro acesso.
+Preencha em `.env.local`:
 
-Cada conta Google enxerga só os dados do seu espaço familiar; quem criou o espaço adiciona as outras pessoas da família em Configurações, que também precisam estar em `SPENDLE_ALLOWED_EMAILS`. Se você já tinha dados antes dos espaços, rode uma vez, antes de entrar: `vp run --filter @spendle/server claim-space --email <seu e-mail>`.
+- `BETTER_AUTH_SECRET`: gere com `openssl rand -base64 32`.
+- `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET`: de um cliente OAuth do Google com o redirecionamento `http://localhost:3000/api/auth/callback/google`.
+- `SPENDLE_ALLOWED_EMAILS`: as contas que podem entrar. Com a lista vazia, ninguém entra.
 
-O app lê `SPENDLE_API_URL` (padrão `http://127.0.0.1:4100`) e o token opcional `SPENDLE_API_TOKEN`. O servidor guarda um banco por espaço familiar em `data/v2/`, fora da pasta pública e do Git; suas variáveis (Pluggy, OpenRouter, TypeSafe) estão no [README do servidor](./packages/server/README.md).
+Cada conta enxerga só o seu espaço familiar. Quem criou o espaço adiciona o resto da família em Configurações; essas pessoas também precisam estar em `SPENDLE_ALLOWED_EMAILS`.
 
-Os recursos de IA (assistente e classificador de categorias) ficam ligados por padrão quando o servidor tem as chaves, sem consentimento separado. Sem chave, nunca chamam o modelo. A resposta de um modelo nunca libera uma importação nem ensina a base de categorias.
+### Bancos e IA
 
-## MCP
+Open Finance (Pluggy), o assistente e o classificador de categorias são configurados no [README do servidor](./packages/server/README.md). A IA fica ligada quando o servidor tem as chaves e nunca é chamada sem elas. Uma resposta de modelo não libera importação nem ensina categorias: isso só acontece com decisões suas.
 
-O Spendle expõe um servidor MCP em `<BETTER_AUTH_URL>/api/mcp` para assistentes como Claude Code, Claude e Cursor. O cliente descobre o login sozinho: a pessoa entra com Google, aprova o aplicativo em `/autorizar` e ele passa a ler contas, transações, planejamento, previsão de caixa, cartões, investimentos e as conexões de Open Finance, além de atualizar e sincronizar essas conexões. O MCP não altera categorias, planos nem contas. Tirar um e-mail de `SPENDLE_ALLOWED_EMAILS` corta também os tokens já emitidos para ele.
+## Usar com assistentes (MCP)
 
-```sh
+Claude Code, Claude, Cursor e outros clientes MCP podem ler suas finanças em `<BETTER_AUTH_URL>/api/mcp`:
+
+```bash
 claude mcp add --transport http spendle http://localhost:3000/api/mcp
 ```
 
-## Migração do V1
+O cliente abre o login sozinho. Você entra com Google e aprova o aplicativo em `/autorizar`. A partir daí ele lê contas, transações, planejamento, previsão de caixa, cartões, investimentos e conexões de Open Finance, e pode atualizar e sincronizar essas conexões. Ele não altera categorias, planos nem contas. Tirar um e-mail de `SPENDLE_ALLOWED_EMAILS` também corta o acesso que esse e-mail já tinha dado.
 
-Os dados de uma instalação V1 entram no Spendle por `migrate-v1`, que lê o arquivo SQLite do V1 só para leitura e traz configuração e decisões humanas; os fatos são observados de novo nas fontes:
+## Onde ficam os dados
 
-```bash
-vp run --filter @spendle/server migrate-v1 --from "$PWD/data/financas.db" --dry-run
-vp run --filter @spendle/server migrate-v1 --from "$PWD/data/financas.db"
-```
+- `data/v2/`: um banco por espaço familiar, com os dados financeiros.
+- `data/auth/auth.sqlite`: pessoas, sessões e aplicativos MCP aprovados (`SPENDLE_AUTH_DATABASE_PATH`).
 
-Detalhes no [README do servidor](./packages/server/README.md#migração-do-v1).
+As duas pastas ficam fora do Git. Fatos vindos de bancos e arquivos nunca são alterados, e suas decisões ficam guardadas. Todo o resto pode ser recalculado a partir dos dois.
 
-## Comandos
+## Desenvolvimento
+
+O app web fica em `src/` (TanStack Start). Ele fala com o backend em [`packages/server`](./packages/server/README.md) (Effect 4 e SQLite) só por server functions. Rode os comandos pelo `vp`, nunca pelo `pnpm`:
 
 ```bash
 vp run typecheck
 vp lint
-vp fmt --check                         # vp run fmt formata e corrige o lint
-vp run test                            # testes do app web
-vp build
-vp run --filter @spendle/server verify # tipos, diagnósticos Effect e testes do servidor
-vp run verify                          # tudo acima, também no CI
+vp fmt --check   # vp run fmt formata e corrige o lint
+vp run test
+vp run verify    # o mesmo gate do CI
 ```
 
-## Arquitetura
+Agentes verificam as mudanças de ponta a ponta sozinhos: `vp run qa:start` sobe um run isolado com dados sintéticos e login de QA, e a skill [browser-qa](./.agents/skills/browser-qa/SKILL.md) explica o resto. As regras para agentes estão em [AGENTS.md](./AGENTS.md).
 
-- TanStack Start, Router e Query; TypeScript, Tailwind CSS e shadcn `base-nova` com Base UI
-- Backend em Effect 4 com `effect/sql` sobre `node:sqlite`, contrato HTTP tipado em `@spendle/server/api`
-- Valores em centavos, percentuais em basis points e BRL como moeda-base
-- Fatos observados de bancos (Pluggy) e arquivos (OFX, CSV, PDF) imutáveis; decisões humanas duráveis; o resto é projeção recalculável
-- Duas pontas preservadas em transferências, pagamentos de fatura e distribuições de lucro
-
-O mapa do código está em [`plans/architecture.md`](./plans/architecture.md); escopo e decisões em [`plans/`](./plans/README.md). Verificações e limitações conhecidas estão em [`docs/`](./docs/README.md).
-
-## Verificação com agentes
-
-Agentes verificam de ponta a ponta sozinhos, com o navegador do T3 Code, seguindo a [skill browser-qa](.agents/skills/browser-qa/SKILL.md):
-
-```bash
-vp run qa:start            # app e API de QA em memória em portas livres, numa nova pasta .qa/
-vp run qa:mcp <pasta>      # cliente MCP real: autoriza em /autorizar e chama as ferramentas
-vp run qa:inspect <pasta>  # contas, lançamentos e importações do run, enquanto ele roda
-vp run qa:clean <pasta>    # remover um run depois de parar seu servidor
-```
-
-O run usa o Better Auth de verdade, com banco próprio na pasta do run: o link `signInUrl` que ele imprime entra como `qa@spendle.local`, sem Google. Cada worktree tem seus próprios runs. Não é preciso copiar `.env.local` ou dados reais: a API de QA semeia dados sintéticos, usa uma Pluggy falsa e mantém a IA desligada. O run grava `server.log` (app) e `server-api.log` (API).
+Arquitetura e decisões ficam em [`plans/`](./plans/README.md). Registros de QA ficam em [`docs/`](./docs/README.md).
