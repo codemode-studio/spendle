@@ -81,6 +81,21 @@ function createAuth() {
         },
       },
     },
+    advanced: {
+      ipAddress: {
+        // For Cloudflare
+        ipAddressHeaders: ["cf-connecting-ip", "x-forwarded-for"],
+
+        // For Vercel
+        // ipAddressHeaders: ["x-vercel-forwarded-for", "x-forwarded-for"],
+
+        // For AWS/Generic
+        // ipAddressHeaders: ["x-forwarded-for"],
+      },
+      database: {
+        joins: true, // Enable database joins for better performance
+      },
+    },
     plugins: [
       // Signs the MCP access tokens and serves the keys at `/api/auth/jwks`.
       jwt(),
