@@ -130,7 +130,7 @@ function AppLayout({ children }: Readonly<{ children: React.ReactNode }>) {
 
   const search = useRouterState({ select: (state) => state.location.search })
 
-  if (pathname === '/marca' || pathname === '/entrar') {
+  if (['/marca', '/entrar', '/autorizar'].includes(pathname)) {
     return (
       <main className="brand-guide-shell min-h-svh overflow-y-auto">
         {children}

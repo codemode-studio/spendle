@@ -141,7 +141,18 @@ async function run<TResult, TError>(
 export async function v2<TResult, TError>(
   use: (client: V2Client) => Effect.Effect<TResult, TError>,
 ): Promise<TResult> {
-  const member = await memberEmail()
+  return v2As(await memberEmail(), use)
+}
+
+/**
+ * `v2` for a member identified some other way than the session cookie, such
+ * as the person an MCP access token belongs to. The caller has already
+ * checked that they may use Spendle.
+ */
+export function v2As<TResult, TError>(
+  member: string | undefined,
+  use: (client: V2Client) => Effect.Effect<TResult, TError>,
+): Promise<TResult> {
   return run(
     Effect.flatMap(
       HttpApiClient.make(SpendleApi, { transformClient: locate(member) }),

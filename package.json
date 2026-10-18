@@ -27,7 +27,11 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
+    "@better-auth/cimd": "1.7.10",
+    "@better-auth/mcp": "1.7.10",
+    "@better-auth/oauth-provider": "1.7.10",
     "@fontsource-variable/geist": "^5.3.0",
+    "@modelcontextprotocol/server": "2.3.1",
     "@shadcn/react": "^0.3.1",
     "@spendle/server": "workspace:*",
     "@tailwindcss/vite": "^4.1.18",

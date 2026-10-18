@@ -18,13 +18,21 @@ vp run dev                            # app web
 
 `vp run dev` escuta em `http://localhost:3000`, sem depender do Tailscale.
 
-O app exige entrar com Google. Em `.env.local`, preencha `BETTER_AUTH_SECRET` (`openssl rand -base64 32`), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` e, em `SPENDLE_ALLOWED_EMAILS`, as contas Google que podem entrar; lista vazia não deixa ninguém entrar. O cliente OAuth do Google precisa do redirecionamento `http://localhost:3000/api/auth/callback/google`. A sessão fica num cookie criptografado, sem banco; trocar o segredo encerra todas as sessões.
+O app exige entrar com Google. Em `.env.local`, preencha `BETTER_AUTH_SECRET` (`openssl rand -base64 32`), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` e, em `SPENDLE_ALLOWED_EMAILS`, as contas Google que podem entrar; lista vazia não deixa ninguém entrar. O cliente OAuth do Google precisa do redirecionamento `http://localhost:3000/api/auth/callback/google`. Pessoas, sessões e os aplicativos conectados por MCP ficam no banco do Better Auth em `data/auth/auth.sqlite` (`SPENDLE_AUTH_DATABASE_PATH`), separado dos dados financeiros; as tabelas são criadas no primeiro acesso.
 
 Cada conta Google enxerga só os dados do seu espaço familiar; quem criou o espaço adiciona as outras pessoas da família em Configurações, que também precisam estar em `SPENDLE_ALLOWED_EMAILS`. Se você já tinha dados antes dos espaços, rode uma vez, antes de entrar: `vp run --filter @spendle/server claim-space --email <seu e-mail>`.
 
 O app lê `SPENDLE_API_URL` (padrão `http://127.0.0.1:4100`) e o token opcional `SPENDLE_API_TOKEN`. O servidor guarda um banco por espaço familiar em `data/v2/`, fora da pasta pública e do Git; suas variáveis (Pluggy, OpenRouter, TypeSafe) estão no [README do servidor](./packages/server/README.md).
 
 Os recursos de IA (assistente e classificador de categorias) ficam ligados por padrão quando o servidor tem as chaves, sem consentimento separado. Sem chave, nunca chamam o modelo. A resposta de um modelo nunca libera uma importação nem ensina a base de categorias.
+
+## MCP
+
+O Spendle expõe um servidor MCP em `<BETTER_AUTH_URL>/api/mcp` para assistentes como Claude Code, Claude e Cursor. O cliente descobre o login sozinho: a pessoa entra com Google, aprova o aplicativo em `/autorizar` e ele passa a ler contas, transações, planejamento, previsão de caixa, cartões, investimentos e as conexões de Open Finance, além de atualizar e sincronizar essas conexões. O MCP não altera categorias, planos nem contas. Tirar um e-mail de `SPENDLE_ALLOWED_EMAILS` corta também os tokens já emitidos para ele.
+
+```sh
+claude mcp add --transport http spendle http://localhost:3000/api/mcp
+```
 
 ## Migração do V1
 
