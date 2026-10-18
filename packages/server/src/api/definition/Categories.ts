@@ -168,7 +168,7 @@ export class CategoriesApi extends HttpApiGroup.make('categories')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2/categories') {}
+  .prefix('/api/categories') {}
 
 export class CategoryStoreApi extends HttpApiGroup.make('categoryStore')
   .add(
@@ -192,7 +192,7 @@ export class CategoryStoreApi extends HttpApiGroup.make('categoryStore')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2/category-store') {}
+  .prefix('/api/category-store') {}
 
 export class CategoryDecisionsApi extends HttpApiGroup.make('categoryDecisions')
   .add(
@@ -237,4 +237,4 @@ export class CategoryDecisionsApi extends HttpApiGroup.make('categoryDecisions')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2') {}
+  .prefix('/api') {}

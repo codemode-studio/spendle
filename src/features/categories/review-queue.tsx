@@ -21,14 +21,14 @@ import { formatShortDate } from '#/lib/period'
 import {
   confirmCategoryFn,
   correctCategoryFn,
-} from '#/features/v2/entries.functions'
+} from '#/features/data/entries.functions'
 import {
   categoriesOptions,
   categoryReviewOptions,
   invalidateAfterReactors,
   patchEntryCategory,
-} from '#/features/v2/queries'
-import { errorMessage } from '#/lib/v2/errors'
+} from '#/features/data/queries'
+import { errorMessage } from '#/lib/api/errors'
 import { cn } from '#/lib/utils'
 
 const visible = 6

@@ -88,4 +88,4 @@ export class CardsApi extends HttpApiGroup.make('cards')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2/cards') {}
+  .prefix('/api/cards') {}

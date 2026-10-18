@@ -10,7 +10,7 @@ import {
   monthHistoryOptions,
   monthOptions,
   planningStateOptions,
-} from '#/features/v2/queries'
+} from '#/features/data/queries'
 
 export const Route = createFileRoute('/')({
   loader: ({ context }) =>

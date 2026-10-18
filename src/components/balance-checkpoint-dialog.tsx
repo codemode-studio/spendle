@@ -30,16 +30,16 @@ import {
 } from '#/lib/currency'
 import { formatInstrumentName } from '#/lib/finance'
 import { formatShortDate, todayIso } from '#/lib/period'
-import type { AccountView } from '#/features/v2/accounts'
+import type { AccountView } from '#/features/data/accounts'
 import {
   recordCheckpointFn,
   withdrawCheckpointFn,
-} from '#/features/v2/manual.functions'
+} from '#/features/data/manual.functions'
 import {
   balanceProofOptions,
   invalidateAfterReactors,
-} from '#/features/v2/queries'
-import { errorMessage } from '#/lib/v2/errors'
+} from '#/features/data/queries'
+import { errorMessage } from '#/lib/api/errors'
 
 /**
  * The balance the person sees at the bank, for an account no statement or

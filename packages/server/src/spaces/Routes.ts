@@ -23,7 +23,7 @@ const unauthorized = (reason: string) =>
   )
 
 /**
- * `/api/v2/*`: checks the token, then serves the request from the space of
+ * `/api/*`: checks the token, then serves the request from the space of
  * the member the web server names. The token comes first so an unauthorized
  * caller cannot create spaces.
  */
@@ -33,7 +33,7 @@ export const spaceRoutes = HttpRouter.use(
     // a supervisor probes health, and the document describes every space.
     yield* router.add(
       'GET',
-      '/api/v2/health',
+      '/api/health',
       SpaceDirectory.use((directory) => directory.ping).pipe(
         Effect.as(HttpServerResponse.empty({ status: 204 })),
         Effect.catchCause((cause) =>
@@ -54,12 +54,12 @@ export const spaceRoutes = HttpRouter.use(
     )
     yield* router.add(
       'GET',
-      '/api/v2/openapi.json',
+      '/api/openapi.json',
       HttpServerResponse.jsonUnsafe(openApi),
     )
     yield* router.add(
       '*',
-      '/api/v2/*',
+      '/api/*',
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const { token } = yield* ApiConfig

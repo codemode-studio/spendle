@@ -21,9 +21,9 @@ import {
 } from '#/components/ui/dialog'
 import { Field, FieldGroup, FieldLabel } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
-import { addMemberFn, removeMemberFn } from '#/features/v2/space.functions'
-import { spaceOptions } from '#/features/v2/queries'
-import { errorMessage } from '#/lib/v2/errors'
+import { addMemberFn, removeMemberFn } from '#/features/data/space.functions'
+import { spaceOptions } from '#/features/data/queries'
+import { errorMessage } from '#/lib/api/errors'
 
 /** Who can see this family's data; the owner adds and removes people. */
 export function MembersPanel() {

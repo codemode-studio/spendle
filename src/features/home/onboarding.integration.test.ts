@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it } from 'vite-plus/test'
 
-import { v2 } from '#/lib/v2/client.server'
-import { startV2Api } from '#/test/v2-api'
-import type { V2TestApi } from '#/test/v2-api'
+import { api } from '#/lib/api/client.server'
+import { startTestApi } from '#/test/api'
+import type { TestApi } from '#/test/api'
 
 import { hasActiveRecurrences, ledgerSetup } from './onboarding.server'
 
-let api: V2TestApi | undefined
+let testApi: TestApi | undefined
 afterEach(async () => {
-  await api?.close()
-  api = undefined
+  await testApi?.close()
+  testApi = undefined
 })
 
 const statement = `OFXHEADER:100
@@ -22,18 +22,18 @@ CHARSET:UTF-8
 </STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>`
 
 describe('onboarding status', () => {
-  it('completes categorization only after every V2 entry has a decided category', async () => {
-    api = await startV2Api()
-    expect(await v2(ledgerSetup)).toEqual({
+  it('completes categorization only after every entry has a decided category', async () => {
+    testApi = await startTestApi()
+    expect(await api(ledgerSetup)).toEqual({
       accounts: false,
       transactions: false,
       categories: false,
       uncategorizedCount: 0,
     })
-    const owner = await v2((client) =>
+    const owner = await api((client) =>
       client.owners.create({ payload: { name: 'Família', kind: 'household' } }),
     )
-    const account = await v2((client) =>
+    const account = await api((client) =>
       client.accounts.open({
         payload: {
           ownerId: owner.id,
@@ -48,35 +48,35 @@ describe('onboarding status', () => {
     const upload = new FormData()
     upload.append('accountId', account.id)
     upload.append('file', new Blob([statement]), 'agosto.ofx')
-    await v2((client) => client.imports.upload({ payload: upload }))
-    await api.drain()
-    expect(await v2(ledgerSetup)).toEqual({
+    await api((client) => client.imports.upload({ payload: upload }))
+    await testApi.drain()
+    expect(await api(ledgerSetup)).toEqual({
       accounts: true,
       transactions: true,
       categories: false,
       uncategorizedCount: 1,
     })
 
-    const [entry] = (await v2((client) => client.entries.list({ query: {} })))
+    const [entry] = (await api((client) => client.entries.list({ query: {} })))
       .entries
     const [category] = (
-      await v2((client) => client.categories.list({ query: {} }))
+      await api((client) => client.categories.list({ query: {} }))
     ).filter((item) => !item.system && item.bucket !== 'income')
-    await v2((client) =>
+    await api((client) =>
       client.categoryDecisions.decide({
         params: { entryId: entry.id },
         payload: { categoryId: category.id },
       }),
     )
-    expect(await v2(ledgerSetup)).toMatchObject({
+    expect(await api(ledgerSetup)).toMatchObject({
       categories: true,
       uncategorizedCount: 0,
     })
   })
 
   it('does not treat a paused recurrence as set up', async () => {
-    api = await startV2Api()
-    const { id } = await v2((client) =>
+    testApi = await startTestApi()
+    const { id } = await api((client) =>
       client.recurrences.create({
         payload: {
           name: 'Internet QA',
@@ -93,13 +93,13 @@ describe('onboarding status', () => {
         },
       }),
     )
-    expect(await v2(hasActiveRecurrences)).toBe(true)
-    await v2((client) =>
+    expect(await api(hasActiveRecurrences)).toBe(true)
+    await api((client) =>
       client.recurrences.active({
         params: { recurrenceId: id },
         payload: { active: false },
       }),
     )
-    expect(await v2(hasActiveRecurrences)).toBe(false)
+    expect(await api(hasActiveRecurrences)).toBe(false)
   })
 })

@@ -20,7 +20,7 @@ import { formatCurrency, formatMinorUnitsForInput } from '#/lib/currency'
 import { formatInstrumentName, normalizeDescription } from '#/lib/finance'
 import { formatShortDate as formatDate } from '#/lib/period'
 import { recurrenceLinkCandidateLimits } from '#/lib/recurrence'
-import { recurrenceCandidatesOptions } from '#/features/v2/queries'
+import { recurrenceCandidatesOptions } from '#/features/data/queries'
 import { cn } from '#/lib/utils'
 
 import { occurrenceRef } from './types'

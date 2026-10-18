@@ -24,11 +24,11 @@ import { ApiAuthorization, RequestValidation } from './Security.ts'
 import { SystemApi } from './System.ts'
 
 /**
- * The V2 API under `/api/v2`. Clients derive a typed client from it with
+ * The API under `/api`. Clients derive a typed client from it with
  * `HttpApiClient.make(SpendleApi)`; this module and its siblings import only
  * `effect`, so they are safe to bundle in the web app.
  */
-export class V2Api extends HttpApi.make('spendle-v2')
+export class AuthorizedApi extends HttpApi.make('spendle-api')
   .add(
     OwnersApi,
     AccountsApi,
@@ -49,9 +49,9 @@ export class V2Api extends HttpApi.make('spendle-v2')
   )
   .middleware(ApiAuthorization) {}
 
-/** `V2Api` plus `/health`, which answers without a token. */
+/** `AuthorizedApi` plus `/health`, which answers without a token. */
 export class SpendleApi extends HttpApi.make('spendle')
-  .addHttpApi(V2Api)
+  .addHttpApi(AuthorizedApi)
   .add(SystemApi)
   .middleware(RequestValidation)
   .annotateMerge(OpenApi.annotations({ title: 'Spendle API', version: '2' })) {}

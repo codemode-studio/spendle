@@ -31,7 +31,7 @@ import {
   Unavailable,
 } from './definition/Errors.ts'
 
-/** What a V2 endpoint may fail with besides the middleware's errors. */
+/** What an endpoint may fail with besides the middleware's errors. */
 export type EndpointError =
   | NotFound
   | InvalidRequest

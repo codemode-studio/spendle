@@ -78,7 +78,7 @@ export type ApiError =
   | InternalError
 
 /**
- * What every `/api/v2` endpoint may answer besides its success. The
+ * What every `/api` endpoint may answer besides its success. The
  * middleware adds `Unauthorized` and `InvalidRequest` for a bad token or body.
  */
 export const EndpointErrors = [

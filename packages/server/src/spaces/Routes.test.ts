@@ -36,7 +36,7 @@ describe('family spaces API', () => {
 
   it.effect('refuses a call without a member', () =>
     Effect.gen(function* () {
-      const response = yield* rawJson(HttpClientRequest.get('/api/v2/owners'))
+      const response = yield* rawJson(HttpClientRequest.get('/api/owners'))
       assert.deepStrictEqual(response, {
         status: 401,
         body: { _tag: 'Unauthorized', reason: 'member_required', detail: null },
@@ -47,7 +47,7 @@ describe('family spaces API', () => {
   it.effect('checks the token before creating a space', () =>
     Effect.gen(function* () {
       const missing = yield* rawJson(
-        HttpClientRequest.get('/api/v2/owners').pipe(
+        HttpClientRequest.get('/api/owners').pipe(
           HttpClientRequest.setHeader(memberHeader, 'ana@example.com'),
         ),
       )
@@ -120,10 +120,10 @@ describe('family spaces API', () => {
   it.effect('answers health and the OpenAPI document without a member', () =>
     Effect.gen(function* () {
       const health = yield* HttpClient.execute(
-        HttpClientRequest.get('/api/v2/health'),
+        HttpClientRequest.get('/api/health'),
       )
       const document = yield* rawJson(
-        HttpClientRequest.get('/api/v2/openapi.json'),
+        HttpClientRequest.get('/api/openapi.json'),
       )
       assert.deepStrictEqual([health.status, document.status], [204, 200])
     }).pipe(Effect.provide(spacesTest({ token }))),

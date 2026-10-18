@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AutorizarRouteImport } from './routes/autorizar'
 import { Route as CategoriasRouteImport } from './routes/categorias'
 import { Route as ConfiguracoesRouteImport } from './routes/configuracoes'
 import { Route as EntrarRouteImport } from './routes/entrar'
@@ -18,12 +19,19 @@ import { Route as InvestimentosRouteImport } from './routes/investimentos'
 import { Route as MarcaRouteImport } from './routes/marca'
 import { Route as PlanejamentoRouteImport } from './routes/planejamento'
 import { Route as TransacoesRouteImport } from './routes/transacoes'
+import { Route as Char91DotwellKnownChar93SplatRouteImport } from './routes/[.well-known]/$'
+import { Route as ApiMcpRouteImport } from './routes/api/mcp'
 import { Route as ApiViewerRouteImport } from './routes/api/viewer'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AutorizarRoute = AutorizarRouteImport.update({
+  id: '/autorizar',
+  path: '/autorizar',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CategoriasRoute = CategoriasRouteImport.update({
@@ -66,6 +74,17 @@ const TransacoesRoute = TransacoesRouteImport.update({
   path: '/transacoes',
   getParentRoute: () => rootRouteImport,
 } as any)
+const Char91DotwellKnownChar93SplatRoute =
+  Char91DotwellKnownChar93SplatRouteImport.update({
+    id: '/.well-known/$',
+    path: '/.well-known/$',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiMcpRoute = ApiMcpRouteImport.update({
+  id: '/api/mcp',
+  path: '/api/mcp',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiViewerRoute = ApiViewerRouteImport.update({
   id: '/api/viewer',
   path: '/api/viewer',
@@ -79,6 +98,7 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/autorizar': typeof AutorizarRoute
   '/categorias': typeof CategoriasRoute
   '/configuracoes': typeof ConfiguracoesRoute
   '/entrar': typeof EntrarRoute
@@ -87,11 +107,14 @@ export interface FileRoutesByFullPath {
   '/marca': typeof MarcaRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
+  '/.well-known/$': typeof Char91DotwellKnownChar93SplatRoute
+  '/api/mcp': typeof ApiMcpRoute
   '/api/viewer': typeof ApiViewerRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/autorizar': typeof AutorizarRoute
   '/categorias': typeof CategoriasRoute
   '/configuracoes': typeof ConfiguracoesRoute
   '/entrar': typeof EntrarRoute
@@ -100,12 +123,15 @@ export interface FileRoutesByTo {
   '/marca': typeof MarcaRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
+  '/.well-known/$': typeof Char91DotwellKnownChar93SplatRoute
+  '/api/mcp': typeof ApiMcpRoute
   '/api/viewer': typeof ApiViewerRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/autorizar': typeof AutorizarRoute
   '/categorias': typeof CategoriasRoute
   '/configuracoes': typeof ConfiguracoesRoute
   '/entrar': typeof EntrarRoute
@@ -114,6 +140,8 @@ export interface FileRoutesById {
   '/marca': typeof MarcaRoute
   '/planejamento': typeof PlanejamentoRoute
   '/transacoes': typeof TransacoesRoute
+  '/.well-known/$': typeof Char91DotwellKnownChar93SplatRoute
+  '/api/mcp': typeof ApiMcpRoute
   '/api/viewer': typeof ApiViewerRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
@@ -121,6 +149,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/autorizar'
     | '/categorias'
     | '/configuracoes'
     | '/entrar'
@@ -129,11 +158,14 @@ export interface FileRouteTypes {
     | '/marca'
     | '/planejamento'
     | '/transacoes'
+    | '/.well-known/$'
+    | '/api/mcp'
     | '/api/viewer'
     | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/autorizar'
     | '/categorias'
     | '/configuracoes'
     | '/entrar'
@@ -142,11 +174,14 @@ export interface FileRouteTypes {
     | '/marca'
     | '/planejamento'
     | '/transacoes'
+    | '/.well-known/$'
+    | '/api/mcp'
     | '/api/viewer'
     | '/api/auth/$'
   id:
     | '__root__'
     | '/'
+    | '/autorizar'
     | '/categorias'
     | '/configuracoes'
     | '/entrar'
@@ -155,12 +190,15 @@ export interface FileRouteTypes {
     | '/marca'
     | '/planejamento'
     | '/transacoes'
+    | '/.well-known/$'
+    | '/api/mcp'
     | '/api/viewer'
     | '/api/auth/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AutorizarRoute: typeof AutorizarRoute
   CategoriasRoute: typeof CategoriasRoute
   ConfiguracoesRoute: typeof ConfiguracoesRoute
   EntrarRoute: typeof EntrarRoute
@@ -169,6 +207,8 @@ export interface RootRouteChildren {
   MarcaRoute: typeof MarcaRoute
   PlanejamentoRoute: typeof PlanejamentoRoute
   TransacoesRoute: typeof TransacoesRoute
+  Char91DotwellKnownChar93SplatRoute: typeof Char91DotwellKnownChar93SplatRoute
+  ApiMcpRoute: typeof ApiMcpRoute
   ApiViewerRoute: typeof ApiViewerRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
@@ -180,6 +220,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/autorizar': {
+      id: '/autorizar'
+      path: '/autorizar'
+      fullPath: '/autorizar'
+      preLoaderRoute: typeof AutorizarRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/categorias': {
@@ -238,6 +285,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TransacoesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/.well-known/$': {
+      id: '/.well-known/$'
+      path: '/.well-known/$'
+      fullPath: '/.well-known/$'
+      preLoaderRoute: typeof Char91DotwellKnownChar93SplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mcp': {
+      id: '/api/mcp'
+      path: '/api/mcp'
+      fullPath: '/api/mcp'
+      preLoaderRoute: typeof ApiMcpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/viewer': {
       id: '/api/viewer'
       path: '/api/viewer'
@@ -257,6 +318,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AutorizarRoute: AutorizarRoute,
   CategoriasRoute: CategoriasRoute,
   ConfiguracoesRoute: ConfiguracoesRoute,
   EntrarRoute: EntrarRoute,
@@ -265,6 +327,8 @@ const rootRouteChildren: RootRouteChildren = {
   MarcaRoute: MarcaRoute,
   PlanejamentoRoute: PlanejamentoRoute,
   TransacoesRoute: TransacoesRoute,
+  Char91DotwellKnownChar93SplatRoute: Char91DotwellKnownChar93SplatRoute,
+  ApiMcpRoute: ApiMcpRoute,
   ApiViewerRoute: ApiViewerRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }

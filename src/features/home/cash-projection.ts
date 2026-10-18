@@ -11,7 +11,7 @@ export interface CashPoint {
 
 export type CashEvent = ProjectionFromApi['scheduled'][number]
 
-/** The V2 forecast cut to a horizon, with the daily balance line and what it assumes. */
+/** The API's forecast cut to a horizon, with the daily balance line and what it assumes. */
 export interface CashProjection {
   today: string
   /** Empty when today's cash is unknown. */

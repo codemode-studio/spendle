@@ -9,9 +9,13 @@ import { Spinner } from '#/components/ui/spinner'
 import { authClient } from '#/features/auth/auth-client'
 import { safeRedirect } from '#/features/auth/redirect'
 
-const signInSearchSchema = z.object({
+// Loose: an MCP client's authorization request arrives here as signed query
+// parameters, which sign-in must send back untouched.
+const signInSearchSchema = z.looseObject({
   redirect: z.string().transform(safeRedirect).optional().catch(undefined),
   error: z.string().optional().catch(undefined),
+  /** Present when an MCP client's authorization request sent the person here. */
+  sig: z.string().optional().catch(undefined),
 })
 
 /** Codes Better Auth appends to the error URL after Google's callback. */
@@ -24,7 +28,11 @@ const errorMessages: Record<string, string> = {
 export const Route = createFileRoute('/entrar')({
   validateSearch: signInSearchSchema,
   beforeLoad: ({ context, search }) => {
-    if (context.viewer) throw redirect({ to: search.redirect ?? '/' })
+    // An authorization request may ask a signed-in person to sign in again
+    // (`prompt=login`, `max_age`); only a new sign-in continues it.
+    if (context.viewer && search.sig === undefined) {
+      throw redirect({ to: search.redirect ?? '/' })
+    }
   },
   head: () => ({ meta: [{ title: 'Entrar · Spendle' }] }),
   component: SignInPage,

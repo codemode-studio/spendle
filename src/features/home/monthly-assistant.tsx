@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Sparkles } from 'lucide-react'
 import { Button } from '#/components/ui/button'
 import { AnalysisCard } from './analysis-card'
-import { monthlyAnalysisFn } from '#/features/v2/planning.functions'
+import { monthlyAnalysisFn } from '#/features/data/planning.functions'
 
 export function MonthlyAssistant({
   month,

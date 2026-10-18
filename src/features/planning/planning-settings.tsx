@@ -26,7 +26,7 @@ import {
   monthOptions,
   planningStateOptions,
   recurrenceBookOptions,
-} from '#/features/v2/queries'
+} from '#/features/data/queries'
 
 function usePlanningData(): PlanningData {
   const { data: state } = useSuspenseQuery(planningStateOptions())

@@ -21,12 +21,12 @@ import type { DetectedRecurrence } from '@spendle/server/api'
 import {
   approveDetectedFn,
   ignoreDetectedFn,
-} from '#/features/v2/planning.functions'
+} from '#/features/data/planning.functions'
 import {
   detectedRecurrencesOptions,
   invalidateAfterReactors,
-} from '#/features/v2/queries'
-import { errorMessage } from '#/lib/v2/errors'
+} from '#/features/data/queries'
+import { errorMessage } from '#/lib/api/errors'
 
 import type { PlanningData } from './types'
 

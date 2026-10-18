@@ -12,7 +12,7 @@ import { LinkPaymentDialog } from './recurrence-dialogs'
 import type { RecurrenceView } from './types'
 
 const { fetchCandidates } = vi.hoisted(() => ({ fetchCandidates: vi.fn() }))
-vi.mock('#/features/v2/queries', () => ({
+vi.mock('#/features/data/queries', () => ({
   recurrenceCandidatesOptions: () => ({
     queryKey: ['link-test'],
     queryFn: fetchCandidates,

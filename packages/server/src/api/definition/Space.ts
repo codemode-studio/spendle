@@ -47,7 +47,7 @@ export class SpaceGroupApi extends HttpApiGroup.make('space')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2/space') {}
+  .prefix('/api/space') {}
 
 /**
  * Who belongs to the caller's space. Served by the server itself rather than

@@ -37,15 +37,15 @@ import {
 } from '#/lib/currency'
 import { formatInstrumentName } from '#/lib/finance'
 import { todayIso } from '#/lib/period'
-import { isCard } from '#/features/v2/accounts'
-import type { AccountView } from '#/features/v2/accounts'
+import { isCard } from '#/features/data/accounts'
+import type { AccountView } from '#/features/data/accounts'
 import {
   createManualTransactionFn,
   removeManualTransactionFn,
   reviseManualTransactionFn,
-} from '#/features/v2/manual.functions'
-import { invalidateAfterReactors } from '#/features/v2/queries'
-import { errorMessage } from '#/lib/v2/errors'
+} from '#/features/data/manual.functions'
+import { invalidateAfterReactors } from '#/features/data/queries'
+import { errorMessage } from '#/lib/api/errors'
 
 import type { Category } from '@spendle/server/api'
 
@@ -60,7 +60,7 @@ export interface ManualTransactionDraft {
 
 /**
  * Registers a movement no statement or bank reported, or corrects or
- * deletes one typed in before. V2 keeps every version; once the bank
+ * deletes one typed in before. The API keeps every version; once the bank
  * reports the same movement, both become one entry.
  */
 export function ManualTransactionDialog({

@@ -101,4 +101,4 @@ export class ManualApi extends HttpApiGroup.make('manual')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2') {}
+  .prefix('/api') {}

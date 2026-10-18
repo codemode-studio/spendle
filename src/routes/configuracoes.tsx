@@ -28,9 +28,9 @@ import { AccountsSection } from '#/features/finance/accounts-section'
 import { CardsSection } from '#/features/finance/cards-section'
 import { KnowledgeBaseSection } from '#/features/finance/knowledge-base-section'
 import { invalidateFinance } from '#/features/finance/queries'
-import { createOwnerFn } from '#/features/v2/accounts.functions'
-import { ownerKindLabels } from '#/features/v2/accounts'
-import type { Owner } from '#/features/v2/accounts'
+import { createOwnerFn } from '#/features/data/accounts.functions'
+import { ownerKindLabels } from '#/features/data/accounts'
+import type { Owner } from '#/features/data/accounts'
 import {
   accountsOptions,
   categoriesOptions,
@@ -43,10 +43,10 @@ import {
   planningStateOptions,
   recurrenceBookOptions,
   spaceOptions,
-} from '#/features/v2/queries'
+} from '#/features/data/queries'
 import { OpenFinanceSection } from '#/features/finance/open-finance-section'
 import { MembersPanel } from '#/features/space/members-panel'
-import { errorMessage } from '#/lib/v2/errors'
+import { errorMessage } from '#/lib/api/errors'
 
 import { PlanningSettings } from '#/features/planning/planning-settings'
 

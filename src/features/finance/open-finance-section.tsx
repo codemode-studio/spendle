@@ -71,8 +71,8 @@ import {
 import { toMinorUnits } from '#/lib/currency'
 import { formatInstrumentName } from '#/lib/finance'
 import { formatLongDate } from '#/lib/period'
-import { isCard } from '#/features/v2/accounts'
-import type { AccountView } from '#/features/v2/accounts'
+import { isCard } from '#/features/data/accounts'
+import type { AccountView } from '#/features/data/accounts'
 import {
   createConnectTokenFn,
   disconnectFn,
@@ -82,9 +82,9 @@ import {
   registerItemFn,
   syncConnectionFn,
   unlinkProviderAccountFn,
-} from '#/features/v2/open-finance.functions'
-import { openPluggyConnect } from '#/features/v2/pluggy-connect'
-import type { PluggyConnectCallbacks } from '#/features/v2/pluggy-connect'
+} from '#/features/data/open-finance.functions'
+import { openPluggyConnect } from '#/features/data/pluggy-connect'
+import type { PluggyConnectCallbacks } from '#/features/data/pluggy-connect'
 import {
   accountsOptions,
   connectSettingsOptions,
@@ -92,8 +92,8 @@ import {
   invalidateAfterReactors,
   ownersOptions,
   providerAccountsOptions,
-} from '#/features/v2/queries'
-import { errorMessage } from '#/lib/v2/errors'
+} from '#/features/data/queries'
+import { errorMessage } from '#/lib/api/errors'
 import { cn } from '#/lib/utils'
 
 import type { Connection, ProviderAccount } from '@spendle/server/api'

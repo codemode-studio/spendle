@@ -10,7 +10,7 @@ import { Button } from '#/components/ui/button'
 import { Skeleton } from '#/components/ui/skeleton'
 import { bucketLabels, formatCurrency, formatMonth } from '#/lib/finance'
 import { GoalRing } from '#/features/finance/strategy-progress'
-import { categoriesOptions, monthHistoryOptions } from '#/features/v2/queries'
+import { categoriesOptions, monthHistoryOptions } from '#/features/data/queries'
 import { cn } from '#/lib/utils'
 import { MonthlyAssistant } from './monthly-assistant'
 

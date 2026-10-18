@@ -20,9 +20,9 @@ import {
   setRecurrenceActiveFn,
   skipOccurrenceFn,
   unlinkMatchFn,
-} from '#/features/v2/planning.functions'
-import { invalidateAfterReactors } from '#/features/v2/queries'
-import { errorMessage } from '#/lib/v2/errors'
+} from '#/features/data/planning.functions'
+import { invalidateAfterReactors } from '#/features/data/queries'
+import { errorMessage } from '#/lib/api/errors'
 
 import type { Allocation, PlanInput } from './budget-section'
 import { matchRef, occurrenceRef } from './types'

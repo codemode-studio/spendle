@@ -6,7 +6,7 @@ import type { PatternRow } from '../categories/Store.ts'
 import type { EvalItem, Outcomes } from './Scoreboard.ts'
 
 /**
- * What the deterministic V2 policy does with the exam: the store learns the
+ * What the deterministic policy does with the exam: the store learns the
  * context split as if the person had decided each item in review, then
  * every exam item is categorized by patterns, prefixes and the provider
  * map, with no model. The dataset carries no provider categories, so this

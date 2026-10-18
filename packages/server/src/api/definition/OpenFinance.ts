@@ -138,4 +138,4 @@ export class OpenFinanceApi extends HttpApiGroup.make('openFinance')
       },
     ),
   )
-  .prefix('/api/v2/open-finance') {}
+  .prefix('/api/open-finance') {}

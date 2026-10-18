@@ -1,7 +1,7 @@
 /**
- * Read model da Home sobre o razão real da família (V2).
+ * Read model da Home sobre o razão real da família.
  * Tudo aqui é cálculo puro (roda no cliente e no servidor) — nenhum dado fictício.
- * Caixa e compromissos vêm da previsão de caixa do V2.
+ * Caixa e compromissos vêm da previsão de caixa da API.
  */
 import {
   isSpending,
@@ -163,7 +163,7 @@ export interface HomeView {
 }
 
 /**
- * Totais e categorias dos últimos 30 dias sobre o razão da família (V2).
+ * Totais e categorias dos últimos 30 dias sobre o razão da família.
  * Comparações só valem quando o histórico cobre a janela inteira e não há
  * pendências que deixem o mês parcial.
  */

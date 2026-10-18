@@ -17,11 +17,11 @@ describe('API access', () => {
     }).pipe(Effect.provide(apiTest())),
   )
 
-  it.effect('requires the configured bearer token on /api/v2', () =>
+  it.effect('requires the configured bearer token on /api', () =>
     Effect.gen(function* () {
-      const missing = yield* rawJson(HttpClientRequest.get('/api/v2/owners'))
+      const missing = yield* rawJson(HttpClientRequest.get('/api/owners'))
       const wrong = yield* rawJson(
-        HttpClientRequest.get('/api/v2/owners').pipe(
+        HttpClientRequest.get('/api/owners').pipe(
           HttpClientRequest.bearerToken('guess'),
         ),
       )
@@ -40,7 +40,7 @@ describe('API access', () => {
   it.effect('checks the token before reading a malformed body', () =>
     Effect.gen(function* () {
       const response = yield* rawJson(
-        HttpClientRequest.post('/api/v2/owners').pipe(
+        HttpClientRequest.post('/api/owners').pipe(
           HttpClientRequest.bodyJsonUnsafe({ name: 42 }),
         ),
       )
@@ -51,13 +51,11 @@ describe('API access', () => {
   it.effect('publishes the OpenAPI document', () =>
     Effect.gen(function* () {
       const { status, body } = yield* rawJson(
-        HttpClientRequest.get('/api/v2/openapi.json'),
+        HttpClientRequest.get('/api/openapi.json'),
       )
       assert.strictEqual(status, 200)
       assert.isTrue(
-        Object.keys((body as { paths: object }).paths).includes(
-          '/api/v2/entries',
-        ),
+        Object.keys((body as { paths: object }).paths).includes('/api/entries'),
       )
     }).pipe(Effect.provide(apiTest())),
   )

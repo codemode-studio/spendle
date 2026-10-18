@@ -78,4 +78,4 @@ export class ImportsApi extends HttpApiGroup.make('imports')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2/imports') {}
+  .prefix('/api/imports') {}

@@ -21,10 +21,13 @@ import {
   formatMonthShort,
   formatShortDate as formatDate,
 } from '#/lib/period'
-import type { AccountView } from '#/features/v2/accounts'
-import { cycleStatusCopy } from '#/features/v2/cards'
-import { cardOverviewOptions, cycleEntriesOptions } from '#/features/v2/queries'
-import { errorMessage } from '#/lib/v2/errors'
+import type { AccountView } from '#/features/data/accounts'
+import { cycleStatusCopy } from '#/features/data/cards'
+import {
+  cardOverviewOptions,
+  cycleEntriesOptions,
+} from '#/features/data/queries'
+import { errorMessage } from '#/lib/api/errors'
 import { cn } from '#/lib/utils'
 
 import type { CardCycle, InstallmentPlan } from '@spendle/server/api'

@@ -164,10 +164,10 @@ describe('accounts API', () => {
   it.effect('answers every failure with the same body', () =>
     Effect.gen(function* () {
       const missing = yield* rawJson(
-        HttpClientRequest.get('/api/v2/accounts/nope'),
+        HttpClientRequest.get('/api/accounts/nope'),
       )
       const malformed = yield* rawJson(
-        HttpClientRequest.post('/api/v2/accounts').pipe(
+        HttpClientRequest.post('/api/accounts').pipe(
           HttpClientRequest.bodyJsonUnsafe({ ownerId: 'x', currency: 'brl' }),
         ),
       )

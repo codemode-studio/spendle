@@ -6,7 +6,7 @@ import {
   invalidateFinance,
   onboardingOptions,
 } from './queries'
-import { monthHistoryOptions } from '#/features/v2/queries'
+import { monthHistoryOptions } from '#/features/data/queries'
 import type { FinanceInvalidationScope } from './queries'
 
 // Concrete cached instances exercise prefix matching, including inactive months.

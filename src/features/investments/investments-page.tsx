@@ -80,15 +80,15 @@ import {
   classifyMovementFn,
   recordValuationFn,
   unclassifyMovementFn,
-} from '#/features/v2/investments.functions'
+} from '#/features/data/investments.functions'
 import {
   accountsOptions,
   categoriesOptions,
   investmentsOptions,
   invalidateAfterReactors,
   monthOptions,
-} from '#/features/v2/queries'
-import { errorMessage } from '#/lib/v2/errors'
+} from '#/features/data/queries'
+import { errorMessage } from '#/lib/api/errors'
 import { cn } from '#/lib/utils'
 
 import type { InvestmentsSnapshot, Position } from '@spendle/server/api'

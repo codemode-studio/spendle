@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 const vp = execFileSync('vp', ['--version'], { encoding: 'utf8' })
 console.log(`Node ${process.version}; ${vp.split('\n')[0]}`)
 
-// The V2 server stores everything in SQLite through `node:sqlite`.
+// The API server stores everything in SQLite through `node:sqlite`.
 const sqlite = new DatabaseSync(':memory:')
 try {
   const row = sqlite.prepare('select sqlite_version() as version').get()

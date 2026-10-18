@@ -110,7 +110,7 @@ export class OwnersApi extends HttpApiGroup.make('owners')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2/owners') {}
+  .prefix('/api/owners') {}
 
 export class AccountsApi extends HttpApiGroup.make('accounts')
   .add(
@@ -152,4 +152,4 @@ export class AccountsApi extends HttpApiGroup.make('accounts')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2/accounts') {}
+  .prefix('/api/accounts') {}

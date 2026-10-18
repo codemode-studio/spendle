@@ -51,14 +51,14 @@ import { formatLongDate, formatShortDate } from '#/lib/period'
 import {
   applyStoreEditFn,
   previewStoreEditFn,
-} from '#/features/v2/categories.functions'
+} from '#/features/data/categories.functions'
 import {
   categoriesOptions,
   invalidateAfterReactors,
   providerMappingsOptions,
   storePatternsOptions,
-} from '#/features/v2/queries'
-import { errorMessage } from '#/lib/v2/errors'
+} from '#/features/data/queries'
+import { errorMessage } from '#/lib/api/errors'
 
 import type { StoreEdit, StorePattern } from '@spendle/server/api'
 
