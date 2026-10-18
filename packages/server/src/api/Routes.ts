@@ -46,7 +46,7 @@ export const ApiHandlers = Layer.mergeAll(
   AssistantHandlers,
 ).pipe(Layer.provide(ReadModel.layer), Layer.provideMerge(SecurityLive))
 
-/** `SpendleApi` as routes, with its OpenAPI document at `/api/v2/openapi.json`. */
+/** `SpendleApi` as routes, with its OpenAPI document at `/api/openapi.json`. */
 export const ApiRoutes = HttpApiBuilder.layer(SpendleApi, {
-  openapiPath: '/api/v2/openapi.json',
+  openapiPath: '/api/openapi.json',
 }).pipe(Layer.provide(ApiHandlers))

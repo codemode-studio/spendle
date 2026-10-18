@@ -1,4 +1,4 @@
-import { v2Space } from '#/lib/v2/client.server'
+import { spaceApi } from '#/lib/api/client.server'
 
 import { readViewer } from './auth.server'
 import type { Viewer } from './viewer'
@@ -11,7 +11,7 @@ import type { Viewer } from './viewer'
 export async function readViewerWithSpace(): Promise<Viewer | null> {
   const person = await readViewer()
   if (person === null) return null
-  const spaceId = await v2Space((client) => client.space.get()).then(
+  const spaceId = await spaceApi((client) => client.space.get()).then(
     (space) => space.id,
     () => null,
   )

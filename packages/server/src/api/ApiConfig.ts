@@ -16,7 +16,7 @@ export class ApiConfigError extends Schema.TaggedError<ApiConfigError>()(
 }
 
 export interface ApiSettings {
-  /** The bearer token every `/api/v2` request must carry; `None` accepts any local caller. */
+  /** The bearer token every `/api` request must carry; `None` accepts any local caller. */
   readonly token: Option.Option<Redacted.Redacted>
 }
 

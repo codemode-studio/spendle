@@ -1,19 +1,19 @@
 import { afterEach, beforeEach, expect, it } from 'vite-plus/test'
 
-import { v2 } from '#/lib/v2/client.server'
-import { startV2Api } from '#/test/v2-api'
-import type { V2TestApi } from '#/test/v2-api'
-import { ofxStatement, openChecking, statementUpload } from '#/test/v2-fixtures'
+import { api } from '#/lib/api/client.server'
+import { startTestApi } from '#/test/api'
+import type { TestApi } from '#/test/api'
+import { ofxStatement, openChecking, statementUpload } from '#/test/fixtures'
 
-let api: V2TestApi
+let testApi: TestApi
 beforeEach(async () => {
-  api = await startV2Api()
+  testApi = await startTestApi()
 })
-afterEach(() => api.close())
+afterEach(() => testApi.close())
 
 it('learns from a decision, previews a store edit over history and applies it', async () => {
   const account = await openChecking()
-  await v2((client) =>
+  await api((client) =>
     client.imports.upload({
       payload: statementUpload(
         account.id,
@@ -40,18 +40,18 @@ it('learns from a decision, previews a store edit over history and applies it', 
       ),
     }),
   )
-  await api.drain()
-  const [first] = (await v2((client) => client.entries.list({ query: {} })))
+  await testApi.drain()
+  const [first] = (await api((client) => client.entries.list({ query: {} })))
     .entries
-  await v2((client) =>
+  await api((client) =>
     client.categoryDecisions.decide({
       params: { entryId: first.id },
       payload: { categoryId: 'groceries' },
     }),
   )
-  await api.drain()
+  await testApi.drain()
 
-  const [pattern] = await v2((client) => client.categoryStore.patterns())
+  const [pattern] = await api((client) => client.categoryStore.patterns())
   expect(pattern).toMatchObject({
     kind: 'merchant',
     categoryId: 'groceries',
@@ -62,7 +62,7 @@ it('learns from a decision, previews a store edit over history and applies it', 
     id: pattern.id,
     categoryId: 'restaurants',
   }
-  const preview = await v2((client) =>
+  const preview = await api((client) =>
     client.categoryStore.preview({ payload: { edit } }),
   )
   // The decided entry keeps the person's category; only the other one follows the base.
@@ -72,14 +72,14 @@ it('learns from a decision, previews a store edit over history and applies it', 
       change.after.categoryId,
     ]),
   ).toEqual([['groceries', 'restaurants']])
-  const stillGroceries = await v2((client) =>
+  const stillGroceries = await api((client) =>
     client.entries.list({ query: { categoryId: 'groceries' } }),
   )
   expect(stillGroceries.total).toBe(2)
 
-  await v2((client) => client.categoryStore.edit({ payload: { edit } }))
-  await api.drain()
-  const restaurants = await v2((client) =>
+  await api((client) => client.categoryStore.edit({ payload: { edit } }))
+  await testApi.drain()
+  const restaurants = await api((client) =>
     client.entries.list({ query: { categoryId: 'restaurants' } }),
   )
   expect(restaurants.entries.map((entry) => entry.id)).toEqual(

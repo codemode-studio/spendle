@@ -14,12 +14,12 @@ import type { MonthView } from '@spendle/server/api'
 
 import { MonthlyOverview } from './monthly-overview'
 
-vi.mock('#/features/v2/planning.functions', () => ({
+vi.mock('#/features/data/planning.functions', () => ({
   monthlyAnalysisFn: vi.fn(),
 }))
 
 const { fetchHistory } = vi.hoisted(() => ({ fetchHistory: vi.fn() }))
-vi.mock('#/features/v2/queries', () => ({
+vi.mock('#/features/data/queries', () => ({
   monthHistoryOptions: () => ({
     queryKey: ['monthly-overview-test'],
     queryFn: fetchHistory,

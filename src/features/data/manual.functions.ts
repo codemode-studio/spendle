@@ -6,16 +6,16 @@ import {
   NewManualTransaction,
 } from '@spendle/server/api'
 
-import { v2 } from '#/lib/v2/client.server'
+import { api } from '#/lib/api/client.server'
 
 /** A transaction the person types in; the answer carries the entry it became. */
 export const createManualTransactionFn = createServerFn({ method: 'POST' })
   .validator(Schema.toStandardSchemaV1(NewManualTransaction))
   .handler(({ data }) =>
-    v2((client) => client.manual.createTransaction({ payload: data })),
+    api((client) => client.manual.createTransaction({ payload: data })),
   )
 
-/** A correction of a typed-in transaction: V2 keeps it as the next version. */
+/** A correction of a typed-in transaction: the API keeps it as the next version. */
 export const reviseManualTransactionFn = createServerFn({ method: 'POST' })
   .validator(
     Schema.toStandardSchemaV1(
@@ -27,7 +27,7 @@ export const reviseManualTransactionFn = createServerFn({ method: 'POST' })
   )
   .handler(({ data }) => {
     const { externalId, ...payload } = data
-    return v2((client) =>
+    return api((client) =>
       client.manual.reviseTransaction({ params: { externalId }, payload }),
     )
   })
@@ -37,7 +37,7 @@ export const removeManualTransactionFn = createServerFn({ method: 'POST' })
     Schema.toStandardSchemaV1(Schema.Struct({ externalId: Schema.String })),
   )
   .handler(({ data }) =>
-    v2((client) => client.manual.removeTransaction({ params: data })),
+    api((client) => client.manual.removeTransaction({ params: data })),
   )
 
 /** The person's note on an entry; null or blank clears it. */
@@ -51,7 +51,7 @@ export const setEntryNoteFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(({ data }) =>
-    v2((client) =>
+    api((client) =>
       client.manual.setNote({
         params: { entryId: data.entryId },
         payload: { note: data.note },
@@ -71,7 +71,7 @@ export const recordCheckpointFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(({ data }) =>
-    v2((client) =>
+    api((client) =>
       client.manual.recordCheckpoint({
         params: { accountId: data.accountId },
         payload: { asOf: data.asOf, balanceCents: data.balanceCents },
@@ -84,5 +84,5 @@ export const withdrawCheckpointFn = createServerFn({ method: 'POST' })
     Schema.toStandardSchemaV1(Schema.Struct({ checkpointId: Schema.String })),
   )
   .handler(({ data }) =>
-    v2((client) => client.manual.withdrawCheckpoint({ params: data })),
+    api((client) => client.manual.withdrawCheckpoint({ params: data })),
   )

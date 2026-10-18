@@ -7,7 +7,7 @@ import type {
   RecurrenceView,
 } from '@spendle/server/api'
 
-/** What Orçamento e metas and Recorrências read, all from V2. */
+/** What Orçamento e metas and Recorrências read, all from the API. */
 export interface PlanningData {
   state: PlanningState
   /** The current month. */

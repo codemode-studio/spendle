@@ -409,7 +409,7 @@ export class PlanningApi extends HttpApiGroup.make('planning')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2/planning') {}
+  .prefix('/api/planning') {}
 
 export class DashboardApi extends HttpApiGroup.make('dashboard')
   .add(
@@ -437,7 +437,7 @@ export class DashboardApi extends HttpApiGroup.make('dashboard')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2/dashboard') {}
+  .prefix('/api/dashboard') {}
 
 export class RecurrencesApi extends HttpApiGroup.make('recurrences')
   .add(
@@ -537,7 +537,7 @@ export class RecurrencesApi extends HttpApiGroup.make('recurrences')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2/recurrences') {}
+  .prefix('/api/recurrences') {}
 
 const Action = Schema.Struct({
   title: Schema.String,
@@ -631,4 +631,4 @@ export class AssistantApi extends HttpApiGroup.make('assistant')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2/assistant') {}
+  .prefix('/api/assistant') {}

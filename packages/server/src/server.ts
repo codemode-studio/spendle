@@ -33,7 +33,7 @@ const SharedLive = Layer.mergeAll(
 )
 
 /**
- * One API for every family space: `/api/v2` serves the signed-in member's
+ * One API for every family space: `/api` serves the signed-in member's
  * space, and Pluggy's webhook reaches the spaces its items belong to.
  */
 export const ServerLive = HttpRouter.serve(

@@ -7,10 +7,10 @@ import { toNodeHandler } from 'better-auth/node'
 import { afterAll, beforeAll, expect, it } from 'vite-plus/test'
 
 import { getAuth } from '#/features/auth/auth.server'
-import { v2 } from '#/lib/v2/client.server'
-import { startV2Api } from '#/test/v2-api'
-import type { V2TestApi } from '#/test/v2-api'
-import { openChecking } from '#/test/v2-fixtures'
+import { api } from '#/lib/api/client.server'
+import { startTestApi } from '#/test/api'
+import type { TestApi } from '#/test/api'
+import { openChecking } from '#/test/fixtures'
 
 import { handleMcpRequest } from './endpoint.server'
 
@@ -19,7 +19,7 @@ import { handleMcpRequest } from './endpoint.server'
 const authServer = createServer(
   toNodeHandler(async (request) => (await getAuth()).handler(request)),
 )
-let api: V2TestApi
+let testApi: TestApi
 let base: string
 let mcpUrl: string
 
@@ -39,10 +39,10 @@ beforeAll(async () => {
     SPENDLE_AUTH_DATABASE_PATH: ':memory:',
   })
   delete process.env.SPENDLE_AUTH_DISABLED
-  api = await startV2Api()
+  testApi = await startTestApi()
 })
 afterAll(async () => {
-  await api.close()
+  await testApi.close()
   await new Promise((resolve) => authServer.close(resolve))
 })
 
@@ -167,7 +167,7 @@ it('points an unauthenticated client to where it signs in', async () => {
 
 it("reads the member's transactions with a token they approved, until their email leaves the allowlist", async () => {
   const account = await openChecking()
-  await v2((client) =>
+  await api((client) =>
     client.manual.createTransaction({
       payload: {
         accountId: account.id,
@@ -177,7 +177,7 @@ it("reads the member's transactions with a token they approved, until their emai
       },
     }),
   )
-  await api.drain()
+  await testApi.drain()
   const token = await connectClient(await signIn('ana@example.com'))
 
   const { body } = await callMcp(token, 'tools/call', {

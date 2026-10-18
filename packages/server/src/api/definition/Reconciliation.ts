@@ -72,4 +72,4 @@ export class ReconciliationApi extends HttpApiGroup.make('reconciliation')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2/reconciliation') {}
+  .prefix('/api/reconciliation') {}

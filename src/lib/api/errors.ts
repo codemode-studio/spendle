@@ -1,5 +1,5 @@
 /**
- * Messages for the V2 API failures the app can act on. The API answers every
+ * Messages for the API failures the app can act on. The API answers every
  * failure with `{ _tag, reason, detail }`; `reason` is stable, so the UI keys
  * its copy on it and falls back to the class of failure.
  */
@@ -97,7 +97,7 @@ const reasonMessages: Record<string, string | undefined> = {
     'Assistente desligado: configure OPENROUTER_API_KEY e OPENROUTER_MODEL no servidor.',
   assistant_unavailable: 'O assistente não respondeu. Tente de novo.',
   invalid_report: 'A análise não fechou com os gastos. Tente de novo.',
-  v2_unreachable:
+  api_unreachable:
     'O servidor da API não respondeu. Inicie `vp run --filter @spendle/server dev` e tente de novo.',
 }
 

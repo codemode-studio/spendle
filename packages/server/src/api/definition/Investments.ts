@@ -176,4 +176,4 @@ export class InvestmentsApi extends HttpApiGroup.make('investments')
       },
     ),
   )
-  .prefix('/api/v2') {}
+  .prefix('/api') {}

@@ -56,7 +56,7 @@ const { ask, generate, latest } = vi.hoisted(() => ({
   generate: vi.fn(),
   latest: vi.fn(),
 }))
-vi.mock('#/features/v2/planning.functions', () => ({
+vi.mock('#/features/data/planning.functions', () => ({
   askAssistantFn: ask,
   monthlyAnalysisFn: generate,
   latestAnalysisFn: latest,

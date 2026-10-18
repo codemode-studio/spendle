@@ -1,6 +1,6 @@
 # @spendle/server
 
-Backend V2 ([ADR 003](../../plans/adrs/003-backend-v2-effect.md)), o único backend do Spendle: o app web em `src/` o chama pelas server functions. Cada espaço familiar tem o próprio banco SQLite em `data/v2/spaces/`; `data/v2/control.sqlite` guarda os espaços e seus membros.
+Backend ([ADR 003](../../plans/adrs/003-backend-v2-effect.md)), o único backend do Spendle: o app web em `src/` o chama pelas server functions. Cada espaço familiar tem o próprio banco SQLite em `data/v2/spaces/`; `data/v2/control.sqlite` guarda os espaços e seus membros.
 
 ```bash
 vp run --filter @spendle/server dev     # http://localhost:4100
@@ -16,7 +16,7 @@ vp run --filter @spendle/server qa      # API em memória com dados sintéticos 
 | `SPENDLE_DATABASE_PATH`                       | Banco de antes dos espaços, usado por `claim-space` e `migrate-v1`; padrão `data/v2/spendle.sqlite`  |
 | `SPENDLE_SERVER_PORT`                         | Porta HTTP; padrão `4100`                                                                            |
 | `SPENDLE_SERVER_HOST`                         | Interface; padrão `127.0.0.1` (só esta máquina)                                                      |
-| `SPENDLE_API_TOKEN`                           | Token Bearer exigido em `/api/v2`; 32+ caracteres; opcional                                          |
+| `SPENDLE_API_TOKEN`                           | Token Bearer exigido em `/api`; 32+ caracteres; opcional                                             |
 | `PLUGGY_CLIENT_ID`, `PLUGGY_CLIENT_SECRET`    | Credenciais da Pluggy; sem elas, o Open Finance fica inativo                                         |
 | `PLUGGY_WEBHOOK_URL`, `PLUGGY_WEBHOOK_SECRET` | Webhook; os dois juntos ou nenhum                                                                    |
 | `TYPESAFE_API_KEY`                            | Classificador de categorias (Jev, da TypeSafe); sem ela, o modelo nunca é chamado                    |
@@ -30,9 +30,9 @@ Todos os dados pertencem a um espaço: contas, lançamentos, categorias, planeja
 
 - O app web envia o e-mail de quem entrou no cabeçalho `x-spendle-member`. Com `SPENDLE_API_TOKEN`, o token é verificado antes, e só ele torna o cabeçalho confiável.
 - O primeiro pedido de um e-mail sem espaço cria um espaço vazio para ele.
-- `/api/v2/space` (contrato `SpaceApi`, respondido pelo servidor, não por um espaço) mostra quem faz parte do espaço; quem o criou adiciona e remove pessoas. Uma pessoa que já entrou, mas nunca gravou nada no próprio espaço, muda para o novo espaço; o antigo fica sem membros, com o arquivo intacto. Se ela gravou qualquer coisa lá, o pedido é recusado (`member_elsewhere`). As mudanças de membros conferem, na mesma transação, que quem pede é quem criou o espaço.
+- `/api/space` (contrato `SpaceApi`, respondido pelo servidor, não por um espaço) mostra quem faz parte do espaço; quem o criou adiciona e remove pessoas. Uma pessoa que já entrou, mas nunca gravou nada no próprio espaço, muda para o novo espaço; o antigo fica sem membros, com o arquivo intacto. Se ela gravou qualquer coisa lá, o pedido é recusado (`member_elsewhere`). As mudanças de membros conferem, na mesma transação, que quem pede é quem criou o espaço.
 - O webhook da Pluggy é guardado primeiro no banco de controle e respondido na hora; depois vai ao espaço cuja conexão tem o item ou, para um item novo, ao espaço da conexão que o pediu. Exclusões de item vão a todos os espaços. O que não dá para entregar ainda (Pluggy ou um espaço indisponível, dados não reivindicados) fica guardado e é tentado de novo, na ordem de cada item.
-- Saúde (`/api/v2/health`) e o documento OpenAPI respondem sem token nem membro.
+- Saúde (`/api/health`) e o documento OpenAPI respondem sem token nem membro.
 
 Os dados de antes dos espaços continuam em `SPENDLE_DATABASE_PATH`. Enquanto ninguém os reivindica, a API não cria espaços e responde `unclaimed_database`. Rode uma vez, antes de entrar no app:
 
@@ -63,7 +63,7 @@ curl -i -X POST "$PLUGGY_WEBHOOK_URL" -d '{}'
 
 ## API para o app web
 
-A API V2 fica em `/api/v2`, definida uma vez em `src/api/definition/` com `HttpApi` do Effect. O app web importa o contrato de `@spendle/server/api` (só depende de `effect`) e deriva um cliente tipado; o documento OpenAPI fica em `GET /api/v2/openapi.json`.
+A API fica em `/api`, definida uma vez em `src/api/definition/` com `HttpApi` do Effect. O app web importa o contrato de `@spendle/server/api` (só depende de `effect`) e deriva um cliente tipado; o documento OpenAPI fica em `GET /api/openapi.json`.
 
 ```ts
 import * as HttpApiClient from 'effect/http-api/HttpApiClient'
@@ -82,7 +82,7 @@ const client = HttpApiClient.make(SpendleApi, {
 // client.entries.list({ query: { accountId, limit: 50 } })
 ```
 
-**Acesso.** Ainda não há contas de usuário ([ADR 003](../../plans/adrs/003-backend-v2-effect.md)). O servidor escuta só em `127.0.0.1`; para servir outra máquina da rede, defina `SPENDLE_SERVER_HOST` e um `SPENDLE_API_TOKEN` longo (`openssl rand -hex 32`), que passa a ser exigido como `Authorization: Bearer` em toda rota `/api/v2`. `GET /health` responde sem token. Nunca publique a API na internet; o webhook da Pluggy continua sendo a única rota pública.
+**Acesso.** Ainda não há contas de usuário ([ADR 003](../../plans/adrs/003-backend-v2-effect.md)). O servidor escuta só em `127.0.0.1`; para servir outra máquina da rede, defina `SPENDLE_SERVER_HOST` e um `SPENDLE_API_TOKEN` longo (`openssl rand -hex 32`), que passa a ser exigido como `Authorization: Bearer` em toda rota `/api`. `GET /health` responde sem token. Nunca publique a API na internet; o webhook da Pluggy continua sendo a única rota pública.
 
 **Erros.** Toda falha tem o corpo `{ _tag, reason, detail }`. `_tag` define o status; `reason` é um código estável para o app decidir o que mostrar; `detail` diz a qual registro ou valor se refere, ou é `null`.
 
@@ -145,7 +145,7 @@ Renda de referência, regra da reserva, estratégia, metas e meses fechados são
 
 Recorrências guardam o calendário (início, âncora, frequência) e os vereditos da pessoa: pagamento vinculado ou rejeitado (seguindo as observações do lançamento, como as decisões de categoria), ocorrência ignorada ou período de envelope concluído, candidato ignorado na detecção. Ocorrências, correspondências e detecção são recalculadas a cada leitura (`RecurrencePolicy.ts`). O que o conciliador aprende de uma recorrência (estabelecimentos, contas, atraso típico, faixa de valor) vem só dos vínculos confirmados pela pessoa e dos estabelecimentos trazidos do V1; vínculo automático só com três confirmações, estabelecimento e conta já confirmados e sem ambiguidade, e nunca ensina. Confirmar um pagamento de lançamento ainda sem categoria aplicada decide a categoria da recorrência por `Categorizer.decide`.
 
-O mês (`Month.ts`) e a previsão de caixa são política pura: faturas pertencem ao mês de vencimento (compras do ciclo, parcelas ainda não lançadas e o que a fatura mostra além delas), gastos em conta ao mês do lançamento, recorrências ainda esperadas viram estimativas, aportes são lançamentos de investimento ou reserva e transferências confirmadas para contas dessas finalidades. Caixa é a soma das contas operacionais em BRL a partir do checkpoint de saldo mais próximo; contas em outra moeda ficam de fora e são contadas (o V2 ainda não tem cotações).
+O mês (`Month.ts`) e a previsão de caixa são política pura: faturas pertencem ao mês de vencimento (compras do ciclo, parcelas ainda não lançadas e o que a fatura mostra além delas), gastos em conta ao mês do lançamento, recorrências ainda esperadas viram estimativas, aportes são lançamentos de investimento ou reserva e transferências confirmadas para contas dessas finalidades. Caixa é a soma das contas operacionais em BRL a partir do checkpoint de saldo mais próximo; contas em outra moeda ficam de fora e são contadas (o backend ainda não tem cotações).
 
 O assistente usa o OpenRouter, atrás de `AssistantModel`; sem `OPENROUTER_API_KEY` e `OPENROUTER_MODEL` nunca chama o modelo. Não há consentimento separado. Relatórios ficam em `assistant_reports` como saída de modelo, nunca como decisão; as economias propostas são calculadas no servidor a partir dos gastos observados.
 
@@ -189,6 +189,6 @@ O caminho é relativo a `packages/server`, por isso o `$PWD`. O banco do V1 é a
 **Depois da migração.**
 
 1. Inicie o servidor (`vp run --filter @spendle/server dev`).
-2. Pluggy: conecte cada banco no V2 (`POST /api/v2/open-finance/connect-token` e `POST /api/v2/open-finance/connections/:id/item`), ligue cada conta da Pluggy à conta migrada em vez de abrir outra (`PUT /api/v2/open-finance/provider-accounts/:id/link`) e sincronize (`POST /api/v2/open-finance/connections/:id/sync`).
-3. Arquivos: importe os mesmos OFX, CSV e PDF nas contas migradas (`POST /api/v2/imports`).
+2. Pluggy: conecte cada banco no V2 (`POST /api/open-finance/connect-token` e `POST /api/open-finance/connections/:id/item`), ligue cada conta da Pluggy à conta migrada em vez de abrir outra (`PUT /api/open-finance/provider-accounts/:id/link`) e sincronize (`POST /api/open-finance/connections/:id/sync`).
+3. Arquivos: importe os mesmos OFX, CSV e PDF nas contas migradas (`POST /api/imports`).
 4. As decisões se aplicam conforme os lançamentos chegam. `migrate-v1 --dry-run` de novo mostra o que ainda espera.

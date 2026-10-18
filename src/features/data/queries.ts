@@ -50,11 +50,11 @@ import {
 } from './open-finance.functions'
 
 /**
- * V2 reads live under `['finance', 'read', …]`, so every invalidation group
+ * API reads live under `['finance', 'read', …]`, so every invalidation group
  * that refreshes the ledger (`invalidateFinance(queryClient, 'ledger')`) also
  * refreshes them.
  */
-export const v2QueryKeys = {
+export const queryKeys = {
   owners: () => [...financeQueryKeys.all, 'read', 'owners'] as const,
   accounts: (includeArchived = false) =>
     [
@@ -79,7 +79,7 @@ export const v2QueryKeys = {
   entriesPages: () =>
     [...financeQueryKeys.all, 'read', 'transactions'] as const,
   entriesPage: (query: EntryPageQuery) =>
-    [...v2QueryKeys.entriesPages(), query] as const,
+    [...queryKeys.entriesPages(), query] as const,
   entryCounts: () => [...financeQueryKeys.all, 'read', 'entry-counts'] as const,
   categories: (includeArchived = false) =>
     [
@@ -143,21 +143,21 @@ export const v2QueryKeys = {
 
 export const planningStateOptions = () =>
   queryOptions({
-    queryKey: v2QueryKeys.planningState(),
+    queryKey: queryKeys.planningState(),
     queryFn: () => planningStateFn(),
     staleTime: 15_000,
   })
 
 export const monthOptions = (month?: string) =>
   queryOptions({
-    queryKey: v2QueryKeys.month(month),
+    queryKey: queryKeys.month(month),
     queryFn: () => monthFn({ data: { month } }),
     staleTime: 15_000,
   })
 
 export const monthHistoryOptions = (months = 11) =>
   queryOptions({
-    queryKey: v2QueryKeys.monthHistory(months),
+    queryKey: queryKeys.monthHistory(months),
     queryFn: () => monthHistoryFn({ data: { months } }),
     staleTime: 60_000,
     gcTime: 30 * 60_000,
@@ -165,14 +165,14 @@ export const monthHistoryOptions = (months = 11) =>
 
 export const forecastOptions = () =>
   queryOptions({
-    queryKey: v2QueryKeys.forecast(),
+    queryKey: queryKeys.forecast(),
     queryFn: () => forecastFn(),
     staleTime: 15_000,
   })
 
 export const recurrenceBookOptions = () =>
   queryOptions({
-    queryKey: v2QueryKeys.recurrenceBook(),
+    queryKey: queryKeys.recurrenceBook(),
     queryFn: () => recurrenceBookFn(),
     staleTime: 15_000,
   })
@@ -214,21 +214,21 @@ export const spaceOptions = () =>
 
 export const ownersOptions = () =>
   queryOptions({
-    queryKey: v2QueryKeys.owners(),
+    queryKey: queryKeys.owners(),
     queryFn: () => listOwnersFn(),
     staleTime: 60_000,
   })
 
 export const accountsOptions = (includeArchived = false) =>
   queryOptions({
-    queryKey: v2QueryKeys.accounts(includeArchived),
+    queryKey: queryKeys.accounts(includeArchived),
     queryFn: () => listAccountsFn({ data: { includeArchived } }),
     staleTime: 15_000,
   })
 
 export const balanceProofOptions = (accountId?: string) =>
   queryOptions({
-    queryKey: v2QueryKeys.balanceProof(accountId ?? ''),
+    queryKey: queryKeys.balanceProof(accountId ?? ''),
     queryFn: accountId
       ? () => balanceProofFn({ data: { accountId } })
       : skipToken,
@@ -237,49 +237,49 @@ export const balanceProofOptions = (accountId?: string) =>
 
 export const connectionsOptions = () =>
   queryOptions({
-    queryKey: v2QueryKeys.connections(),
+    queryKey: queryKeys.connections(),
     queryFn: () => listConnectionsFn(),
     staleTime: 15_000,
   })
 
 export const providerAccountsOptions = (connectionId: string) =>
   queryOptions({
-    queryKey: v2QueryKeys.providerAccounts(connectionId),
+    queryKey: queryKeys.providerAccounts(connectionId),
     queryFn: () => providerAccountsFn({ data: { connectionId } }),
     staleTime: 15_000,
   })
 
 export const connectSettingsOptions = () =>
   queryOptions({
-    queryKey: v2QueryKeys.connectSettings(),
+    queryKey: queryKeys.connectSettings(),
     queryFn: () => connectSettingsFn(),
     staleTime: Infinity,
   })
 
 export const entriesPageOptions = (query: EntryPageQuery) =>
   queryOptions({
-    queryKey: v2QueryKeys.entriesPage(query),
+    queryKey: queryKeys.entriesPage(query),
     queryFn: () => entriesPageFn({ data: query }),
     staleTime: 15_000,
   })
 
 export const entryCountsOptions = () =>
   queryOptions({
-    queryKey: v2QueryKeys.entryCounts(),
+    queryKey: queryKeys.entryCounts(),
     queryFn: () => entryCountsFn(),
     staleTime: 15_000,
   })
 
 export const categoriesOptions = (includeArchived = false) =>
   queryOptions({
-    queryKey: v2QueryKeys.categories(includeArchived),
+    queryKey: queryKeys.categories(includeArchived),
     queryFn: () => listCategoriesFn({ data: { includeArchived } }),
     staleTime: 60_000,
   })
 
 export const categoryReviewOptions = () =>
   queryOptions({
-    queryKey: v2QueryKeys.categoryReview(),
+    queryKey: queryKeys.categoryReview(),
     queryFn: () => categoryReviewFn(),
     staleTime: 15_000,
   })
@@ -288,21 +288,21 @@ export const relationsOptions = (
   status?: 'suggested' | 'confirmed' | 'conflict',
 ) =>
   queryOptions({
-    queryKey: v2QueryKeys.relations(status),
+    queryKey: queryKeys.relations(status),
     queryFn: () => relationsFn({ data: { status } }),
     staleTime: 15_000,
   })
 
 export const orphanedDecisionsOptions = () =>
   queryOptions({
-    queryKey: v2QueryKeys.orphanedDecisions(),
+    queryKey: queryKeys.orphanedDecisions(),
     queryFn: () => orphanedDecisionsFn(),
     staleTime: 15_000,
   })
 
 export const linkCandidatesOptions = (entryId: string | null, text = '') =>
   queryOptions({
-    queryKey: v2QueryKeys.linkCandidates(entryId ?? '', text),
+    queryKey: queryKeys.linkCandidates(entryId ?? '', text),
     queryFn: entryId
       ? () => linkCandidatesFn({ data: { entryId, text } })
       : skipToken,
@@ -311,7 +311,7 @@ export const linkCandidatesOptions = (entryId: string | null, text = '') =>
 
 export const cardOverviewOptions = (accountId: string) =>
   queryOptions({
-    queryKey: v2QueryKeys.cardOverview(accountId),
+    queryKey: queryKeys.cardOverview(accountId),
     queryFn: () => cardOverviewFn({ data: { accountId } }),
     staleTime: 15_000,
   })
@@ -321,7 +321,7 @@ export const cycleEntriesOptions = (
   cycle: { closingOn: string; entryIds: ReadonlyArray<string> },
 ) =>
   queryOptions({
-    queryKey: v2QueryKeys.cycleEntries(accountId, cycle.closingOn),
+    queryKey: queryKeys.cycleEntries(accountId, cycle.closingOn),
     queryFn: () =>
       cycleEntriesFn({ data: { accountId, entryIds: cycle.entryIds } }),
     staleTime: 15_000,
@@ -329,14 +329,14 @@ export const cycleEntriesOptions = (
 
 export const importsOptions = () =>
   queryOptions({
-    queryKey: v2QueryKeys.imports(),
+    queryKey: queryKeys.imports(),
     queryFn: () => listImportsFn({ data: {} }),
     staleTime: 15_000,
   })
 
 export const investmentsOptions = () =>
   queryOptions({
-    queryKey: v2QueryKeys.investments(),
+    queryKey: queryKeys.investments(),
     queryFn: () => investmentsSnapshotFn(),
     staleTime: 60_000,
   })
@@ -344,21 +344,21 @@ export const investmentsOptions = () =>
 /** Same key as the V1 category analysis, which the ledger invalidations cover. */
 export const categoryLedgerOptions = () =>
   queryOptions({
-    queryKey: v2QueryKeys.categoryLedger(),
+    queryKey: queryKeys.categoryLedger(),
     queryFn: () => categoryLedgerFn(),
     staleTime: 15_000,
   })
 
 export const storePatternsOptions = () =>
   queryOptions({
-    queryKey: v2QueryKeys.storePatterns(),
+    queryKey: queryKeys.storePatterns(),
     queryFn: () => storePatternsFn(),
     staleTime: 15_000,
   })
 
 export const providerMappingsOptions = () =>
   queryOptions({
-    queryKey: v2QueryKeys.providerMappings(),
+    queryKey: queryKeys.providerMappings(),
     queryFn: () => providerMappingsFn(),
     staleTime: 60_000,
   })
@@ -373,8 +373,8 @@ export async function patchEntryCategory(
   input: { entryId: string; categoryId: string },
 ) {
   const filters: Array<{ queryKey: QueryKey }> = [
-    { queryKey: v2QueryKeys.entriesPages() },
-    { queryKey: v2QueryKeys.categoryReview() },
+    { queryKey: queryKeys.entriesPages() },
+    { queryKey: queryKeys.categoryReview() },
   ]
   await Promise.all(filters.map((filter) => queryClient.cancelQueries(filter)))
   const previous = filters.flatMap((filter) =>
@@ -395,14 +395,14 @@ export async function patchEntryCategory(
         }
       : entry
   queryClient.setQueriesData<{ entries: ReadonlyArray<Entry> }>(
-    { queryKey: v2QueryKeys.entriesPages() },
+    { queryKey: queryKeys.entriesPages() },
     (page) =>
       page && 'entries' in page
         ? { ...page, entries: page.entries.map(decided) }
         : page,
   )
   queryClient.setQueriesData<ReadonlyArray<{ inference: { entryId: string } }>>(
-    { queryKey: v2QueryKeys.categoryReview() },
+    { queryKey: queryKeys.categoryReview() },
     (items) =>
       items?.filter((item) => item.inference.entryId !== input.entryId),
   )
@@ -420,7 +420,7 @@ export async function patchEntryNote(
   queryClient: QueryClient,
   input: { entryId: string; note: string | null },
 ) {
-  const filter = { queryKey: v2QueryKeys.entriesPages() }
+  const filter = { queryKey: queryKeys.entriesPages() }
   await queryClient.cancelQueries(filter)
   const previous = queryClient.getQueriesData(filter)
   queryClient.setQueriesData<{ entries: ReadonlyArray<Entry> }>(
@@ -444,7 +444,7 @@ export async function patchEntryNote(
 }
 
 /**
- * The V2 server answers writes at once and rebuilds entries, relations and
+ * The API answers writes at once and rebuilds entries, relations and
  * categories in background reactors. Invalidate now, then again after the
  * reactors had time to run, so the screen settles on the rebuilt reads.
  */

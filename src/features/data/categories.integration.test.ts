@@ -1,22 +1,22 @@
 import { afterEach, beforeEach, expect, it } from 'vite-plus/test'
 
 import { analyzeCategories } from '#/features/categories/analysis'
-import { v2 } from '#/lib/v2/client.server'
-import { startV2Api } from '#/test/v2-api'
-import type { V2TestApi } from '#/test/v2-api'
-import { ofxStatement, openChecking, statementUpload } from '#/test/v2-fixtures'
+import { api } from '#/lib/api/client.server'
+import { startTestApi } from '#/test/api'
+import type { TestApi } from '#/test/api'
+import { ofxStatement, openChecking, statementUpload } from '#/test/fixtures'
 
 import { categoryLedger } from './categories.server'
 
-let api: V2TestApi
+let testApi: TestApi
 beforeEach(async () => {
-  api = await startV2Api()
+  testApi = await startTestApi()
 })
-afterEach(() => api.close())
+afterEach(() => testApi.close())
 
 it('analyzes spending by the categories the person decided, in centavos', async () => {
   const account = await openChecking()
-  await v2((client) =>
+  await api((client) =>
     client.imports.upload({
       payload: statementUpload(
         account.id,
@@ -49,18 +49,18 @@ it('analyzes spending by the categories the person decided, in centavos', async 
       ),
     }),
   )
-  await api.drain()
-  const { entries } = await v2((client) => client.entries.list({ query: {} }))
+  await testApi.drain()
+  const { entries } = await api((client) => client.entries.list({ query: {} }))
   const market = entries.find((entry) => entry.description === 'Mercado Bom')!
-  await v2((client) =>
+  await api((client) =>
     client.categoryDecisions.decide({
       params: { entryId: market.id },
       payload: { categoryId: 'groceries' },
     }),
   )
-  await api.drain()
+  await testApi.drain()
 
-  const ledger = await v2(categoryLedger)
+  const ledger = await api(categoryLedger)
   const analysis = analyzeCategories(ledger, {
     start: '2026-09-01',
     end: '2026-09-30',
@@ -77,8 +77,8 @@ it('analyzes spending by the categories the person decided, in centavos', async 
 })
 
 it('counts spending in another currency in reais at the rate of its date', async () => {
-  await api.close()
-  api = await startV2Api({
+  await testApi.close()
+  testApi = await startTestApi({
     rates: {
       USD: [
         ['2026-09-04', 5_000_000],
@@ -88,7 +88,7 @@ it('counts spending in another currency in reais at the rate of its date', async
   })
   const dollars = await openChecking('Conta em dólar', 'USD')
   const euros = await openChecking('Conta em euro', 'EUR')
-  const lunch = await v2((client) =>
+  const lunch = await api((client) =>
     client.manual.createTransaction({
       payload: {
         accountId: dollars.id,
@@ -98,7 +98,7 @@ it('counts spending in another currency in reais at the rate of its date', async
       },
     }),
   )
-  await v2((client) =>
+  await api((client) =>
     client.manual.createTransaction({
       payload: {
         accountId: euros.id,
@@ -108,16 +108,16 @@ it('counts spending in another currency in reais at the rate of its date', async
       },
     }),
   )
-  await api.drain()
-  await v2((client) =>
+  await testApi.drain()
+  await api((client) =>
     client.categoryDecisions.decide({
       params: { entryId: lunch.entryId! },
       payload: { categoryId: 'restaurants' },
     }),
   )
-  await api.drain()
+  await testApi.drain()
 
-  const ledger = await v2(categoryLedger)
+  const ledger = await api(categoryLedger)
   // US$ 20.00 at the 4th's R$ 5.00; the euro, without a rate, stays out.
   expect(ledger.map((entry) => [entry.description, entry.amountCents])).toEqual(
     [['Lunch', -10_000]],

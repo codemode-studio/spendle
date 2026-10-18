@@ -2,7 +2,7 @@ import * as Effect from 'effect/Effect'
 
 import type { EntryFilters } from '@spendle/server/api'
 
-import type { V2Client } from '#/lib/v2/client.server'
+import type { ApiClient } from '#/lib/api/client.server'
 
 export const entriesPageSize = 50
 
@@ -15,17 +15,17 @@ const skipStep = 200
  * each step returns. A page past the end falls back to the last page.
  */
 export function entriesAt(
-  client: V2Client,
+  client: ApiClient,
   filters: Omit<EntryFilters, 'cursor' | 'limit'>,
   page: number,
 ): Effect.Effect<
   {
-    entries: Effect.Success<ReturnType<V2Client['entries']['list']>>['entries']
+    entries: Effect.Success<ReturnType<ApiClient['entries']['list']>>['entries']
     total: number
     page: number
     pageSize: number
   },
-  Effect.Error<ReturnType<V2Client['entries']['list']>>
+  Effect.Error<ReturnType<ApiClient['entries']['list']>>
 > {
   return Effect.gen(function* () {
     let cursor: string | undefined

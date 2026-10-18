@@ -3,7 +3,7 @@ import * as Schema from 'effect/Schema'
 
 import { LinkTarget } from '@spendle/server/api'
 
-import { v2 } from '#/lib/v2/client.server'
+import { api } from '#/lib/api/client.server'
 
 const connectionId = Schema.Struct({ connectionId: Schema.String })
 const providerAccountId = Schema.Struct({ providerAccountId: Schema.String })
@@ -23,7 +23,7 @@ export const connectSettingsFn = createServerFn({ method: 'GET' }).handler(
 )
 
 export const listConnectionsFn = createServerFn({ method: 'GET' }).handler(() =>
-  v2((client) => client.openFinance.connections()),
+  api((client) => client.openFinance.connections()),
 )
 
 export const createConnectTokenFn = createServerFn({ method: 'POST' })
@@ -31,13 +31,13 @@ export const createConnectTokenFn = createServerFn({ method: 'POST' })
     Schema.toStandardSchemaV1(Schema.Struct({ ownerId: Schema.String })),
   )
   .handler(({ data }) =>
-    v2((client) => client.openFinance.createConnectToken({ payload: data })),
+    api((client) => client.openFinance.createConnectToken({ payload: data })),
   )
 
 export const reconnectTokenFn = createServerFn({ method: 'POST' })
   .validator(Schema.toStandardSchemaV1(connectionId))
   .handler(({ data }) =>
-    v2((client) => client.openFinance.reconnectToken({ params: data })),
+    api((client) => client.openFinance.reconnectToken({ params: data })),
   )
 
 export const registerItemFn = createServerFn({ method: 'POST' })
@@ -50,7 +50,7 @@ export const registerItemFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(({ data }) =>
-    v2((client) =>
+    api((client) =>
       client.openFinance.registerItem({
         params: { connectionId: data.connectionId },
         payload: { itemId: data.itemId },
@@ -61,13 +61,13 @@ export const registerItemFn = createServerFn({ method: 'POST' })
 export const refreshConnectionFn = createServerFn({ method: 'POST' })
   .validator(Schema.toStandardSchemaV1(connectionId))
   .handler(({ data }) =>
-    v2((client) => client.openFinance.refresh({ params: data })),
+    api((client) => client.openFinance.refresh({ params: data })),
   )
 
 export const providerAccountsFn = createServerFn({ method: 'GET' })
   .validator(Schema.toStandardSchemaV1(connectionId))
   .handler(({ data }) =>
-    v2((client) => client.openFinance.providerAccounts({ params: data })),
+    api((client) => client.openFinance.providerAccounts({ params: data })),
   )
 
 export const syncConnectionFn = createServerFn({ method: 'POST' })
@@ -80,7 +80,7 @@ export const syncConnectionFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(async ({ data }) => {
-    await v2((client) =>
+    await api((client) =>
       client.openFinance.sync({
         params: { connectionId: data.connectionId },
         payload: { providerAccountId: data.providerAccountId },
@@ -92,7 +92,7 @@ export const syncConnectionFn = createServerFn({ method: 'POST' })
 export const disconnectFn = createServerFn({ method: 'POST' })
   .validator(Schema.toStandardSchemaV1(connectionId))
   .handler(async ({ data }) => {
-    await v2((client) => client.openFinance.disconnect({ params: data }))
+    await api((client) => client.openFinance.disconnect({ params: data }))
     return { disconnected: true }
   })
 
@@ -107,7 +107,7 @@ export const linkProviderAccountFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(({ data }) =>
-    v2((client) =>
+    api((client) =>
       client.openFinance.link({
         params: { providerAccountId: data.providerAccountId },
         payload: { target: data.target, historyMonths: data.historyMonths },
@@ -118,6 +118,6 @@ export const linkProviderAccountFn = createServerFn({ method: 'POST' })
 export const unlinkProviderAccountFn = createServerFn({ method: 'POST' })
   .validator(Schema.toStandardSchemaV1(providerAccountId))
   .handler(async ({ data }) => {
-    await v2((client) => client.openFinance.unlink({ params: data }))
+    await api((client) => client.openFinance.unlink({ params: data }))
     return { unlinked: true }
   })

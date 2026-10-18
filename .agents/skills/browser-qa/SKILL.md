@@ -17,11 +17,11 @@ For mutations, imports, provider flows, or checks requiring controlled state, us
 
 ## Start an isolated run when needed
 
-Run `vp run setup:check`, then `vp run qa:start 3100` from the checkout being verified. Choose another explicit port for concurrent worktrees. The command starts the app on that port and an in-memory V2 QA API on the port plus 1200, and prints both URLs and the run directory. It refuses an occupied port. Use only the printed app URL for mutations.
+Run `vp run setup:check`, then `vp run qa:start 3100` from the checkout being verified. Choose another explicit port for concurrent worktrees. The command starts the app on that port and an in-memory QA API on the port plus 1200, and prints both URLs and the run directory. It refuses an occupied port. Use only the printed app URL for mutations.
 
 QA runs skip Google sign-in (`SPENDLE_AUTH_DISABLED=1`) and act as the `QA` user, the only member of a single space whose members cannot change. Check the sign-in page and redirects only on a run started without that flag, and never complete a real Google sign-in.
 
-The QA API seeds owner `Família QA`, account `Conta BRL de teste`, card `Cartão BRL de teste` and the default categories, and fakes Pluggy: connecting a bank in Configurações opens a simulated widget whose item brings synthetic movements. AI calls are disabled. The run directory contains `balanced.ofx`, `unbalanced.ofx`, `volume-121.ofx`, `server.log` (app) and `server-v2.log` (API). The API keeps its data in memory, so stopping the run discards it; do not copy or symlink a user's `data/` into QA.
+The QA API seeds owner `Família QA`, account `Conta BRL de teste`, card `Cartão BRL de teste` and the default categories, and fakes Pluggy: connecting a bank in Configurações opens a simulated widget whose item brings synthetic movements. AI calls are disabled. The run directory contains `balanced.ofx`, `unbalanced.ofx`, `volume-121.ofx`, `server.log` (app) and `server-api.log` (API). The API keeps its data in memory, so stopping the run discards it; do not copy or symlink a user's `data/` into QA.
 
 For transaction pagination use a separate run and import `volume-121.ofx` (121 expenses of R$ 1,00) into the synthetic account. It changes balances; use another fresh run for import assertions.
 
@@ -39,7 +39,7 @@ Perform import checks before manual transaction checks, or start a fresh run; ch
 
 ## Evidence and cleanup
 
-Record URL, commit/worktree, run directory, flows actually exercised, expected versus observed values, and pass/fail. Save screenshots with the browser tool when supported, especially on failure. Consult `server.log` and `server-v2.log` for errors, and browser console/network errors when the tool exposes them. `vp run qa:inspect <run-directory>` prints the run's accounts, entries and imports from the running QA API without changing them.
+Record URL, commit/worktree, run directory, flows actually exercised, expected versus observed values, and pass/fail. Save screenshots with the browser tool when supported, especially on failure. Consult `server.log` and `server-api.log` for errors, and browser console/network errors when the tool exposes them. `vp run qa:inspect <run-directory>` prints the run's accounts, entries and imports from the running QA API without changing them.
 
 If file upload or another required browser capability is unavailable, mark that flow unverified and run its integration test as separate evidence. Do not claim a browser pass based on a server test.
 

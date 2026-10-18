@@ -17,11 +17,11 @@ import type { FakeSeries } from '../../packages/server/src/testing/FakeRates.ts'
 export { bank, card, tx } from '../../packages/server/src/testing/FakePluggy.ts'
 
 /**
- * A real V2 API served in this process on a random local port, with an
+ * A real API served in this process on a random local port, with an
  * in-memory database and a fake Pluggy. `SPENDLE_API_URL` points at it, so
- * the web app's server-side client (`v2()`) talks to it over HTTP.
+ * the web app's server-side client (`api()`) talks to it over HTTP.
  */
-export async function startV2Api(options: { rates?: FakeSeries } = {}) {
+export async function startTestApi(options: { rates?: FakeSeries } = {}) {
   const scope = Scope.makeUnsafe()
   const context = await Effect.runPromise(
     Layer.buildWithScope(apiTest({ rates: options.rates }), scope),
@@ -63,4 +63,4 @@ export async function startV2Api(options: { rates?: FakeSeries } = {}) {
   }
 }
 
-export type V2TestApi = Awaited<ReturnType<typeof startV2Api>>
+export type TestApi = Awaited<ReturnType<typeof startTestApi>>

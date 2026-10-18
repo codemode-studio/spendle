@@ -8,6 +8,8 @@ output
 .env.*
 !.env.example
 data/
+# Runtime databases, not the server functions in src/features/data.
+!src/features/data/
 *.db
 *.db-shm
 *.db-wal

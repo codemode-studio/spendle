@@ -1,6 +1,6 @@
 /**
  * Replays the frozen category evaluation (`evals/categories`) through the
- * V2 classifier and the deterministic policy, and prints the scoreboard
+ * Spendle classifier and the deterministic policy, and prints the scoreboard
  * used to choose `TYPESAFE_APPLY_THRESHOLD`. The model mode makes paid
  * TypeSafe calls, so it stays out of `vp run verify`.
  *

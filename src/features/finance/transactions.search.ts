@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { toMinorUnits } from '#/lib/currency'
-import type { EntryPageQuery } from '#/features/v2/entries.functions'
+import type { EntryPageQuery } from '#/features/data/entries.functions'
 
 export const transactionSearchDefaults = {
   search: '',
@@ -46,7 +46,7 @@ export function parseAmountInput(text: string): number | null {
 }
 
 /**
- * The URL state as the V2 entries query. `category` is a category id, or
+ * The URL state as the API's entries query. `category` is a category id, or
  * `review` / `uncategorized` for the entries waiting on a decision. URL pages
  * start at one; API pages start at zero.
  */

@@ -1,7 +1,7 @@
 import { createServerFn } from '@tanstack/react-start'
 import * as Schema from 'effect/Schema'
 
-import { v2 } from '#/lib/v2/client.server'
+import { api } from '#/lib/api/client.server'
 
 const PositionFields = Schema.Struct({
   assetClassId: Schema.String,
@@ -10,7 +10,7 @@ const PositionFields = Schema.Struct({
 })
 
 export const investmentsSnapshotFn = createServerFn({ method: 'GET' }).handler(
-  () => v2((client) => client.investments.snapshot({ query: {} })),
+  () => api((client) => client.investments.snapshot({ query: {} })),
 )
 
 /** Puts a brokerage movement into a position, or into a new one. */
@@ -25,7 +25,7 @@ export const classifyMovementFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(({ data }) =>
-    v2((client) => client.investments.classify({ payload: data })),
+    api((client) => client.investments.classify({ payload: data })),
   )
 
 export const unclassifyMovementFn = createServerFn({ method: 'POST' })
@@ -33,7 +33,7 @@ export const unclassifyMovementFn = createServerFn({ method: 'POST' })
     Schema.toStandardSchemaV1(Schema.Struct({ entryId: Schema.String })),
   )
   .handler(({ data }) =>
-    v2((client) => client.investments.unclassify({ params: data })),
+    api((client) => client.investments.unclassify({ params: data })),
   )
 
 /** The position's total at the end of a day, as the person reads it at the broker. */
@@ -48,7 +48,7 @@ export const recordValuationFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(({ data }) =>
-    v2((client) =>
+    api((client) =>
       client.investments.recordValuation({
         params: { positionId: data.positionId },
         payload: { asOf: data.asOf, amountCents: data.amountCents },

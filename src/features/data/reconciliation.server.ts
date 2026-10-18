@@ -1,6 +1,6 @@
 import * as Effect from 'effect/Effect'
 
-import type { V2Client } from '#/lib/v2/client.server'
+import type { ApiClient } from '#/lib/api/client.server'
 
 /**
  * Entries that could be the other side of `entryId`: the opposite direction
@@ -8,7 +8,7 @@ import type { V2Client } from '#/lib/v2/client.server'
  * so smaller amounts on the same account are offered too.
  */
 export function linkCandidates(
-  client: V2Client,
+  client: ApiClient,
   entryId: string,
   search?: string,
 ) {

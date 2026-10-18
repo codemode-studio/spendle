@@ -18,7 +18,7 @@ const unpaid = (cycle: Cycle) =>
   Math.max(0, cycle.billedCents - cycle.paidCents)
 
 /**
- * What a card owes and can still spend, from its V2 cycles: the open bill,
+ * What a card owes and can still spend, from its cycles: the open bill,
  * what closed bills still owe, and the limit left after unpaid bills and the
  * instalments already scheduled for later bills.
  */

@@ -13,7 +13,7 @@ import { signedOutMessage } from '#/features/auth/viewer'
 
 import { apiFailureMessage } from './errors'
 
-export type V2Client = HttpApiClient.ForApi<typeof SpendleApi>
+export type ApiClient = HttpApiClient.ForApi<typeof SpendleApi>
 
 const apiFailureTags = new Set([
   'NotFound',
@@ -38,25 +38,25 @@ const statusOfTag: Record<string, number> = {
 }
 
 /**
- * A V2 API failure as the browser receives it: the pt-BR message the UI
+ * An API failure as the browser receives it: the pt-BR message the UI
  * shows, plus the stable `reason` for code that branches on it.
  */
-export class V2ApiError extends Error {
+export class ApiRequestError extends Error {
   constructor(
     readonly tag: string,
     readonly reason: string,
     readonly detail: string | null,
   ) {
     super(apiFailureMessage({ tag, reason, detail }))
-    this.name = 'V2ApiError'
+    this.name = 'ApiRequestError'
   }
 }
 
 /**
- * Where the V2 server listens and the token it expects. Read per call, on the
+ * Where the API server listens and the token it expects. Read per call, on the
  * server only: the token never reaches the browser bundle.
  */
-function v2Settings() {
+function apiSettings() {
   return {
     baseUrl: process.env.SPENDLE_API_URL || 'http://127.0.0.1:4100',
     token: process.env.SPENDLE_API_TOKEN || undefined,
@@ -79,7 +79,7 @@ async function memberEmail() {
   return viewer.email
 }
 
-const toV2ApiError = (error: unknown): V2ApiError => {
+const toApiRequestError = (error: unknown): ApiRequestError => {
   if (
     Predicate.hasProperty(error, '_tag') &&
     Predicate.isString(error._tag) &&
@@ -91,16 +91,16 @@ const toV2ApiError = (error: unknown): V2ApiError => {
       Predicate.hasProperty(error, 'detail') && Predicate.isString(error.detail)
         ? error.detail
         : null
-    return new V2ApiError(error._tag, error.reason, detail)
+    return new ApiRequestError(error._tag, error.reason, detail)
   }
   // Transport failures (server down, refused connection) and responses the
   // contract cannot decode both mean the app cannot reach a compatible API.
-  return new V2ApiError('Unavailable', 'v2_unreachable', null)
+  return new ApiRequestError('Unavailable', 'api_unreachable', null)
 }
 
 // Points a client's requests at the API, naming the member and the token.
 function locate(member: string | undefined) {
-  const { baseUrl, token } = v2Settings()
+  const { baseUrl, token } = apiSettings()
   return HttpClient.mapRequest((request) => {
     let located = HttpClientRequest.prependUrl(request, baseUrl)
     if (member !== undefined) {
@@ -118,12 +118,13 @@ async function run<TResult, TError>(
   try {
     return await Effect.runPromise(
       program.pipe(
-        Effect.mapError(toV2ApiError),
+        Effect.mapError(toApiRequestError),
         Effect.provide(FetchHttpClient.layer),
       ),
     )
   } catch (error) {
-    const failure = error instanceof V2ApiError ? error : toV2ApiError(error)
+    const failure =
+      error instanceof ApiRequestError ? error : toApiRequestError(error)
     try {
       setResponseStatus(statusOfTag[failure.tag] ?? 500)
     } catch {
@@ -134,24 +135,24 @@ async function run<TResult, TError>(
 }
 
 /**
- * Runs one or more typed V2 calls from a server function handler. Failures
- * reject with a `V2ApiError` and set the response status, so a mutation's
+ * Runs one or more typed API calls from a server function handler. Failures
+ * reject with a `ApiRequestError` and set the response status, so a mutation's
  * `onError` shows a message the person can act on.
  */
-export async function v2<TResult, TError>(
-  use: (client: V2Client) => Effect.Effect<TResult, TError>,
+export async function api<TResult, TError>(
+  use: (client: ApiClient) => Effect.Effect<TResult, TError>,
 ): Promise<TResult> {
-  return v2As(await memberEmail(), use)
+  return apiAs(await memberEmail(), use)
 }
 
 /**
- * `v2` for a member identified some other way than the session cookie, such
+ * `api` for a member identified some other way than the session cookie, such
  * as the person an MCP access token belongs to. The caller has already
  * checked that they may use Spendle.
  */
-export function v2As<TResult, TError>(
+export function apiAs<TResult, TError>(
   member: string | undefined,
-  use: (client: V2Client) => Effect.Effect<TResult, TError>,
+  use: (client: ApiClient) => Effect.Effect<TResult, TError>,
 ): Promise<TResult> {
   return run(
     Effect.flatMap(
@@ -161,8 +162,8 @@ export function v2As<TResult, TError>(
   )
 }
 
-/** `v2` for the caller's family space and its members (`SpaceApi`). */
-export async function v2Space<TResult, TError>(
+/** `api` for the caller's family space and its members (`SpaceApi`). */
+export async function spaceApi<TResult, TError>(
   use: (
     client: HttpApiClient.ForApi<typeof SpaceApi>,
   ) => Effect.Effect<TResult, TError>,
@@ -178,9 +179,9 @@ export async function v2Space<TResult, TError>(
 
 /** Every entry matching the filters, following cursors in pages of 200. */
 export function allEntries(
-  client: V2Client,
+  client: ApiClient,
   filters: Omit<
-    Parameters<V2Client['entries']['list']>[0]['query'],
+    Parameters<ApiClient['entries']['list']>[0]['query'],
     'cursor' | 'limit'
   >,
 ) {

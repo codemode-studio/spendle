@@ -1,4 +1,4 @@
-import { v2 } from '#/lib/v2/client.server'
+import { api } from '#/lib/api/client.server'
 
 /** An OFX statement for one account; amounts in reais, dates `YYYYMMDD`. */
 export function ofxStatement(input: {
@@ -38,12 +38,12 @@ export function statementUpload(
   return data
 }
 
-/** A household with one checking account, through the V2 API. */
+/** A household with one checking account, through the API. */
 export async function openChecking(name = 'Conta', currency = 'BRL') {
-  const owner = await v2((client) =>
+  const owner = await api((client) =>
     client.owners.create({ payload: { name: 'Família', kind: 'household' } }),
   )
-  return v2((client) =>
+  return api((client) =>
     client.accounts.open({
       payload: {
         ownerId: owner.id,

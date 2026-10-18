@@ -4,7 +4,7 @@ import * as Schema from 'effect/Schema'
 
 import { Allocation, GoalType, RecurrenceInput } from '@spendle/server/api'
 
-import { v2 } from '#/lib/v2/client.server'
+import { api } from '#/lib/api/client.server'
 
 const input = Schema.toStandardSchemaV1
 
@@ -22,7 +22,7 @@ const MatchRef = Schema.Struct({
 // ─── Plan ─────────────────────────────────────────────────────────────────
 
 export const planningStateFn = createServerFn({ method: 'GET' }).handler(() =>
-  v2((client) => client.planning.state()),
+  api((client) => client.planning.state()),
 )
 
 /** Income, reserve rule and strategy are one decision, saved together. */
@@ -39,7 +39,7 @@ export const savePlanFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(({ data }) =>
-    v2((client) =>
+    api((client) =>
       // The strategy goes first: a closed month refuses it before anything changes.
       client.planning
         .strategy({
@@ -73,12 +73,12 @@ export const saveGoalFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(({ data }) =>
-    v2((client) => client.planning.saveGoal({ payload: data })),
+    api((client) => client.planning.saveGoal({ payload: data })),
   )
 
 /** Closes the current month; its plan is frozen from then on. */
 export const closeMonthFn = createServerFn({ method: 'POST' }).handler(() =>
-  v2((client) => client.planning.close()),
+  api((client) => client.planning.close()),
 )
 
 // ─── Dashboard ────────────────────────────────────────────────────────────
@@ -86,25 +86,25 @@ export const closeMonthFn = createServerFn({ method: 'POST' }).handler(() =>
 export const monthFn = createServerFn({ method: 'GET' })
   .validator(input(Schema.Struct({ month: Schema.optional(Month) })))
   .handler(({ data }) =>
-    v2((client) => client.dashboard.month({ query: data })),
+    api((client) => client.dashboard.month({ query: data })),
   )
 
 export const monthHistoryFn = createServerFn({ method: 'GET' })
   .validator(input(Schema.Struct({ months: Schema.Int })))
   .handler(({ data }) =>
-    v2((client) =>
+    api((client) =>
       client.dashboard.history({ query: { months: data.months } }),
     ),
   )
 
 export const forecastFn = createServerFn({ method: 'GET' }).handler(() =>
-  v2((client) => client.dashboard.forecast({ query: { days: 90 } })),
+  api((client) => client.dashboard.forecast({ query: { days: 90 } })),
 )
 
 // ─── Recurrences ──────────────────────────────────────────────────────────
 
 export const recurrenceBookFn = createServerFn({ method: 'GET' }).handler(() =>
-  v2((client) => client.recurrences.book()),
+  api((client) => client.recurrences.book()),
 )
 
 export const saveRecurrenceFn = createServerFn({ method: 'POST' })
@@ -117,7 +117,7 @@ export const saveRecurrenceFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(({ data }) =>
-    v2((client) =>
+    api((client) =>
       data.id === undefined
         ? client.recurrences.create({ payload: data.recurrence })
         : client.recurrences.update({
@@ -132,7 +132,7 @@ export const setRecurrenceActiveFn = createServerFn({ method: 'POST' })
     input(Schema.Struct({ id: Schema.String, active: Schema.Boolean })),
   )
   .handler(({ data }) =>
-    v2((client) =>
+    api((client) =>
       client.recurrences.active({
         params: { recurrenceId: data.id },
         payload: { active: data.active },
@@ -143,14 +143,14 @@ export const setRecurrenceActiveFn = createServerFn({ method: 'POST' })
 export const deleteRecurrenceFn = createServerFn({ method: 'POST' })
   .validator(input(Schema.Struct({ id: Schema.String })))
   .handler(async ({ data }) => {
-    await v2((client) =>
+    await api((client) =>
       client.recurrences.remove({ params: { recurrenceId: data.id } }),
     )
     return data
   })
 
 export const detectedRecurrencesFn = createServerFn({ method: 'GET' }).handler(
-  () => v2((client) => client.recurrences.detected()),
+  () => api((client) => client.recurrences.detected()),
 )
 
 export const approveDetectedFn = createServerFn({ method: 'POST' })
@@ -171,7 +171,7 @@ export const approveDetectedFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(({ data }) =>
-    v2((client) => client.recurrences.approve({ payload: data })),
+    api((client) => client.recurrences.approve({ payload: data })),
   )
 
 export const ignoreDetectedFn = createServerFn({ method: 'POST' })
@@ -184,14 +184,14 @@ export const ignoreDetectedFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(async ({ data }) => {
-    await v2((client) => client.recurrences.ignore({ payload: data }))
+    await api((client) => client.recurrences.ignore({ payload: data }))
     return data
   })
 
 export const linkCandidatesFn = createServerFn({ method: 'GET' })
   .validator(input(OccurrenceRef))
   .handler(({ data }) =>
-    v2((client) => client.recurrences.candidates({ query: data })),
+    api((client) => client.recurrences.candidates({ query: data })),
   )
 
 export const linkPaymentsFn = createServerFn({ method: 'POST' })
@@ -204,60 +204,60 @@ export const linkPaymentsFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(({ data }) =>
-    v2((client) => client.recurrences.link({ payload: data })),
+    api((client) => client.recurrences.link({ payload: data })),
   )
 
 export const confirmMatchFn = createServerFn({ method: 'POST' })
   .validator(input(MatchRef))
   .handler(async ({ data }) => {
-    await v2((client) => client.recurrences.confirm({ payload: data }))
+    await api((client) => client.recurrences.confirm({ payload: data }))
     return data
   })
 
 export const rejectMatchFn = createServerFn({ method: 'POST' })
   .validator(input(MatchRef))
   .handler(async ({ data }) => {
-    await v2((client) => client.recurrences.reject({ payload: data }))
+    await api((client) => client.recurrences.reject({ payload: data }))
     return data
   })
 
 export const unlinkMatchFn = createServerFn({ method: 'POST' })
   .validator(input(MatchRef))
   .handler(async ({ data }) => {
-    await v2((client) => client.recurrences.unlink({ payload: data }))
+    await api((client) => client.recurrences.unlink({ payload: data }))
     return data
   })
 
 export const skipOccurrenceFn = createServerFn({ method: 'POST' })
   .validator(input(OccurrenceRef))
   .handler(async ({ data }) => {
-    await v2((client) => client.recurrences.skip({ payload: data }))
+    await api((client) => client.recurrences.skip({ payload: data }))
     return data
   })
 
 export const completeOccurrenceFn = createServerFn({ method: 'POST' })
   .validator(input(OccurrenceRef))
   .handler(async ({ data }) => {
-    await v2((client) => client.recurrences.complete({ payload: data }))
+    await api((client) => client.recurrences.complete({ payload: data }))
     return data
   })
 
 // ─── Assistant ────────────────────────────────────────────────────────────
 
 export const assistantStatusFn = createServerFn({ method: 'GET' }).handler(() =>
-  v2((client) => client.assistant.status()),
+  api((client) => client.assistant.status()),
 )
 
 export const latestAnalysisFn = createServerFn({ method: 'POST' })
   .validator(input(Schema.Struct({ refreshInitial: Schema.Boolean })))
   .handler(({ data }) =>
-    v2((client) => client.assistant.latest({ payload: data })),
+    api((client) => client.assistant.latest({ payload: data })),
   )
 
 export const monthlyAnalysisFn = createServerFn({ method: 'POST' })
   .validator(input(Schema.Struct({ month: Month })))
   .handler(({ data }) =>
-    v2((client) => client.assistant.monthly({ params: data })),
+    api((client) => client.assistant.monthly({ params: data })),
   )
 
 export const askAssistantFn = createServerFn({ method: 'POST' })
@@ -275,5 +275,5 @@ export const askAssistantFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(({ data }) =>
-    v2((client) => client.assistant.ask({ payload: data })),
+    api((client) => client.assistant.ask({ payload: data })),
   )

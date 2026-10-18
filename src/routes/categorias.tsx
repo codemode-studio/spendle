@@ -30,7 +30,7 @@ import {
   categoriesOptions,
   categoryLedgerOptions,
   categoryReviewOptions,
-} from '#/features/v2/queries'
+} from '#/features/data/queries'
 import { cn } from '#/lib/utils'
 
 const PERIODS = {

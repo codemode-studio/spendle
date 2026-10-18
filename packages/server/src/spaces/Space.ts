@@ -107,7 +107,7 @@ export const spaceServices = (databasePath: string) =>
 
 const makeApp = HttpRouter.toHttpEffect(ApiRoutes)
 
-/** One space's `/api/v2` routes as a handler for the current request. */
+/** One space's `/api` routes as a handler for the current request. */
 export class SpaceApp extends Context.Service<
   SpaceApp,
   Effect.Success<typeof makeApp>

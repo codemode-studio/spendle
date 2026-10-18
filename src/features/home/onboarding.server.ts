@@ -1,8 +1,8 @@
 import * as Effect from 'effect/Effect'
-import type { V2Client } from '#/lib/v2/client.server'
+import type { ApiClient } from '#/lib/api/client.server'
 
 /** Whether any recurrence is active. */
-export function hasActiveRecurrences(client: V2Client) {
+export function hasActiveRecurrences(client: ApiClient) {
   return client.recurrences
     .book()
     .pipe(
@@ -13,12 +13,12 @@ export function hasActiveRecurrences(client: V2Client) {
 }
 
 /**
- * The ledger steps of the setup, from V2: an active account or card, any
+ * The ledger steps of the setup, from the API: an active account or card, any
  * entry, and no entry left without a category or waiting for review.
  * Counts only; never loads entries.
  */
-export function ledgerSetup(client: V2Client) {
-  const count = (query: Parameters<V2Client['entries']['list']>[0]['query']) =>
+export function ledgerSetup(client: ApiClient) {
+  const count = (query: Parameters<ApiClient['entries']['list']>[0]['query']) =>
     client.entries
       .list({ query: { ...query, limit: 1 } })
       .pipe(Effect.map((page) => page.total))

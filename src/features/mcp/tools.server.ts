@@ -9,8 +9,8 @@ import * as Schema from 'effect/Schema'
 
 import { LocalDate } from '@spendle/server/api'
 
-import { V2ApiError, v2As } from '#/lib/v2/client.server'
-import type { V2Client } from '#/lib/v2/client.server'
+import { ApiRequestError, apiAs } from '#/lib/api/client.server'
+import type { ApiClient } from '#/lib/api/client.server'
 
 const instructions = [
   "Spendle holds the signed-in person's family finances: accounts, transactions,",
@@ -56,7 +56,7 @@ const failure = (text: string): CallToolResult => ({
 })
 
 /**
- * The tools for one member's MCP request. Each calls the V2 API as that
+ * The tools for one member's MCP request. Each calls the API as that
  * member, through the same client as the web app's server functions, so the
  * API scopes every read to their family space.
  */
@@ -75,7 +75,7 @@ export function spendleMcpServer(member: string) {
       input: Input
     },
     call: (
-      client: V2Client,
+      client: ApiClient,
       input: Input['Type'],
     ) => Effect.Effect<unknown, unknown>,
   ) {
@@ -91,14 +91,14 @@ export function spendleMcpServer(member: string) {
       },
       async (input) => {
         try {
-          const result = await v2As(member, (client) => call(client, input))
+          const result = await apiAs(member, (client) => call(client, input))
           return {
             content: [{ type: 'text', text: JSON.stringify(result ?? null) }],
           }
         } catch (error) {
           // The API's own message says what failed and what to do; anything
           // else is the API being unreachable.
-          return error instanceof V2ApiError
+          return error instanceof ApiRequestError
             ? failure(`${error.reason}: ${error.message}`)
             : failure('Spendle is unavailable right now. Try again shortly.')
         }

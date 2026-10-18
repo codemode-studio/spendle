@@ -1,23 +1,23 @@
 import { QueryClient } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it } from 'vite-plus/test'
 
-import { v2 } from '#/lib/v2/client.server'
-import { startV2Api } from '#/test/v2-api'
-import type { V2TestApi } from '#/test/v2-api'
-import { openChecking } from '#/test/v2-fixtures'
+import { api } from '#/lib/api/client.server'
+import { startTestApi } from '#/test/api'
+import type { TestApi } from '#/test/api'
+import { openChecking } from '#/test/fixtures'
 
 import { entriesAt } from './entries.server'
-import { patchEntryNote, v2QueryKeys } from './queries'
+import { patchEntryNote, queryKeys } from './queries'
 
-let api: V2TestApi
+let testApi: TestApi
 beforeEach(async () => {
-  api = await startV2Api()
+  testApi = await startTestApi()
 })
-afterEach(() => api.close())
+afterEach(() => testApi.close())
 
 it('shows a typed-in transaction with its manual id and note on every cached page at once', async () => {
   const account = await openChecking()
-  const created = await v2((client) =>
+  const created = await api((client) =>
     client.manual.createTransaction({
       payload: {
         accountId: account.id,
@@ -27,13 +27,13 @@ it('shows a typed-in transaction with its manual id and note on every cached pag
       },
     }),
   )
-  const page = await v2((client) => entriesAt(client, {}, 0))
+  const page = await api((client) => entriesAt(client, {}, 0))
   const [entry] = page.entries
   expect([entry.manualId, entry.note]).toEqual([created.externalId, null])
 
   const queryClient = new QueryClient()
-  const all = v2QueryKeys.entriesPage({ page: 0 })
-  const searched = v2QueryKeys.entriesPage({ page: 0, text: 'feira' })
+  const all = queryKeys.entriesPage({ page: 0 })
+  const searched = queryKeys.entriesPage({ page: 0, text: 'feira' })
   queryClient.setQueryData(all, page)
   queryClient.setQueryData(searched, page)
   const rollback = await patchEntryNote(queryClient, {

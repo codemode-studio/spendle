@@ -2,7 +2,7 @@ import { createServerFn } from '@tanstack/react-start'
 import * as Schema from 'effect/Schema'
 
 import { isAllowedEmail, parseAllowedEmails } from '#/features/auth/allowlist'
-import { V2ApiError, v2Space } from '#/lib/v2/client.server'
+import { ApiRequestError, spaceApi } from '#/lib/api/client.server'
 
 const MemberEmail = Schema.toStandardSchemaV1(
   Schema.Struct({
@@ -11,7 +11,7 @@ const MemberEmail = Schema.toStandardSchemaV1(
 )
 
 export const getSpaceFn = createServerFn({ method: 'GET' }).handler(() =>
-  v2Space((client) => client.space.get()),
+  spaceApi((client) => client.space.get()),
 )
 
 export const addMemberFn = createServerFn({ method: 'POST' })
@@ -26,13 +26,13 @@ export const addMemberFn = createServerFn({ method: 'POST' })
         parseAllowedEmails(process.env.SPENDLE_ALLOWED_EMAILS),
       )
     ) {
-      throw new V2ApiError('Rejected', 'not_allowed', data.email)
+      throw new ApiRequestError('Rejected', 'not_allowed', data.email)
     }
-    return v2Space((client) => client.space.addMember({ payload: data }))
+    return spaceApi((client) => client.space.addMember({ payload: data }))
   })
 
 export const removeMemberFn = createServerFn({ method: 'POST' })
   .validator(MemberEmail)
   .handler(({ data }) =>
-    v2Space((client) => client.space.removeMember({ payload: data })),
+    spaceApi((client) => client.space.removeMember({ payload: data })),
   )

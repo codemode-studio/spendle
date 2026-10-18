@@ -4,7 +4,7 @@ import * as Schema from 'effect/Schema'
 
 import { EntryFilters } from '@spendle/server/api'
 
-import { v2 } from '#/lib/v2/client.server'
+import { api } from '#/lib/api/client.server'
 
 import { entriesAt } from './entries.server'
 
@@ -23,12 +23,12 @@ export const entriesPageFn = createServerFn({ method: 'GET' })
   .validator(Schema.toStandardSchemaV1(EntryPageQuery))
   .handler(({ data }) => {
     const { page, ...filters } = data
-    return v2((client) => entriesAt(client, filters, page))
+    return api((client) => entriesAt(client, filters, page))
   })
 
 /** How many entries wait for a category decision, across the whole ledger. */
 export const entryCountsFn = createServerFn({ method: 'GET' }).handler(() =>
-  v2((client) =>
+  api((client) =>
     Effect.all({
       review: client.entries
         .list({ query: { categoryStatus: 'review', limit: 1 } })
@@ -45,7 +45,7 @@ export const entryCountsFn = createServerFn({ method: 'GET' }).handler(() =>
 
 export const entryDetailFn = createServerFn({ method: 'GET' })
   .validator(Schema.toStandardSchemaV1(entryId))
-  .handler(({ data }) => v2((client) => client.entries.get({ params: data })))
+  .handler(({ data }) => api((client) => client.entries.get({ params: data })))
 
 /** The person's category for an entry, chosen in the transaction list. */
 export const decideCategoryFn = createServerFn({ method: 'POST' })
@@ -59,7 +59,7 @@ export const decideCategoryFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(({ data }) =>
-    v2((client) =>
+    api((client) =>
       client.categoryDecisions.decide({
         params: { entryId: data.entryId },
         payload: { categoryId: data.categoryId, learn: data.learn },
@@ -70,7 +70,7 @@ export const decideCategoryFn = createServerFn({ method: 'POST' })
 export const confirmCategoryFn = createServerFn({ method: 'POST' })
   .validator(Schema.toStandardSchemaV1(entryId))
   .handler(({ data }) =>
-    v2((client) => client.categoryDecisions.confirm({ params: data })),
+    api((client) => client.categoryDecisions.confirm({ params: data })),
   )
 
 export const correctCategoryFn = createServerFn({ method: 'POST' })
@@ -80,7 +80,7 @@ export const correctCategoryFn = createServerFn({ method: 'POST' })
     ),
   )
   .handler(({ data }) =>
-    v2((client) =>
+    api((client) =>
       client.categoryDecisions.correct({
         params: { entryId: data.entryId },
         payload: { categoryId: data.categoryId },
@@ -91,9 +91,9 @@ export const correctCategoryFn = createServerFn({ method: 'POST' })
 export const undoCategoryFn = createServerFn({ method: 'POST' })
   .validator(Schema.toStandardSchemaV1(entryId))
   .handler(({ data }) =>
-    v2((client) => client.categoryDecisions.undo({ params: data })),
+    api((client) => client.categoryDecisions.undo({ params: data })),
   )
 
 export const categoryReviewFn = createServerFn({ method: 'GET' }).handler(() =>
-  v2((client) => client.categoryDecisions.review()),
+  api((client) => client.categoryDecisions.review()),
 )

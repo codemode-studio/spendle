@@ -3,7 +3,7 @@ import { createMiddleware, createStart } from '@tanstack/react-start'
 import { signedOutMessage } from '#/features/auth/viewer'
 
 /**
- * Every server function reads or writes financial data through the V2 API, so
+ * Every server function reads or writes financial data through the API, so
  * each call needs an allowed session. Route guards only cover page rendering.
  */
 const requireViewer = createMiddleware({ type: 'function' })

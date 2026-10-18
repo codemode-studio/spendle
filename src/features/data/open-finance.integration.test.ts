@@ -1,29 +1,29 @@
 import { afterEach, beforeEach, expect, it } from 'vite-plus/test'
 
-import { v2 } from '#/lib/v2/client.server'
-import { bank, card, startV2Api, tx } from '#/test/v2-api'
-import type { V2TestApi } from '#/test/v2-api'
+import { api } from '#/lib/api/client.server'
+import { bank, card, startTestApi, tx } from '#/test/api'
+import type { TestApi } from '#/test/api'
 
-let api: V2TestApi
+let testApi: TestApi
 beforeEach(async () => {
-  api = await startV2Api()
+  testApi = await startTestApi()
 })
-afterEach(() => api.close())
+afterEach(() => testApi.close())
 
 const fiveDaysAgo = new Date(Date.now() - 5 * 86_400_000)
   .toISOString()
   .slice(0, 10)
 
 it('connects an item, links its accounts with history and syncs entries', async () => {
-  const owner = await v2((client) =>
+  const owner = await api((client) =>
     client.owners.create({ payload: { name: 'Família', kind: 'household' } }),
   )
-  const { connectionId, accessToken } = await v2((client) =>
+  const { connectionId, accessToken } = await api((client) =>
     client.openFinance.createConnectToken({ payload: { ownerId: owner.id } }),
   )
   expect(accessToken).toBeTruthy()
   // The widget authorizes the item for this connection's clientUserId.
-  await api.pluggy((current) => ({
+  await testApi.pluggy((current) => ({
     ...current,
     clientUserId: connectionId,
     accounts: [bank, card],
@@ -33,7 +33,7 @@ it('connects an item, links its accounts with history and syncs entries', async 
       ],
     },
   }))
-  const found = await v2((client) =>
+  const found = await api((client) =>
     client.openFinance.registerItem({
       params: { connectionId },
       payload: { itemId: 'item-1' },
@@ -44,7 +44,7 @@ it('connects an item, links its accounts with history and syncs entries', async 
     ['CREDIT', null],
   ])
 
-  const checking = await v2((client) =>
+  const checking = await api((client) =>
     client.openFinance.link({
       params: { providerAccountId: bank.id },
       payload: {
@@ -53,7 +53,7 @@ it('connects an item, links its accounts with history and syncs entries', async 
       },
     }),
   )
-  const cardFailure = await v2((client) =>
+  const cardFailure = await api((client) =>
     client.openFinance.link({
       params: { providerAccountId: card.id },
       payload: {
@@ -62,17 +62,17 @@ it('connects an item, links its accounts with history and syncs entries', async 
       },
     }),
   ).catch((error: unknown) => error)
-  await api.drain()
+  await testApi.drain()
 
-  const entries = await v2((client) =>
+  const entries = await api((client) =>
     client.entries.list({ query: { accountId: checking.id } }),
   )
   expect(entries.entries.map((entry) => entry.amountCents)).toEqual([-12_050])
   expect(cardFailure).toMatchObject({ reason: 'card_terms_required' })
 
-  await v2((client) =>
+  await api((client) =>
     client.openFinance.disconnect({ params: { connectionId } }),
   )
-  const [connection] = await v2((client) => client.openFinance.connections())
+  const [connection] = await api((client) => client.openFinance.connections())
   expect(connection).toMatchObject({ status: 'disconnected' })
 })

@@ -1,4 +1,4 @@
-// The V2 API contract for clients: `HttpApiClient.make(SpendleApi)`.
+// The API contract for clients: `HttpApiClient.make(SpendleApi)`.
 export * from './Accounts.ts'
 export * from './Api.ts'
 export * from './Cards.ts'

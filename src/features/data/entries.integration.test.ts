@@ -1,19 +1,19 @@
 import { QueryClient } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it } from 'vite-plus/test'
 
-import { v2 } from '#/lib/v2/client.server'
-import { startV2Api } from '#/test/v2-api'
-import type { V2TestApi } from '#/test/v2-api'
-import { ofxStatement, openChecking, statementUpload } from '#/test/v2-fixtures'
+import { api } from '#/lib/api/client.server'
+import { startTestApi } from '#/test/api'
+import type { TestApi } from '#/test/api'
+import { ofxStatement, openChecking, statementUpload } from '#/test/fixtures'
 
 import { entriesAt } from './entries.server'
-import { patchEntryCategory, v2QueryKeys } from './queries'
+import { patchEntryCategory, queryKeys } from './queries'
 
-let api: V2TestApi
+let testApi: TestApi
 beforeEach(async () => {
-  api = await startV2Api()
+  testApi = await startTestApi()
 })
-afterEach(() => api.close())
+afterEach(() => testApi.close())
 
 async function importVolume(count: number) {
   const account = await openChecking()
@@ -29,7 +29,7 @@ async function importVolume(count: number) {
     amount: '500.01',
     memo: 'Receita',
   })
-  await v2((client) =>
+  await api((client) =>
     client.imports.upload({
       payload: statementUpload(
         account.id,
@@ -43,14 +43,14 @@ async function importVolume(count: number) {
       ),
     }),
   )
-  await api.drain()
+  await testApi.drain()
   return account
 }
 
 it('serves numbered pages of 50 over the cursor API without repeating entries', async () => {
   await importVolume(120)
   const pages = await Promise.all(
-    [0, 1, 2].map((page) => v2((client) => entriesAt(client, {}, page))),
+    [0, 1, 2].map((page) => api((client) => entriesAt(client, {}, page))),
   )
   expect(pages.map((page) => page.entries.length)).toEqual([50, 50, 21])
   expect(pages.map((page) => page.total)).toEqual([121, 121, 121])
@@ -59,9 +59,9 @@ it('serves numbered pages of 50 over the cursor API without repeating entries', 
   // Latest first: the income booked on the 2nd opens the first page.
   expect(pages[0].entries[0].amountCents).toBe(50_001)
 
-  const beyond = await v2((client) => entriesAt(client, {}, 9))
+  const beyond = await api((client) => entriesAt(client, {}, 9))
   expect([beyond.page, beyond.entries.length]).toEqual([2, 21])
-  const outflows = await v2((client) =>
+  const outflows = await api((client) =>
     entriesAt(client, { direction: 'outflow', text: 'QA 11' }, 0),
   )
   expect(outflows.entries.map((entry) => entry.description).sort()).toEqual([
@@ -81,10 +81,10 @@ it('serves numbered pages of 50 over the cursor API without repeating entries', 
 
 it('patches a decided category into every cached page and rolls it back', async () => {
   await importVolume(2)
-  const page = await v2((client) => entriesAt(client, {}, 0))
+  const page = await api((client) => entriesAt(client, {}, 0))
   const queryClient = new QueryClient()
-  const first = v2QueryKeys.entriesPage({ page: 0 })
-  const filtered = v2QueryKeys.entriesPage({ page: 0, direction: 'outflow' })
+  const first = queryKeys.entriesPage({ page: 0 })
+  const filtered = queryKeys.entriesPage({ page: 0, direction: 'outflow' })
   queryClient.setQueryData(first, page)
   queryClient.setQueryData(filtered, {
     ...page,

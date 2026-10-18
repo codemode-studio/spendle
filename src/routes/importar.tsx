@@ -40,17 +40,17 @@ import {
 import { formatCurrency } from '#/lib/currency'
 import { formatInstrumentName } from '#/lib/finance'
 import { formatPeriod, formatShortDate } from '#/lib/period'
-import { accountOptionLabel } from '#/features/v2/accounts'
+import { accountOptionLabel } from '#/features/data/accounts'
 import {
   previewImportFn,
   uploadImportFn,
-} from '#/features/v2/imports.functions'
+} from '#/features/data/imports.functions'
 import {
   accountsOptions,
   importsOptions,
   invalidateAfterReactors,
-} from '#/features/v2/queries'
-import { errorMessage } from '#/lib/v2/errors'
+} from '#/features/data/queries'
+import { errorMessage } from '#/lib/api/errors'
 import { cn } from '#/lib/utils'
 
 import type { ImportPreview } from '@spendle/server/api'

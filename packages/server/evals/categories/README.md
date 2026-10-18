@@ -1,6 +1,6 @@
 # Avaliação das categorias
 
-`vp run --filter @spendle/server eval:categories` reproduz decisões humanas congeladas pelo classificador do V2 (`src/categories/Classifier.ts`, o Jev da TypeSafe) e imprime o placar usado para escolher `TYPESAFE_APPLY_THRESHOLD`. Faz chamadas pagas e fica fora de `vp run verify`.
+`vp run --filter @spendle/server eval:categories` reproduz decisões humanas congeladas pelo classificador do Spendle (`src/categories/Classifier.ts`, o Jev da TypeSafe) e imprime o placar usado para escolher `TYPESAFE_APPLY_THRESHOLD`. Faz chamadas pagas e fica fora de `vp run verify`.
 
 ```bash
 # Da raiz; a chave vem do ambiente ou de .env.local na raiz
@@ -16,7 +16,7 @@ Sem `TYPESAFE_API_KEY`, o modo `model` sai com código 1 e explica o que fazer. 
 ## Arquivos
 
 - `dataset.json`: conjunto congelado, trazido da PR #2. Nomes de pessoas, documentos, contas e valores são falsos; nomes de empresas são reais. Não regenere: acrescente itens com novos `id` para que execuções de datas diferentes sejam comparáveis.
-- `categories.json`: categorias do conjunto (os mesmos ids das categorias embutidas do V2). O campo `description` é histórico; o que vai ao modelo é `Descriptions.ts`.
+- `categories.json`: categorias do conjunto (os mesmos ids das categorias embutidas do Spendle). O campo `description` é histórico; o que vai ao modelo é `Descriptions.ts`.
 - `baselines/`: placares já registrados. `2026-09-19-pr2-v1.json` é a execução da PR #2 no V1 (Jev pelo Vercel AI Gateway, um pedido por lançamento; confiança 70 = probabilidade 0,7).
 - `results/`: saídas locais completas, fora do Git.
 

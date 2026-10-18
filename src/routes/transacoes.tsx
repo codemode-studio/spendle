@@ -84,13 +84,13 @@ import {
   LinkEntryDialog,
   ReconciliationReview,
 } from '#/features/finance/reconciliation-review'
-import { accountOptionLabel } from '#/features/v2/accounts'
+import { accountOptionLabel } from '#/features/data/accounts'
 import {
   confirmCategoryFn,
   correctCategoryFn,
   decideCategoryFn,
-} from '#/features/v2/entries.functions'
-import { setEntryNoteFn } from '#/features/v2/manual.functions'
+} from '#/features/data/entries.functions'
+import { setEntryNoteFn } from '#/features/data/manual.functions'
 import {
   accountsOptions,
   categoriesOptions,
@@ -101,9 +101,9 @@ import {
   patchEntryCategory,
   patchEntryNote,
   relationsOptions,
-} from '#/features/v2/queries'
+} from '#/features/data/queries'
 import { useIsMobile } from '#/hooks/use-mobile'
-import { errorMessage } from '#/lib/v2/errors'
+import { errorMessage } from '#/lib/api/errors'
 import { cn } from '#/lib/utils'
 
 import type { Category, Entry } from '@spendle/server/api'

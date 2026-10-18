@@ -37,15 +37,15 @@ import { formatShortDate } from '#/lib/period'
 import {
   decideRelationFn,
   linkEntriesFn,
-} from '#/features/v2/reconciliation.functions'
+} from '#/features/data/reconciliation.functions'
 import {
   accountsOptions,
   invalidateAfterReactors,
   linkCandidatesOptions,
   orphanedDecisionsOptions,
   relationsOptions,
-} from '#/features/v2/queries'
-import { errorMessage } from '#/lib/v2/errors'
+} from '#/features/data/queries'
+import { errorMessage } from '#/lib/api/errors'
 import { cn } from '#/lib/utils'
 
 import type { Entry, Relation } from '@spendle/server/api'

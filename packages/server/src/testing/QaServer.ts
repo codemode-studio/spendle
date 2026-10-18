@@ -49,7 +49,7 @@ import type { FakePluggyData } from './FakePluggy.ts'
 import { LedgerTest } from './layers.ts'
 
 /**
- * The V2 API for browser QA: an in-memory database with synthetic accounts
+ * The API for browser QA: an in-memory database with synthetic accounts
  * and a fake Pluggy whose item carries synthetic movements, so the connect
  * flow runs end to end without credentials. Never point it at real data.
  *

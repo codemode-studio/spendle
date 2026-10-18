@@ -94,7 +94,7 @@ const SpaceHandlers = HttpApiBuilder.group(
   }),
 )
 
-/** `/api/v2/space`, answered by the server for the caller's space. */
+/** `/api/space`, answered by the server for the caller's space. */
 export const memberRoutes = HttpApiBuilder.layer(SpaceApi).pipe(
   Layer.provide(SpaceHandlers),
   Layer.provide(SecurityLive),

@@ -127,14 +127,14 @@ export const formatSummary = (
 
   lines.push(
     '',
-    'Next steps (imported facts are not copied; V2 observes them again):',
-    '  1. Start the V2 server: vp run --filter @spendle/server dev',
-    '  2. Pluggy (V1 never connected to it): connect each bank in V2 (POST /api/v2/open-finance/',
-    '     connect-token, then POST /api/v2/open-finance/connections/:id/item), link each provider',
-    '     account to its migrated account instead of opening a new one (PUT /api/v2/open-finance/',
-    '     provider-accounts/:id/link) and sync (POST /api/v2/open-finance/connections/:id/sync).',
+    'Next steps (imported facts are not copied; Spendle observes them again):',
+    '  1. Start the API server: vp run --filter @spendle/server dev',
+    '  2. Pluggy (V1 never connected to it): connect each bank in Spendle (POST /api/open-finance/',
+    '     connect-token, then POST /api/open-finance/connections/:id/item), link each provider',
+    '     account to its migrated account instead of opening a new one (PUT /api/open-finance/',
+    '     provider-accounts/:id/link) and sync (POST /api/open-finance/connections/:id/sync).',
     '  3. Files: import the same OFX, CSV and PDF statements into the migrated accounts',
-    '     (POST /api/v2/imports).',
+    '     (POST /api/imports).',
     '  4. Waiting decisions apply by themselves as entries appear. Run migrate-v1 --dry-run again',
     '     to see what is still waiting.',
   )

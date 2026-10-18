@@ -220,4 +220,4 @@ export class EntriesApi extends HttpApiGroup.make('entries')
       error: EndpointErrors,
     }),
   )
-  .prefix('/api/v2') {}
+  .prefix('/api') {}

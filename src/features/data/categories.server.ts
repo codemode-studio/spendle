@@ -1,9 +1,9 @@
 import * as Effect from 'effect/Effect'
 
 import type { FamilyTransaction } from '#/lib/ledger'
-import type { V2Client } from '#/lib/v2/client.server'
+import type { ApiClient } from '#/lib/api/client.server'
 
-import { allEntries } from '#/lib/v2/client.server'
+import { allEntries } from '#/lib/api/client.server'
 
 const otherColor = '#94a3b8'
 
@@ -14,7 +14,7 @@ const otherColor = '#94a3b8'
  * outside the spending buckets; entries without a category count as
  * uncategorized.
  */
-export function categoryLedger(client: V2Client) {
+export function categoryLedger(client: ApiClient) {
   return Effect.gen(function* () {
     const [entries, categories, accounts] = yield* Effect.all([
       allEntries(client, {}),

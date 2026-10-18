@@ -65,7 +65,7 @@ import type { FamilyTransaction } from '#/lib/ledger'
 import {
   askAssistantFn,
   latestAnalysisFn,
-} from '#/features/v2/planning.functions'
+} from '#/features/data/planning.functions'
 import { cn } from '#/lib/utils'
 import {
   INITIAL_ANALYSIS_REFRESH_MS,
@@ -83,7 +83,7 @@ import { assistantQueryKeys } from './query-keys'
 type ConversationMessage = { role: 'user' | 'assistant'; content: string }
 type FinanceQuestionnaire = NonNullable<FinanceAnswer['questionnaire']>
 
-/** What the overview reads, all from V2. */
+/** What the overview reads, all from the API. */
 export interface HomeData {
   month: MonthView
   forecast: ProjectionFromApi

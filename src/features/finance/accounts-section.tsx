@@ -39,21 +39,21 @@ import {
   openAccountFn,
   restoreAccountFn,
   updateAccountFn,
-} from '#/features/v2/accounts.functions'
+} from '#/features/data/accounts.functions'
 import {
   balanceSourceLabels,
   currentBalance,
   isCard,
   isInvestment,
-} from '#/features/v2/accounts'
-import type { AccountView, Owner } from '#/features/v2/accounts'
+} from '#/features/data/accounts'
+import type { AccountView, Owner } from '#/features/data/accounts'
 import {
   accountsOptions,
   balanceProofOptions,
   invalidateAfterReactors,
   ownersOptions,
-} from '#/features/v2/queries'
-import { errorMessage } from '#/lib/v2/errors'
+} from '#/features/data/queries'
+import { errorMessage } from '#/lib/api/errors'
 
 type BankKind = Exclude<AccountView['kind'], 'credit_card'>
 

@@ -1,7 +1,7 @@
 import { createServerFn } from '@tanstack/react-start'
 import * as Schema from 'effect/Schema'
 
-import { v2 } from '#/lib/v2/client.server'
+import { api } from '#/lib/api/client.server'
 
 /** A statement upload: the account and one OFX, CSV or PDF file. */
 function readUpload(data: unknown) {
@@ -27,14 +27,14 @@ function forward(upload: { accountId: string; file: File }) {
 export const previewImportFn = createServerFn({ method: 'POST' })
   .validator(readUpload)
   .handler(({ data }) =>
-    v2((client) => client.imports.preview({ payload: forward(data) })),
+    api((client) => client.imports.preview({ payload: forward(data) })),
   )
 
 /** Records the file's movements and balances; the same file again changes nothing. */
 export const uploadImportFn = createServerFn({ method: 'POST' })
   .validator(readUpload)
   .handler(({ data }) =>
-    v2((client) => client.imports.upload({ payload: forward(data) })),
+    api((client) => client.imports.upload({ payload: forward(data) })),
   )
 
 export const listImportsFn = createServerFn({ method: 'GET' })
@@ -43,4 +43,4 @@ export const listImportsFn = createServerFn({ method: 'GET' })
       Schema.Struct({ accountId: Schema.optional(Schema.String) }),
     ),
   )
-  .handler(({ data }) => v2((client) => client.imports.list({ query: data })))
+  .handler(({ data }) => api((client) => client.imports.list({ query: data })))

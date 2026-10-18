@@ -7,7 +7,7 @@ import {
   categoriesOptions,
   investmentsOptions,
   monthOptions,
-} from '#/features/v2/queries'
+} from '#/features/data/queries'
 
 export const Route = createFileRoute('/investimentos')({
   loader: ({ context }) =>

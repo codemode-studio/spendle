@@ -1,20 +1,20 @@
 import { afterEach, beforeEach, expect, it } from 'vite-plus/test'
 
-import { V2ApiError, v2 } from '#/lib/v2/client.server'
-import { startV2Api } from '#/test/v2-api'
-import type { V2TestApi } from '#/test/v2-api'
+import { ApiRequestError, api } from '#/lib/api/client.server'
+import { startTestApi } from '#/test/api'
+import type { TestApi } from '#/test/api'
 
-let api: V2TestApi
+let testApi: TestApi
 beforeEach(async () => {
-  api = await startV2Api()
+  testApi = await startTestApi()
 })
-afterEach(() => api.close())
+afterEach(() => testApi.close())
 
-it('opens an account and a card with terms through the V2 API', async () => {
-  const owner = await v2((client) =>
+it('opens an account and a card with terms through the API', async () => {
+  const owner = await api((client) =>
     client.owners.create({ payload: { name: 'Família', kind: 'household' } }),
   )
-  const card = await v2((client) =>
+  const card = await api((client) =>
     client.accounts.open({
       payload: {
         ownerId: owner.id,
@@ -32,7 +32,7 @@ it('opens an account and a card with terms through the V2 API', async () => {
       },
     }),
   )
-  const changed = await v2((client) =>
+  const changed = await api((client) =>
     client.accounts.setCardTerms({
       params: { accountId: card.id },
       payload: {
@@ -43,7 +43,7 @@ it('opens an account and a card with terms through the V2 API', async () => {
       },
     }),
   )
-  const listed = await v2((client) => client.accounts.list({ query: {} }))
+  const listed = await api((client) => client.accounts.list({ query: {} }))
   expect(listed.map((account) => [account.name, account.card])).toEqual([
     [
       'Cartão',
@@ -54,10 +54,10 @@ it('opens an account and a card with terms through the V2 API', async () => {
 })
 
 it('rejects with the API reason and a message the person can act on', async () => {
-  const failure = await v2((client) =>
+  const failure = await api((client) =>
     client.accounts.get({ params: { accountId: 'missing' } }),
   ).catch((error: unknown) => error)
-  expect(failure).toBeInstanceOf(V2ApiError)
+  expect(failure).toBeInstanceOf(ApiRequestError)
   expect(failure).toMatchObject({
     tag: 'NotFound',
     reason: 'account_not_found',
@@ -66,11 +66,11 @@ it('rejects with the API reason and a message the person can act on', async () =
 })
 
 it('reports an unreachable API instead of a transport stack', async () => {
-  await api.close()
+  await testApi.close()
   process.env.SPENDLE_API_URL = 'http://127.0.0.1:9'
-  const failure = await v2((client) => client.owners.list()).catch(
+  const failure = await api((client) => client.owners.list()).catch(
     (error: unknown) => error,
   )
-  expect(failure).toMatchObject({ reason: 'v2_unreachable' })
-  api = await startV2Api()
+  expect(failure).toMatchObject({ reason: 'api_unreachable' })
+  testApi = await startTestApi()
 })

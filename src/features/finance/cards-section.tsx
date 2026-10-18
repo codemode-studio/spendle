@@ -44,17 +44,17 @@ import {
   archiveAccountFn,
   openAccountFn,
   updateAccountFn,
-} from '#/features/v2/accounts.functions'
-import { isCard } from '#/features/v2/accounts'
-import type { AccountView, Owner } from '#/features/v2/accounts'
-import { summarizeCard } from '#/features/v2/cards'
+} from '#/features/data/accounts.functions'
+import { isCard } from '#/features/data/accounts'
+import type { AccountView, Owner } from '#/features/data/accounts'
+import { summarizeCard } from '#/features/data/cards'
 import {
   accountsOptions,
   cardOverviewOptions,
   invalidateAfterReactors,
   ownersOptions,
-} from '#/features/v2/queries'
-import { errorMessage } from '#/lib/v2/errors'
+} from '#/features/data/queries'
+import { errorMessage } from '#/lib/api/errors'
 
 export function CardsSection() {
   const { data: accounts } = useSuspenseQuery(accountsOptions(true))
