@@ -155,7 +155,7 @@ function ConsentPage() {
                 <ArrowUpRight className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                 <span>
                   O acesso vai para{' '}
-                  <span className="font-medium break-all">{destination}</span>
+                  <span className="font-medium break-words">{destination}</span>
                 </span>
               </p>
             )}
