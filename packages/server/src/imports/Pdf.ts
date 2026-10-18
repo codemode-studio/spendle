@@ -1,8 +1,4 @@
-import {
-  classifyPdfAsync,
-  extractText,
-  extractTextWithPositions,
-} from '@firecrawl/pdf-inspector'
+import { readPdf } from '@spendle/pdf'
 import * as Effect from 'effect/Effect'
 import * as Result from 'effect/Result'
 import * as Schema from 'effect/Schema'
@@ -59,23 +55,11 @@ export const looksLikePdf = (bytes: Uint8Array) =>
 export const extractPdfText = Effect.fn('Pdf.extractText')(function* (
   bytes: Uint8Array,
 ) {
-  const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-  const classification = yield* Effect.tryPromise({
-    try: () => classifyPdfAsync(buffer),
+  const pdf: PdfText = yield* Effect.try({
+    try: () => readPdf(bytes),
     catch: (cause) => new PdfUnreadable({ cause }),
   })
-  const { text, items } = yield* Effect.try({
-    try: () => ({
-      text: extractText(buffer),
-      items: extractTextWithPositions(buffer),
-    }),
-    catch: (cause) => new PdfUnreadable({ cause }),
-  })
-  return {
-    text,
-    items,
-    pagesNeedingOcr: classification.pagesNeedingOcr,
-  } satisfies PdfText
+  return pdf
 })
 
 const visibleLength = (value: string) => value.replace(/\s+/g, '').length

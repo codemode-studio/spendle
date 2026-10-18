@@ -29,3 +29,6 @@ todos.json
 packages/server/evals/categories/results/
 .claude/worktrees/
 .vitest/
+
+# Rust build output of packages/pdf; its wasm/ output is committed.
+packages/pdf/target/

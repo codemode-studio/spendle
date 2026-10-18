@@ -100,7 +100,7 @@ TRANSAÇÕES DE 03 SET A 03 OUT
     )
   })
 
-  it.effect('reads a synthetic PDF through the native extractor', () =>
+  it.effect('reads a synthetic PDF through the extractor', () =>
     Effect.gen(function* () {
       const text = yield* extractPdfText(syntheticPdf(mercadoPagoStatement))
       const statement = Result.getOrThrow(parsePdf(text, 'account'))
@@ -146,13 +146,19 @@ TRANSAÇÕES DE 03 SET A 03 OUT
     }),
   )
 
-  it.effect('fails as unreadable on bytes that are not a PDF', () =>
-    Effect.gen(function* () {
-      const error = yield* extractPdfText(
-        new TextEncoder().encode('%PDF-1.7 binary'),
-      ).pipe(Effect.flip)
-      assert.strictEqual(error._tag, 'PdfUnreadable')
-    }),
+  it.effect(
+    'fails as unreadable on bytes that are not a PDF, then reads the next',
+    () =>
+      Effect.gen(function* () {
+        const error = yield* extractPdfText(
+          new TextEncoder().encode('%PDF-1.7 binary'),
+        ).pipe(Effect.flip)
+        assert.strictEqual(error._tag, 'PdfUnreadable')
+        // The reader's own reason survives the instance reset that follows it.
+        assert.match(String(error.cause), /invalid PDF file header/)
+        const pdf = yield* extractPdfText(syntheticPdf(['Recibo de entrega']))
+        assert.strictEqual(pdf.text.trim(), 'Recibo de entrega')
+      }),
   )
 })
 
