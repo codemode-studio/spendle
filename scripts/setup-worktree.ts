@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, rmSync, symlinkSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 
-const ENV_FILES = ['.env','.env.local']
+const ENV_FILES = ['.env.local']
 
 const worktree = process.argv.at(2) ?? process.cwd()
 
