@@ -353,25 +353,40 @@ describe('investments API', () => {
 
   it.effect('lists unplaced movements older than a page of placed ones', () =>
     Effect.gen(function* () {
-      const { client, brokerage, typed } = yield* setup
-      // 202 daily contributions; the newest 201 are placed, more than the
-      // 200 movements a page reads, so only the oldest is left.
-      const created = yield* Effect.forEach(
-        Array.from({ length: 202 }, (_, day) => day),
-        (day) =>
-          typed(
-            brokerage.id,
-            DateTime.formatIsoDate(
-              DateTime.add(DateTime.makeUnsafe('2026-01-01'), { days: day }),
-            ),
-            10_000,
-            `Aporte ${day}`,
-          ),
+      const { client, brokerage } = yield* setup
+      // 202 daily contributions in one statement; the newest 201 are placed,
+      // more than the 200 movements a page reads, so only the oldest is left.
+      const day = (n: number) =>
+        DateTime.formatIsoDate(
+          DateTime.add(DateTime.makeUnsafe('2026-01-01'), { days: n }),
+        ).replaceAll('-', '')
+      const lines = Array.from(
+        { length: 202 },
+        (_, n) =>
+          `<STMTTRN><TRNTYPE>CREDIT<DTPOSTED>${day(n)}<TRNAMT>100.00<FITID>a${n}<MEMO>Aporte ${n}</STMTTRN>`,
       )
+      yield* client.imports.upload({
+        payload: upload(
+          brokerage.id,
+          ofx(lines.join('\n'), day(0), day(201), '20200.00'),
+          'xp.ofx',
+        ),
+      })
       yield* drain
+      const newest = yield* client.entries.list({
+        query: { accountId: brokerage.id, limit: 200 },
+      })
+      const next = yield* client.entries.list({
+        query: {
+          accountId: brokerage.id,
+          limit: 1,
+          cursor: newest.nextCursor!,
+        },
+      })
+      const [first, ...rest] = [...newest.entries, ...next.entries]
       const { positionId } = yield* client.investments.classify({
         payload: {
-          entryId: created[201]!.entryId!,
+          entryId: first!.id,
           newPosition: {
             name: 'Tesouro Selic 2029',
             assetClassId: 'fixed-income',
@@ -379,10 +394,13 @@ describe('investments API', () => {
           },
         },
       })
-      yield* Effect.forEach(created.slice(1, 201), (movement) =>
-        client.investments.classify({
-          payload: { entryId: movement.entryId!, positionId },
-        }),
+      yield* Effect.forEach(
+        rest,
+        (entry) =>
+          client.investments.classify({
+            payload: { entryId: entry.id, positionId },
+          }),
+        { concurrency: 8 },
       )
       const snapshot = yield* client.investments.snapshot({ query: {} })
       assert.deepStrictEqual(
