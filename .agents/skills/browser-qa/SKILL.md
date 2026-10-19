@@ -19,6 +19,10 @@ The QA API seeds owner `Família QA`, account `Conta BRL de teste`, card `Cartã
 
 For transaction pagination use a separate run and import `volume-121.ofx` (121 expenses of R$ 1,00) into the synthetic account. It changes balances; use another fresh run for import assertions.
 
+## Check the Worker build
+
+For changes to the Worker, the Durable Objects or `src/platform`, also run the production build in the local Workers runtime, as the README's "Publicar" section describes: synthetic secrets in `.dev.vars.qa` (never real ones), `vp build --mode qa`, then `vp preview --mode qa --port <port>` in the background with `CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false`. Sign in at `/api/auth/qa/sign-in?token=<SPENDLE_QA_SIGN_IN_TOKEN>`. The space starts empty: add a holder in Configurações, then an account, before importing. Its state lives in `.cloudflare/state/`; delete that directory and `.dev.vars.qa` when done. `vp run qa:mcp` works against it with a `run.json` holding its `url`.
+
 ## Check the MCP
 
 `vp run qa:mcp <run-directory>` (in the background) connects with the official MCP client SDK, as Claude Code does: discovery, registration, PKCE authorization. It prints `authorizeUrl:`; open it in the signed-in browser, check `/autorizar`, and click Permitir or Recusar. On Permitir it lists the tools and calls `list_accounts`, `search_transactions` and `list_open_finance_connections`, printing the results, and exits 0; on Recusar it prints `refused: access_denied` and exits 1. Run it once per decision you need to check.

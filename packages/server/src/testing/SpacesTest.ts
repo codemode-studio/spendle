@@ -19,8 +19,7 @@ import { PluggyClient } from '../openfinance/PluggyClient.ts'
 import { WebhookConfig } from '../openfinance/WebhookConfig.ts'
 import { memberRoutes } from '../spaces/Members.ts'
 import { spaceRoutes } from '../spaces/Routes.ts'
-import { SpaceApps } from '../spaces/Space.ts'
-import { SpaceDirectory } from '../spaces/SpaceDirectory.ts'
+import * as LocalSpaces from '../spaces/LocalSpaces.ts'
 import { SpaceWebhooks, webhookRoutes } from '../spaces/SpaceWebhooks.ts'
 import { FakePluggyState, makeFake } from './FakePluggy.ts'
 import type { FakePluggyData } from './FakePluggy.ts'
@@ -59,8 +58,9 @@ export const spacesTest = (
     disableLogger: true,
   }).pipe(
     Layer.provideMerge(SpaceWebhooks.layer),
-    Layer.provideMerge(SpaceApps.layer),
-    Layer.provideMerge(SpaceDirectory.layer),
+    Layer.provideMerge(LocalSpaces.gateway),
+    Layer.provideMerge(LocalSpaces.SpaceApps.layer),
+    Layer.provideMerge(LocalSpaces.directory),
     Layer.provideMerge(
       Layer.mergeAll(
         ApiConfig.layerTest(options.token),

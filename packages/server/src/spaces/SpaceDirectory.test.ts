@@ -6,6 +6,7 @@ import * as Layer from 'effect/Layer'
 import * as Path from 'effect/Path'
 
 import { ServerConfig } from '../config.ts'
+import { directory } from './LocalSpaces.ts'
 import { SpaceDirectory } from './SpaceDirectory.ts'
 
 // A directory over a fresh data directory on disk.
@@ -17,7 +18,7 @@ const withDirectory = <A, E, R>(
     const dataDirectory = yield* fs.makeTempDirectoryScoped()
     return yield* use(dataDirectory).pipe(
       Effect.provide(
-        SpaceDirectory.layer.pipe(
+        directory.pipe(
           Layer.provide(ServerConfig.layerTest({ dataDirectory })),
         ),
       ),

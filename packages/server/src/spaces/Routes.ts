@@ -10,7 +10,7 @@ import { ApiConfig } from '../api/ApiConfig.ts'
 import { SpendleApi } from '../api/definition/Api.ts'
 import { memberHeader } from '../api/definition/Security.ts'
 import * as Webhook from '../openfinance/Webhook.ts'
-import { SpaceApp, withSpace } from './Space.ts'
+import { SpaceGateway } from './SpaceGateway.ts'
 import { SpaceDirectory } from './SpaceDirectory.ts'
 
 const openApi = OpenApi.fromApi(SpendleApi)
@@ -90,11 +90,8 @@ export const spaceRoutes = HttpRouter.use(
         const space = yield* directory.spaceOf(member, {
           write: request.method !== 'GET' && request.method !== 'HEAD',
         })
-        const handle = yield* withSpace(
-          space.id,
-          SpaceApp.useSync((app) => app),
-        )
-        return yield* handle
+        const gateway = yield* SpaceGateway
+        return yield* gateway.serve(space.id)
       }),
     )
   }),

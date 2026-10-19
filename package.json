@@ -11,6 +11,8 @@
     "generate-routes": "tsr generate",
     "build": "vp build .",
     "preview": "vp preview --host 127.0.0.1",
+    "deploy": "cf deploy --prebuilt --mode production",
+    "deploy:check": "cf deploy --prebuilt --mode production --dry-run",
     "lint": "vp lint",
     "typecheck": "tsc-rs --noEmit",
     "test": "vp test run --exclude 'data/**' --exclude 'packages/**' --exclude '.repos/**'",
@@ -61,6 +63,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "2.0.0-beta.v.1",
     "@effect/tsgo": "catalog:",
     "@modelcontextprotocol/client": "2.3.1",
     "@tanstack/devtools-vite": "0.8.3",
@@ -71,6 +74,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.1",
+    "cf": "1.0.0-beta.18",
     "jsdom": "^30.0.1",
     "tsc-rs": "0.7.0",
     "tsx": "^4.21.0",

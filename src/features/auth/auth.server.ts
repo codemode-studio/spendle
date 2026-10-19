@@ -1,10 +1,5 @@
-import { mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
-
 import { cimd } from '@better-auth/cimd'
 import { dash } from '@better-auth/infra'
-import { fetchClientMetadataResource } from '@better-auth/cimd/node'
 import { mcp } from '@better-auth/mcp'
 import { getRequest } from '@tanstack/react-start/server'
 import { betterAuth } from 'better-auth'
@@ -12,6 +7,8 @@ import { APIError } from 'better-auth/api'
 import { getMigrations } from 'better-auth/db/migration'
 import { jwt } from 'better-auth/plugins'
 import { tanstackStartCookies } from 'better-auth/tanstack-start'
+
+import { authPlatform } from '#/platform/auth.server'
 
 import { isAllowedEmail, parseAllowedEmails } from './allowlist'
 import { qaSignIn } from './qa-sign-in.server'
@@ -37,24 +34,16 @@ export const isAllowed = (email: string) =>
 export const mcpResource = () =>
   new URL('/api/mcp', requiredEnv('BETTER_AUTH_URL')).toString()
 
-/**
- * Better Auth's own SQLite file: people, sessions and the OAuth clients,
- * consents and signing keys behind the MCP. Financial data never lives here.
- * QA runs keep theirs in the run directory.
- */
-function openDatabase() {
-  const path = process.env.SPENDLE_AUTH_DATABASE_PATH || 'data/auth/auth.sqlite'
-  mkdirSync(dirname(path), { recursive: true })
-  return new DatabaseSync(path)
-}
-
 function createAuth() {
   // Set only by `vp run qa:start`, whose API holds synthetic data.
   const qaToken = process.env.SPENDLE_QA_SIGN_IN_TOKEN
   return betterAuth({
     secret: requiredEnv('BETTER_AUTH_SECRET'),
     baseURL: requiredEnv('BETTER_AUTH_URL'),
-    database: openDatabase(),
+    // People, sessions and the OAuth clients, consents and signing keys
+    // behind the MCP: a SQLite file on Node, D1 on Cloudflare. Financial data
+    // never lives here.
+    database: authPlatform.database(),
     // The JWT plugin's `/token` hands a session's JWT to the browser; the MCP
     // only accepts access tokens from the OAuth flow, so nothing needs it.
     disabledPaths: ['/token'],
@@ -84,7 +73,7 @@ function createAuth() {
     advanced: {
       ipAddress: {
         // For Cloudflare
-        ipAddressHeaders: ["cf-connecting-ip", "x-forwarded-for"],
+        ipAddressHeaders: ['cf-connecting-ip', 'x-forwarded-for'],
 
         // For Vercel
         // ipAddressHeaders: ["x-vercel-forwarded-for", "x-forwarded-for"],
@@ -112,7 +101,10 @@ function createAuth() {
         // without saying they are native apps; web clients still need https.
         clientRegistrationDefaultApplicationType: 'infer',
       }),
-      cimd({ fetchClientMetadataResource, metadataProfile: 'mcp-2026-07-28' }),
+      cimd({
+        fetchClientMetadataResource: authPlatform.fetchClientMetadataResource,
+        metadataProfile: 'mcp-2026-07-28',
+      }),
       ...(qaToken ? [qaSignIn(qaToken)] : []),
       // Must stay last: it applies cookies Better Auth sets inside Start.
       tanstackStartCookies(),

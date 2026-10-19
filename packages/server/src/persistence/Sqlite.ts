@@ -3,32 +3,17 @@ import * as Effect from 'effect/Effect'
 import * as FileSystem from 'effect/FileSystem'
 import * as Layer from 'effect/Layer'
 import * as Path from 'effect/Path'
-import * as SqlClient from 'effect/sql/SqlClient'
 
 import { ServerConfig } from '../config.ts'
-import { runMigrations } from './Migrations.ts'
+import { layerClient } from './Database.ts'
 
-// The client opens one serialized connection with WAL and a busy timeout.
-// Foreign keys and recursive triggers are per-connection settings, so they
-// are enabled here. Recursive triggers make the implicit delete of an
-// `INSERT OR REPLACE` fire delete triggers, which guard immutable facts.
-const setup = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient
-    yield* sql`PRAGMA foreign_keys = ON`
-    yield* sql`PRAGMA recursive_triggers = ON`
-    yield* runMigrations
-  }),
-)
-
+// The Node client opens one serialized connection with WAL and a busy timeout.
 const makeLayer = (filename: string) =>
-  setup.pipe(
-    Layer.provideMerge(
-      SqliteClient.layer({
-        filename,
-        spanAttributes: { 'db.name': 'spendle' },
-      }),
-    ),
+  layerClient(
+    SqliteClient.layer({
+      filename,
+      spanAttributes: { 'db.name': 'spendle' },
+    }),
   )
 
 /** Opens (creating its directory) and migrates the database at `filename`. */

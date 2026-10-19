@@ -1,0 +1,48 @@
+name: Deploy
+# Publishes `main` to Cloudflare once Verify passes on it; a manual run
+# redeploys the latest `main`.
+on:
+  workflow_run:
+    workflows: [Verify]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, in order; a newer commit waits instead of cancelling
+# an upload halfway.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: [self-hosted, linux]
+    environment:
+      name: production
+      url: https://spendle.codemode.studio
+    env:
+      CF_SEND_TELEMETRY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The commit Verify passed, not whatever `main` points to now.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: .node-version
+          cache: false
+          run-install: true
+      - name: Build
+        run: vp run build
+      # Worker secrets live in Cloudflare and carry over to each new version.
+      - name: Deploy
+        run: vp run deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

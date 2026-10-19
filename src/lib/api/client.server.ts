@@ -1,5 +1,4 @@
 import * as Effect from 'effect/Effect'
-import * as FetchHttpClient from 'effect/http/FetchHttpClient'
 import * as HttpClient from 'effect/http/HttpClient'
 import * as HttpClientRequest from 'effect/http/HttpClientRequest'
 import * as HttpApiClient from 'effect/http-api/HttpApiClient'
@@ -9,6 +8,7 @@ import { getRequest, setResponseStatus } from '@tanstack/react-start/server'
 import { SpaceApi, SpendleApi, memberHeader } from '@spendle/server/api'
 
 import { readViewer } from '#/features/auth/auth.server'
+import { apiPlatform } from '#/platform/api.server'
 import { signedOutMessage } from '#/features/auth/viewer'
 
 import { apiFailureMessage } from './errors'
@@ -53,17 +53,6 @@ export class ApiRequestError extends Error {
 }
 
 /**
- * Where the API server listens and the token it expects. Read per call, on the
- * server only: the token never reaches the browser bundle.
- */
-function apiSettings() {
-  return {
-    baseUrl: process.env.SPENDLE_API_URL || 'http://127.0.0.1:4100',
-    token: process.env.SPENDLE_API_TOKEN || undefined,
-  }
-}
-
-/**
  * The signed-in email the API scopes the call to. Outside a request (tests,
  * scripts) there is none and the call goes without it; inside one, a session
  * that ended since the middleware's check signs the person out.
@@ -99,8 +88,9 @@ const toApiRequestError = (error: unknown): ApiRequestError => {
 }
 
 // Points a client's requests at the API, naming the member and the token.
+// Read per call, on the server only: the token never reaches the browser.
 function locate(member: string | undefined) {
-  const { baseUrl, token } = apiSettings()
+  const { baseUrl, token } = apiPlatform.settings()
   return HttpClient.mapRequest((request) => {
     let located = HttpClientRequest.prependUrl(request, baseUrl)
     if (member !== undefined) {
@@ -119,7 +109,7 @@ async function run<TResult, TError>(
     return await Effect.runPromise(
       program.pipe(
         Effect.mapError(toApiRequestError),
-        Effect.provide(FetchHttpClient.layer),
+        Effect.provide(apiPlatform.httpClient),
       ),
     )
   } catch (error) {

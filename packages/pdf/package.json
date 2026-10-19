@@ -3,7 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./index.ts"
+    ".": {
+      "workerd": "./index.workerd.ts",
+      "default": "./index.ts"
+    }
   },
   "scripts": {
     "build:wasm": "node build.ts"

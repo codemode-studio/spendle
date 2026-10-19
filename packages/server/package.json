@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./api": "./src/api/definition/index.ts"
+    "./api": "./src/api/definition/index.ts",
+    "./durable": "./src/durable/index.ts"
   },
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env.local --watch src/bin.ts",

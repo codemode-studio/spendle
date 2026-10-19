@@ -14,6 +14,9 @@ data/
 *.db-shm
 *.db-wal
 .nitro
+# Cloudflare builds, generated types and local Worker state; local secrets.
+.cloudflare/
+.dev.vars*
 .tanstack
 .wrangler
 .output

@@ -1,11 +1,9 @@
 import * as Context from 'effect/Context'
-import * as Duration from 'effect/Duration'
-import * as Effect from 'effect/Effect'
+import type * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
-import * as LayerMap from 'effect/LayerMap'
-import * as Option from 'effect/Option'
 import * as FetchHttpClient from 'effect/http/FetchHttpClient'
 import * as HttpRouter from 'effect/http/HttpRouter'
+import type * as SqlClient from 'effect/sql/SqlClient'
 
 import { ApiRoutes } from '../api/Routes.ts'
 import { Categories } from '../categories/Categories.ts'
@@ -24,7 +22,6 @@ import { Observations } from '../ledger/Observations.ts'
 import { OpenFinance } from '../openfinance/OpenFinance.ts'
 import * as SyncReactor from '../openfinance/SyncReactor.ts'
 import * as Webhook from '../openfinance/Webhook.ts'
-import * as Sqlite from '../persistence/Sqlite.ts'
 import { AssistantModel } from '../planning/AssistantModel.ts'
 import { PlanningServices } from '../planning/Services.ts'
 import { ExchangeRates } from '../rates/ExchangeRates.ts'
@@ -33,7 +30,6 @@ import * as Reconciliation from '../reconciliation/Reconciliation.ts'
 import { Cards } from '../reconciliation/Cards.ts'
 import * as V1PlanningImport from '../v1import/PlanningImport.ts'
 import * as V1Import from '../v1import/V1Import.ts'
-import { SpaceDirectory } from './SpaceDirectory.ts'
 
 // Category learning; the model is called only when `TYPESAFE_API_KEY` is set.
 const CategoriesLive = Categorizer.Categorizer.layer.pipe(
@@ -57,7 +53,7 @@ const PersonLive = Layer.mergeAll(ManualEntries.layer, Investments.layer).pipe(
 
 // Services every feature builds on, over the space's database. Feature
 // reactors are added beside them.
-const coreLive = (databasePath: string) =>
+const coreLive = <E, R>(database: Layer.Layer<SqlClient.SqlClient, E, R>) =>
   PersonLive.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
@@ -72,7 +68,7 @@ const coreLive = (databasePath: string) =>
     Layer.provideMerge(Observations.layer),
     Layer.provideMerge(Accounts.layer),
     Layer.provideMerge(EventLog.layer),
-    Layer.provideMerge(Sqlite.layerFile(databasePath)),
+    Layer.provideMerge(database),
   )
 
 // The assistant calls its model only when `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` are set.
@@ -99,10 +95,15 @@ const OpenFinanceLive = Layer.mergeAll(
   V1Import.reactor.pipe(Layer.provide(V1Import.V1Import.layer)),
 ).pipe(Layer.provideMerge(OpenFinance.layer))
 
-/** Every service and reactor of one space, over the database at `databasePath`. */
-export const spaceServices = (databasePath: string) =>
+/**
+ * Every service and reactor of one space, over `database`: a file through
+ * `Sqlite.layerFile`, or a Durable Object's storage through `Database.layerClient`.
+ */
+export const spaceServices = <E, R>(
+  database: Layer.Layer<SqlClient.SqlClient, E, R>,
+) =>
   Layer.mergeAll(PlanningLive, OpenFinanceLive).pipe(
-    Layer.provideMerge(coreLive(databasePath)),
+    Layer.provideMerge(coreLive(database)),
   )
 
 const makeApp = HttpRouter.toHttpEffect(ApiRoutes)
@@ -114,73 +115,9 @@ export class SpaceApp extends Context.Service<
 >()('@spendle/server/spaces/Space/SpaceApp') {}
 
 /** A space's services, reactors and API, over its own database. */
-export const spaceLive = (databasePath: string) =>
-  Layer.effect(SpaceApp, makeApp).pipe(
-    Layer.provideMerge(spaceServices(databasePath)),
-  )
-
-/**
- * Builds `layer` with a memo map of its own. LayerMap shares one memo map
- * across keys, so module-level layers (`Accounts.layer`, `EventLog.layer`)
- * would otherwise be built once, over the first space's database, and reused
- * by every other space.
- */
-const isolated = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
-  Layer.fromBuild((_shared, scope) =>
-    Layer.buildWithMemoMap(layer, Layer.makeMemoMapUnsafe(), scope),
-  )
-
-/**
- * Each space's services, built on first use and kept: its reactors keep
- * working on events (webhooks, syncs) while nobody is signed in.
- */
-export class SpaceApps extends LayerMap.Service<SpaceApps>()(
-  '@spendle/server/spaces/Space/SpaceApps',
-  {
-    lookup: (spaceId: string) =>
-      Layer.unwrap(
-        Effect.gen(function* () {
-          const directory = yield* SpaceDirectory
-          const space = yield* directory.space(spaceId)
-          if (Option.isNone(space)) {
-            return yield* Effect.die(`Unknown space ${spaceId}`)
-          }
-          return isolated(spaceLive(directory.databasePath(space.value)))
-        }),
-      ),
-    idleTimeToLive: Duration.infinity,
-  },
-) {}
-
-/**
- * Runs `effect` with a space's services. A space that fails to build (its
- * database locked or unreadable) is dropped from the map, so the next use
- * builds it again instead of repeating the failure until a restart.
- */
-export const withSpace = <A, E, R>(
-  spaceId: string,
-  effect: Effect.Effect<A, E, R>,
+export const spaceLive = <E, R>(
+  database: Layer.Layer<SqlClient.SqlClient, E, R>,
 ) =>
-  Effect.void.pipe(
-    Effect.provide(SpaceApps.get(spaceId)),
-    Effect.tapCause(() => SpaceApps.invalidate(spaceId)),
-    Effect.andThen(effect.pipe(Effect.provide(SpaceApps.get(spaceId)))),
+  Layer.effect(SpaceApp, makeApp).pipe(
+    Layer.provideMerge(spaceServices(database)),
   )
-
-/** Builds every known space at startup so their reactors run from the start. */
-export const warmSpaces = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const directory = yield* SpaceDirectory
-    const spaces = yield* directory.list
-    yield* Effect.forEach(
-      spaces,
-      (space) =>
-        withSpace(space.id, Effect.void).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logError(`Space ${space.id} failed to start`, cause),
-          ),
-        ),
-      { discard: true },
-    )
-  }),
-)

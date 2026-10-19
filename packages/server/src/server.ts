@@ -14,8 +14,7 @@ import * as Webhook from './openfinance/Webhook.ts'
 import { WebhookConfig } from './openfinance/WebhookConfig.ts'
 import { memberRoutes } from './spaces/Members.ts'
 import { spaceRoutes } from './spaces/Routes.ts'
-import { SpaceApps, warmSpaces } from './spaces/Space.ts'
-import { SpaceDirectory } from './spaces/SpaceDirectory.ts'
+import * as LocalSpaces from './spaces/LocalSpaces.ts'
 import { SpaceWebhooks, webhookRoutes } from './spaces/SpaceWebhooks.ts'
 
 const HttpServerLive = Layer.unwrap(
@@ -39,10 +38,13 @@ const SharedLive = Layer.mergeAll(
 export const ServerLive = HttpRouter.serve(
   Layer.mergeAll(spaceRoutes, memberRoutes, webhookRoutes),
 ).pipe(
-  Layer.provideMerge(Layer.mergeAll(warmSpaces, Webhook.registration)),
+  Layer.provideMerge(
+    Layer.mergeAll(LocalSpaces.warmSpaces, Webhook.registration),
+  ),
   Layer.provideMerge(SpaceWebhooks.layer),
-  Layer.provideMerge(SpaceApps.layer),
-  Layer.provideMerge(SpaceDirectory.layer),
+  Layer.provideMerge(LocalSpaces.gateway),
+  Layer.provideMerge(LocalSpaces.SpaceApps.layer),
+  Layer.provideMerge(LocalSpaces.directory),
   Layer.provideMerge(SharedLive),
   Layer.provide(HttpServerLive),
 )

@@ -7,13 +7,13 @@ import * as Queue from 'effect/Queue'
 import * as Result from 'effect/Result'
 import * as Semaphore from 'effect/Semaphore'
 
-import { OpenFinance } from '../openfinance/OpenFinance.ts'
 import { PluggyClient } from '../openfinance/PluggyClient.ts'
 import * as Webhook from '../openfinance/Webhook.ts'
 import type { PluggyWebhook } from '../openfinance/Webhook.ts'
-import { SpaceApps, withSpace } from './Space.ts'
 import type { PendingWebhook, Space } from './SpaceDirectory.ts'
 import { SpaceDirectory } from './SpaceDirectory.ts'
+import { SpaceGateway } from './SpaceGateway.ts'
+import type { SpaceUnavailable } from './SpaceGateway.ts'
 
 // What routing could decide: the spaces an event belongs to, and whether that
 // answer is final. An answer is not final while a space or Pluggy could not
@@ -26,17 +26,17 @@ interface Destination {
 const make = Effect.gen(function* () {
   const directory = yield* SpaceDirectory
   const pluggy = yield* PluggyClient
-  const spaceApps = yield* SpaceApps
+  const gateway = yield* SpaceGateway
   const wake = yield* Queue.unbounded<void>()
   const lock = yield* Semaphore.make(1)
 
   // Asks every space; a space that fails counts as unknown, not as "no".
-  const ask = <E>(
+  const ask = (
     spaces: ReadonlyArray<Space>,
-    question: Effect.Effect<boolean, E, OpenFinance>,
+    question: (spaceId: string) => Effect.Effect<boolean, SpaceUnavailable>,
   ) =>
     Effect.forEach(spaces, (space) =>
-      withSpace(space.id, question).pipe(
+      question(space.id).pipe(
         Effect.map((yes) => ({ space, answer: Option.some(yes) })),
         Effect.catchCause((cause) =>
           Effect.logError(`Space ${space.id} could not be asked`, cause).pipe(
@@ -63,17 +63,14 @@ const make = Effect.gen(function* () {
    */
   const destinationOf = Effect.fnUntraced(function* (
     webhook: PluggyWebhook,
-  ): Effect.fn.Return<Destination, never, SpaceApps> {
+  ): Effect.fn.Return<Destination> {
     const itemId = webhook.itemId
     if (itemId === undefined) return { spaces: [], final: true }
     const spaces = yield* directory.list
     if (webhook.event === 'item/deleted') return { spaces, final: true }
 
-    const holding = yield* ask(
-      spaces,
-      OpenFinance.use((openFinance) =>
-        openFinance.connectionByItem(itemId),
-      ).pipe(Effect.map(Option.isSome)),
+    const holding = yield* ask(spaces, (spaceId) =>
+      gateway.holdsItem(spaceId, itemId),
     )
     // Item ids are Pluggy's, so a holder found is the only one.
     if (holding.yes.length > 0) return { spaces: holding.yes, final: true }
@@ -91,12 +88,8 @@ const make = Effect.gen(function* () {
     }
     const requester = item.success.clientUserId
     if (!requester) return { spaces: [], final: holding.complete }
-    const requesting = yield* ask(
-      spaces,
-      OpenFinance.use((openFinance) => openFinance.connection(requester)).pipe(
-        Effect.as(true),
-        Effect.catchTag('OpenFinanceError', () => Effect.succeed(false)),
-      ),
+    const requesting = yield* ask(spaces, (spaceId) =>
+      gateway.hasConnection(spaceId, requester),
     )
     // Connection ids are unique, so a requester found is the only one.
     return {
@@ -119,7 +112,7 @@ const make = Effect.gen(function* () {
     // Each space independently: one that fails keeps the event for a retry
     // without holding back the others. Stores are idempotent by event id.
     const stored = yield* Effect.forEach(destination.spaces, (space) =>
-      withSpace(space.id, Webhook.storeWebhook(delivery.value)).pipe(
+      gateway.storeWebhook(space.id, pending.payload).pipe(
         Effect.as(true),
         Effect.catchCause((cause) =>
           Effect.logError(
@@ -155,7 +148,7 @@ const make = Effect.gen(function* () {
         )
         if (!done && pending.itemId !== null) waiting.add(pending.itemId)
       }
-    }).pipe(Effect.provideService(SpaceApps, spaceApps)),
+    }),
   )
 
   /** Validates a delivery and keeps it in the inbox; routing happens after. */
