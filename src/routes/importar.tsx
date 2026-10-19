@@ -271,7 +271,7 @@ function ImportPage() {
                 Arraste arquivos aqui ou clique para selecionar
               </span>
               <span className="text-xs text-muted-foreground">
-                OFX, CSV ou PDF · 20 MB cada
+                OFX, CSV ou PDF · 1,5 MB cada
               </span>
               <Input
                 type="file"

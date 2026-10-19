@@ -7,6 +7,7 @@ import * as Queue from 'effect/Queue'
 import * as Result from 'effect/Result'
 import * as Semaphore from 'effect/Semaphore'
 
+import { Polling } from '../events/Reactor.ts'
 import { PluggyClient } from '../openfinance/PluggyClient.ts'
 import * as Webhook from '../openfinance/Webhook.ts'
 import type { PluggyWebhook } from '../openfinance/Webhook.ts'
@@ -170,16 +171,22 @@ const make = Effect.gen(function* () {
     } satisfies Webhook.WebhookResult
   })
 
-  // Routes on each delivery, and again every minute for what had to wait. A
-  // pass that fails (the control database busy, say) is logged and the next
-  // one runs as usual; only interruption stops the loop.
+  // Routes on each delivery, and again every minute for what had to wait
+  // (unless `Polling` is off and the caller retries). A pass that fails (the
+  // control database busy, say) is logged and the next one runs as usual;
+  // only interruption stops the loop.
+  const polling = yield* Polling
   yield* drain.pipe(
     Effect.catchCause((cause) =>
       Cause.hasInterruptsOnly(cause)
         ? Effect.failCause(cause)
         : Effect.logError('Webhook routing failed; retrying', cause),
     ),
-    Effect.andThen(Queue.take(wake).pipe(Effect.timeoutOption('1 minute'))),
+    Effect.andThen(
+      polling
+        ? Queue.take(wake).pipe(Effect.timeoutOption('1 minute'))
+        : Queue.take(wake),
+    ),
     Effect.forever,
     Effect.forkScoped,
   )

@@ -8,10 +8,15 @@ export { Space } from './Space.ts'
 /**
  * The Worker: the web app answers every request but Pluggy's webhook, the
  * one API route the internet reaches, which goes to the control object.
+ * Only its POST: any other method would fall through to the control
+ * object's `/api` routes, which trust the member header the web app sets.
  */
 export default {
   fetch(request) {
-    if (new URL(request.url).pathname === webhookPath) {
+    if (
+      request.method === 'POST' &&
+      new URL(request.url).pathname === webhookPath
+    ) {
       return env.CONTROL.getByName('control').fetch(request)
     }
     return handler.fetch(request)

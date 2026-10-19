@@ -59,6 +59,17 @@ const retrySchedule = Schedule.min([
   Schedule.spaced(Duration.minutes(1)),
 ])
 
+/**
+ * Whether background loops also run on timers: reactors sweeping for other
+ * writers and retrying failures, Pluggy deliveries being routed again. A
+ * Durable Object turns this off, since a pending timer keeps it in memory and
+ * billed; its alarm finishes and retries that work instead.
+ */
+export const Polling = Context.Reference<boolean>(
+  '@spendle/server/events/Reactor/Polling',
+  { defaultValue: () => true },
+)
+
 export class Reactors extends Context.Service<
   Reactors,
   ReactorsShape & {
@@ -124,6 +135,7 @@ export const layer = <E, R>(spec: ReactorSpec<E, R>) =>
       const sql = yield* SqlClient.SqlClient
       const log = yield* EventLog
       const reactors = yield* Reactors
+      const polling = yield* Polling
       const context = yield* Effect.context<R>()
       const types = new Set(spec.types)
       const lock = yield* Semaphore.make(1)
@@ -195,8 +207,9 @@ export const layer = <E, R>(spec: ReactorSpec<E, R>) =>
       )
 
       // The background loop must outlive any failure but shutdown: defects
-      // (a thrown handler, a failed COMMIT) are retried like typed errors.
-      const resilientCatchUp = catchUp.pipe(
+      // (a thrown handler, a failed COMMIT) are handled like typed errors,
+      // retried here or, without polling, left for the next wake or drain.
+      const loggedCatchUp = catchUp.pipe(
         Effect.catchCause((cause) =>
           Cause.hasInterruptsOnly(cause)
             ? Effect.failCause(cause)
@@ -208,12 +221,17 @@ export const layer = <E, R>(spec: ReactorSpec<E, R>) =>
               ),
         ),
         Effect.tapError((error) => Effect.logError(error.message, error.cause)),
-        Effect.retry(retrySchedule),
       )
-      const wake = log.appended.pipe(
-        Stream.merge(Stream.tick(sweepInterval)),
-        Stream.runForEach(() => resilientCatchUp),
-      )
+      const wake = polling
+        ? log.appended.pipe(
+            Stream.merge(Stream.tick(sweepInterval)),
+            Stream.runForEach(() =>
+              loggedCatchUp.pipe(Effect.retry(retrySchedule)),
+            ),
+          )
+        : log.appended.pipe(
+            Stream.runForEach(() => Effect.ignore(loggedCatchUp)),
+          )
       yield* Effect.forkScoped(wake)
     }),
   )

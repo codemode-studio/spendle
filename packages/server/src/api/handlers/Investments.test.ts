@@ -350,4 +350,48 @@ describe('investments API', () => {
         ),
       ),
   )
+
+  it.effect('lists unplaced movements older than a page of placed ones', () =>
+    Effect.gen(function* () {
+      const { client, brokerage, typed } = yield* setup
+      // 202 daily contributions; the newest 201 are placed, more than the
+      // 200 movements a page reads, so only the oldest is left.
+      const created = yield* Effect.forEach(
+        Array.from({ length: 202 }, (_, day) => day),
+        (day) =>
+          typed(
+            brokerage.id,
+            DateTime.formatIsoDate(
+              DateTime.add(DateTime.makeUnsafe('2026-01-01'), { days: day }),
+            ),
+            10_000,
+            `Aporte ${day}`,
+          ),
+      )
+      yield* drain
+      const { positionId } = yield* client.investments.classify({
+        payload: {
+          entryId: created[201]!.entryId!,
+          newPosition: {
+            name: 'Tesouro Selic 2029',
+            assetClassId: 'fixed-income',
+            reserve: false,
+          },
+        },
+      })
+      yield* Effect.forEach(created.slice(1, 201), (movement) =>
+        client.investments.classify({
+          payload: { entryId: movement.entryId!, positionId },
+        }),
+      )
+      const snapshot = yield* client.investments.snapshot({ query: {} })
+      assert.deepStrictEqual(
+        {
+          movements: snapshot.positions[0]!.movements.length,
+          available: snapshot.available.map((entry) => entry.description),
+        },
+        { movements: 201, available: ['Aporte 0'] },
+      )
+    }).pipe(Effect.provide(apiTest())),
+  )
 })

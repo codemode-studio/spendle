@@ -10,6 +10,7 @@ import * as SqlSchema from 'effect/sql/SqlSchema'
 
 import { today } from '../domain/LocalDate.ts'
 import { addEndpoints, covering, holders } from '../ledger/Followed.ts'
+import { inChunks } from '../persistence/Chunks.ts'
 import { toBrlCents } from '../rates/Conversion.ts'
 import { ExchangeRates } from '../rates/ExchangeRates.ts'
 import { valuePosition } from './Valuation.ts'
@@ -89,6 +90,11 @@ const ClassRow = Schema.Struct({
   name: Schema.String,
   color: Schema.String,
 })
+
+// A snapshot lists at most `availableLimit` unplaced brokerage movements,
+// reading them `availablePage` at a time.
+const availableLimit = 100
+const availablePage = 200
 
 const isBrokerage = (account: { kind: string; purpose: string }) =>
   account.kind === 'investment' || account.purpose === 'investment'
@@ -172,13 +178,13 @@ const make = Effect.gen(function* () {
     e.currency, e.description, e.status
   `
   const entriesIn = (ids: ReadonlyArray<string>) =>
-    ids.length === 0
-      ? Effect.succeed([] as ReadonlyArray<typeof EntryRow.Type>)
-      : sql`
-          SELECT ${entryColumns} FROM ledger_entries e WHERE ${sql.in('e.id', ids)}
-        `.pipe(
-          Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(EntryRow))),
-        )
+    inChunks(ids, (chunk) =>
+      sql`
+        SELECT ${entryColumns} FROM ledger_entries e WHERE ${sql.in('e.id', chunk)}
+      `.pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(EntryRow))),
+      ),
+    )
   const findEntry = SqlSchema.findOneOption({
     Request: Schema.String,
     Result: EntryRow,
@@ -291,18 +297,24 @@ const make = Effect.gen(function* () {
       (account) => isBrokerage(account) && !account.archived,
     )
     const brokerageIds = new Set(brokerage.map((account) => account.id))
-    const available =
-      brokerageIds.size === 0
-        ? []
-        : yield* sql`
-            SELECT ${entryColumns} FROM ledger_entries e
-            WHERE ${sql.in('e.account_id', [...brokerageIds])} AND e.amount_cents <> 0
-              ${placed.byEntry.size === 0 ? sql`` : sql`AND e.id NOT IN ${sql.in([...placed.byEntry.keys()])}`}
-            ORDER BY e.booked_on DESC, e.id DESC
-            LIMIT 100
-          `.pipe(
-            Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(EntryRow))),
-          )
+    // The newest 100 brokerage movements not yet placed. Placed ones are
+    // skipped here, page by page, rather than listed in the query: they grow
+    // past the parameters a Durable Object's SQLite binds.
+    const available: Array<typeof EntryRow.Type> = []
+    let after: typeof EntryRow.Type | undefined
+    while (brokerageIds.size > 0 && available.length < availableLimit) {
+      const page = yield* sql`
+        SELECT ${entryColumns} FROM ledger_entries e
+        WHERE ${sql.in('e.account_id', [...brokerageIds])} AND e.amount_cents <> 0
+          ${after === undefined ? sql`` : sql`AND (e.booked_on, e.id) < (${after.bookedOn}, ${after.id})`}
+        ORDER BY e.booked_on DESC, e.id DESC
+        LIMIT ${availablePage}
+      `.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(EntryRow))))
+      available.push(...page.filter((entry) => !placed.byEntry.has(entry.id)))
+      if (page.length < availablePage) break
+      after = page.at(-1)
+    }
+    available.splice(availableLimit)
 
     const totals = new Map<
       string,

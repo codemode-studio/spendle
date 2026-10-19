@@ -1,5 +1,6 @@
 import * as Effect from 'effect/Effect'
 import * as HttpClient from 'effect/http/HttpClient'
+import * as HttpClientError from 'effect/http/HttpClientError'
 import * as HttpClientRequest from 'effect/http/HttpClientRequest'
 import * as HttpApiClient from 'effect/http-api/HttpApiClient'
 import * as Predicate from 'effect/Predicate'
@@ -81,6 +82,15 @@ const toApiRequestError = (error: unknown): ApiRequestError => {
         ? error.detail
         : null
     return new ApiRequestError(error._tag, error.reason, detail)
+  }
+  // The API refuses an upload past its size limit before reading it, so the
+  // 413 carries no failure body.
+  if (
+    HttpClientError.isHttpClientError(error) &&
+    'response' in error.reason &&
+    error.reason.response.status === 413
+  ) {
+    return new ApiRequestError('InvalidRequest', 'file_too_large', null)
   }
   // Transport failures (server down, refused connection) and responses the
   // contract cannot decode both mean the app cannot reach a compatible API.

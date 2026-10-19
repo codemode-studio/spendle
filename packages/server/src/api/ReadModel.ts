@@ -8,6 +8,7 @@ import * as SqlSchema from 'effect/sql/SqlSchema'
 
 import type { Account } from '../ledger/Accounts.ts'
 import { entryNotes } from '../ledger/Notes.ts'
+import { inChunks } from '../persistence/Chunks.ts'
 import { baseCurrency, convert } from '../rates/Conversion.ts'
 import type { RateTable } from '../rates/Conversion.ts'
 import { ExchangeRates } from '../rates/ExchangeRates.ts'
@@ -381,12 +382,15 @@ const make = Effect.gen(function* () {
   const entriesById = Effect.fn('ReadModel.entriesById')(function* (
     ids: ReadonlyArray<string>,
   ) {
-    if (ids.length === 0) return new Map<string, Entry>()
-    const rows = yield* sql`
-      SELECT ${entryColumns}
-      FROM ${entrySource}
-      WHERE ${sql.in('e.id', [...new Set(ids)])}
-    `.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(EntryRow))))
+    const rows = yield* inChunks([...new Set(ids)], (chunk) =>
+      sql`
+        SELECT ${entryColumns}
+        FROM ${entrySource}
+        WHERE ${sql.in('e.id', chunk)}
+      `.pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(EntryRow))),
+      ),
+    )
     const entries = yield* toEntries(rows)
     return new Map(entries.map((entry) => [entry.id, entry]))
   })

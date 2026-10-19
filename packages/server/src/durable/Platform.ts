@@ -14,6 +14,7 @@ import * as HttpPlatform from 'effect/http/HttpPlatform'
 import type * as HttpServerResponse from 'effect/http/HttpServerResponse'
 
 import { ApiConfig } from '../api/ApiConfig.ts'
+import { Polling } from '../events/Reactor.ts'
 import { PluggyClient } from '../openfinance/PluggyClient.ts'
 import { WebhookConfig } from '../openfinance/WebhookConfig.ts'
 
@@ -102,6 +103,8 @@ export const layer = Layer.mergeAll(
   HttpPlatform.layer,
   Etag.layerWeak,
   ServerWide,
+  // The object's alarm drains and retries instead; see `Polling`.
+  Layer.succeed(Polling, false),
 ).pipe(
   Layer.provideMerge(Layer.mergeAll(memoryFileSystem, webCrypto, Path.layer)),
 )

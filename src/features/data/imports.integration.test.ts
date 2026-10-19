@@ -67,6 +67,23 @@ it('previews a statement, records it once and lists the import', async () => {
   })
 })
 
+it('refuses a file past the size limit with a message the page can show', async () => {
+  const account = await openChecking()
+  const failure = await api((client) =>
+    client.imports.preview({
+      payload: statementUpload(
+        account.id,
+        balanced + ' '.repeat(1_600_000),
+        'large.ofx',
+      ),
+    }),
+  ).catch((error: unknown) => error)
+  expect(failure).toMatchObject({
+    reason: 'file_too_large',
+    message: 'O arquivo passa de 1,5 MB, o limite por extrato.',
+  })
+})
+
 it('refuses a file that is not a statement with a reason the page can show', async () => {
   const account = await openChecking()
   const failure = await api((client) =>
