@@ -6,11 +6,15 @@ import * as HttpApiSchema from 'effect/http-api/HttpApiSchema'
 
 import { EndpointErrors } from './Errors.ts'
 
-/** A statement file (OFX, CSV or PDF) for an account, as `multipart/form-data`. */
+/**
+ * A statement file (OFX, CSV or PDF) for an account, as `multipart/form-data`.
+ * The file is kept whole in one row, and a Durable Object's SQLite takes rows
+ * of up to 2 MB: hence the limit, with room for the row's other columns.
+ */
 export const StatementUpload = Schema.Struct({
   accountId: Schema.String,
   file: Multipart.SingleFileSchema,
-}).pipe(HttpApiSchema.asMultipart({ maxFileSize: '20 MB', maxParts: 2 }))
+}).pipe(HttpApiSchema.asMultipart({ maxFileSize: '1500 kB', maxParts: 2 }))
 
 export const ImportFormat = Schema.Literals(['ofx', 'csv', 'pdf'])
 

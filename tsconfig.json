@@ -1,6 +1,16 @@
 {
   "include": ["**/*.ts", "**/*.tsx", "vite.config.js"],
-  "exclude": ["node_modules", "data", ".qa", "dist", "packages", ".repos"],
+  "exclude": [
+    "node_modules",
+    "data",
+    ".qa",
+    "dist",
+    "packages",
+    ".repos",
+    ".cloudflare",
+    // Typed against the Workers runtime by packages/cloudflare.
+    "src/platform/cloudflare"
+  ],
 
   "compilerOptions": {
     "target": "ES2022",

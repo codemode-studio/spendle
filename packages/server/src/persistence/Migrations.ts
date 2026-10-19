@@ -1,4 +1,4 @@
-import * as SqliteMigrator from '@effect/sql-sqlite-node/SqliteMigrator'
+import * as Migrator from 'effect/sql/Migrator'
 
 import EventLog from './Migrations/0001_event_log.ts'
 import Ledger from './Migrations/0002_ledger.ts'
@@ -35,6 +35,7 @@ export const migrations = {
   '0014_classifier_context': ClassifierContext,
 }
 
-export const runMigrations = SqliteMigrator.run({
-  loader: SqliteMigrator.fromRecord(migrations),
+// The generic migrator, so the same migrations run on any SQLite client.
+export const runMigrations = Migrator.make({})({
+  loader: Migrator.fromRecord(migrations),
 })

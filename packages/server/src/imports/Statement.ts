@@ -69,7 +69,9 @@ export type StatementProblem =
  */
 export const decodeUndeclared = (bytes: Uint8Array) => {
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(
+      bytes,
+    )
   } catch {
     return new TextDecoder('windows-1252').decode(bytes)
   }

@@ -48,10 +48,23 @@ O cliente abre o login sozinho. Você entra com Google e aprova o aplicativo em 
 
 ## Onde ficam os dados
 
+Na sua máquina:
+
 - `data/v2/`: um banco por espaço familiar, com os dados financeiros.
 - `data/auth/auth.sqlite`: pessoas, sessões e aplicativos MCP aprovados (`SPENDLE_AUTH_DATABASE_PATH`).
 
-As duas pastas ficam fora do Git. Fatos vindos de bancos e arquivos nunca são alterados, e suas decisões ficam guardadas. Todo o resto pode ser recalculado a partir dos dois.
+As duas pastas ficam fora do Git. Em produção, cada espaço é um Durable Object com o próprio SQLite e o Better Auth usa o D1 `spendle-auth` (veja [Publicar](#publicar)). Fatos vindos de bancos e arquivos nunca são alterados, e suas decisões ficam guardadas. Todo o resto pode ser recalculado a partir dos dois.
+
+## Publicar
+
+A produção é um Worker da Cloudflare, `spendle`, em `https://spendle.codemode.studio` ([ADR 004](./plans/adrs/004-cloudflare-workers.md)). `vp run build` gera o Worker; `vp run dev` continua no Node, com a API de `packages/server`.
+
+- **Deploy:** o workflow `Deploy` publica cada commit de `main` depois que o `Verify` passa, com os segredos `CLOUDFLARE_API_TOKEN` e `CLOUDFLARE_ACCOUNT_ID` do repositório. À mão: `vp run build && vp run deploy`, com o `cf` autenticado.
+- **Configuração:** `cloudflare.config.ts` declara o Worker, os Durable Objects (`Control` e um `Space` por espaço), o D1 `spendle-auth`, as variáveis públicas e os segredos que ele espera.
+- **Segredos:** ficam na Cloudflare e passam de uma versão para a próxima; `cf workers secrets list --worker spendle` lista os nomes. Para trocar um: `cf workers secrets update <NOME> --worker spendle --type secret_text --text <valor>`, ou `cf deploy --secrets-file <arquivo>` junto com um deploy.
+- **Google:** o cliente OAuth precisa listar `https://spendle.codemode.studio/api/auth/callback/google`.
+- **Pluggy:** o servidor registra o webhook `https://spendle.codemode.studio/api/pluggy/webhook` na primeira requisição do objeto `Control` depois de cada deploy.
+- **Testar o Worker localmente:** crie `.dev.vars.qa` com segredos sintéticos (`BETTER_AUTH_URL=http://127.0.0.1:4791`, `BETTER_AUTH_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SPENDLE_ALLOWED_EMAILS=qa@spendle.local`, `SPENDLE_QA_SIGN_IN_TOKEN`) e rode `vp build --mode qa`, depois `vp preview --mode qa --port 4791`. Ele roda no workerd com o estado em `.cloudflare/state/`, e `/api/auth/qa/sign-in?token=<SPENDLE_QA_SIGN_IN_TOKEN>` faz login.
 
 ## Desenvolvimento
 

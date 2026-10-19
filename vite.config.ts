@@ -1,4 +1,7 @@
+import { fileURLToPath } from 'node:url'
+
 import { defineConfig, loadEnv, lazyPlugins } from 'vite-plus'
+import { cloudflare } from '@cloudflare/vite-plugin'
 import { devtools } from '@tanstack/devtools-vite'
 
 import { tanstackStart } from '@tanstack/react-start/plugin/vite'
@@ -6,7 +9,13 @@ import { tanstackStart } from '@tanstack/react-start/plugin/vite'
 import viteReact from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-const config = defineConfig(({ mode }) => {
+const config = defineConfig(({ command, mode, isPreview }) => {
+  // `vp run dev` (and QA) runs the web app on Node against the Node API
+  // server. Builds are for Cloudflare Workers, and `vp preview` runs them in
+  // the local Workers runtime: the Worker in `packages/cloudflare` wraps the
+  // app, and `src/platform` modules are swapped for the ones that use its
+  // bindings.
+  const workers = command === 'build' || isPreview === true
   // Server code reads these from process.env; Vite only exposes .env files to
   // import.meta.env, so copy the server-side ones over. None reach the client.
   const env = loadEnv(mode, process.cwd(), [
@@ -101,7 +110,19 @@ const config = defineConfig(({ mode }) => {
         },
       ],
     },
-    resolve: { tsconfigPaths: true },
+    resolve: {
+      tsconfigPaths: true,
+      alias: workers
+        ? [
+            {
+              find: /^#\/platform\/(.*)$/,
+              replacement: fileURLToPath(
+                new URL('./src/platform/cloudflare/$1.ts', import.meta.url),
+              ),
+            },
+          ]
+        : [],
+    },
     // `vp run dev` binds to the Tailscale address. Allow the MagicDNS name and
     // Cloudflare quick tunnels too; Vite rejects unknown Host headers by default.
     server: { allowedHosts: ['.ts.net', '.trycloudflare.com'] },
@@ -110,6 +131,7 @@ const config = defineConfig(({ mode }) => {
       // the browser creates a feedback loop that can fill the disk with logs.
       devtools({ consolePiping: { enabled: false } }),
       tailwindcss(),
+      ...(workers ? [cloudflare({ viteEnvironment: { name: 'ssr' } })] : []),
       tanstackStart(),
       viteReact(),
     ]),

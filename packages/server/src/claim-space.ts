@@ -8,6 +8,7 @@ import * as Command from 'effect/cli/Command'
 import * as Flag from 'effect/cli/Flag'
 
 import { ServerConfig } from './config.ts'
+import * as LocalSpaces from './spaces/LocalSpaces.ts'
 import { SpaceDirectory } from './spaces/SpaceDirectory.ts'
 
 // `vp run --filter @spendle/server claim-space --email <email>`
@@ -35,7 +36,7 @@ const command = Command.make(
     'Makes the database at SPENDLE_DATABASE_PATH the family space of an account, so its data stays reachable after signing in',
   ),
   Command.provide(
-    SpaceDirectory.layer.pipe(Layer.provideMerge(ServerConfig.layer)),
+    LocalSpaces.directory.pipe(Layer.provideMerge(ServerConfig.layer)),
   ),
 )
 

@@ -38,3 +38,8 @@ jobs:
         run: vp run -r --parallel test
       - name: Build
         run: vp run build
+      # Validates the Worker build `Deploy` would upload, without credentials.
+      - name: Check deploy
+        run: vp run deploy:check
+        env:
+          CF_SEND_TELEMETRY: 'false'

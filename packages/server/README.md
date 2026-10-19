@@ -2,6 +2,8 @@
 
 Backend ([ADR 003](../../plans/adrs/003-backend-v2-effect.md)), o único backend do Spendle: o app web em `src/` o chama pelas server functions. Cada espaço familiar tem o próprio banco SQLite em `data/v2/spaces/`; `data/v2/control.sqlite` guarda os espaços e seus membros.
 
+Na produção ([ADR 004](../../plans/adrs/004-cloudflare-workers.md)) os mesmos serviços rodam em Durable Objects da Cloudflare (`src/durable`): um objeto por espaço, com o próprio SQLite, e o objeto `Control` no lugar de `control.sqlite`. O que segue descreve o servidor Node, usado no desenvolvimento e no QA.
+
 ```bash
 vp run --filter @spendle/server dev     # http://localhost:4100
 vp run --filter @spendle/server verify  # typecheck, diagnósticos Effect e testes

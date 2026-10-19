@@ -6,9 +6,11 @@ allowBuilds:
   lightningcss: true
   tsc-rs: true
   unrs-resolver: false
+  workerd: true
 
 catalog:
   '@effect/platform-node': 4.0.0
+  '@effect/sql-sqlite-do': 4.0.0
   '@effect/sql-sqlite-node': 4.0.0
   # tsc-rs ports this effect-tsgo version; keep them in step.
   '@effect/tsgo': 0.51.1
