@@ -13,12 +13,14 @@ import * as SqlSchema from 'effect/sql/SqlSchema'
 
 import Spaces from './Migrations/0001_spaces.ts'
 import SpaceWrites from './Migrations/0002_space_writes.ts'
+import StartupMarks from './Migrations/0003_startup_marks.ts'
 
 // The control database has its own migrations, separate from the ones every
 // space database runs. Append-only, like those.
 const migrations = {
   '0001_spaces': Spaces,
   '0002_space_writes': SpaceWrites,
+  '0003_startup_marks': StartupMarks,
 }
 
 export const Space = Schema.Struct({

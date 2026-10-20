@@ -45,6 +45,7 @@ export default defineConfig(({ mode }) => {
           exportName: 'Control',
         }),
         SPACES: bindings.durableObject({ worker: name, exportName: 'Space' }),
+        CF_VERSION_METADATA: bindings.versionMetadata(),
         BETTER_AUTH_URL: qa ? bindings.secret() : bindings.text(origin),
         PLUGGY_WEBHOOK_URL:
           !qa && bindings.text(`${origin}/api/pluggy/webhook`),

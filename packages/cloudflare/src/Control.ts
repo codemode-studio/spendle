@@ -3,6 +3,8 @@ import { makeControlObject, webhookPath } from '@spendle/server/durable'
 import type { ControlObject } from '@spendle/server/durable'
 import { DurableObject } from 'cloudflare:workers'
 
+import { keepAwake } from './awake.ts'
+
 // Deliveries a space could not take yet are routed again a minute later,
 // for as long as any wait.
 const retryDelay = 60_000
@@ -14,6 +16,7 @@ const retryDelay = 60_000
  */
 export class Control extends DurableObject<Cloudflare.Env> {
   readonly #control: ControlObject
+  readonly #touch = keepAwake()
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env)
@@ -27,10 +30,12 @@ export class Control extends DurableObject<Cloudflare.Env> {
           space(spaceId).hasConnection(connectionId),
         storeWebhook: (spaceId, body) => space(spaceId).storeWebhook(body),
       },
+      env.CF_VERSION_METADATA.id,
     )
   }
 
   override async fetch(request: Request) {
+    this.#touch()
     const response = await this.#control.fetch(request)
     if (
       new URL(request.url).pathname === webhookPath &&

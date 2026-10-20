@@ -2,10 +2,12 @@ import * as Context from 'effect/Context'
 import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
 import * as ManagedRuntime from 'effect/ManagedRuntime'
+import * as Option from 'effect/Option'
 import * as HttpMiddleware from 'effect/http/HttpMiddleware'
 import * as HttpRouter from 'effect/http/HttpRouter'
 import type * as SqlClient from 'effect/sql/SqlClient'
 
+import { Deployment, oncePerDeployment } from '../events/Startup.ts'
 import * as Webhook from '../openfinance/Webhook.ts'
 import { memberRoutes } from '../spaces/Members.ts'
 import { spaceRoutes } from '../spaces/Routes.ts'
@@ -33,17 +35,26 @@ class ControlApp extends Context.Service<
 export const makeControlObject = <E>(
   database: Layer.Layer<SqlClient.SqlClient, E>,
   spaces: RemoteSpaces,
+  /** The Worker version, so startup work runs once per deployment. */
+  deployment?: string,
 ) => {
   const runtime = ManagedRuntime.make(
     Layer.effect(ControlApp, makeApp).pipe(
-      // Pluggy keeps one subscription per URL, so registering again on each
-      // cold start only refreshes it.
-      Layer.provideMerge(Webhook.registration),
+      // Pluggy keeps one subscription per URL; a new deployment may bring a
+      // new URL or secret, so each one refreshes it once.
+      Layer.provideMerge(
+        Webhook.registrationWith(
+          oncePerDeployment('pluggy-webhook', Webhook.subscribe),
+        ),
+      ),
       Layer.provideMerge(SpaceWebhooks.layer),
       Layer.provideMerge(SpaceGateway.remote(spaces)),
       Layer.provideMerge(SpaceDirectory.layerClient),
       Layer.provideMerge(database),
       Layer.provideMerge(Platform.layer),
+      Layer.provideMerge(
+        Layer.succeed(Deployment, Option.fromNullishOr(deployment)),
+      ),
     ),
   )
   const handler = runtime

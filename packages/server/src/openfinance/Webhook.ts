@@ -456,20 +456,29 @@ export const reactor = Reactor.layer({
     }),
 })
 
-/** Subscribes the configured URL at Pluggy on startup. Failure is logged, not fatal. */
-export const registration = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const settings = yield* WebhookConfig
-    if (Option.isNone(settings)) return
-    const pluggy = yield* PluggyClient
-    yield* pluggy.ensureWebhook(settings.value).pipe(
-      Effect.tap(() =>
-        Effect.logInfo(`Pluggy webhook registered at ${settings.value.url}`),
-      ),
+/** Subscribes the configured URL at Pluggy, when one is configured. */
+export const subscribe = Effect.gen(function* () {
+  const settings = yield* WebhookConfig
+  if (Option.isNone(settings)) return
+  yield* (yield* PluggyClient).ensureWebhook(settings.value)
+  yield* Effect.logInfo(`Pluggy webhook registered at ${settings.value.url}`)
+})
+
+/**
+ * Runs `subscription` (`subscribe`, possibly guarded) in the background for
+ * the layer's lifetime. Failure is logged, not fatal.
+ */
+export const registrationWith = <E, R>(
+  subscription: Effect.Effect<void, E, R>,
+) =>
+  Layer.effectDiscard(
+    subscription.pipe(
       Effect.catch((error) =>
         Effect.logError('Pluggy webhook registration failed', error),
       ),
       Effect.forkScoped,
-    )
-  }),
-)
+    ),
+  )
+
+/** Subscribes the configured URL at Pluggy on startup. */
+export const registration = registrationWith(subscribe)

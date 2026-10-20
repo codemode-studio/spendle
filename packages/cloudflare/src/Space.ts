@@ -3,6 +3,8 @@ import { makeSpaceObject } from '@spendle/server/durable'
 import type { SpaceObject } from '@spendle/server/durable'
 import { DurableObject } from 'cloudflare:workers'
 
+import { keepAwake } from './awake.ts'
+
 // Reactors handle new events while the object is in memory; the alarm makes
 // sure they finish after it would otherwise be evicted, and retries a failed
 // pass (Pluggy down, say) a minute later.
@@ -12,13 +14,18 @@ const retryDelay = 60_000
 /** One family space: its database, services, reactors and `/api`. */
 export class Space extends DurableObject<Cloudflare.Env> {
   readonly #space: SpaceObject
+  readonly #touch = keepAwake()
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env)
-    this.#space = makeSpaceObject(SqliteClient.layer({ storage: ctx.storage }))
+    this.#space = makeSpaceObject(
+      SqliteClient.layer({ storage: ctx.storage }),
+      env.CF_VERSION_METADATA.id,
+    )
   }
 
   override async fetch(request: Request) {
+    this.#touch()
     try {
       return await this.#space.fetch(request)
     } finally {
