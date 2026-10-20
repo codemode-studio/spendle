@@ -20,7 +20,12 @@ export default defineConfig(({ mode }) => {
       compatibilityDate: '2026-10-01',
       // TanStack Start and Better Auth need Node's APIs; the flag also fills
       // `process.env` from the variables and secrets below.
-      compatibilityFlags: ['nodejs_compat'],
+      // `global_fetch_strictly_public` sends a `fetch()` to our own domain
+      // back through Cloudflare's front door to this Worker. Without it the
+      // request goes to the zone's origin, which a Worker on a Custom Domain
+      // doesn't have (522), and the MCP endpoint verifies each token against
+      // `/api/auth/jwks` on its own domain.
+      compatibilityFlags: ['nodejs_compat', 'global_fetch_strictly_public'],
       // Served only on its own domain: Better Auth signs people in on
       // `BETTER_AUTH_URL`, so a workers.dev copy would only show the sign-in.
       domains: qa ? [] : [new URL(origin).hostname],
