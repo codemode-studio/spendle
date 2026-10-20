@@ -291,7 +291,7 @@ const make = Effect.gen(function* () {
             ]),
       ])}
       ORDER BY e.booked_on DESC, e.id DESC
-      LIMIT ${limit + 1}
+      LIMIT ${limit + 1} OFFSET ${filters.offset ?? 0}
     `.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(EntryRow))))
     const counted = yield* sql<{ total: number }>`
       SELECT count(*) AS total
@@ -307,6 +307,28 @@ const make = Effect.gen(function* () {
       total: counted[0]?.total ?? 0,
     })
   })
+
+  // The same category conditions `entriesPage` filters `categoryStatus` by.
+  const findCounts = SqlSchema.findOne({
+    Request: Schema.Void,
+    Result: Schema.Struct({
+      total: Schema.Int,
+      review: Schema.Int,
+      uncategorized: Schema.Int,
+    }),
+    execute: () => sql`
+      SELECT count(*) AS total,
+        coalesce(sum(c.status = 'review'), 0) AS review,
+        coalesce(sum(c.entry_id IS NULL OR c.status = 'none'), 0) AS uncategorized
+      FROM ledger_entries e
+      LEFT JOIN category_inferences c ON c.entry_id = e.id
+    `,
+  })
+
+  /** Every entry, and those waiting on a category decision, in one query. */
+  const entryCounts = findCounts(undefined).pipe(
+    Effect.withSpan('ReadModel.entryCounts'),
+  )
 
   const findEntry = SqlSchema.findOneOption({
     Request: Schema.String,
@@ -395,7 +417,14 @@ const make = Effect.gen(function* () {
     return new Map(entries.map((entry) => [entry.id, entry]))
   })
 
-  return { accountViews, accountView, entriesPage, entryDetail, entriesById }
+  return {
+    accountViews,
+    accountView,
+    entriesPage,
+    entryCounts,
+    entryDetail,
+    entriesById,
+  }
 })
 
 export class ReadModel extends Context.Service<

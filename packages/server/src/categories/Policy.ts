@@ -1,6 +1,6 @@
 import type { FollowedCategoryDecisions } from './FollowDecisions.ts'
 import { knowledgeExactPatterns, knowledgeKey } from './Patterns.ts'
-import type { Direction } from './Patterns.ts'
+import type { Direction, KnowledgeKey } from './Patterns.ts'
 import {
   builtInProviderCategories,
   pluggyProvider,
@@ -345,16 +345,37 @@ export const categorize = (input: PolicyInput): ReadonlyArray<Inference> => {
     return proposals
   }
 
+  // Descriptions repeat across a history (every ride, every month of a
+  // subscription), so each is read once. A key depends on the description
+  // and the amount's sign alone.
+  const keys = new Map<string, KnowledgeKey | null>()
+  const keyOf = (entry: PolicyEntry) => {
+    const id = `${Math.sign(entry.amountCents)}|${entry.description}`
+    let key = keys.get(id)
+    if (key === undefined) {
+      key = knowledgeKey(entry)
+      keys.set(id, key)
+    }
+    return key
+  }
+  const exactPatterns = new Map<string, ReadonlyArray<string>>()
+  const exactPatternsOf = (description: string) => {
+    let patterns = exactPatterns.get(description)
+    if (patterns === undefined) {
+      patterns = knowledgeExactPatterns(description)
+      exactPatterns.set(description, patterns)
+    }
+    return patterns
+  }
+
   const learned = (entry: PolicyEntry): ReadonlyArray<Proposal> => {
-    const key = knowledgeKey(entry)
+    const key = keyOf(entry)
     if (key === null) return []
     const proposals: Array<Proposal> = []
-    const hits = knowledgeExactPatterns(entry.description).flatMap(
-      (pattern) => {
-        const row = exact.get(`${pattern}|${key.direction}`)
-        return row ? [row] : []
-      },
-    )
+    const hits = exactPatternsOf(entry.description).flatMap((pattern) => {
+      const row = exact.get(`${pattern}|${key.direction}`)
+      return row ? [row] : []
+    })
     const [first] = hits
     if (first) {
       const disagree = hits.some((hit) => hit.categoryId !== first.categoryId)
@@ -463,7 +484,7 @@ export const categorize = (input: PolicyInput): ReadonlyArray<Inference> => {
 
   const modelled = (entry: PolicyEntry): ReadonlyArray<Proposal> => {
     const model = input.model
-    const key = knowledgeKey(entry)
+    const key = keyOf(entry)
     if (model === undefined || key === null) return []
     const answer = model.answers.get(`${key.pattern}|${key.direction}`)
     if (

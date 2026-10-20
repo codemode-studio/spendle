@@ -35,10 +35,8 @@ import {
   recordCheckpointFn,
   withdrawCheckpointFn,
 } from '#/features/data/manual.functions'
-import {
-  balanceProofOptions,
-  invalidateAfterReactors,
-} from '#/features/data/queries'
+import { balanceProofOptions } from '#/features/data/queries'
+import { invalidateFinance } from '#/features/finance/queries'
 import { errorMessage } from '#/lib/api/errors'
 
 /**
@@ -66,7 +64,7 @@ export function BalanceCheckpointDialog({ account }: { account: AccountView }) {
     onSuccess: () => {
       toast.success('Saldo informado. A conferência foi refeita.')
       setOpen(false)
-      void invalidateAfterReactors(queryClient)
+      void invalidateFinance(queryClient, 'ledger')
     },
     onError: (reason) =>
       toast.error(errorMessage(reason, 'Não foi possível informar o saldo.')),
@@ -75,7 +73,7 @@ export function BalanceCheckpointDialog({ account }: { account: AccountView }) {
     mutationFn: withdraw,
     onSuccess: () => {
       toast.success('Saldo retirado da conferência.')
-      void invalidateAfterReactors(queryClient)
+      void invalidateFinance(queryClient, 'ledger')
     },
     onError: (reason) =>
       toast.error(errorMessage(reason, 'Não foi possível retirar o saldo.')),

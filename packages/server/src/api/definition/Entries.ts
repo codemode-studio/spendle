@@ -87,8 +87,25 @@ export const EntryFilters = Schema.Struct({
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 })),
   ),
   cursor: Schema.optional(Schema.String),
+  /**
+   * Entries to skip before the page, for numbered pages; after `cursor` when
+   * both are given. Past the end the page is empty and `total` tells where
+   * the last page starts. The bound covers the web's millionth page of 50.
+   */
+  offset: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 50_000_000 })),
+  ),
 })
 export type EntryFilters = typeof EntryFilters.Type
+
+/** How many entries the ledger holds, and how many wait on a category decision. */
+export const EntryCounts = Schema.Struct({
+  total: Schema.Int,
+  /** The entries `categoryStatus=review` lists. */
+  review: Schema.Int,
+  /** The entries `categoryStatus=none` lists. */
+  uncategorized: Schema.Int,
+})
 
 /** One observation an entry rests on, at its latest version. */
 export const Evidence = Schema.Struct({
@@ -207,6 +224,10 @@ export class EntriesApi extends HttpApiGroup.make('entries')
     HttpApiEndpoint.get('list', '/entries', {
       query: EntryFilters,
       success: EntryPage,
+      error: EndpointErrors,
+    }),
+    HttpApiEndpoint.get('counts', '/entries/counts', {
+      success: EntryCounts,
       error: EndpointErrors,
     }),
     HttpApiEndpoint.get('get', '/entries/:entryId', {

@@ -40,12 +40,13 @@ import {
 } from '#/features/data/reconciliation.functions'
 import {
   accountsOptions,
-  invalidateAfterReactors,
   linkCandidatesOptions,
   orphanedDecisionsOptions,
+  patchRelationDecision,
   relationsOptions,
 } from '#/features/data/queries'
 import { errorMessage } from '#/lib/api/errors'
+import { invalidateFinance } from '#/features/finance/queries'
 import { cn } from '#/lib/utils'
 
 import type { Entry, Relation } from '@spendle/server/api'
@@ -104,18 +105,33 @@ export function ReconciliationReview() {
   const { data: orphaned } = useSuspenseQuery(orphanedDecisionsOptions())
   const queryClient = useQueryClient()
   const decide = useServerFn(decideRelationFn)
+  // Each pair waits only for its own decision; others stay clickable.
+  const [deciding, setDeciding] = useState<ReadonlySet<string>>(new Set())
   const mutation = useMutation({
     mutationFn: decide,
+    // The pair moves at once; the lists and the ledger catch up after.
+    onMutate: async ({ data }) => {
+      setDeciding((keys) => new Set(keys).add(data.key))
+      return { rollback: await patchRelationDecision(queryClient, data) }
+    },
     onSuccess: (decision) => {
       toast.success(
         decision.decision === 'confirmed'
           ? 'Vínculo confirmado.'
           : 'Vínculo rejeitado. Esse par não será sugerido de novo.',
       )
-      void invalidateAfterReactors(queryClient)
+      void invalidateFinance(queryClient, 'ledger')
     },
-    onError: (error) =>
-      toast.error(errorMessage(error, 'Não foi possível salvar a decisão.')),
+    onError: (error, _variables, context) => {
+      context?.rollback()
+      toast.error(errorMessage(error, 'Não foi possível salvar a decisão.'))
+    },
+    onSettled: (_decision, _error, { data }) =>
+      setDeciding((keys) => {
+        const rest = new Set(keys)
+        rest.delete(data.key)
+        return rest
+      }),
   })
   const pending = relations.filter(
     (relation) => relation.status !== 'confirmed',
@@ -123,7 +139,6 @@ export function ReconciliationReview() {
   const confirmed = relations.filter(
     (relation) => relation.status === 'confirmed',
   )
-  const decidingKey = mutation.isPending ? mutation.variables.data.key : null
 
   return (
     <>
@@ -144,7 +159,7 @@ export function ReconciliationReview() {
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={decidingKey === relation.key}
+                    disabled={deciding.has(relation.key)}
                     onClick={() =>
                       mutation.mutate({
                         data: { key: relation.key, decision: 'rejected' },
@@ -156,7 +171,7 @@ export function ReconciliationReview() {
                   </Button>
                   <Button
                     size="sm"
-                    disabled={decidingKey === relation.key}
+                    disabled={deciding.has(relation.key)}
                     onClick={() =>
                       mutation.mutate({
                         data: { key: relation.key, decision: 'confirmed' },
@@ -191,7 +206,7 @@ export function ReconciliationReview() {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={decidingKey === decision.key}
+                  disabled={deciding.has(decision.key)}
                   onClick={() =>
                     mutation.mutate({
                       data: { key: decision.key, decision: 'rejected' },
@@ -224,7 +239,7 @@ export function ReconciliationReview() {
                   variant="ghost"
                   size="sm"
                   className="shrink-0 self-start md:self-center"
-                  disabled={decidingKey === relation.key}
+                  disabled={deciding.has(relation.key)}
                   onClick={() =>
                     mutation.mutate({
                       data: { key: relation.key, decision: 'rejected' },
@@ -365,7 +380,7 @@ export function LinkEntryDialog({
       toast.success('Lançamentos vinculados.')
       setText('')
       onClose()
-      void invalidateAfterReactors(queryClient)
+      void invalidateFinance(queryClient, 'ledger')
     },
     onError: (error) =>
       toast.error(errorMessage(error, 'Não foi possível vincular.')),

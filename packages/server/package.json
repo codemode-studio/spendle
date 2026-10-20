@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     "./api": "./src/api/definition/index.ts",
-    "./durable": "./src/durable/index.ts"
+    "./durable": "./src/durable/index.ts",
+    "./routing": "./src/durable/Routing.ts"
   },
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env.local --watch src/bin.ts",

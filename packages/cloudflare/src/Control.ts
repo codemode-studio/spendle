@@ -1,5 +1,4 @@
-import * as SqliteClient from '@effect/sql-sqlite-do/SqliteClient'
-import { makeControlObject, webhookPath } from '@spendle/server/durable'
+import { webhookPath } from '@spendle/server/routing'
 import type { ControlObject } from '@spendle/server/durable'
 import { DurableObject } from 'cloudflare:workers'
 
@@ -15,28 +14,30 @@ const retryDelay = 60_000
  * space they belong to has stored them.
  */
 export class Control extends DurableObject<Cloudflare.Env> {
-  readonly #control: ControlObject
+  readonly #control: Promise<ControlObject>
   readonly #touch = keepAwake()
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env)
     const space = (spaceId: string) => env.SPACES.getByName(spaceId)
-    this.#control = makeControlObject(
-      SqliteClient.layer({ storage: ctx.storage }),
-      {
-        fetch: (spaceId, request) => space(spaceId).fetch(request),
-        holdsItem: (spaceId, itemId) => space(spaceId).holdsItem(itemId),
-        hasConnection: (spaceId, connectionId) =>
-          space(spaceId).hasConnection(connectionId),
-        storeWebhook: (spaceId, body) => space(spaceId).storeWebhook(body),
-      },
-      env.CF_VERSION_METADATA.id,
+    this.#control = import('./server.ts').then((server) =>
+      server.controlObject(
+        ctx.storage,
+        {
+          fetch: (spaceId, request) => space(spaceId).fetch(request),
+          holdsItem: (spaceId, itemId) => space(spaceId).holdsItem(itemId),
+          hasConnection: (spaceId, connectionId) =>
+            space(spaceId).hasConnection(connectionId),
+          storeWebhook: (spaceId, body) => space(spaceId).storeWebhook(body),
+        },
+        env.CF_VERSION_METADATA.id,
+      ),
     )
   }
 
   override async fetch(request: Request) {
     this.#touch()
-    const response = await this.#control.fetch(request)
+    const response = await (await this.#control).fetch(request)
     if (
       new URL(request.url).pathname === webhookPath &&
       (await this.ctx.storage.getAlarm()) === null
@@ -46,8 +47,14 @@ export class Control extends DurableObject<Cloudflare.Env> {
     return response
   }
 
+  /** The space a member's requests go to; see `ControlObject.spaceOf`. */
+  async spaceOf(member: string, write: boolean) {
+    this.#touch()
+    return (await this.#control).spaceOf(member, write)
+  }
+
   override async alarm() {
-    if (await this.#control.drainWebhooks()) {
+    if (await (await this.#control).drainWebhooks()) {
       await this.ctx.storage.setAlarm(Date.now() + retryDelay)
     }
   }

@@ -24,7 +24,14 @@ import {
   stripSearchParams,
 } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import { Fragment, useDeferredValue, useEffect, useMemo, useState } from 'react'
+import {
+  Fragment,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import type { DateRange } from 'react-day-picker'
@@ -96,7 +103,6 @@ import {
   categoriesOptions,
   entriesPageOptions,
   entryCountsOptions,
-  invalidateAfterReactors,
   orphanedDecisionsOptions,
   patchEntryCategory,
   patchEntryNote,
@@ -104,6 +110,7 @@ import {
 } from '#/features/data/queries'
 import { useIsMobile } from '#/hooks/use-mobile'
 import { errorMessage } from '#/lib/api/errors'
+import { invalidateFinance } from '#/features/finance/queries'
 import { cn } from '#/lib/utils'
 
 import type { Category, Entry } from '@spendle/server/api'
@@ -112,9 +119,13 @@ export const Route = createFileRoute('/transacoes')({
   validateSearch: transactionSearchSchema,
   search: { middlewares: [stripSearchParams(transactionSearchDefaults)] },
   loaderDeps: ({ search }) => transactionSearchToFilters(search),
-  loader: ({ context, deps }) =>
+  loader: ({ context, deps, cause }) =>
     Promise.all([
-      context.queryClient.ensureQueryData(entriesPageOptions(deps)),
+      // Another page or filter keeps the current list on screen while it
+      // loads (`useDeferredValue` below) instead of holding the navigation.
+      cause === 'stay'
+        ? void context.queryClient.prefetchQuery(entriesPageOptions(deps))
+        : context.queryClient.ensureQueryData(entriesPageOptions(deps)),
       context.queryClient.ensureQueryData(entryCountsOptions()),
       context.queryClient.ensureQueryData(categoriesOptions(true)),
       context.queryClient.ensureQueryData(accountsOptions(true)),
@@ -185,22 +196,36 @@ function TransactionsPage() {
     [urlState],
   )
   const deferredFilters = useDeferredValue(filters)
-  const { data, isFetching } = useSuspenseQuery(
-    entriesPageOptions(deferredFilters),
-  )
+  const { data } = useSuspenseQuery(entriesPageOptions(deferredFilters))
   const { data: counts } = useSuspenseQuery(entryCountsOptions())
   const { data: categories } = useSuspenseQuery(categoriesOptions(true))
   const { data: accounts } = useSuspenseQuery(accountsOptions(true))
-  const changingPage = isFetching || deferredFilters !== filters
+  // The list on screen still answers older filters while the new ones load.
+  const changingPage = deferredFilters !== filters
+  const pageCount = Math.max(1, Math.ceil(data.total / data.pageSize))
   useEffect(() => {
-    if (!changingPage && data.page !== filters.page) {
+    if (changingPage) return
+    // A page past the end comes back as the last one; show that in the URL.
+    if (data.page !== filters.page) {
       void navigate({
         search: (previous) => ({ ...previous, page: data.page + 1 }),
         replace: true,
         resetScroll: false,
       })
+      return
     }
-  }, [changingPage, data.page, filters.page, navigate])
+    // The next page is usually the next request; have it ready.
+    if (data.page + 1 < pageCount) {
+      void queryClient.prefetchQuery(
+        entriesPageOptions({ ...filters, page: data.page + 1 }),
+      )
+    }
+  }, [changingPage, data.page, filters, navigate, pageCount, queryClient])
+  const listTop = useRef<HTMLDivElement>(null)
+  const goToPage = (page: number) => {
+    void setUrlState({ page: page + 1 })
+    listTop.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }
 
   const categoryById = useMemo(
     () => new Map(categories.map((item) => [item.id, item])),
@@ -239,7 +264,9 @@ function TransactionsPage() {
     Number(categoryFilter !== 'all') +
     Number(minCents !== null || maxCents !== null)
 
-  const invalidate = () => invalidateAfterReactors(queryClient)
+  // Decisions answer once the ledger reflects them, and notes are stored as
+  // they are: one refetch is enough.
+  const invalidate = () => invalidateFinance(queryClient, 'ledger')
   const categoryMutation = useMutation({
     mutationFn: (input: {
       entry: Entry
@@ -340,7 +367,6 @@ function TransactionsPage() {
     },
   ].filter((chip): chip is Exclude<typeof chip, false> => Boolean(chip))
   const hasTransactions = counts.total > 0
-  const pageCount = Math.max(1, Math.ceil(data.total / data.pageSize))
 
   return (
     <Page>
@@ -660,8 +686,15 @@ function TransactionsPage() {
               </div>
             )}
           </div>
+          <div ref={listTop} className="scroll-mt-4" />
           {data.entries.length ? (
-            <Table className="sm:table-fixed">
+            <Table
+              className={cn(
+                'transition-opacity duration-150 sm:table-fixed',
+                changingPage && 'opacity-60',
+              )}
+              aria-busy={changingPage}
+            >
               <TableHeader>
                 <TableRow>
                   <TableHead>Descrição</TableHead>
@@ -892,22 +925,23 @@ function TransactionsPage() {
               className="flex items-center justify-end gap-3 p-3"
               aria-label="Paginação"
             >
-              <span className="text-sm text-muted-foreground">
-                Página {data.page + 1} de {pageCount}
+              <span className="flex items-center gap-2 text-sm text-muted-foreground tabular-nums">
+                {changingPage ? <Spinner /> : null}
+                Página {filters.page + 1} de {pageCount}
               </span>
               <Button
                 variant="outline"
                 size="sm"
-                disabled={changingPage || data.page === 0}
-                onClick={() => void setUrlState({ page: data.page })}
+                disabled={filters.page === 0}
+                onClick={() => goToPage(filters.page - 1)}
               >
                 Anterior
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                disabled={changingPage || data.page + 1 >= pageCount}
-                onClick={() => void setUrlState({ page: data.page + 2 })}
+                disabled={filters.page + 1 >= pageCount}
+                onClick={() => goToPage(filters.page + 1)}
               >
                 Próxima
               </Button>

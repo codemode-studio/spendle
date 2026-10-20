@@ -1,4 +1,4 @@
-import { daysBetween } from '../domain/LocalDate.ts'
+import { dayNumber } from '../domain/LocalDate.ts'
 import { foldDescription } from '../imports/Statement.ts'
 import { meaningfulWords } from '../ledger/Resolution.ts'
 import { autoConfirmScore, relationKey, rivalMargin } from './Keys.ts'
@@ -141,26 +141,35 @@ const refundWords = new Set([
   'valor',
 ])
 
-/** The words of a description that tell one shop from another. */
-const merchantWords = (description: string) =>
-  new Set(
-    [...meaningfulWords(description)].filter(
-      (word) =>
-        !storeWords.has(word) &&
-        kindOf(word) === undefined &&
-        !refundWords.has(word) &&
-        !/^\d+$/.test(word),
-    ),
-  )
+/**
+ * What a description says about its shop: the words that tell one shop from
+ * another, and the kinds of business it names.
+ */
+interface MerchantProfile {
+  readonly words: ReadonlySet<string>
+  readonly kinds: ReadonlySet<string>
+}
 
-/** The kinds of business a description names. */
-const kindsOf = (description: string) =>
-  new Set(
-    [...meaningfulWords(description)].flatMap((word) => {
-      const kind = kindOf(word)
-      return kind === undefined ? [] : [kind]
-    }),
-  )
+const merchantProfile = (description: string): MerchantProfile => {
+  const meaningful = [...meaningfulWords(description)]
+  return {
+    words: new Set(
+      meaningful.filter(
+        (word) =>
+          !storeWords.has(word) &&
+          kindOf(word) === undefined &&
+          !refundWords.has(word) &&
+          !/^\d+$/.test(word),
+      ),
+    ),
+    kinds: new Set(
+      meaningful.flatMap((word) => {
+        const kind = kindOf(word)
+        return kind === undefined ? [] : [kind]
+      }),
+    ),
+  }
+}
 
 type Merchant = 'same' | 'uncertain' | 'different'
 
@@ -180,14 +189,14 @@ type Merchant = 'same' | 'uncertain' | 'different'
  * umbrella (`Pet Shop` and `Pet Clinica`) is `uncertain`.
  */
 const compareMerchants = (
-  a: string,
-  b: string,
+  a: MerchantProfile,
+  b: MerchantProfile,
 ): { readonly merchant: Merchant; readonly differentBusiness: boolean } => {
-  const left = merchantWords(a)
-  const right = merchantWords(b)
+  const left = a.words
+  const right = b.words
   const shared = [...left].filter((word) => right.has(word))
-  const leftKinds = kindsOf(a)
-  const rightKinds = kindsOf(b)
+  const leftKinds = a.kinds
+  const rightKinds = b.kinds
   const specific = (kinds: ReadonlySet<string>) =>
     new Set([...kinds].filter((kind) => !broadKinds.has(kind)))
   const leftSpecific = specific(leftKinds)
@@ -247,17 +256,25 @@ interface Candidate {
   readonly reasons: ReadonlyArray<string>
 }
 
+/** A credit read once for every purchase it is compared with. */
+interface Credit {
+  readonly entry: MatchableEntry
+  /** Its folded description. */
+  readonly text: string
+  readonly profile: MerchantProfile
+}
+
 const evaluate = (
-  purchase: MatchableEntry,
-  refund: MatchableEntry,
+  purchase: MerchantProfile,
+  refund: Credit,
   remainingCents: number,
 ) => {
-  const text = foldDescription(refund.description)
+  const { text } = refund
   const reasons = ['same_account']
   let score = 40
   const { merchant, differentBusiness } = compareMerchants(
-    purchase.description,
-    refund.description,
+    purchase,
+    refund.profile,
   )
   if (merchant === 'same') {
     score += 30
@@ -275,7 +292,7 @@ const evaluate = (
   // chance; its amount then tells no purchase of the shop from another.
   if (partialWording.test(text)) {
     reasons.push('partial_wording')
-  } else if (refund.amountCents === remainingCents) {
+  } else if (refund.entry.amountCents === remainingCents) {
     score += 15
     reasons.push('full_amount')
   } else {
@@ -316,11 +333,25 @@ export const matchRefunds = (
   const remaining = (purchase: MatchableEntry) =>
     -purchase.amountCents - (refunded.get(purchase.id) ?? 0)
 
-  const purchasesByAccount = new Map<string, Array<MatchableEntry>>()
+  // Each description is read once, however many pairs it is compared in.
+  const profiles = new Map<string, MerchantProfile>()
+  const profileOf = (description: string) => {
+    let profile = profiles.get(description)
+    if (profile === undefined) {
+      profile = merchantProfile(description)
+      profiles.set(description, profile)
+    }
+    return profile
+  }
+
+  const purchasesByAccount = new Map<
+    string,
+    Array<{ readonly entry: MatchableEntry; readonly day: number }>
+  >()
   for (const entry of entries) {
     if (entry.amountCents >= 0 || used.has(entry.id)) continue
     const list = purchasesByAccount.get(entry.accountId) ?? []
-    list.push(entry)
+    list.push({ entry, day: dayNumber(entry.bookedOn) })
     purchasesByAccount.set(entry.accountId, list)
   }
 
@@ -335,34 +366,56 @@ export const matchRefunds = (
     )
       continue
     const wording = refundHint.test(text)
-    for (const purchase of purchasesByAccount.get(refund.accountId) ?? []) {
+    const day = dayNumber(refund.bookedOn)
+    const credit: Credit = {
+      entry: refund,
+      text,
+      profile: profileOf(refund.description),
+    }
+    for (const { entry: purchase, day: purchaseDay } of purchasesByAccount.get(
+      refund.accountId,
+    ) ?? []) {
       if (!validRefund(purchase, refund)) continue
       if (refund.amountCents > remaining(purchase)) continue
-      const days = daysBetween(purchase.bookedOn, refund.bookedOn)
+      const days = Math.abs(day - purchaseDay)
       if (days > refundWindowDays) continue
       if (
         decisions.get(relationKey('refund', purchase.id, refund.id)) ===
         'rejected'
       )
         continue
-      const evaluated = evaluate(purchase, refund, remaining(purchase))
+      const evaluated = evaluate(
+        profileOf(purchase.description),
+        credit,
+        remaining(purchase),
+      )
       if (!wording && evaluated.merchant === 'different') continue
       candidates.push({ purchase, refund, days, ...evaluated })
     }
   }
 
-  const rival = (except: Candidate) =>
-    Math.max(
-      -Infinity,
-      ...candidates
-        .filter(
-          (candidate) =>
-            candidate !== except &&
-            (candidate.refund.id === except.refund.id ||
-              candidate.purchase.id === except.purchase.id),
-        )
-        .map((candidate) => candidate.score),
-    )
+  // The candidates sharing each refund and each purchase, for rivals.
+  const byRefund = new Map<string, Array<Candidate>>()
+  const byPurchase = new Map<string, Array<Candidate>>()
+  for (const candidate of candidates) {
+    for (const [index, id] of [
+      [byRefund, candidate.refund.id],
+      [byPurchase, candidate.purchase.id],
+    ] as const) {
+      const list = index.get(id) ?? []
+      list.push(candidate)
+      index.set(id, list)
+    }
+  }
+  const rival = (except: Candidate) => {
+    let best = -Infinity
+    for (const candidate of [
+      ...byRefund.get(except.refund.id)!,
+      ...byPurchase.get(except.purchase.id)!,
+    ])
+      if (candidate !== except && candidate.score > best) best = candidate.score
+    return best
+  }
 
   candidates.sort(
     (a, b) =>

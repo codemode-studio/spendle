@@ -1,7 +1,7 @@
 import { queryOptions, skipToken } from '@tanstack/react-query'
 import type { QueryClient, QueryKey } from '@tanstack/react-query'
 
-import type { Entry } from '@spendle/server/api'
+import type { Entry, Relation } from '@spendle/server/api'
 
 import { financeQueryKeys, invalidateFinance } from '#/features/finance/queries'
 import type { FinanceInvalidationScope } from '#/features/finance/queries'
@@ -90,14 +90,11 @@ export const queryKeys = {
     ] as const,
   categoryReview: () =>
     [...financeQueryKeys.all, 'read', 'category-review'] as const,
+  /** The prefix of every relation list, which decisions patch. */
+  allRelations: () =>
+    [...financeQueryKeys.all, 'read', 'reconciliation', 'relations'] as const,
   relations: (status?: string) =>
-    [
-      ...financeQueryKeys.all,
-      'read',
-      'reconciliation',
-      'relations',
-      status ?? 'all',
-    ] as const,
+    [...queryKeys.allRelations(), status ?? 'all'] as const,
   orphanedDecisions: () =>
     [...financeQueryKeys.all, 'read', 'reconciliation', 'orphaned'] as const,
   linkCandidates: (entryId: string, text: string) =>
@@ -405,6 +402,50 @@ export async function patchEntryCategory(
     { queryKey: queryKeys.categoryReview() },
     (items) =>
       items?.filter((item) => item.inference.entryId !== input.entryId),
+  )
+  return () => {
+    for (const [queryKey, data] of previous)
+      queryClient.setQueryData(queryKey, data)
+  }
+}
+
+/**
+ * Applies the person's verdict on a pair to the cached lists at once: a
+ * confirmed pair moves to the confirmed ones as theirs, a rejected pair or
+ * released confirmation leaves. Returns the rollback for a failed decision.
+ */
+export async function patchRelationDecision(
+  queryClient: QueryClient,
+  input: { key: string; decision: 'confirmed' | 'rejected' },
+) {
+  const relations = { queryKey: queryKeys.allRelations() }
+  const orphaned = { queryKey: queryKeys.orphanedDecisions() }
+  await Promise.all([
+    queryClient.cancelQueries(relations),
+    queryClient.cancelQueries(orphaned),
+  ])
+  const previous = [
+    ...queryClient.getQueriesData(relations),
+    ...queryClient.getQueriesData(orphaned),
+  ]
+  queryClient.setQueriesData<ReadonlyArray<Relation>>(relations, (items) =>
+    items?.flatMap((item) =>
+      item.key !== input.key
+        ? [item]
+        : input.decision === 'rejected'
+          ? []
+          : [
+              {
+                ...item,
+                status: 'confirmed' as const,
+                origin: 'person' as const,
+              },
+            ],
+    ),
+  )
+  queryClient.setQueriesData<ReadonlyArray<{ key: string }>>(
+    orphaned,
+    (items) => items?.filter((item) => item.key !== input.key),
   )
   return () => {
     for (const [queryKey, data] of previous)

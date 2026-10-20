@@ -1,5 +1,9 @@
 import { assert, describe, it } from '@effect/vitest'
+import * as Deferred from 'effect/Deferred'
 import * as Effect from 'effect/Effect'
+import * as Fiber from 'effect/Fiber'
+import * as Statement from 'effect/sql/Statement'
+import * as Tracer from 'effect/Tracer'
 
 import { apiClient, apiTest } from '../../testing/ApiTest.ts'
 import { drain } from '../../testing/FakePluggy.ts'
@@ -54,6 +58,78 @@ const checking = Effect.gen(function* () {
 })
 
 describe('manual entries API', () => {
+  it.effect('answers a typed-in transfer once its pair is suggested', () =>
+    Effect.gen(function* () {
+      // Signalled when a request starts waiting for the projections.
+      const settling = yield* Deferred.make<void>()
+      const base = yield* Effect.tracer
+      const observe = Tracer.make({
+        ...(base.context ? { context: base.context } : {}),
+        span: (options) => {
+          if (options.name === 'Reactors.settle')
+            Deferred.doneUnsafe(settling, Effect.void)
+          return base.span(options)
+        },
+      })
+      yield* Effect.gen(function* () {
+        const { client, owner, account } = yield* checking
+        const savings = yield* client.accounts.open({
+          payload: {
+            ownerId: owner.id,
+            institutionName: 'Inter',
+            name: 'Inter',
+            kind: 'checking',
+            purpose: 'operating',
+            currency: 'BRL',
+          },
+        })
+        yield* drain
+        // A catch-up holds reconciliation at its cursor until a request
+        // settles, so no background pass pairs the entries before then.
+        const reached = yield* Deferred.make<void>()
+        const hold: Statement.Transformer = (statement) => {
+          const [text, params] = statement.compile()
+          return text.includes('FROM reactor_cursors') &&
+            params.includes('reconciliation') &&
+            !Deferred.isDoneUnsafe(reached)
+            ? Deferred.succeed(reached, undefined).pipe(
+                Effect.andThen(Deferred.await(settling)),
+                Effect.as(statement),
+              )
+            : Effect.succeed(statement)
+        }
+        const held = yield* drain.pipe(
+          Effect.provideService(Statement.CurrentTransformer, hold),
+          Effect.forkChild,
+        )
+        yield* Deferred.await(reached)
+
+        for (const [accountId, amountCents, description] of [
+          [account.id, -50000, 'Pix enviado Donald'],
+          [savings.id, 50000, 'Pix recebido Donald'],
+        ] as const) {
+          yield* client.manual.createTransaction({
+            payload: {
+              accountId,
+              bookedOn: '2026-09-12',
+              amountCents,
+              description,
+            },
+          })
+        }
+        // What the transactions screen reads right after the response.
+        const relations = yield* client.reconciliation.relations({ query: {} })
+        yield* Deferred.succeed(settling, undefined)
+        yield* Fiber.join(held)
+
+        assert.deepStrictEqual(
+          relations.map((relation) => relation.kind),
+          ['internal_transfer'],
+        )
+      }).pipe(Effect.provide(apiTest()), Effect.withTracer(observe))
+    }),
+  )
+
   it.effect(
     'records a typed-in transaction as an entry with its category and note',
     () =>

@@ -336,21 +336,41 @@ const make = Effect.gen(function* () {
     `,
   })
 
-  const followed = Effect.gen(function* () {
-    const entries = yield* findEntries(undefined)
+  // The entries categorized, by id alone: what following decisions needs.
+  const findEntryIds = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Schema.Struct({ id: Schema.String }),
+    execute: () => sql`
+      SELECT e.id FROM ledger_entries e JOIN accounts a ON a.id = e.account_id
+      WHERE a.archived_at IS NULL
+    `,
+  })
+
+  // Where each stored decision applies among the entries now.
+  const follow = Effect.fnUntraced(function* (entryIds: ReadonlySet<string>) {
     const holders = new Map<string, Array<string>>()
     for (const row of yield* findHolders(undefined)) {
       const list = holders.get(row.key) ?? []
       list.push(row.entryId)
       holders.set(row.key, list)
     }
-    const decisions = followCategoryDecisions(
+    return followCategoryDecisions(
       (yield* findDecisions(undefined)).map((row) => ({
         ...row,
         holders: holders.get(row.key) ?? [],
       })),
-      new Set(entries.map((entry) => entry.id)),
+      entryIds,
     )
+  })
+  const currentDecisions = Effect.gen(function* () {
+    return yield* follow(
+      new Set((yield* findEntryIds(undefined)).map((entry) => entry.id)),
+    )
+  })
+
+  const followed = Effect.gen(function* () {
+    const entries = yield* findEntries(undefined)
+    const decisions = yield* follow(new Set(entries.map((entry) => entry.id)))
     return { entries, decisions }
   })
 
@@ -374,12 +394,6 @@ const make = Effect.gen(function* () {
     return input
   })
 
-  const toStored = (inference: Inference) =>
-    new CategoryInference({
-      ...inference,
-      policyVersion: POLICY_VERSION,
-    })
-
   const markRebuilt = (sequence: number) =>
     sql`
       INSERT INTO categorization_state (id, sequence, policy_version)
@@ -388,11 +402,16 @@ const make = Effect.gen(function* () {
         policy_version = excluded.policy_version
     `
 
-  // Callers hold `lock`. Reads and the replacement share one transaction.
+  // Callers hold `lock`. Reads and the replacement share one transaction;
+  // only inferences that changed are written.
   const replaceInferences = sql.withTransaction(
     Effect.gen(function* () {
       const sequence = yield* log.latestSequence
-      const computed = categorize(yield* load).map(toStored)
+      // Plain rows: what is compared and written needs no class instance.
+      const computed = categorize(yield* load).map((inference) => ({
+        ...inference,
+        policyVersion: POLICY_VERSION,
+      }))
       const stored = new Map(
         (yield* findInferences(undefined)).map((row) => [row.entryId, row]),
       )
@@ -404,12 +423,15 @@ const make = Effect.gen(function* () {
           fingerprint(found) !== fingerprint(inference)
         )
       })
-      if (changed.length === 0 && stored.size === computed.length) {
+      const current = new Set(computed.map((inference) => inference.entryId))
+      const gone = [...stored.keys()].filter((entryId) => !current.has(entryId))
+      if (changed.length === 0 && gone.length === 0) {
         yield* markRebuilt(sequence)
         return false
       }
-      yield* sql`DELETE FROM category_inferences`
-      for (const inference of computed) {
+      for (const entryId of gone)
+        yield* sql`DELETE FROM category_inferences WHERE entry_id = ${entryId}`
+      for (const inference of changed) {
         yield* sql`
           INSERT INTO category_inferences (entry_id, category_id, origin, origin_ref,
             policy_version, confidence, status, excluded_from_spending, reasons, candidates)
@@ -418,6 +440,11 @@ const make = Effect.gen(function* () {
             ${inference.status}, ${inference.excludedFromSpending ? 1 : 0},
             ${yield* encodeReasons(inference.reasons)},
             ${yield* encodeCandidates(inference.candidates)})
+          ON CONFLICT (entry_id) DO UPDATE SET category_id = excluded.category_id,
+            origin = excluded.origin, origin_ref = excluded.origin_ref,
+            policy_version = excluded.policy_version, confidence = excluded.confidence,
+            status = excluded.status, excluded_from_spending = excluded.excluded_from_spending,
+            reasons = excluded.reasons, candidates = excluded.candidates
         `
       }
       yield* log.append([
@@ -481,7 +508,7 @@ const make = Effect.gen(function* () {
     categoryId: string,
     origin: DecisionOrigin,
   ) {
-    const { decisions } = yield* followed
+    const decisions = yield* currentDecisions
     const covering = [...decisions.entriesOf]
       .filter(([, ids]) => ids.length === 1 && ids[0] === entryId)
       .map(([key]) => key)
@@ -566,7 +593,7 @@ const make = Effect.gen(function* () {
     serialized(
       sql.withTransaction(
         Effect.gen(function* () {
-          const { decisions } = yield* followed
+          const decisions = yield* currentDecisions
           const keys = [...decisions.entriesOf]
             .filter(([, ids]) => ids.length === 1 && ids[0] === entryId)
             .map(([key]) => key)
@@ -910,6 +937,7 @@ export class Categorizer extends Context.Service<
  */
 export const reactor = Reactor.layer({
   name: 'categorizer',
+  projection: true,
   types: [
     entriesResolved,
     'TransactionObserved',

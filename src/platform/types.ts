@@ -12,6 +12,11 @@ export interface AuthPlatform {
   readonly database: () => BetterAuthOptions['database']
   /** How the MCP's Client ID Metadata Documents are fetched; see `CimdOptions`. */
   readonly fetchClientMetadataResource: CimdOptions['fetchClientMetadataResource']
+  /**
+   * Brings Better Auth's tables up to date with `migrate`, which compares
+   * them with the configuration and creates or extends what is missing.
+   */
+  readonly migrate: (migrate: () => Promise<void>) => Promise<void>
 }
 
 export interface ApiPlatform {

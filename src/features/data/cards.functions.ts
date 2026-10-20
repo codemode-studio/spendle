@@ -11,10 +11,13 @@ export const cardOverviewFn = createServerFn({ method: 'GET' })
   .validator(Schema.toStandardSchemaV1(accountId))
   .handler(({ data }) =>
     api((client) =>
-      Effect.all({
-        cycles: client.cards.cycles({ params: data }),
-        installments: client.cards.installments({ params: data }),
-      }),
+      Effect.all(
+        {
+          cycles: client.cards.cycles({ params: data }),
+          installments: client.cards.installments({ params: data }),
+        },
+        { concurrency: 'unbounded' },
+      ),
     ),
   )
 

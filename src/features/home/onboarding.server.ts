@@ -18,23 +18,21 @@ export function hasActiveRecurrences(client: ApiClient) {
  * Counts only; never loads entries.
  */
 export function ledgerSetup(client: ApiClient) {
-  const count = (query: Parameters<ApiClient['entries']['list']>[0]['query']) =>
-    client.entries
-      .list({ query: { ...query, limit: 1 } })
-      .pipe(Effect.map((page) => page.total))
-  return Effect.all({
-    accounts: client.accounts
-      .list({ query: {} })
-      .pipe(Effect.map((accounts) => accounts.length > 0)),
-    entries: count({}),
-    uncategorized: count({ categoryStatus: 'none' }),
-    review: count({ categoryStatus: 'review' }),
-  }).pipe(
-    Effect.map(({ accounts, entries, uncategorized, review }) => ({
+  return Effect.all(
+    {
+      accounts: client.accounts
+        .list({ query: {} })
+        .pipe(Effect.map((accounts) => accounts.length > 0)),
+      counts: client.entries.counts(),
+    },
+    { concurrency: 'unbounded' },
+  ).pipe(
+    Effect.map(({ accounts, counts }) => ({
       accounts,
-      transactions: entries > 0,
-      categories: entries > 0 && uncategorized + review === 0,
-      uncategorizedCount: uncategorized + review,
+      transactions: counts.total > 0,
+      categories:
+        counts.total > 0 && counts.uncategorized + counts.review === 0,
+      uncategorizedCount: counts.uncategorized + counts.review,
     })),
   )
 }

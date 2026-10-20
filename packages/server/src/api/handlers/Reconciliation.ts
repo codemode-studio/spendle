@@ -1,6 +1,7 @@
 import * as Effect from 'effect/Effect'
 import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder'
 
+import { Reactors, settled } from '../../events/Reactor.ts'
 import { Reconciliation } from '../../reconciliation/Reconciliation.ts'
 import { SpendleApi } from '../definition/Api.ts'
 import { respond } from '../Failures.ts'
@@ -12,6 +13,8 @@ export const ReconciliationHandlers = HttpApiBuilder.group(
   Effect.fn(function* (handlers) {
     const reconciliation = yield* Reconciliation
     const reads = yield* ReadModel
+    // Categories follow relations in a reactor; decisions answer once they did.
+    const settle = settled(yield* Reactors)
     return handlers.handleAll({
       relations: ({ query }) =>
         Effect.gen(function* () {
@@ -43,9 +46,10 @@ export const ReconciliationHandlers = HttpApiBuilder.group(
       decide: ({ payload }) =>
         reconciliation
           .decide(payload.key, payload.decision)
-          .pipe(respond('reconciliation.decide')),
+          .pipe(settle, respond('reconciliation.decide')),
       link: ({ payload }) =>
         reconciliation.link(payload).pipe(
+          settle,
           Effect.map((key) => ({ key })),
           respond('reconciliation.link'),
         ),

@@ -28,6 +28,12 @@ export interface ReactorSpec<E, R> {
   readonly name: string
   readonly types: ReadonlyArray<string>
   readonly handle: (event: StoredEvent) => Effect.Effect<void, E, R>
+  /**
+   * Rebuilds a local projection a person reads right after their own write,
+   * so `Reactors.settle` waits for it. Such a reactor must not call a
+   * provider or a model: the person's request waits for it.
+   */
+  readonly projection?: boolean
 }
 
 export class ReactorError extends Schema.TaggedError<ReactorError>()(
@@ -48,6 +54,17 @@ export class ReactorError extends Schema.TaggedError<ReactorError>()(
 export interface ReactorsShape {
   /** Processes every event appended so far in every reactor. For tests and shutdown. */
   readonly drain: Effect.Effect<void, ReactorError>
+  /**
+   * Processes every event appended so far in the projection reactors only,
+   * so a read after a person's write reflects it without waiting for
+   * providers or models. Runs outside any transaction, like `drain`.
+   */
+  readonly settle: Effect.Effect<void, ReactorError>
+}
+
+interface Registered {
+  readonly catchUp: Effect.Effect<void, ReactorError>
+  readonly projection: boolean
 }
 
 const batchSize = 100
@@ -73,9 +90,9 @@ export const Polling = Context.Reference<boolean>(
 export class Reactors extends Context.Service<
   Reactors,
   ReactorsShape & {
-    /** Adds a reactor's drain until the caller's scope closes. */
+    /** Adds a reactor's catch-up until the caller's scope closes. */
     readonly register: (
-      drain: Effect.Effect<void, ReactorError>,
+      reactor: Registered,
     ) => Effect.Effect<void, never, Scope.Scope>
   }
 >()('@spendle/server/events/Reactor/Reactors') {
@@ -84,43 +101,51 @@ export class Reactors extends Context.Service<
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
       const log = yield* EventLog
-      const drains = yield* Ref.make<
-        ReadonlyArray<Effect.Effect<void, ReactorError>>
-      >([])
+      const registered = yield* Ref.make<ReadonlyArray<Registered>>([])
       const latest = log.latestSequence.pipe(
         Effect.mapError(
           (cause) => new ReactorError({ reactor: 'drain', cause }),
         ),
       )
       // A reactor may append events another reactor handles, so passes repeat
-      // until one ends with no new events.
-      const drain = Effect.gen(function* () {
-        // Reactors write their cursors through the single SQLite connection,
-        // which an open transaction holds: draining inside one would deadlock.
-        if (
-          Option.isSome(yield* Effect.serviceOption(sql.transactionService))
-        ) {
-          return yield* new ReactorError({
-            reactor: 'drain',
-            cause: 'drain must run after the caller commits its transaction',
-          })
-        }
-        let before: number
-        do {
-          before = yield* latest
-          yield* Effect.forEach(yield* Ref.get(drains), (each) => each, {
-            discard: true,
-          })
-        } while ((yield* latest) !== before)
-      })
+      // until one ends with no new events. A catch-up already running in the
+      // background holds its reactor's lock; this one waits for it and then
+      // handles whatever is left.
+      const catchUp = (include: (reactor: Registered) => boolean) =>
+        Effect.gen(function* () {
+          // Reactors write their cursors through the single SQLite connection,
+          // which an open transaction holds: draining inside one would deadlock.
+          if (
+            Option.isSome(yield* Effect.serviceOption(sql.transactionService))
+          ) {
+            return yield* new ReactorError({
+              reactor: 'drain',
+              cause: 'drain must run after the caller commits its transaction',
+            })
+          }
+          let before: number
+          do {
+            before = yield* latest
+            yield* Effect.forEach(
+              (yield* Ref.get(registered)).filter(include),
+              (reactor) => reactor.catchUp,
+              { discard: true },
+            )
+          } while ((yield* latest) !== before)
+        })
       return Reactors.of({
-        register: (each) =>
+        register: (reactor) =>
           Effect.acquireRelease(
-            Ref.update(drains, (all) => [...all, each]),
+            Ref.update(registered, (all) => [...all, reactor]),
             () =>
-              Ref.update(drains, (all) => all.filter((one) => one !== each)),
+              Ref.update(registered, (all) =>
+                all.filter((one) => one !== reactor),
+              ),
           ),
-        drain,
+        drain: catchUp(() => true).pipe(Effect.withSpan('Reactors.drain')),
+        settle: catchUp((reactor) => reactor.projection).pipe(
+          Effect.withSpan('Reactors.settle'),
+        ),
       })
     }),
   )
@@ -198,7 +223,10 @@ export const layer = <E, R>(spec: ReactorSpec<E, R>) =>
         }),
       )
 
-      yield* reactors.register(catchUp)
+      yield* reactors.register({
+        catchUp,
+        projection: spec.projection ?? false,
+      })
       // Closing waits for a catch-up already running to finish.
       yield* Effect.addFinalizer(() =>
         Ref.set(open, false).pipe(
@@ -235,3 +263,18 @@ export const layer = <E, R>(spec: ReactorSpec<E, R>) =>
       yield* Effect.forkScoped(wake)
     }),
   )
+
+/**
+ * Runs a person's write, then waits for the projections to handle what it
+ * appended, so the read that follows the response reflects it. A failing
+ * reactor is logged, not returned: the write committed, and the reactor
+ * retries in the background.
+ */
+export const settled =
+  (reactors: ReactorsShape) =>
+  <A, E, R>(write: Effect.Effect<A, E, R>) =>
+    Effect.tap(write, () =>
+      reactors.settle.pipe(
+        Effect.catch((error) => Effect.logWarning(error.message, error.cause)),
+      ),
+    )

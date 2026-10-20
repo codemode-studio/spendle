@@ -92,6 +92,78 @@ describe('entries API', () => {
     }).pipe(Effect.provide(apiTest())),
   )
 
+  it.effect('serves a numbered page by offset, in list order', () =>
+    Effect.gen(function* () {
+      const { client, account } = yield* imported
+      const at = (offset: number) =>
+        client.entries
+          .list({ query: { accountId: account.id, limit: 2, offset } })
+          .pipe(
+            Effect.map((page) => ({
+              amounts: page.entries.map((entry) => entry.amountCents),
+              total: page.total,
+              more: page.nextCursor !== null,
+            })),
+          )
+      assert.deepStrictEqual(
+        { first: yield* at(0), second: yield* at(2), beyond: yield* at(3) },
+        {
+          first: { amounts: [-5000, -10000], total: 3, more: true },
+          second: { amounts: [100000], total: 3, more: false },
+          beyond: { amounts: [], total: 3, more: false },
+        },
+      )
+    }).pipe(Effect.provide(apiTest())),
+  )
+
+  it.effect('counts entries as the category filters list them', () =>
+    Effect.gen(function* () {
+      const { client, owner, account } = yield* imported
+      // A credit in another own account the day after the bakery debit:
+      // a transfer suggestion the person still has to review.
+      const savings = yield* client.accounts.open({
+        payload: {
+          ownerId: owner.id,
+          institutionName: 'Itaú',
+          name: 'Poupança',
+          kind: 'savings',
+          purpose: 'reserve',
+          currency: 'BRL',
+        },
+      })
+      yield* client.imports.upload({
+        payload: upload(
+          savings.id,
+          ofx(
+            `<STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20260911<TRNAMT>100.00<FITID>c1<MEMO>Transferência</STMTTRN>`,
+            '20260901',
+            '20260930',
+            '100.00',
+          ),
+          'poupanca.ofx',
+        ),
+      })
+      yield* drain
+      const [salary] = (yield* client.entries.list({
+        query: { accountId: account.id, direction: 'inflow' },
+      })).entries
+      yield* client.categoryDecisions.decide({
+        params: { entryId: salary!.id },
+        payload: { categoryId: 'salary' },
+      })
+      yield* drain
+      const total = (query: Parameters<typeof client.entries.list>[0]) =>
+        client.entries.list(query).pipe(Effect.map((page) => page.total))
+      const counts = yield* client.entries.counts()
+      assert.deepStrictEqual(counts, {
+        total: yield* total({ query: {} }),
+        review: yield* total({ query: { categoryStatus: 'review' } }),
+        uncategorized: yield* total({ query: { categoryStatus: 'none' } }),
+      })
+      assert.deepStrictEqual(counts, { total: 4, review: 2, uncategorized: 1 })
+    }).pipe(Effect.provide(apiTest())),
+  )
+
   it.effect('filters by period, status and words', () =>
     Effect.gen(function* () {
       const { client } = yield* imported

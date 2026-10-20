@@ -16,11 +16,14 @@ const otherColor = '#94a3b8'
  */
 export function categoryLedger(client: ApiClient) {
   return Effect.gen(function* () {
-    const [entries, categories, accounts] = yield* Effect.all([
-      allEntries(client, {}),
-      client.categories.list({ query: { includeArchived: true } }),
-      client.accounts.list({ query: { includeArchived: true } }),
-    ])
+    const [entries, categories, accounts] = yield* Effect.all(
+      [
+        allEntries(client, {}),
+        client.categories.list({ query: { includeArchived: true } }),
+        client.accounts.list({ query: { includeArchived: true } }),
+      ],
+      { concurrency: 'unbounded' },
+    )
     const categoryById = new Map(categories.map((item) => [item.id, item]))
     const cards = new Set(
       accounts

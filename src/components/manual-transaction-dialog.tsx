@@ -44,7 +44,7 @@ import {
   removeManualTransactionFn,
   reviseManualTransactionFn,
 } from '#/features/data/manual.functions'
-import { invalidateAfterReactors } from '#/features/data/queries'
+import { invalidateFinance } from '#/features/finance/queries'
 import { errorMessage } from '#/lib/api/errors'
 
 import type { Category } from '@spendle/server/api'
@@ -160,7 +160,7 @@ export function ManualTransactionDialog({
       toast.success(editing ? 'Lançamento corrigido.' : 'Lançamento salvo.')
       setOpen(false)
       if (!editing) reset()
-      void invalidateAfterReactors(queryClient)
+      void invalidateFinance(queryClient, 'ledger')
       onSaved?.({ entryId: result.entryId })
     },
     onError: (reason) =>
@@ -174,7 +174,7 @@ export function ManualTransactionDialog({
     onSuccess: () => {
       toast.success('Lançamento excluído. O histórico continua salvo.')
       setOpen(false)
-      void invalidateAfterReactors(queryClient)
+      void invalidateFinance(queryClient, 'ledger')
     },
     onError: (reason) =>
       toast.error(
