@@ -15,7 +15,7 @@ vp run --filter @spendle/server qa      # API em memória com dados sintéticos 
 | Variável                                      | Uso                                                                                                  |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `SPENDLE_DATA_DIR`                            | Pasta do banco de controle e dos bancos dos espaços; padrão `data/v2`                                |
-| `SPENDLE_DATABASE_PATH`                       | Banco de antes dos espaços, usado por `claim-space` e `migrate-v1`; padrão `data/v2/spendle.sqlite`  |
+| `SPENDLE_DATABASE_PATH`                       | Banco de antes dos espaços, usado por `claim-space`; padrão `data/v2/spendle.sqlite`                 |
 | `SPENDLE_SERVER_PORT`                         | Porta HTTP; padrão `4100`                                                                            |
 | `SPENDLE_SERVER_HOST`                         | Interface; padrão `127.0.0.1` (só esta máquina)                                                      |
 | `SPENDLE_API_TOKEN`                           | Token Bearer exigido em `/api`; 32+ caracteres; opcional                                             |
@@ -150,47 +150,3 @@ Recorrências guardam o calendário (início, âncora, frequência) e os veredit
 O mês (`Month.ts`) e a previsão de caixa são política pura: faturas pertencem ao mês de vencimento (compras do ciclo, parcelas ainda não lançadas e o que a fatura mostra além delas), gastos em conta ao mês do lançamento, recorrências ainda esperadas viram estimativas, aportes são lançamentos de investimento ou reserva e transferências confirmadas para contas dessas finalidades. Caixa é a soma das contas operacionais em BRL a partir do checkpoint de saldo mais próximo; contas em outra moeda ficam de fora e são contadas (o backend ainda não tem cotações).
 
 O assistente usa o OpenRouter, atrás de `AssistantModel`; sem `OPENROUTER_API_KEY` e `OPENROUTER_MODEL` nunca chama o modelo. Não há consentimento separado. Relatórios ficam em `assistant_reports` como saída de modelo, nunca como decisão; as economias propostas são calculadas no servidor a partir dos gastos observados.
-
-## Migração do V1
-
-`migrate-v1` traz do banco do V1 o que a pessoa configurou e decidiu, sem copiar fatos importados: o V2 volta a observá-los nas fontes ([ADR 003](../../plans/adrs/003-backend-v2-effect.md)).
-
-```bash
-# Da raiz do repositório, com o arquivo SQLite do V1 (o V1 o gravava em data/financas.db)
-vp run --filter @spendle/server migrate-v1 --from "$PWD/data/financas.db" --dry-run  # mostra o que mudaria
-vp run --filter @spendle/server migrate-v1 --from "$PWD/data/financas.db"            # grava no banco do V2
-```
-
-O caminho é relativo a `packages/server`, por isso o `$PWD`. O banco do V1 é aberto só para leitura; o código do V1 já foi removido e a migração depende só desse arquivo. Os testes montam bancos V1 sintéticos com o esquema congelado em `src/v1import/fixtures/v1-schema.sql`. O do V2 é o de `SPENDLE_DATABASE_PATH`. `--dry-run` executa a migração numa cópia do banco do V2 (feita com o backup do SQLite) e imprime o resumo: contagens por tipo, o que fica para trás e por quê, e as decisões que ainda esperam lançamentos. Rodar de novo não muda nada: cada registro trazido fica em `v1_import_map` e só é criado uma vez; depois disso, editá-lo é com a pessoa, no V2.
-
-| V1                                                                                           | V2                                                                                                                                                          |
-| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Escopos de titularidade                                                                      | Titulares (`company_br` e `company_us` viram `company`)                                                                                                     |
-| Contas e cartões, instituição, limite, fechamento e vencimento                               | Contas por `Accounts.open`; inativas ficam arquivadas. Sem instituição, `Sem instituição`. Cartão sem vencimento fica para trás                             |
-| Categorias                                                                                   | Mesmos ids, nomes, cores, ícones, buckets, pai e estado. `transfer` e `card_payment` continuam do V2                                                        |
-| `knowledge_base` de categoria                                                                | `category_patterns` por `KnowledgeStore.importV1`, origem `v1_import`, com modo, direção, confirmações e correções. Padrão que o V2 já tem prevalece        |
-| Categoria escolhida na revisão de um lote                                                    | Decisão (`v1_import`) quando o lançamento chega ao V2                                                                                                       |
-| Categoria trocada depois na lista de transações                                              | Idem. Reconhecida como na migração 0034 do V1: difere da sugestão concreta da importação. Se os padrões trazidos já dão a mesma categoria, não vira decisão |
-| Transferência, pagamento de fatura e estorno confirmados ou rejeitados pela pessoa           | Decisão de vínculo quando as duas pontas chegam. Os que o V1 confirmou ou invalidou sozinho ficam para o conciliador do V2                                  |
-| Renda de referência, meses de reserva, estratégias                                           | Configuração do planejamento (o consentimento de IA não existe mais)                                                                                        |
-| Meses fechados                                                                               | Meses fechados no V2, congelados com a mesma divisão e renda                                                                                                |
-| Metas                                                                                        | Metas com o valor atual do V1 (os aportes já estão nele)                                                                                                    |
-| Recorrências, grupos, ocorrências ignoradas, estabelecimentos da base e candidatos ignorados | Recorrências que recomeçam na primeira ocorrência que o V1 ainda esperava; precisam de categoria ativa e da conta migrada                                   |
-| Pagamentos vinculados pela pessoa a recorrências                                             | Vínculo da pessoa quando o lançamento chega; os vinculados automaticamente ficam para o conciliador do V2                                                   |
-| ----------------------------------------------------------------------------------           | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Transações digitadas à mão                                                                   | Fatos da fonte `manual` de novo (id `v1:<id>`), com a categoria digitada como decisão. Conta arquivada no V2 fica para trás                                 |
-| Notas de transações                                                                          | Notas, quando o lançamento chega ao V2. Se a pessoa já anotou o lançamento no V2, a nota do V1 fica `superseded`                                            |
-| Saldos informados à mão (não invalidados)                                                    | Saldos informados da conta, na prova de saldo. Os de fatura de cartão ficam para trás: o V2 confere cartões pelos ciclos                                    |
-| Classes, posições de investimento e o último valor informado                                 | Posições na corretora migrada, com o valor inicial como abertura; a meta de reserva de emergência vira `reserve`. O valor informado vira uma avaliação      |
-| Movimentos classificados numa posição                                                        | Classificação, quando o lançamento chega ao V2. Se a pessoa já classificou o lançamento no V2, fica a dela                                                  |
-
-**Decisões esperando lançamentos.** O V1 não guarda uma identidade que o V2 reproduza (o V1 nunca usou a Pluggy, e os ids de linha dos arquivos dependem do leitor), então cada decisão guarda a conta, o dia, o valor e a descrição normalizada do movimento (`v1_import_movements`). Quando os lançamentos de uma conta mudam, o reator `v1-import` procura o único lançamento com o mesmo dia, valor e descrição, ou, se a descrição vier escrita de outro jeito, o único com o mesmo dia e valor. Só aplica quando o movimento também era único assim no V1; com dois candidatos, a decisão espera e aparece no resumo. A categoria entra por `Categorizer.decide` sem ensinar a base (o padrão já veio); o vínculo, por `Reconciliation.decide` ou `link`. Se a pessoa já decidiu aquele lançamento no V2, a decisão do V1 fica `superseded`. Uma rejeição espera até o conciliador sugerir o par.
-
-**O que não vem.** Lançamentos e saldos importados (o V2 os observa de novo), divisões de lançamento, instrumentos de cartão, regras de categorização, aportes de metas um a um, vínculos manuais de débito com fatura (o V2 liga o pagamento ao crédito no cartão; confirme o vínculo quando os dois lados chegarem) e grupos de câmbio ou distribuição de lucros. O resumo lista cada item com o motivo.
-
-**Depois da migração.**
-
-1. Inicie o servidor (`vp run --filter @spendle/server dev`).
-2. Pluggy: conecte cada banco no V2 (`POST /api/open-finance/connect-token` e `POST /api/open-finance/connections/:id/item`), ligue cada conta da Pluggy à conta migrada em vez de abrir outra (`PUT /api/open-finance/provider-accounts/:id/link`) e sincronize (`POST /api/open-finance/connections/:id/sync`).
-3. Arquivos: importe os mesmos OFX, CSV e PDF nas contas migradas (`POST /api/imports`).
-4. As decisões se aplicam conforme os lançamentos chegam. `migrate-v1 --dry-run` de novo mostra o que ainda espera.

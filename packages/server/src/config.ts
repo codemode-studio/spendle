@@ -6,7 +6,7 @@ import * as Path from 'effect/Path'
 
 export interface ServerConfigShape {
   /**
-   * The single database tools like `migrate-v1` and `claim-space` work on;
+   * The database from before spaces, which `claim-space` gives an owner;
    * the server itself serves one database per family space.
    */
   readonly databasePath: string

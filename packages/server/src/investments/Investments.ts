@@ -37,8 +37,6 @@ export class InvestmentsError extends Schema.TaggedError<InvestmentsError>()(
   }
 }
 
-export type DecisionOrigin = 'person' | 'v1_import'
-
 export interface NewPosition {
   readonly accountId: string
   readonly assetClassId: string
@@ -417,14 +415,11 @@ const make = Effect.gen(function* () {
    * created with it. A movement sits in one position: classifying it again
    * moves it.
    */
-  const classify = Effect.fn('Investments.classify')(function* (
-    input: {
-      readonly entryId: string
-      readonly positionId?: string | undefined
-      readonly newPosition?: Omit<NewPosition, 'accountId'> | undefined
-    },
-    origin: DecisionOrigin = 'person',
-  ) {
+  const classify = Effect.fn('Investments.classify')(function* (input: {
+    readonly entryId: string
+    readonly positionId?: string | undefined
+    readonly newPosition?: Omit<NewPosition, 'accountId'> | undefined
+  }) {
     if ((input.positionId === undefined) === (input.newPosition === undefined))
       return yield* new InvestmentsError({
         reason: 'invalid_input',
@@ -469,7 +464,7 @@ const make = Effect.gen(function* () {
         for (const key of targets) {
           yield* sql`
             INSERT INTO investment_movement_decisions (key, position_id, origin, decided_at, revision)
-            VALUES (${key}, ${positionId}, ${origin}, ${decidedAt},
+            VALUES (${key}, ${positionId}, 'person', ${decidedAt},
               (SELECT coalesce(max(revision), 0) + 1 FROM investment_movement_decisions))
             ON CONFLICT (key) DO UPDATE SET position_id = excluded.position_id,
               origin = excluded.origin, decided_at = excluded.decided_at,
@@ -538,31 +533,30 @@ const make = Effect.gen(function* () {
   })
 
   /** What the person says the position was worth at the end of `asOf`. */
-  const recordValuation = Effect.fn('Investments.recordValuation')(function* (
-    input: {
+  const recordValuation = Effect.fn('Investments.recordValuation')(
+    function* (input: {
       readonly positionId: string
       readonly asOf: string
       readonly amountCents: number
-    },
-    origin: DecisionOrigin = 'person',
-  ) {
-    if (!Number.isSafeInteger(input.amountCents) || input.amountCents < 0)
-      return yield* new InvestmentsError({
-        reason: 'invalid_input',
-        detail: 'amountCents',
-      })
-    if (Option.isNone(yield* findPosition(input.positionId)))
-      return yield* new InvestmentsError({
-        reason: 'position_not_found',
-        detail: input.positionId,
-      })
-    const id = yield* newId
-    yield* sql`
+    }) {
+      if (!Number.isSafeInteger(input.amountCents) || input.amountCents < 0)
+        return yield* new InvestmentsError({
+          reason: 'invalid_input',
+          detail: 'amountCents',
+        })
+      if (Option.isNone(yield* findPosition(input.positionId)))
+        return yield* new InvestmentsError({
+          reason: 'position_not_found',
+          detail: input.positionId,
+        })
+      const id = yield* newId
+      yield* sql`
       INSERT INTO investment_valuations (id, position_id, as_of, amount_cents, origin, recorded_at)
-      VALUES (${id}, ${input.positionId}, ${input.asOf}, ${input.amountCents}, ${origin}, ${yield* now})
+      VALUES (${id}, ${input.positionId}, ${input.asOf}, ${input.amountCents}, 'person', ${yield* now})
     `
-    return { id, positionId: input.positionId }
-  })
+      return { id, positionId: input.positionId }
+    },
+  )
 
   return {
     snapshot,

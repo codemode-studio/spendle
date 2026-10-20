@@ -28,8 +28,6 @@ import { ExchangeRates } from '../rates/ExchangeRates.ts'
 import { RateSource } from '../rates/RateSource.ts'
 import * as Reconciliation from '../reconciliation/Reconciliation.ts'
 import { Cards } from '../reconciliation/Cards.ts'
-import * as V1PlanningImport from '../v1import/PlanningImport.ts'
-import * as V1Import from '../v1import/V1Import.ts'
 
 // Category learning; the model is called only when `TYPESAFE_API_KEY` is set.
 const CategoriesLive = Categorizer.Categorizer.layer.pipe(
@@ -72,9 +70,7 @@ const coreLive = <E, R>(database: Layer.Layer<SqlClient.SqlClient, E, R>) =>
   )
 
 // The assistant calls its model only when `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` are set.
-const PlanningLive = V1PlanningImport.reactor.pipe(
-  Layer.provide(V1PlanningImport.V1PlanningImport.layer),
-  Layer.provideMerge(PlanningServices),
+const PlanningLive = PlanningServices.pipe(
   Layer.provideMerge(
     AssistantModel.layer.pipe(Layer.provide(FetchHttpClient.layer)),
   ),
@@ -91,8 +87,6 @@ const OpenFinanceLive = Layer.mergeAll(
   Categorizer.startup,
   SyncReactor.layer,
   Webhook.reactor,
-  // Decisions `migrate-v1` brought over apply as their movements arrive.
-  V1Import.reactor.pipe(Layer.provide(V1Import.V1Import.layer)),
 ).pipe(Layer.provideMerge(OpenFinance.layer))
 
 /**

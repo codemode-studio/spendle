@@ -392,10 +392,7 @@ const make = Effect.gen(function* () {
   )
 
   /** Freezes a month's plan; a month closes once. */
-  const freeze = Effect.fn('Planning.freeze')(function* (
-    budget: ClosedBudget,
-    origin: 'closing' | 'v1_import' = 'closing',
-  ) {
+  const freeze = Effect.fn('Planning.freeze')(function* (budget: ClosedBudget) {
     if (yield* isClosed(budget.month))
       return yield* new PlanningError({
         reason: 'month_closed',
@@ -412,7 +409,7 @@ const make = Effect.gen(function* () {
             ${budget.baseIncomeCents}, ${budget.eligibleIncomeCents}, ${budget.allocation.essential},
             ${budget.allocation.lifestyle}, ${budget.allocation.investment}, ${budget.allocation.reserve},
             ${budget.effectiveAllocation.investment}, ${budget.effectiveAllocation.reserve},
-            ${budget.reserveRedirected ? 1 : 0}, ${origin}, ${closedAt})
+            ${budget.reserveRedirected ? 1 : 0}, 'closing', ${closedAt})
         `
         yield* changed('closing', { month: budget.month })
       }),

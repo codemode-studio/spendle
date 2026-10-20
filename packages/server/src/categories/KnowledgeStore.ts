@@ -12,14 +12,8 @@ import { EventLog } from '../events/EventLog.ts'
 import { Categories, uncategorized } from './Categories.ts'
 import { knowledgePrefixCandidate } from './Patterns.ts'
 import type { MatchMode } from './Patterns.ts'
-import { applyEdit, importPatterns, learn as learnPattern } from './Store.ts'
-import type {
-  ImportedPattern,
-  ImportOutcome,
-  PatternRow,
-  PatternSource,
-  StoreEdit,
-} from './Store.ts'
+import { applyEdit, learn as learnPattern } from './Store.ts'
+import type { PatternRow, PatternSource, StoreEdit } from './Store.ts'
 
 export const categoryStoreChanged = 'CategoryStoreChanged'
 
@@ -238,45 +232,6 @@ const make = Effect.gen(function* () {
     )
   })
 
-  /**
-   * Adds what V1's knowledge base learned from the person, unchanged, with
-   * `v1_import` as the source. Patterns pointing to a category the store may
-   * not teach come back `category_not_assignable`; nothing is written when
-   * every pattern is already there.
-   */
-  const importV1 = Effect.fn('KnowledgeStore.importV1')(function* (
-    patterns: ReadonlyArray<ImportedPattern>,
-  ) {
-    return yield* sql.withTransaction(
-      Effect.gen(function* () {
-        const outcomes: Array<ImportOutcome | 'category_not_assignable'> = []
-        const accepted: Array<ImportedPattern> = []
-        const slots: Array<number> = []
-        for (const pattern of patterns) {
-          const allowed = yield* assignable(pattern.categoryId).pipe(
-            Effect.as(true),
-            Effect.catchTag('KnowledgeStoreError', () => Effect.succeed(false)),
-          )
-          if (allowed) {
-            slots.push(outcomes.length)
-            accepted.push(pattern)
-          }
-          outcomes.push('category_not_assignable')
-        }
-        const before = yield* rows
-        const result = importPatterns(before, accepted)
-        result.outcomes.forEach((outcome, index) => {
-          outcomes[slots[index]!] = outcome
-        })
-        if (result.outcomes.includes('added')) {
-          yield* persist(before, result.rows)
-          yield* changed('v1_import')
-        }
-        return outcomes
-      }),
-    )
-  })
-
   /** The store with category names and prefix candidates, latest first. */
   const list = Effect.gen(function* () {
     const byId = new Map(
@@ -299,7 +254,6 @@ const make = Effect.gen(function* () {
     simulate,
     edit,
     learn,
-    importV1,
     recategorize: (id: string, categoryId: string) =>
       edit({ _tag: 'Recategorize', id, categoryId }),
     editPattern: (id: string, pattern: string, matchMode: MatchMode) =>

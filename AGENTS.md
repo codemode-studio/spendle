@@ -1,6 +1,6 @@
 # Working in this repository
 
-The web app in `src/` (TanStack Start routes, components, hooks and server functions) reads and writes everything through the API in `packages/server`, the only backend. The V1 server, its Drizzle database and its domain logic were removed; do not reintroduce financial rules, database access or provider calls in `src/`. A V1 SQLite file only enters through `vp run --filter @spendle/server migrate-v1`.
+The web app in `src/` (TanStack Start routes, components, hooks and server functions) reads and writes everything through the API in `packages/server`, the only backend. The V1 server, its Drizzle database, its domain logic and the migration of its data were removed; do not reintroduce financial rules, database access or provider calls in `src/`.
 
 - Verify user-visible changes end to end yourself before delivery; do not hand the developer an "untested in a browser" list. Follow [browser QA](.agents/skills/browser-qa/SKILL.md): an isolated `vp run qa:start` run, signed in through its QA link, driven with T3 Code's Browser panel (`preview_*` tools), and `vp run qa:mcp` for MCP changes. Never use the developer's running server or data for this, and do not add an E2E framework.
 - Use `vp run setup:check` after setup. Follow the focused verification guidance below; CI owns `vp run verify`.
@@ -45,7 +45,7 @@ The web app in `src/` (TanStack Start routes, components, hooks and server funct
 
 ## Backend (`packages/server`)
 
-The backend is an Effect 4 server with its own SQLite databases (`data/v2/`, a name kept from the migration); see [ADR 003](plans/adrs/003-backend-v2-effect.md). The V1 import (`src/v1import`) reads a V1 SQLite file; its tests build synthetic V1 databases from the frozen schema in `src/v1import/fixtures/v1-schema.sql`, which never changes.
+The backend is an Effect 4 server with its own SQLite databases (`data/v2/`, a name kept from the migration); see [ADR 003](plans/adrs/003-backend-v2-effect.md).
 
 - Run `vp run sync:effect-docs` once, then read `.repos/effect/LLMS.md` before writing Effect code. `.repos/` holds read-only references matching the pinned version; prefer their patterns over invented ones, never import from them, and resync when bumping `effect`.
 - Effect 4 stable ships SQL, HTTP and testing as `effect/sql`, `effect/http`, `effect/http-api` and `effect/testing`. Older `effect/unstable/*` examples (including T3 Code's) need translating.

@@ -75,7 +75,7 @@ export const queryKeys = {
       'provider-accounts',
       connectionId,
     ] as const,
-  /** Same prefix as the V1 transaction pages, which category edits patch. */
+  /** The prefix of every transaction page, which category edits patch. */
   entriesPages: () =>
     [...financeQueryKeys.all, 'read', 'transactions'] as const,
   entriesPage: (query: EntryPageQuery) =>
@@ -123,7 +123,7 @@ export const queryKeys = {
   imports: () => [...financeQueryKeys.all, 'read', 'imports'] as const,
   categoryLedger: () =>
     [...financeQueryKeys.all, 'read', 'categories'] as const,
-  /** Same key as the V1 knowledge base, so its invalidation group applies. */
+  /** The `knowledge-base` key, so its invalidation group applies. */
   storePatterns: () =>
     [...financeQueryKeys.all, 'read', 'knowledge-base'] as const,
   providerMappings: () =>
@@ -341,7 +341,7 @@ export const investmentsOptions = () =>
     staleTime: 60_000,
   })
 
-/** Same key as the V1 category analysis, which the ledger invalidations cover. */
+/** Under `read`, so the ledger invalidations cover the category analysis. */
 export const categoryLedgerOptions = () =>
   queryOptions({
     queryKey: queryKeys.categoryLedger(),
