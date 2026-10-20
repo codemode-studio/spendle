@@ -16,6 +16,7 @@ import ExchangeRates from './Migrations/0013_exchange_rates.ts'
 import ClassifierContext from './Migrations/0014_classifier_context.ts'
 import DropV1Import from './Migrations/0015_drop_v1_import.ts'
 import StartupMarks from './Migrations/0016_startup_marks.ts'
+import RelationOrphans from './Migrations/0017_relation_orphans.ts'
 
 // Keys are `<id>_<name>`; each migration runs once, in id order. Import every
 // migration statically so the server never depends on files beside the bundle.
@@ -37,6 +38,7 @@ export const migrations = {
   '0014_classifier_context': ClassifierContext,
   '0015_drop_v1_import': DropV1Import,
   '0016_startup_marks': StartupMarks,
+  '0017_relation_orphans': RelationOrphans,
 }
 
 // The generic migrator, so the same migrations run on any SQLite client.

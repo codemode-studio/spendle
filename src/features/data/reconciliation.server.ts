@@ -17,26 +17,29 @@ export function linkCandidates(
     const amount = Math.abs(entry.amountCents)
     const direction = entry.amountCents < 0 ? 'inflow' : 'outflow'
     const text = search?.trim() || undefined
-    const [sameAmount, partial] = yield* Effect.all([
-      client.entries.list({
-        query: {
-          direction,
-          minAmountCents: amount,
-          maxAmountCents: amount,
-          text,
-          limit: 30,
-        },
-      }),
-      client.entries.list({
-        query: {
-          direction,
-          accountId: entry.accountId,
-          maxAmountCents: amount,
-          text,
-          limit: 30,
-        },
-      }),
-    ])
+    const [sameAmount, partial] = yield* Effect.all(
+      [
+        client.entries.list({
+          query: {
+            direction,
+            minAmountCents: amount,
+            maxAmountCents: amount,
+            text,
+            limit: 30,
+          },
+        }),
+        client.entries.list({
+          query: {
+            direction,
+            accountId: entry.accountId,
+            maxAmountCents: amount,
+            text,
+            limit: 30,
+          },
+        }),
+      ],
+      { concurrency: 'unbounded' },
+    )
     const seen = new Set<string>([entry.id])
     const candidates = [...sameAmount.entries, ...partial.entries].filter(
       (candidate) => {

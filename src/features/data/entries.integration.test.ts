@@ -47,7 +47,7 @@ async function importVolume(count: number) {
   return account
 }
 
-it('serves numbered pages of 50 over the cursor API without repeating entries', async () => {
+it('serves numbered pages of 50 without repeating entries', async () => {
   await importVolume(120)
   const pages = await Promise.all(
     [0, 1, 2].map((page) => api((client) => entriesAt(client, {}, page))),

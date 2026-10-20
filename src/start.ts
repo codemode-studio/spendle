@@ -1,6 +1,28 @@
 import { createMiddleware, createStart } from '@tanstack/react-start'
+import type { CustomFetch } from '@tanstack/react-start'
 
 import { signedOutMessage } from '#/features/auth/viewer'
+
+/**
+ * Reads answer in well under a second. One that has not answered in ten is
+ * stuck on an isolate, not slow: abort it so the query retries on another
+ * instead of holding the page. Writes keep waiting, since one that timed
+ * out may still have been applied.
+ */
+const readTimeout = 10_000
+const fetchWithReadTimeout: CustomFetch = (url, init) =>
+  fetch(
+    url,
+    init?.method === 'GET'
+      ? {
+          ...init,
+          signal: AbortSignal.any([
+            ...(init.signal ? [init.signal] : []),
+            AbortSignal.timeout(readTimeout),
+          ]),
+        }
+      : init,
+  )
 
 /**
  * Every server function reads or writes financial data through the API, so
@@ -9,7 +31,7 @@ import { signedOutMessage } from '#/features/auth/viewer'
 const requireViewer = createMiddleware({ type: 'function' })
   .client(async ({ next }) => {
     try {
-      return await next()
+      return await next({ fetch: fetchWithReadTimeout })
     } catch (error) {
       if (error instanceof Error && error.message === signedOutMessage) {
         window.location.assign('/entrar')

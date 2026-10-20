@@ -44,6 +44,11 @@ function createAuth() {
     // behind the MCP: a SQLite file on Node, D1 on Cloudflare. Financial data
     // never lives here.
     database: authPlatform.database(),
+    // Every server function reads the session. A signed cookie answers for
+    // five minutes before the database is asked again, so a session ended
+    // elsewhere can last that long on this browser. The allowlist is still
+    // checked on every call (`readViewer`).
+    session: { cookieCache: { enabled: true, maxAge: 5 * 60 } },
     // The JWT plugin's `/token` hands a session's JWT to the browser; the MCP
     // only accepts access tokens from the OAuth flow, so nothing needs it.
     disabledPaths: ['/token'],
@@ -108,9 +113,10 @@ function createAuth() {
         metadataProfile: 'mcp-2026-07-28',
       }),
       ...(qaToken ? [qaSignIn(qaToken)] : []),
-      // Must stay last: it applies cookies Better Auth sets inside Start.
-      tanstackStartCookies(),
       dash(),
+      // Must stay last: it applies cookies Better Auth sets inside Start,
+      // including the session cache a session read refreshes.
+      tanstackStartCookies(),
     ],
   })
 }
@@ -127,9 +133,10 @@ let auth:
 export async function getAuth() {
   if (auth === undefined) {
     const instance = createAuth()
-    const ready = getMigrations(instance.options).then(({ runMigrations }) =>
-      runMigrations(),
-    )
+    const ready = authPlatform.migrate(async () => {
+      const { runMigrations } = await getMigrations(instance.options)
+      await runMigrations()
+    })
     auth = { instance, ready }
     // A failed migration (a locked file, say) is retried by the next request
     // instead of failing every request until a restart.

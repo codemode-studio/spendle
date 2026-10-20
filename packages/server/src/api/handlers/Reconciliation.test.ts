@@ -1,5 +1,9 @@
 import { assert, describe, it } from '@effect/vitest'
+import * as Deferred from 'effect/Deferred'
 import * as Effect from 'effect/Effect'
+import * as Fiber from 'effect/Fiber'
+import * as Statement from 'effect/sql/Statement'
+import * as Tracer from 'effect/Tracer'
 
 import { apiClient, apiTest } from '../../testing/ApiTest.ts'
 import { drain } from '../../testing/FakePluggy.ts'
@@ -152,5 +156,69 @@ describe('reconciliation API', () => {
         },
       )
     }).pipe(Effect.provide(apiTest())),
+  )
+
+  it.effect(
+    'answers a decision once the categories it changes are rebuilt',
+    () =>
+      Effect.gen(function* () {
+        // Signalled when a request starts waiting for the projections.
+        const settling = yield* Deferred.make<void>()
+        const base = yield* Effect.tracer
+        const observe = Tracer.make({
+          ...(base.context ? { context: base.context } : {}),
+          span: (options) => {
+            if (options.name === 'Reactors.settle')
+              Deferred.doneUnsafe(settling, Effect.void)
+            return base.span(options)
+          },
+        })
+        yield* Effect.gen(function* () {
+          const { client, nubank } = yield* setup
+          const transfer = (yield* client.reconciliation.relations({
+            query: { kind: 'internal_transfer' },
+          }))[0]!
+          // What the transactions screen reads right after the response.
+          const sentCategory = Effect.map(
+            client.entries.list({
+              query: { accountId: nubank.id, text: 'Pix' },
+            }),
+            (page) => page.entries[0]?.category?.categoryId ?? null,
+          )
+          const before = yield* sentCategory
+
+          // A catch-up holds the categorizer at its cursor until a request
+          // settles, so no background pass rebuilds categories before then.
+          const reached = yield* Deferred.make<void>()
+          const hold: Statement.Transformer = (statement) => {
+            const [text, params] = statement.compile()
+            return text.includes('FROM reactor_cursors') &&
+              params.includes('categorizer') &&
+              !Deferred.isDoneUnsafe(reached)
+              ? Deferred.succeed(reached, undefined).pipe(
+                  Effect.andThen(Deferred.await(settling)),
+                  Effect.as(statement),
+                )
+              : Effect.succeed(statement)
+          }
+          const held = yield* drain.pipe(
+            Effect.provideService(Statement.CurrentTransformer, hold),
+            Effect.forkChild,
+          )
+          yield* Deferred.await(reached)
+
+          yield* client.reconciliation.decide({
+            payload: { key: transfer.key, decision: 'rejected' },
+          })
+          const rejected = yield* sentCategory
+          yield* Deferred.succeed(settling, undefined)
+          yield* Fiber.join(held)
+
+          assert.deepStrictEqual(
+            { status: transfer.status, before, rejected },
+            { status: 'confirmed', before: 'transfer', rejected: null },
+          )
+        }).pipe(Effect.provide(apiTest()), Effect.withTracer(observe))
+      }),
   )
 })

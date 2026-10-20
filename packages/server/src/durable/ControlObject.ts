@@ -68,6 +68,20 @@ export const makeControlObject = <E>(
     )
   return {
     fetch: async (request: Request) => (await handler)(request),
+    /**
+     * The id of the space `member` reads and writes, for a caller that sends
+     * its `/api` requests there itself (see `Routing.servedBySpace`). Null
+     * when `/api` would refuse them instead (data not claimed yet); the
+     * object's own `fetch` answers those.
+     */
+    spaceOf: (member: string, write: boolean) =>
+      runtime.runPromise(
+        Effect.gen(function* () {
+          const directory = yield* SpaceDirectory
+          if (Option.isSome(yield* directory.unclaimedLegacy)) return null
+          return (yield* directory.spaceOf(member, { write })).id
+        }),
+      ),
     /** Routes every delivery it can; true when some still wait for a retry. */
     drainWebhooks: () =>
       runtime.runPromise(

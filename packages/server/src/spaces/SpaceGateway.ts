@@ -120,7 +120,11 @@ export class SpaceGateway extends Context.Service<
             const response = yield* Effect.promise(() =>
               spaces.fetch(spaceId, web),
             )
-            return HttpServerResponse.fromWeb(response)
+            // Handed back as the runtime's own response, so its body streams
+            // straight to the caller. Re-streaming it through Effect here
+            // held finished answers in this object for up to a minute.
+            // The copy makes the headers writable for whatever wraps it.
+            return HttpServerResponse.raw(new Response(response.body, response))
           }).pipe(unavailable(spaceId)),
         holdsItem: (spaceId, itemId) =>
           Effect.promise(() => spaces.holdsItem(spaceId, itemId)).pipe(

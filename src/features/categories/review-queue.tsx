@@ -25,10 +25,10 @@ import {
 import {
   categoriesOptions,
   categoryReviewOptions,
-  invalidateAfterReactors,
   patchEntryCategory,
 } from '#/features/data/queries'
 import { errorMessage } from '#/lib/api/errors'
+import { invalidateFinance } from '#/features/finance/queries'
 import { cn } from '#/lib/utils'
 
 const visible = 6
@@ -59,7 +59,7 @@ export function CategoryReviewQueue() {
     onMutate: async (input) => ({
       rollback: await patchEntryCategory(queryClient, input),
     }),
-    onSuccess: () => void invalidateAfterReactors(queryClient),
+    onSuccess: () => void invalidateFinance(queryClient, 'ledger'),
     onError: (error, _input, context) => {
       context?.rollback()
       toast.error(errorMessage(error, 'Não foi possível salvar a categoria.'))

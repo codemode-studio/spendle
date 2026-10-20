@@ -1,5 +1,4 @@
 import { createServerFn } from '@tanstack/react-start'
-import * as Effect from 'effect/Effect'
 import * as Schema from 'effect/Schema'
 
 import { EntryFilters } from '@spendle/server/api'
@@ -10,9 +9,14 @@ import { entriesAt } from './entries.server'
 
 const entryId = Schema.Struct({ entryId: Schema.String })
 
-const { cursor: _cursor, limit: _limit, ...filterFields } = EntryFilters.fields
+const {
+  cursor: _cursor,
+  limit: _limit,
+  offset: _offset,
+  ...filterFields
+} = EntryFilters.fields
 
-/** The transaction list's filters: the API's, without cursor or limit, plus a page number. */
+/** The transaction list's filters: the API's, without cursor, limit or offset, plus a page number. */
 export const EntryPageQuery = Schema.Struct({
   ...filterFields,
   page: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1_000_000 })),
@@ -28,19 +32,7 @@ export const entriesPageFn = createServerFn({ method: 'GET' })
 
 /** How many entries wait for a category decision, across the whole ledger. */
 export const entryCountsFn = createServerFn({ method: 'GET' }).handler(() =>
-  api((client) =>
-    Effect.all({
-      review: client.entries
-        .list({ query: { categoryStatus: 'review', limit: 1 } })
-        .pipe(Effect.map((page) => page.total)),
-      uncategorized: client.entries
-        .list({ query: { categoryStatus: 'none', limit: 1 } })
-        .pipe(Effect.map((page) => page.total)),
-      total: client.entries
-        .list({ query: { limit: 1 } })
-        .pipe(Effect.map((page) => page.total)),
-    }),
-  ),
+  api((client) => client.entries.counts()),
 )
 
 export const entryDetailFn = createServerFn({ method: 'GET' })

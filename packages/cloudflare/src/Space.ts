@@ -1,5 +1,3 @@
-import * as SqliteClient from '@effect/sql-sqlite-do/SqliteClient'
-import { makeSpaceObject } from '@spendle/server/durable'
 import type { SpaceObject } from '@spendle/server/durable'
 import { DurableObject } from 'cloudflare:workers'
 
@@ -13,42 +11,41 @@ const retryDelay = 60_000
 
 /** One family space: its database, services, reactors and `/api`. */
 export class Space extends DurableObject<Cloudflare.Env> {
-  readonly #space: SpaceObject
+  readonly #space: Promise<SpaceObject>
   readonly #touch = keepAwake()
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env)
-    this.#space = makeSpaceObject(
-      SqliteClient.layer({ storage: ctx.storage }),
-      env.CF_VERSION_METADATA.id,
+    this.#space = import('./server.ts').then((server) =>
+      server.spaceObject(ctx.storage, env.CF_VERSION_METADATA.id),
     )
   }
 
   override async fetch(request: Request) {
     this.#touch()
     try {
-      return await this.#space.fetch(request)
+      return await (await this.#space).fetch(request)
     } finally {
       await this.#settleSoon()
     }
   }
 
-  holdsItem(itemId: string) {
-    return this.#space.holdsItem(itemId)
+  async holdsItem(itemId: string) {
+    return (await this.#space).holdsItem(itemId)
   }
 
-  hasConnection(connectionId: string) {
-    return this.#space.hasConnection(connectionId)
+  async hasConnection(connectionId: string) {
+    return (await this.#space).hasConnection(connectionId)
   }
 
   async storeWebhook(body: string) {
-    await this.#space.storeWebhook(body)
+    await (await this.#space).storeWebhook(body)
     await this.#settleSoon()
   }
 
   override async alarm() {
     try {
-      await this.#space.drain()
+      await (await this.#space).drain()
     } catch (error) {
       console.error('Space reactors failed; retrying in a minute', error)
       await this.ctx.storage.setAlarm(Date.now() + retryDelay)

@@ -69,6 +69,9 @@ export interface OrphanedDecision {
   readonly reserved: ReadonlyArray<string>
 }
 
+const byKey = (a: { readonly key: string }, b: { readonly key: string }) =>
+  a.key.localeCompare(b.key)
+
 const EntryRow = Schema.Struct({
   id: Schema.String,
   accountId: Schema.String,
@@ -107,32 +110,49 @@ const RelationRow = Schema.Struct({
   reasons: Schema.fromJsonString(Schema.Array(Schema.String)),
 }).pipe(Schema.decodeTo(Relation))
 
-const encodeReasons = Schema.encodeEffect(
-  Schema.fromJsonString(Schema.Array(Schema.String)),
-)
+// Reasons and entry ids, stored as JSON arrays.
+const Strings = Schema.fromJsonString(Schema.Array(Schema.String))
+const encodeStrings = Schema.encodeEffect(Strings)
 
-// Equal only when every stored relation matches in full: kind, legs, status,
+const OrphanRow = Schema.Struct({
+  key: Schema.String,
+  reason: Schema.Literals([
+    'entry_missing',
+    'entry_split',
+    'overlapping_confirmation',
+  ]),
+  missing: Strings,
+  reserved: Strings,
+})
+
+// Equal only when the stored relation matches in full: kind, legs, status,
 // origin, score and reasons all reach readers.
-const sameRelations = (
-  stored: ReadonlyArray<Relation>,
-  matched: ReadonlyArray<MatchedRelation>,
-) => {
-  if (stored.length !== matched.length) return false
-  const byKey = new Map(stored.map((relation) => [relation.key, relation]))
-  return matched.every((relation) => {
-    const found = byKey.get(relation.key)
-    return (
-      found !== undefined &&
-      found.kind === relation.kind &&
-      found.outflowEntryId === relation.outflowId &&
-      found.inflowEntryId === relation.inflowId &&
-      found.status === relation.status &&
-      found.origin === relation.origin &&
-      found.score === relation.score &&
-      found.reasons.join('|') === relation.reasons.join('|')
-    )
-  })
-}
+const sameRelation = (stored: Relation, matched: MatchedRelation) =>
+  stored.kind === matched.kind &&
+  stored.outflowEntryId === matched.outflowId &&
+  stored.inflowEntryId === matched.inflowId &&
+  stored.status === matched.status &&
+  stored.origin === matched.origin &&
+  stored.score === matched.score &&
+  stored.reasons.join('|') === matched.reasons.join('|')
+
+const orphanFingerprint = (orphan: OrphanedDecision) =>
+  [
+    orphan.key,
+    orphan.reason,
+    orphan.missing.join('|'),
+    orphan.reserved.join('|'),
+  ].join('\u0000')
+
+const sameOrphans = (
+  stored: ReadonlyArray<OrphanedDecision>,
+  matched: ReadonlyArray<OrphanedDecision>,
+) =>
+  stored.length === matched.length &&
+  stored.every(
+    (orphan, index) =>
+      orphanFingerprint(orphan) === orphanFingerprint(matched[index]!),
+  )
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -232,9 +252,46 @@ const make = Effect.gen(function* () {
     `,
   })
 
+  // The entries matching considers, by id alone: what following decisions needs.
+  const findEntryIds = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Schema.Struct({ id: Schema.String }),
+    execute: () => sql`
+      SELECT e.id FROM ledger_entries e JOIN accounts a ON a.id = e.account_id
+      JOIN institutions i ON i.id = a.institution_id JOIN owners o ON o.id = a.owner_id
+      WHERE a.archived_at IS NULL
+    `,
+  })
+  const findOrphans = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: OrphanRow,
+    execute: () =>
+      sql`SELECT key, reason, missing, reserved FROM relation_orphans`,
+  })
+
   const relations = findRelations(undefined).pipe(
     Effect.withSpan('Reconciliation.relations'),
   )
+
+  // Where each stored decision applies among the entries now.
+  const follow = Effect.fnUntraced(function* (entryIds: ReadonlySet<string>) {
+    const holders = new Map<string, Array<string>>()
+    for (const row of yield* findHolders(undefined)) {
+      const list = holders.get(`${row.side}:${row.key}`) ?? []
+      list.push(row.entryId)
+      holders.set(`${row.side}:${row.key}`, list)
+    }
+    const holdersOf = (key: string, side: 'outflow' | 'inflow') =>
+      holders.get(`${side}:${key}`) ?? []
+    return followDecisions(
+      (yield* findDecisions(undefined)).map((row) => ({
+        ...row,
+        outflowHolders: holdersOf(row.key, 'outflow'),
+        inflowHolders: holdersOf(row.key, 'inflow'),
+      })),
+      entryIds,
+    )
+  })
 
   const match = Effect.gen(function* () {
     // Every source's description counts: one naming a third party keeps a
@@ -247,22 +304,7 @@ const make = Effect.gen(function* () {
         ],
       }),
     )
-    const holders = new Map<string, Array<string>>()
-    for (const row of yield* findHolders(undefined)) {
-      const list = holders.get(`${row.side}:${row.key}`) ?? []
-      list.push(row.entryId)
-      holders.set(`${row.side}:${row.key}`, list)
-    }
-    const holdersOf = (key: string, side: 'outflow' | 'inflow') =>
-      holders.get(`${side}:${key}`) ?? []
-    const followed = followDecisions(
-      (yield* findDecisions(undefined)).map((row) => ({
-        ...row,
-        outflowHolders: holdersOf(row.key, 'outflow'),
-        inflowHolders: holdersOf(row.key, 'inflow'),
-      })),
-      new Set(entries.map((entry) => entry.id)),
-    )
+    const followed = yield* follow(new Set(entries.map((entry) => entry.id)))
     const matching = matchRelations(
       entries,
       followed.decisions,
@@ -277,46 +319,79 @@ const make = Effect.gen(function* () {
         ...split,
         reason: 'entry_split',
       })),
-    ].sort((a, b) => a.key.localeCompare(b.key))
-    return { relations: matching.relations, orphaned, followed }
-  })
+    ].sort(byKey)
+    return { relations: matching.relations, orphaned }
+  }).pipe(Effect.withSpan('Reconciliation.match'))
 
-  /** Confirmations that no longer hold their entries, for the person to resolve. */
-  const orphanedDecisions = match.pipe(
-    Effect.map((matching) => matching.orphaned),
+  /**
+   * Confirmations that no longer hold their entries, for the person to
+   * resolve, as of the latest rebuild.
+   */
+  const orphanedDecisions = findOrphans(undefined).pipe(
+    Effect.map((rows): ReadonlyArray<OrphanedDecision> => rows.toSorted(byKey)),
     Effect.withSpan('Reconciliation.orphanedDecisions'),
   )
 
-  // Callers hold `lock`. Reads and the replacement share one transaction.
+  // Callers hold `lock`. Reads and the replacement share one transaction;
+  // only what changed is written. Orphans are stored beside relations but
+  // emit nothing: no reactor reads them.
   const replaceRelations = sql.withTransaction(
     Effect.gen(function* () {
       const sequence = yield* log.latestSequence
-      const matched = (yield* match).relations
-      if (sameRelations(yield* relations, matched)) {
-        yield* markRebuilt(sequence)
-        return false
-      }
-      yield* sql`DELETE FROM relations`
-      for (const relation of matched) {
+      const matched = yield* match
+      const stored = new Map(
+        (yield* relations).map((relation) => [relation.key, relation]),
+      )
+      const next = new Map(
+        matched.relations.map((relation) => [relation.key, relation]),
+      )
+      // Changed rows are replaced whole; deleting first frees the inflow a
+      // new relation may take from a removed one.
+      const stale = [...stored.values()].filter((relation) => {
+        const found = next.get(relation.key)
+        return found === undefined || !sameRelation(relation, found)
+      })
+      const fresh = matched.relations.filter((relation) => {
+        const found = stored.get(relation.key)
+        return found === undefined || !sameRelation(found, relation)
+      })
+      for (const relation of stale)
+        yield* sql`DELETE FROM relations WHERE key = ${relation.key}`
+      for (const relation of fresh) {
         yield* sql`
           INSERT INTO relations (key, kind, outflow_entry_id, inflow_entry_id, status, origin, score, reasons)
           VALUES (${relation.key}, ${relation.kind}, ${relation.outflowId}, ${relation.inflowId},
-            ${relation.status}, ${relation.origin}, ${relation.score}, ${yield* encodeReasons(relation.reasons)})
+            ${relation.status}, ${relation.origin}, ${relation.score}, ${yield* encodeStrings(relation.reasons)})
         `
       }
-      yield* log.append([
-        {
-          type: relationsChanged,
-          streamId: 'relations',
-          payload: { relations: matched.length },
-        },
-      ])
+      if (!sameOrphans(yield* orphanedDecisions, matched.orphaned)) {
+        yield* sql`DELETE FROM relation_orphans`
+        for (const orphan of matched.orphaned) {
+          yield* sql`
+            INSERT INTO relation_orphans (key, reason, missing, reserved)
+            VALUES (${orphan.key}, ${orphan.reason}, ${yield* encodeStrings(orphan.missing)},
+              ${yield* encodeStrings(orphan.reserved)})
+          `
+        }
+      }
+      const changed = stale.length > 0 || fresh.length > 0
+      if (changed)
+        yield* log.append([
+          {
+            type: relationsChanged,
+            streamId: 'relations',
+            payload: { relations: matched.relations.length },
+          },
+        ])
       yield* markRebuilt(sequence)
-      return true
+      return changed
     }),
   )
 
-  /** Recomputes every relation from entries and decisions; emits `RelationsChanged` on change. */
+  /**
+   * Recomputes every relation and orphaned confirmation from entries and
+   * decisions; emits `RelationsChanged` when relations change.
+   */
   const rebuild = Effect.fn('Reconciliation.rebuild')(function* () {
     return yield* serialized(replaceRelations)
   })
@@ -379,7 +454,9 @@ const make = Effect.gen(function* () {
     key: string,
     decision: Decision,
   ) {
-    const { followed } = yield* match
+    const followed = yield* follow(
+      new Set((yield* findEntryIds(undefined)).map((entry) => entry.id)),
+    )
     const sources = [...followed.currentKeys]
       .filter(([, keys]) => keys.length === 1 && keys[0] === key)
       .map(([stored]) => stored)
@@ -575,6 +652,7 @@ export class Reconciliation extends Context.Service<
 export const reactor = Reactor.layer({
   name: 'reconciliation',
   types: [entriesResolved, 'AccountUpdated', 'TransactionObserved'],
+  projection: true,
   handle: (event) =>
     Effect.gen(function* () {
       const reconciliation = yield* Reconciliation

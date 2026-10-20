@@ -1,4 +1,4 @@
-import { webhookPath } from '@spendle/server/durable'
+import { webhookPath } from '@spendle/server/routing'
 import handler from '@tanstack/react-start/server-entry'
 import { env } from 'cloudflare:workers'
 

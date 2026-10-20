@@ -5,6 +5,7 @@ import { Categories } from '../../categories/Categories.ts'
 import { Categorizer } from '../../categories/Categorizer.ts'
 import { KnowledgeStore } from '../../categories/KnowledgeStore.ts'
 import { builtInProviderCategories } from '../../categories/ProviderCategories.ts'
+import { Reactors, settled } from '../../events/Reactor.ts'
 import { SpendleApi } from '../definition/Api.ts'
 import { respond } from '../Failures.ts'
 import { ReadModel } from '../ReadModel.ts'
@@ -45,6 +46,8 @@ export const CategoryStoreHandlers = HttpApiBuilder.group(
     const store = yield* KnowledgeStore
     const categorizer = yield* Categorizer
     const reads = yield* ReadModel
+    // The categorizer reapplies an edited store in a reactor; edits answer once it did.
+    const settle = settled(yield* Reactors)
     return handlers.handleAll({
       patterns: () => store.list.pipe(respond('categoryStore.patterns')),
       preview: ({ payload }) =>
@@ -60,6 +63,7 @@ export const CategoryStoreHandlers = HttpApiBuilder.group(
         }).pipe(respond('categoryStore.preview')),
       edit: ({ payload }) =>
         store.edit(payload.edit).pipe(
+          settle,
           Effect.map((patternId) => ({ patternId })),
           respond('categoryStore.edit'),
         ),
@@ -98,8 +102,14 @@ export const CategoryDecisionsHandlers = HttpApiBuilder.group(
   'categoryDecisions',
   Effect.fn(function* (handlers) {
     const categorizer = yield* Categorizer
-    const then = (entryId: string) =>
-      Effect.andThen(categorizer.explain(entryId))
+    // A decision rebuilds inferences as it commits; settling covers what its
+    // events start (relations' categories, a store change), and the
+    // explanation is read after both.
+    const settle = settled(yield* Reactors)
+    const then =
+      (entryId: string) =>
+      <A, E, R>(decided: Effect.Effect<A, E, R>) =>
+        settle(decided).pipe(Effect.andThen(categorizer.explain(entryId)))
     return handlers.handleAll({
       review: () =>
         categorizer.reviewQueue.pipe(respond('categoryDecisions.review')),

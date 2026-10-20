@@ -31,6 +31,7 @@ export const EntriesHandlers = HttpApiBuilder.group(
             }),
           ),
         ),
+      counts: () => reads.entryCounts.pipe(respond('entries.counts')),
       get: ({ params }) =>
         reads.entryDetail(params.entryId).pipe(
           respond('entries.get'),

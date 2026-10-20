@@ -54,10 +54,10 @@ import {
 } from '#/features/data/categories.functions'
 import {
   categoriesOptions,
-  invalidateAfterReactors,
   providerMappingsOptions,
   storePatternsOptions,
 } from '#/features/data/queries'
+import { invalidateFinance } from '#/features/finance/queries'
 import { errorMessage } from '#/lib/api/errors'
 
 import type { StoreEdit, StorePattern } from '@spendle/server/api'
@@ -103,10 +103,10 @@ export function KnowledgeBaseSection() {
       setEditing(null)
       toast.success(
         changed
-          ? `Base atualizada. ${changed} ${changed === 1 ? 'lançamento muda' : 'lançamentos mudam'} de categoria em instantes.`
+          ? `Base atualizada. ${changed} ${changed === 1 ? 'lançamento muda' : 'lançamentos mudam'} de categoria.`
           : 'Base atualizada.',
       )
-      void invalidateAfterReactors(queryClient, 'knowledgeBase')
+      void invalidateFinance(queryClient, 'knowledgeBase')
     },
     onError: (error) =>
       toast.error(errorMessage(error, 'Não foi possível salvar.')),

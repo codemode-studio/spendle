@@ -17,9 +17,10 @@ import { EventLog } from '../events/EventLog.ts'
 import * as Reactor from '../events/Reactor.ts'
 import { OpenFinance } from './OpenFinance.ts'
 import { PluggyClient } from './PluggyClient.ts'
+import { webhookPath } from './WebhookPath.ts'
 import { WebhookConfig } from './WebhookConfig.ts'
 
-export const webhookPath = '/api/pluggy/webhook'
+export { webhookPath }
 export const webhookReceived = 'PluggyWebhookReceived'
 
 /**

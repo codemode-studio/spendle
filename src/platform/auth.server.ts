@@ -15,4 +15,6 @@ export const authPlatform: AuthPlatform = {
     return new DatabaseSync(path)
   },
   fetchClientMetadataResource,
+  // Comparing a local file's schema costs next to nothing; do it each start.
+  migrate: (migrate) => migrate(),
 }
