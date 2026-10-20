@@ -36,7 +36,6 @@ function candidate(
 ) {
   return {
     entryId: id,
-    inWindow: true,
     sameCategory: false,
     amountDifferenceCents: 0,
     daysApart: 1,

@@ -87,6 +87,8 @@ const reasonMessages: Record<string, string | undefined> = {
   recurrence_paused: 'Retome a recorrência antes de vincular pagamentos.',
   entry_not_linkable:
     'Esse lançamento não pode ser vinculado: confira se está confirmado, na mesma moeda e direção, e se não é transferência.',
+  entry_outside_period:
+    'Esse lançamento é de outro período. Vincule-o ao período da data dele.',
   single_payment:
     'Essa recorrência aceita um pagamento por período. Para somar vários, use envelope.',
   nothing_linked: 'Vincule pelo menos um lançamento antes de concluir.',

@@ -220,6 +220,56 @@ describe('planning API', () => {
   )
 
   it.effect(
+    'fills an envelope period only with payments booked inside it',
+    () =>
+      Effect.gen(function* () {
+        const { client, rent } = yield* september
+        const { entries } = yield* client.entries.list({ query: {} })
+        const market = entries.find(
+          (entry) => entry.description === 'SUPERMERCADO BOM',
+        )!
+        // The period runs from 11/09 to 10/10: the rent, on 10/09, is before it.
+        const { id } = yield* client.recurrences.create({
+          payload: {
+            name: 'Mercado',
+            accountId: null,
+            categoryId: 'groceries',
+            amountCents: 100_000,
+            currency: 'BRL',
+            direction: 'expense',
+            amountMode: 'variable',
+            matchMode: 'aggregate',
+            destinationMode: 'automatic',
+            frequency: 'monthly',
+            nextDate: '2026-09-11',
+          },
+        })
+        const period = { recurrenceId: id, expectedDate: '2026-09-11' }
+        const candidates = yield* client.recurrences.candidates({
+          query: period,
+        })
+        const outside = yield* client.recurrences
+          .link({ payload: { ...period, entryIds: [market.id, rent.id] } })
+          .pipe(Effect.flip)
+        const inside = yield* client.recurrences.link({
+          payload: { ...period, entryIds: [market.id] },
+        })
+        assert.deepStrictEqual(
+          {
+            candidates: candidates.map((candidate) => candidate.entryId),
+            outside: 'reason' in outside ? outside.reason : outside._tag,
+            inside: inside.linked,
+          },
+          {
+            candidates: [market.id],
+            outside: 'entry_outside_period',
+            inside: 1,
+          },
+        )
+      }).pipe(Effect.provide(apiTest())),
+  )
+
+  it.effect(
     'saves goals and the plan, and approves a detected recurrence with its history',
     () =>
       Effect.gen(function* () {

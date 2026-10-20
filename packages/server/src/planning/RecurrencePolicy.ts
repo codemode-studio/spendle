@@ -601,7 +601,6 @@ export const acceptedEntries = (book: ReadonlyArray<BookRecurrence>) =>
 /** An entry offered when the person links a payment by hand. */
 export interface LinkCandidate {
   readonly entryId: string
-  readonly inWindow: boolean
   readonly sameCategory: boolean
   readonly amountDifferenceCents: number
   readonly daysApart: number
@@ -609,6 +608,21 @@ export interface LinkCandidate {
 }
 
 /** Posted entries that could pay the occurrence, most plausible first. */
+/**
+ * Whether an entry can pay the occurrence of `expectedDate`. An envelope
+ * period only sums what was booked inside it; a single payment may come
+ * early or late.
+ */
+export const withinPeriod = (
+  rule: RecurrenceRule,
+  expectedDate: string,
+  entry: RecurrenceEntry,
+) => {
+  if (rule.matchMode === 'single') return true
+  const window = aggregateWindow(expectedDate, rule)
+  return entry.bookedOn >= window.start && entry.bookedOn < window.end
+}
+
 export const linkCandidates = (input: {
   readonly rule: RecurrenceRule
   readonly expectedDate: string
@@ -616,13 +630,13 @@ export const linkCandidates = (input: {
   readonly taken: ReadonlySet<string>
 }): ReadonlyArray<LinkCandidate> => {
   const { rule } = input
-  const window = aggregateWindow(input.expectedDate, rule)
   return input.entries
     .flatMap((entry) => {
       if (
         !eligible(entry) ||
         entry.currency !== rule.currency ||
         Math.sign(entry.amountCents) !== expectedSign(rule.direction) ||
+        !withinPeriod(rule, input.expectedDate, entry) ||
         input.taken.has(entry.id)
       )
         return []
@@ -630,18 +644,15 @@ export const linkCandidates = (input: {
         Math.abs(entry.amountCents) - rule.amountCents,
       )
       const daysApart = Math.abs(daysFrom(input.expectedDate, entry.bookedOn))
-      const inWindow =
-        entry.bookedOn >= window.start && entry.bookedOn < window.end
       const sameCategory = entry.categoryId === rule.categoryId
       const rank =
         rule.matchMode === 'aggregate'
-          ? (inWindow ? 0 : 1_000) + (sameCategory ? 0 : 500) + daysApart
+          ? (sameCategory ? 0 : 500) + daysApart
           : (amountDifferenceCents / Math.max(rule.amountCents, 1)) * 100 +
             daysApart
       return [
         {
           entryId: entry.id,
-          inWindow,
           sameCategory,
           amountDifferenceCents,
           daysApart,
