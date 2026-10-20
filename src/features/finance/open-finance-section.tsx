@@ -8,6 +8,7 @@ import {
   Plug,
   PlugZap,
   RefreshCw,
+  Trash2,
   Unlink,
   Unplug,
 } from 'lucide-react'
@@ -350,6 +351,8 @@ function ConnectionCard({
   const reconnectToken = useServerFn(reconnectTokenFn)
   const unlink = useServerFn(unlinkProviderAccountFn)
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
+  // A request that never reached a bank is removed, not kept as history.
+  const unfinished = connection.itemId === null
   const status = statusCopy[connection.status]
   const accountName = new Map(
     (accounts ?? []).map((account) => [account.id, account.name]),
@@ -383,7 +386,9 @@ function ConnectionCard({
     onSuccess: () => {
       setConfirmDisconnect(false)
       toast.success(
-        'Banco desconectado. Os lançamentos já copiados continuam no histórico.',
+        unfinished
+          ? 'Pedido de conexão removido.'
+          : 'Banco desconectado. Os lançamentos já copiados continuam no histórico.',
       )
       void invalidateAfterReactors(queryClient)
     },
@@ -441,10 +446,12 @@ function ConnectionCard({
             {refreshMutation.isPending ? <Spinner /> : <CircleDashed />}
           </IconAction>
           <IconAction
-            label="Desconectar banco"
+            label={
+              unfinished ? 'Remover pedido de conexão' : 'Desconectar banco'
+            }
             onClick={() => setConfirmDisconnect(true)}
           >
-            <Unplug />
+            {unfinished ? <Trash2 /> : <Unplug />}
           </IconAction>
         </CardAction>
       </CardHeader>
@@ -473,7 +480,7 @@ function ConnectionCard({
         {connection.status === 'pending' && connection.itemId === null ? (
           <p className="text-sm text-muted-foreground">
             A autorização na Pluggy não foi concluída. Use Conectar banco para
-            tentar de novo, ou desconecte para remover este pedido.
+            tentar de novo, ou remova este pedido.
           </p>
         ) : null}
 
@@ -584,11 +591,14 @@ function ConnectionCard({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Desconectar {connection.connectorName ?? 'este banco'}?
+              {unfinished
+                ? 'Remover este pedido de conexão?'
+                : `Desconectar ${connection.connectorName ?? 'este banco'}?`}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              A sincronização para e a autorização na Pluggy é removida. Os
-              lançamentos já copiados continuam no histórico.
+              {unfinished
+                ? 'Ele não chegou a um banco: nada foi copiado e nada fica no histórico.'
+                : 'A sincronização para e a autorização na Pluggy é removida. Os lançamentos já copiados continuam no histórico.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -604,8 +614,18 @@ function ConnectionCard({
                 })
               }
             >
-              <Unplug data-icon="inline-start" />
-              {disconnectMutation.isPending ? 'Desconectando…' : 'Desconectar'}
+              {unfinished ? (
+                <Trash2 data-icon="inline-start" />
+              ) : (
+                <Unplug data-icon="inline-start" />
+              )}
+              {unfinished
+                ? disconnectMutation.isPending
+                  ? 'Removendo…'
+                  : 'Remover'
+                : disconnectMutation.isPending
+                  ? 'Desconectando…'
+                  : 'Desconectar'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

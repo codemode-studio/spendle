@@ -168,6 +168,32 @@ describe('Open Finance API', () => {
     }).pipe(Effect.provide(apiTest())),
   )
 
+  it.effect('reuses an abandoned request and removes it without a trace', () =>
+    Effect.gen(function* () {
+      const client = yield* apiClient()
+      const owner = yield* client.owners.create({
+        payload: { name: 'Donald', kind: 'person' },
+      })
+      const request = { payload: { ownerId: owner.id } }
+      // The person closed the widget before choosing a bank, then tried again.
+      const first = yield* client.openFinance.createConnectToken(request)
+      const again = yield* client.openFinance.createConnectToken(request)
+      const pending = yield* client.openFinance.connections()
+      yield* client.openFinance.disconnect({
+        params: { connectionId: again.connectionId },
+      })
+      const after = yield* client.openFinance.connections()
+      assert.deepStrictEqual(
+        {
+          reused: again.connectionId === first.connectionId,
+          pending: pending.map((connection) => connection.status),
+          after: after.length,
+        },
+        { reused: true, pending: ['pending'], after: 0 },
+      )
+    }).pipe(Effect.provide(apiTest())),
+  )
+
   it.effect('answers 404 for an unknown owner or connection', () =>
     Effect.gen(function* () {
       const client = yield* apiClient()
