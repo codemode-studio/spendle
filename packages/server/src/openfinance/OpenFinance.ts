@@ -404,12 +404,21 @@ const make = Effect.gen(function* () {
       const owner = yield* sql`SELECT 1 FROM owners WHERE id = ${input.ownerId}`
       if (owner.length === 0)
         return yield* new OwnerNotFound({ ownerId: input.ownerId })
-      const connectionId = yield* crypto.randomUUIDv7
-      const createdAt = yield* now
-      yield* sql`
-        INSERT INTO open_finance_connections (id, owner_id, status, created_at, updated_at)
-        VALUES (${connectionId}, ${input.ownerId}, 'pending', ${createdAt}, ${createdAt})
+      // A request the person abandoned in the widget is tried again rather
+      // than left behind as another connection that never reached a bank.
+      const unfinished = yield* sql<{ id: string }>`
+        SELECT id FROM open_finance_connections
+        WHERE owner_id = ${input.ownerId} AND status = 'pending' AND item_id IS NULL
+        ORDER BY created_at, id LIMIT 1
       `
+      const connectionId = unfinished[0]?.id ?? (yield* crypto.randomUUIDv7)
+      if (unfinished.length === 0) {
+        const createdAt = yield* now
+        yield* sql`
+          INSERT INTO open_finance_connections (id, owner_id, status, created_at, updated_at)
+          VALUES (${connectionId}, ${input.ownerId}, 'pending', ${createdAt}, ${createdAt})
+        `
+      }
       const accessToken = yield* pluggy.createConnectToken({
         clientUserId: connectionId,
         webhookUrl,
@@ -1331,6 +1340,14 @@ const make = Effect.gen(function* () {
   const disconnect = Effect.fn('OpenFinance.disconnect')(function* (
     connectionId: string,
   ) {
+    // A request that never reached a bank holds nothing to keep as history:
+    // it goes away. One whose item was pinned meanwhile is disconnected.
+    const removed = yield* sql`
+      DELETE FROM open_finance_connections
+      WHERE id = ${connectionId} AND item_id IS NULL AND status != 'disconnected'
+      RETURNING id
+    `
+    if (removed.length > 0) return
     const current = yield* connection(connectionId)
     if (current.itemId !== null) {
       // Revoking consent at Pluggy comes first; an item already gone is fine.
