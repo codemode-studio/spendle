@@ -36,8 +36,11 @@ jobs:
         run: vp run -r --parallel typecheck
       - name: Test
         run: vp run -r --parallel test
+      # Any origin builds the same Worker; `Deploy` uses the real one.
       - name: Build
         run: vp run build
+        env:
+          SPENDLE_ORIGIN: https://spendle.example.com
       # Validates the Worker build `Deploy` would upload, without credentials.
       - name: Check deploy
         run: vp run deploy:check

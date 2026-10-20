@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: production
-      url: https://spendle.codemode.studio
+      url: ${{ vars.SPENDLE_ORIGIN }}
     env:
       CF_SEND_TELEMETRY: 'false'
     steps:
@@ -49,9 +49,13 @@ jobs:
           node-version-file: .node-version
           cache: true
           run-install: true
+      # The production origin is a repository variable, so a fork deploys to
+      # its own domain.
       - name: Build
         if: steps.main.outputs.current == 'true'
         run: vp run build
+        env:
+          SPENDLE_ORIGIN: ${{ vars.SPENDLE_ORIGIN }}
       # Worker secrets live in Cloudflare and carry over to each new version.
       - name: Deploy
         if: steps.main.outputs.current == 'true'
