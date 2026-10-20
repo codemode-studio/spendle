@@ -25,7 +25,12 @@ export default defineConfig(({ mode }) => {
       // `BETTER_AUTH_URL`, so a workers.dev copy would only show the sign-in.
       domains: qa ? [] : [new URL(origin).hostname],
       workersDev: false,
-      observability: { enabled: true },
+      // D1 and both Durable Objects live in the eastern US (the objects in
+      // IAD and EWR; D1 has no South American region), so the Worker runs
+      // beside them: a request crosses the continent once instead of on
+      // every session read and API call. Static assets stay at the edge.
+      placement: qa ? undefined : { region: 'aws:us-east-1' },
+      observability: { enabled: true, traces: { enabled: true } },
       exports: {
         Control: exports.durableObject({ storage: 'sqlite' }),
         Space: exports.durableObject({ storage: 'sqlite' }),

@@ -87,7 +87,9 @@ function createAuth() {
     },
     plugins: [
       // Signs the MCP access tokens and serves the keys at `/api/auth/jwks`.
-      jwt(),
+      // Nothing reads the `set-auth-jwt` header it would add to every
+      // session read, at the cost of a signing-key lookup and a signature.
+      jwt({ disableSettingJwtHeader: true }),
       mcp({
         loginPage: '/entrar',
         consentPage: '/autorizar',
