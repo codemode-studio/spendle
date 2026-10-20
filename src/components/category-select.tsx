@@ -1,14 +1,19 @@
 import { CircleAlert } from 'lucide-react'
 
+import { Button } from '#/components/ui/button'
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from '#/components/ui/select'
+  Combobox,
+  ComboboxCollection,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxLabel,
+  ComboboxList,
+  ComboboxTrigger,
+  ComboboxValue,
+} from '#/components/ui/combobox'
 import { groupCategoryOptions } from '#/lib/categories'
 import type { CategoryOption } from '#/lib/categories'
 import { cn } from '#/lib/utils'
@@ -16,11 +21,8 @@ import { cn } from '#/lib/utils'
 interface CategorySelectProps {
   categories: CategoryOption[]
   value?: string | null
-  defaultValue?: string | null
   onValueChange?: (categoryId: string) => void
   allowTransfer?: boolean
-  name?: string
-  required?: boolean
   disabled?: boolean
   className?: string
   /** `ghost`: sem borda até o hover, com ponto na cor da categoria. Para listas densas. */
@@ -31,11 +33,8 @@ interface CategorySelectProps {
 export function CategorySelect({
   categories,
   value,
-  defaultValue,
   onValueChange,
   allowTransfer = true,
-  name,
-  required,
   disabled,
   className,
   variant = 'default',
@@ -45,40 +44,44 @@ export function CategorySelect({
     ? categories
     : categories.filter((category) => category.id !== 'transfer')
   const groups = groupCategoryOptions(availableCategories)
-  const items = [...groups.income, ...groups.expenses].map((category) => ({
-    label: category.name,
-    value: category.id,
-  }))
-  const currentId = value ?? defaultValue ?? null
-  const uncategorized = !currentId || currentId === 'uncategorized'
-  const currentColor =
-    availableCategories.find((category) => category.id === currentId)?.color ??
-    '#94a3b8'
+  // Base UI filters grouped items and hides groups left without matches.
+  const items = [
+    { value: 'Receitas', items: groups.income },
+    { value: 'Despesas', items: groups.expenses },
+  ]
+  const selected =
+    availableCategories.find((category) => category.id === value) ?? null
+  const uncategorized = !value || value === 'uncategorized'
 
   return (
-    <Select
+    <Combobox
       items={items}
-      value={value}
-      defaultValue={defaultValue}
-      name={name}
-      required={required}
+      value={selected}
       disabled={disabled}
-      onValueChange={(categoryId) => {
-        if (categoryId) onValueChange?.(categoryId)
+      itemToStringLabel={(category) => category.name}
+      isItemEqualToValue={(item, current) => item.id === current.id}
+      onValueChange={(category) => {
+        if (category) onValueChange?.(category.id)
       }}
     >
-      <SelectTrigger
-        size={variant === 'ghost' ? 'sm' : 'default'}
-        className={cn(
-          variant === 'ghost'
-            ? 'max-w-full border-transparent shadow-none hover:border-input hover:bg-muted/50 data-popup-open:border-input data-popup-open:bg-muted/50'
-            : 'w-full',
-          variant === 'ghost' &&
-            uncategorized &&
-            'bg-amber-50 text-amber-900 hover:border-amber-200 hover:bg-amber-100',
-          className,
-        )}
+      <ComboboxTrigger
         aria-label={ariaLabel}
+        render={
+          <Button
+            variant={variant === 'ghost' ? 'ghost' : 'outline'}
+            size={variant === 'ghost' ? 'sm' : 'default'}
+            className={cn(
+              'justify-between text-sm font-normal',
+              variant === 'ghost'
+                ? 'max-w-full hover:border-input hover:bg-muted/50 aria-expanded:border-input aria-expanded:bg-muted/50'
+                : 'w-full',
+              variant === 'ghost' &&
+                uncategorized &&
+                'bg-amber-50 text-amber-900 hover:border-amber-200 hover:bg-amber-100',
+              className,
+            )}
+          />
+        }
       >
         {variant === 'ghost' &&
           (uncategorized ? (
@@ -86,29 +89,31 @@ export function CategorySelect({
           ) : (
             <span
               className="size-2 shrink-0 rounded-full"
-              style={{ background: currentColor }}
+              style={{ background: selected?.color ?? '#94a3b8' }}
             />
           ))}
-        <SelectValue placeholder="Selecione uma categoria" />
-      </SelectTrigger>
-      <SelectContent align="start" alignItemWithTrigger={false}>
-        <SelectGroup>
-          <SelectLabel>Receitas</SelectLabel>
-          {groups.income.map((category) => (
-            <SelectItem key={category.id} value={category.id}>
-              {category.name}
-            </SelectItem>
-          ))}
-        </SelectGroup>
-        <SelectGroup>
-          <SelectLabel>Despesas</SelectLabel>
-          {groups.expenses.map((category) => (
-            <SelectItem key={category.id} value={category.id}>
-              {category.name}
-            </SelectItem>
-          ))}
-        </SelectGroup>
-      </SelectContent>
-    </Select>
+        <span className="flex-1 truncate text-left">
+          <ComboboxValue placeholder="Selecione uma categoria" />
+        </span>
+      </ComboboxTrigger>
+      <ComboboxContent className="min-w-56">
+        <ComboboxInput showTrigger={false} placeholder="Buscar categoria" />
+        <ComboboxEmpty>Nenhuma categoria encontrada.</ComboboxEmpty>
+        <ComboboxList>
+          {(group: (typeof items)[number]) => (
+            <ComboboxGroup key={group.value} items={group.items}>
+              <ComboboxLabel>{group.value}</ComboboxLabel>
+              <ComboboxCollection>
+                {(category: CategoryOption) => (
+                  <ComboboxItem key={category.id} value={category}>
+                    {category.name}
+                  </ComboboxItem>
+                )}
+              </ComboboxCollection>
+            </ComboboxGroup>
+          )}
+        </ComboboxList>
+      </ComboboxContent>
+    </Combobox>
   )
 }
