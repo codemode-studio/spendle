@@ -598,7 +598,6 @@ const make = Effect.gen(function* () {
       })
     yield* sql.withTransaction(
       Effect.gen(function* () {
-        yield* sql`DELETE FROM v1_import_recurrence_links WHERE recurrence_id = ${id}`
         yield* sql`DELETE FROM recurrences WHERE id = ${id}`
         yield* changed(id, 'deleted')
       }),
@@ -614,7 +613,7 @@ const make = Effect.gen(function* () {
   const writeLink = Effect.fnUntraced(function* (
     ref: MatchRef,
     decision: 'confirmed' | 'rejected',
-    origin: 'person' | 'approval' | 'v1_import',
+    origin: 'person' | 'approval',
   ) {
     const existing = (yield* verdicts).filter(
       (link) =>
@@ -1010,9 +1009,6 @@ const make = Effect.gen(function* () {
     ignore,
     approve,
     candidates,
-    /** For `migrate-v1`: a V1 link applied as the person's verdict. */
-    importLink: (ref: MatchRef) =>
-      sql.withTransaction(writeLink(ref, 'confirmed', 'v1_import')),
   }
 })
 

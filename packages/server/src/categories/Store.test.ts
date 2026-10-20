@@ -1,7 +1,7 @@
 import { assert, describe, it } from '@effect/vitest'
 
-import { applyEdit, importPatterns, learn } from './Store.ts'
-import type { ImportedPattern, PatternRow, StoreEdit } from './Store.ts'
+import { applyEdit, learn } from './Store.ts'
+import type { PatternRow, StoreEdit } from './Store.ts'
 
 let ids = 0
 const clock = () => ({ now: '2026-10-04T12:00:00.000Z', newId: `p${++ids}` })
@@ -164,53 +164,6 @@ describe('applyEdit', () => {
     assert.strictEqual(
       applyEdit(rows, { _tag: 'PromoteToPrefix', id: rows[0]!.id }, clock()).ok,
       false,
-    )
-  })
-})
-
-describe('importPatterns', () => {
-  const imported = (
-    id: string,
-    pattern: string,
-    fields: Partial<ImportedPattern> = {},
-  ): ImportedPattern => ({
-    id,
-    pattern,
-    matchMode: 'exact',
-    direction: 'expense',
-    categoryId: 'groceries',
-    signature: pattern,
-    sampleDescription: pattern.toUpperCase(),
-    confirmations: 4,
-    corrections: 2,
-    lastLearnedAt: '2026-08-29T10:40:00.000Z',
-    ...fields,
-  })
-
-  it('keeps counts and modes, and yields to what the person taught V2', () => {
-    const taught = teach([], 'Padaria Real', 'restaurants')
-    const result = importPatterns(taught, [
-      imported('v1-a', 'padaria real'),
-      imported('v1-b', 'mp', { matchMode: 'prefix', categoryId: 'shopping' }),
-      imported('v1-c', 'ab'),
-    ])
-
-    assert.deepStrictEqual(result.outcomes, [
-      'taken',
-      'added',
-      'invalid_pattern',
-    ])
-    assert.deepStrictEqual(summary(result.rows), [
-      ['padaria real', 'exact', 'restaurants', 1, 0],
-      ['mp', 'prefix', 'shopping', 4, 2],
-    ])
-    assert.strictEqual(result.rows[1]!.source, 'v1_import')
-    // A second import of the same rows adds nothing.
-    assert.deepStrictEqual(
-      importPatterns(result.rows, [
-        imported('v1-b', 'mp', { matchMode: 'prefix' }),
-      ]).outcomes,
-      ['present'],
     )
   })
 })

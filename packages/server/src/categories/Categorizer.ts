@@ -31,7 +31,7 @@ export const categoryDecided = 'CategoryDecided'
 export const categoryDecisionUndone = 'CategoryDecisionUndone'
 export const modelClassified = 'ModelClassified'
 
-export type DecisionOrigin = 'transaction_list' | 'review' | 'v1_import'
+export type DecisionOrigin = 'transaction_list' | 'review'
 
 export class CategorizerError extends Schema.TaggedError<CategorizerError>()(
   'CategorizerError',

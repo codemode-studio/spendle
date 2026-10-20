@@ -1,9 +1,9 @@
 # Arquitetura
 
-O Spendle tem duas partes: o app web em `src/` e o backend V2 em
+O Spendle tem duas partes: o app web em `src/` e o backend em
 `packages/server` ([ADR 003](./adrs/003-backend-v2-effect.md)). O backend V1
-(Drizzle, `src/db`, `src/domain` e os módulos `*.server.ts` de finanças) foi
-removido; seus dados entram no V2 só pela migração `migrate-v1`.
+(Drizzle, `src/db`, `src/domain` e os módulos `*.server.ts` de finanças) e a
+migração dos dados dele foram removidos.
 
 ## App web (`src/`)
 
@@ -28,7 +28,7 @@ token opcional `SPENDLE_API_TOKEN`.
 
 Effect 4 sobre SQLite (`node:sqlite`), com banco próprio em `data/v2/`. Fatos
 observados em bancos e arquivos são imutáveis, decisões humanas são duráveis e
-o resto é projeção recalculável. Os módulos, a API e a migração do V1 estão no
+o resto é projeção recalculável. Os módulos e a API estão no
 [README do servidor](../packages/server/README.md).
 
 ## Regras de dependência

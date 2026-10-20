@@ -204,8 +204,6 @@ const make = Effect.gen(function* () {
       readonly transaction: ManualTransaction
       readonly categoryId?: string | undefined
       readonly note?: string | undefined
-      /** Fixed id, as `migrate-v1` uses to stay idempotent; a new UUID otherwise. */
-      readonly externalId?: string | undefined
     }) {
       const transaction = yield* decodeTransaction(input.transaction).pipe(
         Effect.mapError(invalid),
@@ -233,8 +231,7 @@ const make = Effect.gen(function* () {
           })
       }
       const { id: sourceId } = yield* source
-      const externalId =
-        input.externalId ?? (yield* crypto.randomUUIDv7.pipe(Effect.orDie))
+      const externalId = yield* crypto.randomUUIDv7.pipe(Effect.orDie)
       yield* observations.recordTransactions({
         sourceId,
         accountId: account.id,
