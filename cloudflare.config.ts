@@ -5,13 +5,29 @@ import { bindings, defineConfig, exports } from 'cf/config'
 // space plus the control object. `vp run dev` stays on Node; see
 // `vite.config.ts`. The account comes from `CLOUDFLARE_ACCOUNT_ID` or the
 // signed-in `cf` profile.
-const origin = 'https://spendle.codemode.studio'
+
+/**
+ * Where production is served, from `SPENDLE_ORIGIN` (the environment or
+ * `.env.production.local`): the Worker's Custom Domain and the origin Better
+ * Auth, MCP clients and Pluggy's webhook use. A build without it fails rather
+ * than ship a Worker that no domain reaches.
+ */
+function productionOrigin() {
+  const value = process.env.SPENDLE_ORIGIN
+  if (!value) {
+    throw new Error(
+      'Set SPENDLE_ORIGIN to the production origin, such as https://spendle.example.com; see "Publicar" in the README.',
+    )
+  }
+  return new URL(value).origin
+}
 
 export default defineConfig(({ mode }) => {
   // `--mode qa` builds the same Worker for a local run with synthetic secrets
   // from `.dev.vars.qa` (README, "Publicar"): no domain, its own origin, the QA
   // sign-in link, and no Pluggy webhook.
   const qa = mode === 'qa'
+  const origin = qa ? undefined : productionOrigin()
   const name = qa ? 'spendle-qa' : 'spendle'
   return {
     worker: {
@@ -28,7 +44,7 @@ export default defineConfig(({ mode }) => {
       compatibilityFlags: ['nodejs_compat', 'global_fetch_strictly_public'],
       // Served only on its own domain: Better Auth signs people in on
       // `BETTER_AUTH_URL`, so a workers.dev copy would only show the sign-in.
-      domains: qa ? [] : [new URL(origin).hostname],
+      domains: origin ? [new URL(origin).hostname] : [],
       workersDev: false,
       // D1 and both Durable Objects live in the eastern US (the objects in
       // IAD and EWR; D1 has no South American region), so the Worker runs
@@ -41,19 +57,16 @@ export default defineConfig(({ mode }) => {
         Space: exports.durableObject({ storage: 'sqlite' }),
       },
       env: {
-        AUTH_DB: bindings.d1({
-          name: 'spendle-auth',
-          id: '93cb58c6-43df-47b6-b77d-6201d20dbe1c',
-        }),
+        AUTH_DB: bindings.d1({ name: 'spendle-auth' }),
         CONTROL: bindings.durableObject({
           worker: name,
           exportName: 'Control',
         }),
         SPACES: bindings.durableObject({ worker: name, exportName: 'Space' }),
         CF_VERSION_METADATA: bindings.versionMetadata(),
-        BETTER_AUTH_URL: qa ? bindings.secret() : bindings.text(origin),
+        BETTER_AUTH_URL: origin ? bindings.text(origin) : bindings.secret(),
         PLUGGY_WEBHOOK_URL:
-          !qa && bindings.text(`${origin}/api/pluggy/webhook`),
+          origin !== undefined && bindings.text(`${origin}/api/pluggy/webhook`),
         OPENROUTER_MODEL: bindings.text('openai/gpt-6-luna'),
         SPENDLE_QA_SIGN_IN_TOKEN: qa && bindings.secret(),
         // Values live in Cloudflare; see "Publicar" in the README.
