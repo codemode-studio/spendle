@@ -10,6 +10,7 @@ import * as SqlSchema from 'effect/sql/SqlSchema'
 
 import { EventLog } from '../events/EventLog.ts'
 import * as Reactor from '../events/Reactor.ts'
+import { oncePerDeployment } from '../events/Startup.ts'
 import { entriesResolved } from '../ledger/Entries.ts'
 import { followDecisions } from './Decisions.ts'
 import {
@@ -584,10 +585,14 @@ export const reactor = Reactor.layer({
 
 /**
  * Rebuilds relations when the server starts, so a matcher change applies to
- * the whole history without waiting for new entries.
+ * the whole history without waiting for new entries. Once per deployment,
+ * since the matcher only changes with one.
  */
 export const startup = Layer.effectDiscard(
-  Effect.gen(function* () {
-    yield* (yield* Reconciliation).rebuild()
-  }),
+  oncePerDeployment(
+    'reconciliation',
+    Effect.gen(function* () {
+      yield* (yield* Reconciliation).rebuild()
+    }),
+  ),
 )

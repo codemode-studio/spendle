@@ -1,9 +1,11 @@
 import * as Context from 'effect/Context'
 import * as Layer from 'effect/Layer'
 import * as ManagedRuntime from 'effect/ManagedRuntime'
+import * as Option from 'effect/Option'
 import type * as SqlClient from 'effect/sql/SqlClient'
 
 import { Reactors } from '../events/Reactor.ts'
+import { Deployment } from '../events/Startup.ts'
 import * as Database from '../persistence/Database.ts'
 import { SpaceApp, spaceLive } from '../spaces/Space.ts'
 import * as Questions from '../spaces/SpaceGateway.ts'
@@ -18,10 +20,15 @@ import * as Platform from './Platform.ts'
  */
 export const makeSpaceObject = <E>(
   database: Layer.Layer<SqlClient.SqlClient, E>,
+  /** The Worker version, so startup rebuilds run once per deployment. */
+  deployment?: string,
 ) => {
   const runtime = ManagedRuntime.make(
     spaceLive(Database.layerClient(database)).pipe(
       Layer.provideMerge(Platform.layer),
+      Layer.provideMerge(
+        Layer.succeed(Deployment, Option.fromNullishOr(deployment)),
+      ),
     ),
   )
   const handler = runtime

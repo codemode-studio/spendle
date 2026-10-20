@@ -11,6 +11,7 @@ import * as SqlSchema from 'effect/sql/SqlSchema'
 
 import { EventLog } from '../events/EventLog.ts'
 import * as Reactor from '../events/Reactor.ts'
+import { oncePerDeployment } from '../events/Startup.ts'
 import { entriesResolved } from '../ledger/Entries.ts'
 import { relationsChanged } from '../reconciliation/Reconciliation.ts'
 import { categoryChanged, uncategorized } from './Categories.ts'
@@ -944,19 +945,23 @@ export const modelReactor = Reactor.layer({
  * Rebuilds every inference when the server starts under a policy version
  * other than the one they were computed with, so a categorizer change
  * applies to the whole history without waiting for new entries. With the
- * model enabled it always rebuilds: its version or `applyThreshold` may
- * have changed, and a rebuild that changes nothing emits nothing.
+ * model enabled it rebuilds anyway: its version or `applyThreshold` may
+ * have changed, and a rebuild that changes nothing emits nothing. Once per
+ * deployment, since those only change with one.
  */
 export const startup = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const categorizer = yield* Categorizer
-    const stored = yield* categorizer.storedPolicyVersion
-    const modelEnabled = Option.isSome((yield* Classifier).modelVersion)
-    if (
-      modelEnabled ||
-      Option.isNone(stored) ||
-      stored.value !== POLICY_VERSION
-    )
-      yield* categorizer.rebuild()
-  }),
+  oncePerDeployment(
+    'categorizer',
+    Effect.gen(function* () {
+      const categorizer = yield* Categorizer
+      const stored = yield* categorizer.storedPolicyVersion
+      const modelEnabled = Option.isSome((yield* Classifier).modelVersion)
+      if (
+        modelEnabled ||
+        Option.isNone(stored) ||
+        stored.value !== POLICY_VERSION
+      )
+        yield* categorizer.rebuild()
+    }),
+  ),
 )

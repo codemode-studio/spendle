@@ -27,7 +27,9 @@ O desenvolvimento e o QA continuam no Node, com dados sintéticos e Pluggy falsa
 - Cada espaço ganha recuperação a um ponto dos últimos 30 dias, do próprio Durable Object.
 - Uploads são lidos em memória no objeto, e o arquivo fica inteiro numa linha do SQLite, que aceita até 2 MB: o limite por arquivo caiu de 20 MB para 1,5 MB.
 - O SQLite de um Durable Object aceita até 100 parâmetros por consulta: buscas por listas de ids sem limite vão em lotes (`persistence/Chunks.ts`).
-- Os objetos não varrem nem repetem em timers, que os manteriam na memória e cobrando: o alarme termina e repete o trabalho.
+- Os objetos não varrem nem repetem em timers sem fim: o alarme termina e repete o trabalho.
+- Um objeto ocioso sem timer hiberna em 10 segundos e, no próximo pedido, monta os serviços de novo. Por isso cada objeto fica acordado por 5 minutos depois do último pedido (`packages/cloudflare/src/awake.ts`), e o trabalho de partida que só depende do código e da configuração (recalcular categorias e conciliação, registrar o webhook da Pluggy) roda uma vez por versão do Worker (`events/Startup.ts`), não a cada despertar.
+- O Worker roda no leste dos EUA (`placement`), ao lado do D1 e dos objetos: o D1 não tem região na América do Sul, e um pedido cruza o continente uma vez em vez de a cada leitura de sessão e chamada à API.
 - O plano Free limita cada requisição a 10 ms de CPU, pouco para montar os serviços de um espaço, recalcular o histórico ou ler um PDF: a produção conta com o Workers Paid.
 - O domínio próprio exige a zona `codemode.studio` na conta da Cloudflare.
 - Os dados de `data/` não migram sozinhos para os objetos: trazê-los é um passo separado.
