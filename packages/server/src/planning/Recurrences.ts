@@ -26,6 +26,7 @@ import {
   linkCandidates,
   occurrenceId,
   planApproval,
+  withinPeriod,
 } from './RecurrencePolicy.ts'
 import type {
   BookRecurrence,
@@ -50,6 +51,8 @@ export class RecurrenceError extends Schema.TaggedError<RecurrenceError>()(
       'entry_not_found',
       /** Pending, another currency or direction, or a move between own accounts. */
       'entry_not_linkable',
+      /** Booked outside the envelope period it was linked to. */
+      'entry_outside_period',
       /** The person already linked this entry to another occurrence. */
       'already_linked',
       /** One payment per period; envelopes take several. */
@@ -703,6 +706,11 @@ const make = Effect.gen(function* () {
       )
         return yield* new RecurrenceError({
           reason: 'entry_not_linkable',
+          detail: entryId,
+        })
+      if (!withinPeriod(recurrence.rule, ref.expectedDate, entry))
+        return yield* new RecurrenceError({
+          reason: 'entry_outside_period',
           detail: entryId,
         })
       const elsewhere = loaded.links.some(

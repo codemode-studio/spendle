@@ -330,7 +330,6 @@ export type DetectedRecurrence = typeof DetectedRecurrence.Type
 
 export const LinkCandidate = Schema.Struct({
   entryId: Schema.String,
-  inWindow: Schema.Boolean,
   sameCategory: Schema.Boolean,
   amountDifferenceCents: Schema.Int,
   daysApart: Schema.Int,

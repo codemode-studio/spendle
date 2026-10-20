@@ -149,6 +149,7 @@ const recurrenceReasons: Record<RecurrenceError['reason'], Status> = {
   has_confirmed_links: Conflict,
   recurrence_paused: Rejected,
   entry_not_linkable: Rejected,
+  entry_outside_period: Rejected,
   single_payment: Rejected,
   nothing_linked: Rejected,
   category_not_assignable: Rejected,

@@ -187,8 +187,9 @@ function LinkPaymentDialog({
             <ul className="divide-y">
               {candidates.map((candidate) => {
                 const selected = selectedIds.includes(candidate.entryId)
+                // Envelope candidates are all from the period itself.
                 const hints = multiple
-                  ? [candidate.inWindow ? 'no período' : 'fora do período']
+                  ? []
                   : [
                       candidate.amountDifferenceCents === 0
                         ? 'valor exato'
