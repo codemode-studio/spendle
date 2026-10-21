@@ -64,17 +64,6 @@ export function isSpending(transaction: FamilyTransaction) {
   )
 }
 
-export function baseAmount(transaction: {
-  baseAmountCents: number | null
-  currency: string
-  amountCents: number
-}) {
-  return (
-    transaction.baseAmountCents ??
-    (transaction.currency === 'BRL' ? transaction.amountCents : null)
-  )
-}
-
 /** Returns the first and last posted dates, or `null` when there are no rows. */
 function ledgerSpan(entries: ReadonlyArray<{ postedAt: string }>) {
   if (entries.length === 0) return null

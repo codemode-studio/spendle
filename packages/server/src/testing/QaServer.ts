@@ -168,6 +168,14 @@ const movements = (today: DateTime.Utc) => {
         description: 'PAGAMENTO RECEBIDO',
         category: 'Credit card payment',
       }),
+      // Pluggy lists some bill payments twice on the card, under another id.
+      tx('qa-card-payment-copy', 26, {
+        accountId: card.id,
+        type: 'CREDIT',
+        amount: -210.3,
+        description: 'PAGAMENTO ON LINE',
+        category: 'Shopping',
+      }),
       tx('qa-card-streaming', 12, {
         accountId: card.id,
         amount: 39.9,

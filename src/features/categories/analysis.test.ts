@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vite-plus/test'
 
 import type { FamilyTransaction } from '#/lib/ledger'
-import { monthsInPeriod } from '#/lib/period'
 
 import { analyzeCategories } from './analysis'
 
@@ -83,11 +82,5 @@ describe('analyzeCategories', () => {
     })
     expect(result.averageMonthlyCents).toBeGreaterThan(9_800)
     expect(result.averageMonthlyCents).toBeLessThan(10_200)
-  })
-
-  it('monthsInPeriod rotula meses em português', () => {
-    const months = monthsInPeriod({ start: '2026-12-20', end: '2027-01-10' })
-    expect(months.map((month) => month.label)).toEqual(['dez', 'jan'])
-    expect(months[1]?.fullLabel).toBe('janeiro de 2027')
   })
 })

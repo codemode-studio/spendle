@@ -80,6 +80,7 @@ const PlanningLive = PlanningServices.pipe(
 // server-wide; each space only reacts to the events routed into its log.
 const OpenFinanceLive = Layer.mergeAll(
   Entries.reactor,
+  Entries.startup,
   Reconciliation.reactor,
   Reconciliation.startup,
   Categorizer.reactor,

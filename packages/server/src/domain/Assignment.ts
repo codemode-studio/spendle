@@ -6,7 +6,7 @@ export interface Edge {
 }
 
 /** A set of rows and columns linked by edges to each other and to nothing else. */
-export interface Component {
+interface Component {
   readonly rows: ReadonlyArray<number>
   readonly columns: ReadonlyArray<number>
 }
@@ -17,7 +17,7 @@ export interface Component {
  * without edges belong to none. Components and their members are in
  * ascending order of their first row.
  */
-export const components = (edges: ReadonlyArray<Edge>): Array<Component> => {
+const components = (edges: ReadonlyArray<Edge>): Array<Component> => {
   // Union-find over rows (`r<n>`) and columns (`c<n>`).
   const parent = new Map<string, string>()
   const find = (key: string): string => {
@@ -58,18 +58,6 @@ export const components = (edges: ReadonlyArray<Edge>): Array<Component> => {
     }))
     .sort((a, b) => a.rows[0]! - b.rows[0]!)
 }
-
-/**
- * The independent problems `assign` solves, as `[smaller, larger]` numbers
- * of rows and columns: one per component.
- */
-export const problemShapes = (
-  edges: ReadonlyArray<Edge>,
-): Array<readonly [number, number]> =>
-  components(edges).map(({ rows, columns }) => [
-    Math.min(rows.length, columns.length),
-    Math.max(rows.length, columns.length),
-  ])
 
 // A binary heap of columns by tentative distance, ties by column index so
 // equal-cost solutions come out the same every time.

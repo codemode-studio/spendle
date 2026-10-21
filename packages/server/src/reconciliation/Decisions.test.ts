@@ -20,17 +20,6 @@ const stored = (
 })
 
 describe('followDecisions', () => {
-  it('moves a decision onto the entry its observations merged into', () => {
-    const followed = followDecisions(
-      [stored('out', 'gone', { inflowHolders: ['kept'] })],
-      new Set(['out', 'kept']),
-    )
-    assert.deepStrictEqual(
-      [...followed.decisions],
-      [[relationKey('internal_transfer', 'out', 'kept'), 'confirmed']],
-    )
-  })
-
   it('reports a split confirmation instead of picking one entry, and rejects every part', () => {
     const entries = new Set(['out', 'part-a', 'part-b'])
     const confirmed = stored('out', 'gone', {

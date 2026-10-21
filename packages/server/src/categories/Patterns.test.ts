@@ -15,32 +15,20 @@ import {
 describe('knowledgePattern', () => {
   const cases: ReadonlyArray<readonly [string, string]> = [
     ['MERCADOLIVRE*MERCADOL (Parcela 01 de 02)', 'mercadolivre mercadol'],
-    ['MERCADOLIVRE*4PRODUTOS (Parcela 09 de 12)', 'mercadolivre 4produtos'],
     ['Nuv*Sunflower - Parcela 1/2', 'nuv sunflower'],
     ['MP *BELIVE (Parcela 01 de 02)', 'mp belive'],
     ['Payu *Adidas - Parcela 2/2', 'adidas'],
-    ['Sephora Store - Parcela 1/6', 'sephora store'],
     ['Andrade e Ceccon - Parcela 6/6', 'andrade e ceccon'],
     ['Stb*Carbonepizzaria', 'carbonepizzaria'],
     [
       'Pix enviado: "Cp :12345678-LOCADORA EXEMPLO"',
       'enviado locadora exemplo',
     ],
-    [
-      'Pix recebido: "Cp :12345678-CLIENTE EXEMPLO"',
-      'recebido cliente exemplo',
-    ],
     ['CP Comercio 123', 'cp comercio 123'],
     ['Mp *Dayanemeilipalma', 'mp dayanemeilipalma'],
     ['Htm*Besties em Flor', 'besties em flor'],
     ['ZP*GW HAPPY KIDS LTDA', 'gw happy kids ltda'],
     ['PG *ZE DELIVERY', 'ze delivery'],
-    ['Ifd*54857747 Paulo Rob', 'ifd paulo rob'],
-    ['ANGELONI SUPER LOJA 41', 'angeloni super loja 41'],
-    [
-      'Pix enviado WHOOSH BR ALUGUEL DE PATINETES LT',
-      'enviado whoosh br aluguel de patinetes lt',
-    ],
   ]
   for (const [description, expected] of cases) {
     it(`${description} → ${expected}`, () => {

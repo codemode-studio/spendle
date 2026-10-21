@@ -5,6 +5,7 @@ import * as Ref from 'effect/Ref'
 import * as TestClock from 'effect/testing/TestClock'
 
 import { Imports } from '../imports/Imports.ts'
+import type { PluggyTransaction } from '../openfinance/PluggyApi.ts'
 import {
   bank,
   card,
@@ -275,6 +276,93 @@ CHARSET:UTF-8
         reason: 'credit_card',
       })
     }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
+    'joins a bill payment Pluggy lists twice on the card into the entry it had',
+    () =>
+      Effect.gen(function* () {
+        const onCard = (
+          id: string,
+          date: string,
+          description: string,
+          fields: Partial<PluggyTransaction> = {},
+        ) =>
+          tx(id, date, {
+            accountId: 'provider-card',
+            type: 'CREDIT',
+            amount: -1000,
+            description,
+            ...fields,
+          })
+        const { openFinance, connectionId, state } = yield* connect({
+          accounts: [card],
+          transactions: {
+            'provider-card': [
+              onCard('copy', '2026-10-03', 'PAGAMENTO ON LINE', {
+                status: 'PENDING',
+              }),
+              // Two equal purchases the same day are two movements.
+              onCard('lunch-1', '2026-10-03', 'Restaurante', {
+                type: 'DEBIT',
+                amount: 40,
+              }),
+              onCard('lunch-2', '2026-10-03', 'Restaurante', {
+                type: 'DEBIT',
+                amount: 40,
+              }),
+            ],
+          },
+        })
+        const account = yield* openFinance.linkAccount({
+          providerAccountId: 'provider-card',
+          target: {
+            kind: 'credit_card',
+            purpose: 'operating',
+            card: new CardTerms({
+              closingDay: 3,
+              dueDay: 10,
+              limitCents: null,
+              lastFour: '1889',
+            }),
+          },
+          historyMonths: 3,
+        })
+        yield* drain
+        const entries = yield* Entries
+        const [before] = (yield* entries.entries(account.id)).filter(
+          (entry) => entry.amountCents > 0,
+        )
+
+        // The posted payment arrives under its own id; the copy stays listed.
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          transactions: {
+            'provider-card': [
+              ...current.transactions['provider-card']!,
+              onCard('payment', '2026-10-02', 'Pagamento recebido'),
+            ],
+          },
+        }))
+        yield* openFinance.requestSync({ connectionId })
+        yield* drain
+        assert.deepStrictEqual(
+          (yield* entries.entries(account.id)).map((entry) => [
+            entry.amountCents,
+            entry.status,
+            entry.sources,
+          ]),
+          [
+            [100000, 'posted', 1],
+            [-4000, 'posted', 1],
+            [-4000, 'posted', 1],
+          ],
+        )
+        const [after] = (yield* entries.entries(account.id)).filter(
+          (entry) => entry.amountCents > 0,
+        )
+        assert.strictEqual(after?.id, before?.id)
+      }).pipe(Effect.provide(openFinanceTest())),
   )
 
   it.effect('keeps an entry id when its first observation disappears', () =>
