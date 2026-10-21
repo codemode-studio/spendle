@@ -26,6 +26,7 @@ const observed = (
     previousEntryId: null,
     coverage: null,
     fileTransactionId: null,
+    cardBillPayment: false,
     ...fields,
   }
 }
@@ -107,6 +108,60 @@ describe('resolveEntries', () => {
       result.map((group) => group.length),
       [2, 2],
     )
+  })
+
+  it('joins a card bill payment its feed reports twice into one entry', () => {
+    const payment = { amountCents: 2199131, cardBillPayment: true }
+    const pendingCopy = observed({
+      sourceId: 'pluggy',
+      ...payment,
+      status: 'pending',
+      bookedOn: '2026-10-11',
+      description: 'PAGAMENTO ON LINE',
+    })
+    const posted = observed({
+      sourceId: 'pluggy',
+      ...payment,
+      bookedOn: '2026-10-10',
+      description: 'Pagamento recebido',
+    })
+    const statement = observed({
+      sourceId: 'file',
+      amountCents: 2199131,
+      bookedOn: '2026-10-10',
+      description: 'PAGAMENTO RECEBIDO',
+    })
+    const [entry, ...others] = resolveEntries([pendingCopy, posted, statement])
+    assert.deepStrictEqual(others, [])
+    assert.deepStrictEqual(
+      [
+        entry?.id,
+        entry?.status,
+        entry?.description,
+        entry?.evidence.map((item) => item.anchorId),
+      ],
+      [
+        pendingCopy.anchorId,
+        'posted',
+        'Pagamento recebido',
+        [pendingCopy.anchorId, posted.anchorId, statement.anchorId],
+      ],
+    )
+  })
+
+  it('keeps equal bill payments of one feed apart beyond the window', () => {
+    const payment = {
+      sourceId: 'pluggy',
+      amountCents: 50000,
+      description: 'Pagamento recebido',
+      cardBillPayment: true,
+    }
+    const first = observed({ ...payment, bookedOn: '2026-10-01' })
+    const second = observed({ ...payment, bookedOn: '2026-10-08' })
+    assert.deepStrictEqual(groups([first, second]), [
+      [first.anchorId],
+      [second.anchorId],
+    ])
   })
 
   it('lets a posted report speak for an entry first seen as pending', () => {

@@ -36,6 +36,12 @@ export interface ObservedTransaction {
    * and amount report the same movement, whatever its description says.
    */
   readonly fileTransactionId: string | null
+  /**
+   * A bill payment an Open Finance feed reports as received on a card. Pluggy
+   * may list one such payment twice in the card's feed under different ids
+   * (a pending and a posted copy, or a copy on each of two bills).
+   */
+  readonly cardBillPayment: boolean
 }
 
 /** A canonical transaction: one real movement of money, with every observation of it. */
@@ -731,6 +737,37 @@ const regroup = (
 }
 
 /**
+ * Copies of a card bill payment within one feed, each under the report it
+ * copies: same source and amount, dated within `matchWindowDays`, both
+ * `cardBillPayment`. A posted report is the original over a pending one,
+ * else the first stored, and each original takes one copy. Two real payments
+ * of the same amount days apart in one feed would be joined as well; the
+ * bank's second debit then finds no card side and is left to review.
+ */
+const billPaymentCopies = (ordered: ReadonlyArray<ObservedTransaction>) => {
+  const originals: Array<ObservedTransaction> = []
+  const copies = new Map<ObservedTransaction, ObservedTransaction>()
+  // Posted first; the sort is stable, so each status keeps the stored order.
+  const candidates = ordered
+    .filter((observation) => observation.cardBillPayment)
+    .sort(
+      (a, b) => Number(a.status === 'pending') - Number(b.status === 'pending'),
+    )
+  for (const observation of candidates) {
+    const original = originals.find(
+      (other) =>
+        !copies.has(other) &&
+        other.sourceId === observation.sourceId &&
+        other.amountCents === observation.amountCents &&
+        daysBetween(other.bookedOn, observation.bookedOn) <= matchWindowDays,
+    )
+    if (original === undefined) originals.push(observation)
+    else copies.set(original, observation)
+  }
+  return copies
+}
+
+/**
  * Groups observations of one account into entries, one per real movement.
  *
  * Amounts are resolved independently. Within an amount, lines from two
@@ -745,7 +782,8 @@ const regroup = (
  * trade evidence are rebuilt in other source orders and regrouped into
  * fewer. Reports of other amounts or from unrelated
  * sources cannot change the outcome. A source never reports one movement
- * twice, so identical lines from one source stay separate.
+ * twice, so identical lines from one source stay separate, except a card
+ * bill payment copied in its feed: see `billPaymentCopies`.
  *
  * A pair needs positive evidence, not just an equal amount nearby: the
  * descriptions share a meaningful word (not "pix", "compra"…), or both are
@@ -766,8 +804,11 @@ export const resolveEntries = (
   observations: ReadonlyArray<ObservedTransaction>,
 ): ReadonlyArray<ResolvedEntry> => {
   const ordered = [...observations].sort((a, b) => a.sequence - b.sequence)
+  const copies = billPaymentCopies(ordered)
+  const copied = new Set(copies.values())
   const byAmount = new Map<number, Array<ObservedTransaction>>()
   for (const observation of ordered) {
+    if (copied.has(observation)) continue
     const group = byAmount.get(observation.amountCents) ?? []
     group.push(observation)
     byAmount.set(observation.amountCents, group)
@@ -799,6 +840,14 @@ export const resolveEntries = (
       })
     }
     entries.push(...regroup(built, unitOf))
+  }
+  // Each copy joins the entry of the report it copies, so it adds evidence
+  // (and its decisions follow it there) without changing any pairing.
+  for (const entry of entries) {
+    for (const item of [...entry.evidence]) {
+      const copy = copies.get(item)
+      if (copy !== undefined) entry.evidence.push(copy)
+    }
   }
 
   const idOf = assignIds(entries)

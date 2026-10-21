@@ -221,7 +221,7 @@ const make = Effect.gen(function* () {
   const entryColumns = sql`
     e.id, e.account_id AS accountId, e.booked_on AS bookedOn, e.amount_cents AS amountCents,
     e.currency, e.description, e.status,
-    (SELECT count(*) FROM entry_evidence v WHERE v.entry_id = e.id) AS sources,
+    (SELECT count(DISTINCT v.source_id) FROM entry_evidence v WHERE v.entry_id = e.id) AS sources,
     c.category_id AS categoryId, c.status AS categoryStatus, c.origin,
     c.confidence, c.excluded_from_spending AS excludedFromSpending, n.note,
     (SELECT m.external_id FROM entry_evidence m JOIN sources ms ON ms.id = m.source_id

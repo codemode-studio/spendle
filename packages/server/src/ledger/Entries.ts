@@ -3,11 +3,14 @@ import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
 import * as Schema from 'effect/Schema'
+import * as Semaphore from 'effect/Semaphore'
 import * as SqlClient from 'effect/sql/SqlClient'
 import * as SqlSchema from 'effect/sql/SqlSchema'
 
 import { EventLog } from '../events/EventLog.ts'
 import * as Reactor from '../events/Reactor.ts'
+import { oncePerDeployment } from '../events/Startup.ts'
+import { foldDescription } from '../imports/Statement.ts'
 import { Accounts } from './Accounts.ts'
 import { proveBalances, resolveEntries } from './Resolution.ts'
 import type {
@@ -26,7 +29,7 @@ export class LedgerEntry extends Schema.Class<LedgerEntry>('LedgerEntry')({
   currency: Schema.String,
   description: Schema.String,
   status: Schema.Literals(['pending', 'posted']),
-  /** How many observations confirm this movement. */
+  /** How many sources report this movement. */
   sources: Schema.Int,
 }) {}
 
@@ -100,6 +103,11 @@ const fileTransactionId = (sourceKind: string, externalId: string) => {
   const at = externalId.lastIndexOf('@')
   return at === -1 ? externalId : externalId.slice(0, at)
 }
+
+// A card's feed speaks of a bill payment it received ("Pagamento recebido",
+// "PAGAMENTO ON LINE"); Pluggy's own category is not trusted for it, as it
+// has called one copy of a payment a purchase.
+const billPaymentWords = /\b(pagamento|pgto|pagto|fatura)\b/
 
 const evidenceKey = (sourceId: string, externalId: string) =>
   `${sourceId}\u0000${externalId}`
@@ -182,7 +190,7 @@ const make = Effect.gen(function* () {
     execute: (accountId) => sql`
       SELECT e.id, e.account_id AS accountId, e.booked_on AS bookedOn, e.amount_cents AS amountCents,
         e.currency, e.description, e.status,
-        (SELECT count(*) FROM entry_evidence v WHERE v.entry_id = e.id) AS sources
+        (SELECT count(DISTINCT v.source_id) FROM entry_evidence v WHERE v.entry_id = e.id) AS sources
       FROM ledger_entries e WHERE e.account_id = ${accountId}
       ORDER BY e.booked_on, e.id
     `,
@@ -231,12 +239,12 @@ const make = Effect.gen(function* () {
     findEntries(accountId),
   )
 
-  /**
-   * Rebuilds the account's entries from its current observations. Entry ids
-   * come from observations, so a rebuild keeps them. Emits `EntriesResolved`
-   * only when the entries changed.
-   */
-  const resolveAccount = Effect.fn('Entries.resolveAccount')(function* (
+  // Resolutions run one at a time, each from reading observations to
+  // writing entries, so none writes entries computed before observations
+  // another resolution already resolved.
+  const lock = yield* Semaphore.make(1)
+
+  const resolveUnlocked = Effect.fn('Entries.resolveUnlocked')(function* (
     accountId: string,
   ) {
     const account = yield* accounts.get(accountId)
@@ -246,6 +254,11 @@ const make = Effect.gen(function* () {
         ({ coverageStart, coverageEnd, sourceKind, ...observed }) => ({
           ...observed,
           fileTransactionId: fileTransactionId(sourceKind, observed.externalId),
+          cardBillPayment:
+            account.kind === 'credit_card' &&
+            sourceKind === 'open_finance' &&
+            observed.amountCents > 0 &&
+            billPaymentWords.test(foldDescription(observed.description)),
           coverage:
             coverageStart !== null && coverageEnd !== null
               ? { start: coverageStart, end: coverageEnd }
@@ -330,6 +343,30 @@ const make = Effect.gen(function* () {
       }),
     )
     return changed
+  })
+
+  /**
+   * Rebuilds the account's entries from its current observations. Entry ids
+   * come from observations, so a rebuild keeps them. Emits `EntriesResolved`
+   * only when the entries changed.
+   */
+  const resolveAccount = Effect.fn('Entries.resolveAccount')(function* (
+    accountId: string,
+  ) {
+    return yield* lock.withPermit(resolveUnlocked(accountId))
+  })
+
+  const findObservedAccounts = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Schema.Struct({ accountId: Schema.String }),
+    execute: () =>
+      sql`SELECT DISTINCT account_id AS accountId FROM transaction_observations`,
+  })
+
+  /** Rebuilds the entries of every account with observations. */
+  const resolveAll = Effect.fn('Entries.resolveAll')(function* () {
+    for (const { accountId } of yield* findObservedAccounts(undefined))
+      yield* resolveAccount(accountId)
   })
 
   /** Whether the account's entries already reflect events up to `sequence`. */
@@ -417,7 +454,7 @@ const make = Effect.gen(function* () {
     } satisfies BalanceProof
   })
 
-  return { entries, resolveAccount, resolvedThrough, balanceProof }
+  return { entries, resolveAccount, resolveAll, resolvedThrough, balanceProof }
 })
 
 export class Entries extends Context.Service<
@@ -442,3 +479,17 @@ export const reactor = Reactor.layer({
       yield* service.resolveAccount(accountId)
     }),
 })
+
+/**
+ * Re-resolves every account once per deployment, so a change to how entries
+ * are resolved applies to the whole history without waiting for new
+ * observations. Accounts whose entries come out the same emit nothing.
+ */
+export const startup = Layer.effectDiscard(
+  oncePerDeployment(
+    'entry-resolution',
+    Effect.gen(function* () {
+      yield* (yield* Entries).resolveAll()
+    }),
+  ),
+)
