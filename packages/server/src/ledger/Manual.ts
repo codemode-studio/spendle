@@ -224,7 +224,7 @@ const make = Effect.gen(function* () {
             ),
           ),
         )
-        if (category.system || !category.active)
+        if (!category.assignable)
           return yield* new CategorizerError({
             reason: 'category_not_assignable',
             categoryId,

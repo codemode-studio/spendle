@@ -43,7 +43,7 @@ export function CategoryReviewQueue() {
   const queryClient = useQueryClient()
   const confirm = useServerFn(confirmCategoryFn)
   const correct = useServerFn(correctCategoryFn)
-  const assignable = categories.filter((item) => !item.system)
+  const assignable = categories.filter((item) => item.assignable)
   const nameOf = new Map(categories.map((item) => [item.id, item.name]))
   const mutation = useMutation({
     mutationFn: (input: {
