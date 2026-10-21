@@ -89,6 +89,49 @@ describe('Open Finance API', () => {
     }).pipe(Effect.provide(apiTest())),
   )
 
+  it.effect(
+    'counts the balance Pluggy reports as cash unless the person informed one that day',
+    () =>
+      Effect.gen(function* () {
+        // The bank sends no running balance, so no day yields a booked one.
+        const { client } = yield* connectThroughApi
+        const account = yield* client.openFinance.link({
+          params: { providerAccountId: 'provider-bank' },
+          payload: {
+            target: { kind: 'checking', purpose: 'operating' },
+            historyMonths: 3,
+          },
+        })
+        yield* drain
+        const cash = Effect.gen(function* () {
+          const october = yield* client.dashboard.month({ query: {} })
+          const september = yield* client.dashboard.month({
+            query: { month: '2026-09' },
+          })
+          return [
+            october.cashFlow.cashCents,
+            september.cashFlow.openingCashCents,
+          ]
+        })
+        const reported = yield* cash
+        yield* client.manual.recordCheckpoint({
+          params: { accountId: account.id },
+          payload: { asOf: '2026-10-04', balanceCents: 90_000 },
+        })
+        yield* drain
+        const informed = yield* cash
+
+        assert.deepStrictEqual(
+          { reported, informed },
+          {
+            // Pluggy's R$ 1.000, then September walked back from it.
+            reported: [100_000, 100_000 - 500_000 + 32_050],
+            informed: [90_000, 90_000 - 500_000 + 32_050],
+          },
+        )
+      }).pipe(Effect.provide(apiTest())),
+  )
+
   it.effect('unlinks a provider account and links it again', () =>
     Effect.gen(function* () {
       const { client, connectionId } = yield* connectThroughApi

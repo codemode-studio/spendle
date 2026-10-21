@@ -986,9 +986,10 @@ const make = Effect.gen(function* () {
         }
         if (item.type === 'BANK') {
           // Pluggy's account balance is the available balance when accounts were
-          // last collected: kept for reference, never used as a booked
-          // checkpoint. An execution that did not refresh accounts reports an old
-          // balance, which must not be dated today.
+          // last collected: the account's actual balance for cash and
+          // forecasts, never a booked checkpoint for balance proofs. An
+          // execution that did not refresh accounts reports an old balance,
+          // which must not be dated today.
           // A fully successful execution has no `statusDetail`; its collection
           // time is then the item's `lastUpdatedAt`, or the account's.
           const accountsStatus = pluggyItem.statusDetail?.accounts

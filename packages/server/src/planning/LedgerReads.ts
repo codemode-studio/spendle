@@ -50,6 +50,7 @@ const RelationRow = Schema.Struct({
 const CheckpointRow = Schema.Struct({
   accountId: Schema.String,
   sourceId: Schema.String,
+  kind: Schema.Literals(['booked', 'available', 'statement']),
   asOf: Schema.String,
   balanceCents: Schema.Int,
   received: Schema.Int,
@@ -124,14 +125,13 @@ const make = Effect.gen(function* () {
     Request: Schema.Void,
     Result: CheckpointRow,
     execute: () => sql`
-      SELECT b.account_id AS accountId, b.source_id AS sourceId, b.as_of AS asOf,
-        b.balance_cents AS balanceCents, b.rowid AS received,
+      SELECT b.account_id AS accountId, b.source_id AS sourceId, b.kind,
+        b.as_of AS asOf, b.balance_cents AS balanceCents, b.rowid AS received,
         COALESCE((
           SELECT i.withdrawn FROM open_finance_checkpoint_invalidations i
           WHERE i.balance_observation_id = b.id ORDER BY i.rowid DESC LIMIT 1
         ), 0) AS invalidated
       FROM balance_observations b
-      WHERE b.kind IN ('booked', 'statement')
       ORDER BY b.account_id, b.as_of, b.rowid
     `,
   })
@@ -167,6 +167,11 @@ const make = Effect.gen(function* () {
   /**
    * Per account and day, the latest balance each source reported, unless a
    * later read withdrew it; when sources disagree on a day, the latest wins.
+   * The balance Open Finance reports for the account (Pluggy's available
+   * balance) counts as the actual one too: many banks send no running balance
+   * to derive an end-of-day balance from. A day's end-of-day or statement
+   * balance still wins, since the available one is read at some moment of
+   * that day.
    */
   const checkpoints = findCheckpoints(undefined).pipe(
     Effect.map((rows) => {
@@ -174,15 +179,18 @@ const make = Effect.gen(function* () {
       for (const row of rows) {
         const key = `${row.accountId}|${row.asOf}`
         const day = byDay.get(key) ?? new Map()
-        day.set(row.sourceId, row)
+        day.set(`${row.sourceId}|${row.kind === 'available'}`, row)
         byDay.set(key, day)
       }
       const result: Array<Checkpoint> = []
       for (const reports of byDay.values()) {
-        const standing = [...reports.values()]
-          .filter((report) => report.invalidated === 0)
+        const standing = [...reports.values()].filter(
+          (report) => report.invalidated === 0,
+        )
+        const closing = standing.filter((report) => report.kind !== 'available')
+        const latest = (closing.length > 0 ? closing : standing)
           .sort((a, b) => a.received - b.received)
-        const latest = standing.at(-1)
+          .at(-1)
         if (latest)
           result.push({
             accountId: latest.accountId,

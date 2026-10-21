@@ -10,7 +10,7 @@ Transferência para conta própria de investimento. Movimenta patrimônio, sem c
 
 ## Caixa operacional
 
-Soma dos saldos das contas ativas de finalidade operacional, reconstruída por checkpoints e movimentos postados e convertida para a moeda-base. É o "Caixa atual" da Home e o ponto de partida da previsão. Não é saldo disponível: sem cotação para uma conta em moeda estrangeira, o caixa é desconhecido.
+Soma dos saldos das contas ativas de finalidade operacional, reconstruída por checkpoints e movimentos postados e convertida para a moeda-base. É o "Caixa atual" da Home e o ponto de partida da previsão. O saldo que o Open Finance informa para a conta conta como saldo real, mas um saldo contábil do mesmo dia prevalece. Sem cotação para uma conta em moeda estrangeira, o caixa é desconhecido.
 
 ## Checkpoint de saldo
 
@@ -90,7 +90,7 @@ Regra mensal ou anual de receita ou despesa, com calendário e tolerâncias para
 
 ## Saldo disponível
 
-Valor liberado pelo banco, que pode incluir limites e bloqueios. Não equivale necessariamente ao saldo contábil.
+Valor liberado pelo banco, que pode incluir limites e bloqueios. Não equivale necessariamente ao saldo contábil, então não prova saldos; o do Open Finance serve de saldo real para o caixa operacional.
 
 ## Saldo lançado ou contábil
 

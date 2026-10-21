@@ -77,7 +77,7 @@ export interface MonthInstallment {
 
 export interface Checkpoint {
   readonly accountId: string
-  /** The balance at the end of this day. */
+  /** The balance on this day: at its end, or when Open Finance last read it. */
   readonly asOf: string
   readonly balanceCents: number
 }
