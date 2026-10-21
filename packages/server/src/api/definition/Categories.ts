@@ -30,8 +30,13 @@ export const Category = Schema.Struct({
   icon: Schema.NullOr(Schema.String),
   /** False once archived: kept for history, never offered. */
   active: Schema.Boolean,
-  /** Owned by reconciliation (transfers, card payments): never assigned by hand. */
+  /** Owned by reconciliation (transfers, card payments): never edited or learned. */
   system: Schema.Boolean,
+  /**
+   * Whether a person may choose it for a movement: active and their own, or
+   * the bill payment, for a payment reconciliation found no other side of.
+   */
+  assignable: Schema.Boolean,
 })
 export type Category = typeof Category.Type
 

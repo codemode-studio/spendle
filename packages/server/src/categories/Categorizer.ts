@@ -14,7 +14,11 @@ import * as Reactor from '../events/Reactor.ts'
 import { oncePerDeployment } from '../events/Startup.ts'
 import { entriesResolved } from '../ledger/Entries.ts'
 import { relationsChanged } from '../reconciliation/Reconciliation.ts'
-import { categoryChanged, uncategorized } from './Categories.ts'
+import {
+  assignableByHand,
+  categoryChanged,
+  uncategorized,
+} from './Categories.ts'
 import { Classifier } from './Classifier.ts'
 import type { ClassifyItem } from './Classifier.ts'
 import { categoryDescriptions } from './Descriptions.ts'
@@ -485,7 +489,7 @@ const make = Effect.gen(function* () {
         reason: 'category_not_found',
         categoryId,
       })
-    if (category.system || !category.active)
+    if (!assignableByHand(category))
       return yield* new CategorizerError({
         reason: 'category_not_assignable',
         categoryId,

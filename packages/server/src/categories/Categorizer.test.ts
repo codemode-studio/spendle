@@ -543,6 +543,35 @@ describe('Categorizer with reconciliation', () => {
       }).pipe(Effect.provide(categoriesTest())),
   )
 
+  it.effect(
+    'lets a person mark a bill payment without its other side, out of spending and unlearned',
+    () =>
+      Effect.gen(function* () {
+        // The bank pays a card the space does not track.
+        const { nubank, categorizer, entryId, outcome } = yield* ownAccounts({
+          nubank:
+            line('n1', '20260912', '-1500.00', 'Pagamento fatura') +
+            line('n2', '20260913', '-80.00', 'Pix enviado Maria'),
+        })
+        yield* categorizer.decide(
+          yield* entryId(nubank.id, -150000),
+          'card_payment',
+        )
+        const refused = yield* categorizer
+          .decide(yield* entryId(nubank.id, -8000), 'transfer')
+          .pipe(Effect.flip)
+
+        assert.deepStrictEqual(yield* outcome(nubank.id, -150000), [
+          'card_payment',
+          'decision',
+          'applied',
+          true,
+        ])
+        assert.deepInclude(refused, { reason: 'category_not_assignable' })
+        assert.deepStrictEqual(yield* (yield* KnowledgeStore).list, [])
+      }).pipe(Effect.provide(categoriesTest())),
+  )
+
   it.effect('sends a suggested transfer to review without applying it', () =>
     Effect.gen(function* () {
       const { nubank, outcome } = yield* ownAccounts({

@@ -17,6 +17,19 @@ export const uncategorized = 'uncategorized'
 export const transferCategory = 'transfer'
 export const cardPaymentCategory = 'card_payment'
 
+/**
+ * Whether a person may choose the category for a movement: an active one of
+ * their own, or the bill payment, which they mark when reconciliation finds
+ * no other side (a card the space does not track, or a provider reporting
+ * one payment twice). A transfer always needs both sides.
+ */
+export const assignableByHand = (category: {
+  readonly id: string
+  readonly active: boolean
+  readonly system: boolean
+}) =>
+  category.active && (!category.system || category.id === cardPaymentCategory)
+
 export const Bucket = Schema.Literals([
   'essential',
   'lifestyle',
@@ -37,8 +50,10 @@ export class Category extends Schema.Class<Category>('Category')({
   color: Schema.String,
   icon: Schema.NullOr(Schema.String),
   active: Schema.Boolean,
-  /** Owned by reconciliation: never assigned by hand, edited or learned. */
+  /** Owned by reconciliation: never edited or learned. */
   system: Schema.Boolean,
+  /** See `assignableByHand`. */
+  assignable: Schema.Boolean,
 }) {}
 
 const CategoryRow = Schema.Struct({
@@ -50,7 +65,7 @@ const CategoryRow = Schema.Struct({
   icon: Schema.NullOr(Schema.String),
   active: Schema.BooleanFromBit,
   system: Schema.BooleanFromBit,
-}).pipe(Schema.decodeTo(Category))
+})
 
 const Color = Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/))
 
@@ -117,11 +132,17 @@ const make = Effect.gen(function* () {
     execute: (id) => sql`${select} WHERE id = ${id}`,
   })
 
+  const toCategory = (row: typeof CategoryRow.Type) =>
+    new Category({ ...row, assignable: assignableByHand(row) })
+
   const invalid = (cause: { readonly message: string }) =>
     new CategoriesError({ reason: 'invalid_input', detail: cause.message })
 
   /** Every category, archived ones too, by name. */
-  const list = findAll(undefined).pipe(Effect.withSpan('Categories.list'))
+  const list = findAll(undefined).pipe(
+    Effect.map((rows) => rows.map(toCategory)),
+    Effect.withSpan('Categories.list'),
+  )
 
   const get = Effect.fn('Categories.get')(function* (categoryId: string) {
     const found = yield* findOne(categoryId)
@@ -130,7 +151,7 @@ const make = Effect.gen(function* () {
         reason: 'category_not_found',
         categoryId,
       })
-    return found.value
+    return toCategory(found.value)
   })
 
   // A parent must exist, be the person's own, and not make a cycle.

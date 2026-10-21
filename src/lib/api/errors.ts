@@ -33,7 +33,7 @@ const reasonMessages: Record<string, string | undefined> = {
     'O saldo do arquivo não fecha com as movimentações. Exporte o extrato de novo.',
   not_a_pair: 'Esses dois lançamentos não formam um par válido.',
   category_not_assignable:
-    'Categoria de sistema: transferências e faturas são definidas pela conciliação.',
+    'Categoria indisponível: transferências internas vêm da conciliação e arquivadas não podem ser escolhidas.',
   incompatible_account:
     'Essa conta não combina com a do banco: tipo, moeda ou titular diferentes.',
   item_already_registered: 'Essa conexão já foi registrada.',

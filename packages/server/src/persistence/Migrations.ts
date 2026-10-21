@@ -18,6 +18,7 @@ import DropV1Import from './Migrations/0015_drop_v1_import.ts'
 import StartupMarks from './Migrations/0016_startup_marks.ts'
 import RelationOrphans from './Migrations/0017_relation_orphans.ts'
 import GhostConnections from './Migrations/0018_ghost_connections.ts'
+import BillPaymentName from './Migrations/0019_bill_payment_name.ts'
 
 // Keys are `<id>_<name>`; each migration runs once, in id order. Import every
 // migration statically so the server never depends on files beside the bundle.
@@ -41,6 +42,7 @@ export const migrations = {
   '0016_startup_marks': StartupMarks,
   '0017_relation_orphans': RelationOrphans,
   '0018_ghost_connections': GhostConnections,
+  '0019_bill_payment_name': BillPaymentName,
 }
 
 // The generic migrator, so the same migrations run on any SQLite client.

@@ -235,9 +235,8 @@ function TransactionsPage() {
     () => new Map(accounts.map((account) => [account.id, account])),
     [accounts],
   )
-  /** Categories a person may choose: active and not owned by reconciliation. */
   const assignable = useMemo(
-    () => categories.filter((item) => item.active && !item.system),
+    () => categories.filter((item) => item.assignable),
     [categories],
   )
 
@@ -996,7 +995,9 @@ function EntryCategoryCell({
   if (!entry.category) {
     return <span className="text-xs text-muted-foreground">Categorizando…</span>
   }
-  if (category?.system) {
+  // Reconciliation's own category is read-only; a bill payment the person
+  // marked stays editable.
+  if (category?.system && entry.category.origin === 'reconciliation') {
     return (
       <span className="inline-flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
         <ArrowLeftRight className="size-3.5 shrink-0" />

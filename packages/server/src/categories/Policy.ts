@@ -159,7 +159,8 @@ const infer = (
  * 1. A confirmed transfer or card payment: reconciliation's system
  *    category on both sides, applied and out of spending. A person's
  *    decision on such an entry stays stored, shadowed.
- * 2. The person's decision, applied.
+ * 2. The person's decision, applied; out of spending when it marks a bill
+ *    payment reconciliation found no other side of.
  * 3. A decision about an entry that has since split: each part to review.
  * 4. A confirmed refund: the credit takes its purchase's category and
  *    status, so it lowers that category's spending. Nothing is learned.
@@ -317,7 +318,8 @@ export const categorize = (input: PolicyInput): ReadonlyArray<Inference> => {
           originRef: decision.key,
           confidence: confidence.decision,
           status: 'applied',
-          excludedFromSpending: false,
+          excludedFromSpending:
+            categories.get(decision.categoryId)?.system ?? false,
           reasons: ['decision'],
         },
         ...decision.superseded.map((older): Proposal => ({
