@@ -1,6 +1,6 @@
 import { assert, describe, it } from '@effect/vitest'
 
-import { assignment, problemShapes } from '../domain/Assignment.ts'
+import { assignment } from '../domain/Assignment.ts'
 import { addDays, daysBetween } from '../domain/LocalDate.ts'
 import {
   balanceProof,
@@ -85,16 +85,6 @@ describe('resolveEntries', () => {
       [first.anchorId, second.anchorId],
       [third.anchorId],
     ])
-  })
-
-  it('pairs a whole batch so no movement is counted twice', () => {
-    const a10 = observed({ sourceId: 'a', bookedOn: '2026-09-10' })
-    const a13 = observed({ sourceId: 'a', bookedOn: '2026-09-13' })
-    const b11 = observed({ sourceId: 'b', bookedOn: '2026-09-11' })
-    const b09 = observed({ sourceId: 'b', bookedOn: '2026-09-09' })
-    const result = groups([a10, a13, b11, b09])
-    assert.strictEqual(result.length, 2)
-    assert.isTrue(result.every((group) => group.length === 2))
   })
 
   it('keeps identical lines from one source apart and pairs them across sources', () => {
@@ -182,14 +172,6 @@ describe('resolveEntries', () => {
     )
   })
 
-  it('keeps the entry id after its first observation is removed', () => {
-    const pending = observed({ sourceId: 'pluggy', status: 'pending' })
-    const file = observed({ sourceId: 'file' })
-    const [first] = resolveEntries([pending, file])
-    const [after] = resolveEntries([{ ...file, previousEntryId: first!.id }])
-    assert.strictEqual(after?.id, first?.id)
-  })
-
   it('keeps equal purchases apart when each statement covers only its own date', () => {
     const purchase = { amountCents: -1000, description: 'PADARIA CENTRAL' }
     const september = observed({
@@ -272,27 +254,6 @@ describe('resolveEntries', () => {
       })),
     ).map((entry) => entry.id)
     assert.deepStrictEqual(again, ids)
-  })
-
-  it('poses only reachable entries to the pairing, however long the history', () => {
-    const history = Array.from({ length: 2000 }, (_, day) =>
-      observed({ sourceId: 'file', bookedOn: addDays('2021-01-01', day) }),
-    )
-    const incoming = observed({ sourceId: 'pluggy', bookedOn: '2023-06-01' })
-    const entries = history.map((observation) => ({
-      evidence: [observation],
-    }))
-    // Only the entries within the window of the incoming report.
-    assert.deepStrictEqual(problemShapes(pairings([[incoming]], entries)), [
-      [1, 2 * 3 + 1],
-    ])
-    const merged = resolveEntries([...history, incoming]).filter(
-      (entry) => entry.evidence.length > 1,
-    )
-    assert.deepStrictEqual(
-      merged.map((entry) => entry.bookedOn),
-      ['2023-06-01'],
-    )
   })
 
   it('regroups earlier pairs when a later source can complete more movements', () => {

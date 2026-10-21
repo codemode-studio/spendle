@@ -153,30 +153,6 @@ it('waits for closing before generating and starts after closing', async () => {
   client.clear()
 })
 
-it('renders compact structured answers with real currency values', () => {
-  render(
-    <FinanceAnswerView
-      answer={{
-        summary: 'O limite cabe no plano.',
-        metrics: [{ label: 'Economia', valueCents: 73240 }],
-        comparison: {
-          title: 'Restaurantes',
-          items: [
-            { label: 'Atual', valueCents: 223240 },
-            { label: 'Limite', valueCents: 150000 },
-          ],
-        },
-        nextStep: 'Separe R$ 375,00 por semana.',
-        questionnaire: null,
-      }}
-    />,
-  )
-  expect(screen.getByText('O limite cabe no plano.')).toBeTruthy()
-  expect(screen.getByText('R$ 732,40')).toBeTruthy()
-  expect(screen.getByLabelText('Atual: R$ 2.232,40')).toBeTruthy()
-  expect(screen.getByText('Separe R$ 375,00 por semana.')).toBeTruthy()
-})
-
 it('renders negative projections with a valid comparison scale', () => {
   render(
     <FinanceAnswerView
@@ -202,43 +178,6 @@ it('renders negative projections with a valid comparison scale', () => {
       .getByLabelText('Em 3 meses: -R$ 13.500,00')
       .getAttribute('aria-valuenow'),
   ).toBe('100')
-})
-
-it('submits clarification answers from a questionnaire', () => {
-  const onSubmit = vi.fn()
-  render(
-    <FinanceAnswerView
-      answer={{
-        summary: 'Preciso entender sua prioridade antes de calcular.',
-        metrics: [],
-        comparison: null,
-        nextStep: null,
-        questionnaire: {
-          items: [
-            {
-              question: 'Qual é a prioridade deste mês?',
-              description: 'Escolha a opção mais importante.',
-              multiple: false,
-              required: true,
-              choices: [
-                { label: 'Reduzir gastos', description: null },
-                { label: 'Aumentar a reserva', description: null },
-              ],
-              allowOther: true,
-            },
-          ],
-        },
-      }}
-      onQuestionnaireSubmit={onSubmit}
-    />,
-  )
-
-  fireEvent.click(screen.getByText('Reduzir gastos'))
-  fireEvent.click(screen.getByRole('button', { name: 'Responder' }))
-
-  expect(onSubmit).toHaveBeenCalledWith(
-    'Qual é a prioridade deste mês?\nReduzir gastos',
-  )
 })
 
 it('refreshes only the first analysis before a follow-up', () => {

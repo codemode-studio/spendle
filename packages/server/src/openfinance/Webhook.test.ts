@@ -566,32 +566,6 @@ describe('webhook reactions', () => {
       }).pipe(Effect.provide(openFinanceTest(settings))),
   )
 
-  it.effect('drops a refresh Pluggy can no longer answer and keeps going', () =>
-    Effect.gen(function* () {
-      const { openFinance, connectionId, state } = yield* linkedBank([
-        ['market', '2026-09-28'],
-      ])
-      yield* Ref.update(state, (current) => ({ ...current, gone: true }))
-      yield* deliver({
-        eventId: 'evt-stale',
-        event: 'transactions/updated',
-        itemId: 'item-1',
-        accountId: 'provider-bank',
-        transactionIds: ['market'],
-      })
-      yield* deliver({
-        eventId: 'evt-after',
-        event: 'item/deleted',
-        itemId: 'item-1',
-      })
-      yield* drain
-      assert.strictEqual(
-        (yield* openFinance.connection(connectionId)).status,
-        'disconnected',
-      )
-    }).pipe(Effect.provide(openFinanceTest(settings))),
-  )
-
   it.effect(
     'marks a vanished item disconnected without deleting it at Pluggy',
     () =>

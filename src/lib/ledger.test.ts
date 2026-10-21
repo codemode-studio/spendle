@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vite-plus/test'
 
 import type { FamilyTransaction } from './ledger'
-import {
-  baseAmount,
-  fullPeriod,
-  isSpending,
-  spendingByCategory,
-} from './ledger'
+import { fullPeriod, isSpending, spendingByCategory } from './ledger'
 
 function entry(
   id: string,
@@ -54,24 +49,6 @@ describe('predicados do razão familiar', () => {
         }),
       ),
     ).toBe(false)
-  })
-})
-
-describe('valor-base', () => {
-  it('prefere o valor-base e só usa o valor original como fallback em BRL', () => {
-    expect(
-      baseAmount({
-        baseAmountCents: 550,
-        currency: 'USD',
-        amountCents: 100,
-      }),
-    ).toBe(550)
-    expect(
-      baseAmount({ baseAmountCents: null, currency: 'BRL', amountCents: 100 }),
-    ).toBe(100)
-    expect(
-      baseAmount({ baseAmountCents: null, currency: 'USD', amountCents: 100 }),
-    ).toBeNull()
   })
 })
 

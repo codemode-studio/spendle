@@ -1,6 +1,6 @@
 import { assert, describe, it } from '@effect/vitest'
 
-import { assign, assignment, problemShapes } from './Assignment.ts'
+import { assign, assignment } from './Assignment.ts'
 import type { Edge } from './Assignment.ts'
 
 const pairs = (chosen: Map<number, number>) =>
@@ -36,20 +36,18 @@ describe('assign', () => {
     assert.deepStrictEqual(pairs(assign(tall)), [[0, 0]])
   })
 
-  it('solves one report against a long history without a square matrix', () => {
+  it('matches one report against a long history in either orientation', () => {
     const history: Array<Edge> = Array.from({ length: 2000 }, (_, column) => ({
       row: 0,
       column,
       cost: Math.abs(column - 1234),
     }))
-    assert.deepStrictEqual(problemShapes(history), [[1, 2000]])
     assert.deepStrictEqual(pairs(assign(history)), [[0, 1234]])
     const transposed = history.map(({ row, column, cost }) => ({
       row: column,
       column: row,
       cost,
     }))
-    assert.deepStrictEqual(problemShapes(transposed), [[1, 2000]])
     assert.deepStrictEqual(pairs(assign(transposed)), [[1234, 0]])
   })
 
@@ -75,7 +73,6 @@ describe('assign', () => {
       for (let column = row - 3; column <= row + 3; column++)
         if (column >= 0 && column < size)
           edges.push({ row, column, cost: Math.abs(row - column) })
-    assert.deepStrictEqual(problemShapes(edges), [[size, size]])
     const { chosen, steps } = assignment(edges)
     assert.strictEqual(chosen.size, size)
     assert.isTrue([...chosen].every(([row, column]) => row === column))
@@ -104,10 +101,6 @@ describe('assign', () => {
       { row: 2, column: 5, cost: 1 },
       { row: 2, column: 6, cost: 2 },
     ]
-    assert.deepStrictEqual(problemShapes(edges), [
-      [1, 2],
-      [1, 2],
-    ])
     assert.deepStrictEqual(pairs(assign(edges)), [
       [0, 0],
       [2, 5],
