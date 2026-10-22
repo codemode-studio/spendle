@@ -89,24 +89,10 @@ export interface ClassifierShape {
   ) => Effect.Effect<ReadonlyArray<Classification>, ClassifierError>
 }
 
-const ChoiceAnswer = Schema.Struct({
-  type: Schema.Literal('choice'),
-  choice: Schema.String,
-  probabilities: Schema.Record(Schema.String, Schema.Number),
-})
-const SystemOneResponse = Schema.Struct({
-  answers: Schema.Record(Schema.String, ChoiceAnswer),
-})
-
-/** TypeSafe's choice for "no category fits"; never a category id (those have no `:`). */
-const noCategory = 'none:no_category_fits'
-/** Questions per request, to keep each one well within the APIs' limits. */
+/** Questions per request, to keep each one well within the API's limits. */
 const batchSize = 25
-/** Requests in flight at once, well below the APIs' rate limits. */
+/** Requests in flight at once, well below the API's rate limits. */
 const concurrency = 4
-/** One TypeSafe request answers in seconds; past this it counts as unavailable. */
-const requestTimeout = Duration.seconds(30)
-
 /**
  * The model the threshold is chosen for; see `evals/categories`. GPT-6 Luna
  * matched the most accurate models on the exam at a tenth of their cost.
@@ -374,141 +360,6 @@ export class Classifier extends Context.Service<Classifier, ClassifierShape>()(
       classify: () => Effect.fail(new ClassifierError({ reason: 'disabled' })),
     }),
   )
-
-  /**
-   * TypeSafe's System One API (Jev): a typed choice over the categories that
-   * fit each movement's direction, with its probability. Production moved to
-   * `makeOpenRouter`; `eval:models` still compares new Jev versions with it.
-   */
-  static readonly makeTypeSafe = (options: {
-    readonly apiKey: Redacted.Redacted
-    readonly model: string
-    readonly baseUrl: string
-    readonly applyThreshold?: number
-  }) =>
-    Effect.gen(function* () {
-      const http = (yield* HttpClient.HttpClient).pipe(
-        HttpClient.mapRequest(HttpClientRequest.prependUrl(options.baseUrl)),
-        HttpClient.mapRequest(HttpClientRequest.acceptJson),
-      )
-
-      const ask = Effect.fnUntraced(function* (
-        items: ReadonlyArray<ClassifyItem>,
-        categories: ReadonlyArray<ClassifierCategory>,
-      ) {
-        const criteria: Record<string, string> = {
-          [noCategory]:
-            'None of the listed categories fits this transaction, or the description says too little to tell.',
-        }
-        for (const category of categories)
-          criteria[category.id] = category.description
-            ? `${category.name}: ${category.description}`
-            : category.name
-        const names = new Map(
-          categories.map((category) => [category.id, category.name]),
-        )
-        const transactions = items.map((item) => {
-          // Only categories offered for this direction, by the name the
-          // criteria begin with.
-          const pastDecisions = (item.examples ?? []).flatMap((example) => {
-            const category = names.get(example.categoryId)
-            return category === undefined
-              ? []
-              : [{ description: example.description, category }]
-          })
-          return {
-            description: item.description,
-            amount: formatAmount(item.amountCents),
-            direction:
-              item.direction === 'income' ? 'money received' : 'money spent',
-            ...(pastDecisions.length > 0 ? { pastDecisions } : {}),
-          }
-        })
-        const questions: Record<string, unknown> = {}
-        transactions.forEach((transaction, index) => {
-          const base = `Which category of a Brazilian family's personal finances best describes the transaction \`transactions[${index}]\`? Judge by who was paid or who paid, as the bank statement names them.`
-          questions[`t${index}`] = {
-            type: 'choice',
-            instructions:
-              'pastDecisions' in transaction
-                ? `${base} \`transactions[${index}].pastDecisions\` shows how this family categorized similar transactions before; when the same payee or the same kind of payment appears there, follow their choice.`
-                : base,
-            criteria,
-          }
-        })
-        const response = yield* HttpClientRequest.post('/v1/systemone').pipe(
-          HttpClientRequest.bearerToken(options.apiKey),
-          HttpClientRequest.bodyJsonUnsafe({
-            model: options.model,
-            state: { transactions },
-            questions,
-          }),
-          http.execute,
-          Effect.timeout(requestTimeout),
-          Effect.mapError(
-            (cause) => new ClassifierError({ reason: 'unavailable', cause }),
-          ),
-        )
-        if (response.status === 429 || response.status >= 500)
-          return yield* new ClassifierError({
-            reason: 'unavailable',
-            status: response.status,
-          })
-        if (response.status < 200 || response.status >= 300)
-          return yield* new ClassifierError({
-            reason: 'rejected',
-            status: response.status,
-          })
-        const { answers } = yield* HttpClientResponse.schemaBodyJson(
-          SystemOneResponse,
-        )(response).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ClassifierError({ reason: 'invalid_response', cause }),
-          ),
-        )
-        return yield* Effect.forEach(items, (_, index) => {
-          const answer = answers[`t${index}`]
-          if (answer === undefined || !(answer.choice in criteria))
-            return Effect.fail(
-              new ClassifierError({ reason: 'invalid_response' }),
-            )
-          return Effect.succeed<Classification>({
-            categoryId: answer.choice === noCategory ? null : answer.choice,
-            probability: answer.probabilities[answer.choice] ?? 0,
-          })
-        })
-      })
-
-      const classify = Effect.fn('Classifier.classify')(function* (
-        items: ReadonlyArray<ClassifyItem>,
-        categories: ReadonlyArray<ClassifierCategory>,
-      ) {
-        const batches = classifierBatches(items, categories)
-        const results = yield* Effect.forEach(
-          batches,
-          (batch) =>
-            ask(
-              batch.indexes.map((index) => items[index]!),
-              batch.categories,
-            ).pipe(
-              Effect.retry({
-                while: (error) => error.reason === 'unavailable',
-                schedule: Schedule.exponential(Duration.seconds(1)),
-                times: 3,
-              }),
-            ),
-          { concurrency },
-        )
-        return inItemOrder(items, batches, results)
-      })
-
-      return Classifier.of({
-        modelVersion: Option.some(`typesafe:${options.model}`),
-        applyThreshold: options.applyThreshold ?? MODEL_APPLY_THRESHOLD,
-        classify,
-      })
-    })
 
   /**
    * A general language model through OpenRouter (`makeOpenRouterRequest`),

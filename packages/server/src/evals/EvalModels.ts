@@ -1,13 +1,13 @@
 /**
  * Asks several models the category exam (`evals/categories`) and prints them
  * side by side: how often each is right, how honest its confidence is, how
- * much it could apply without review, and what it costs. Any OpenRouter
- * model is asked exactly as the production classifier asks GPT-6 Luna; Jev
- * answers through TypeSafe, which production used before. Every model makes
- * paid calls, so this stays out of `vp run verify`.
+ * much it could apply without review, and what it costs. Every model is an
+ * OpenRouter id, asked exactly as the production classifier asks GPT-6
+ * Luna; Jev, which production used before, is `typesafe/jev-router`. Every
+ * model makes paid calls, so this stays out of `vp run verify`.
  *
  *   vp run --filter @spendle/server eval:models \
- *     --model openai/gpt-6-luna --model typesafe:jev-1.13.0
+ *     --model openai/gpt-6-luna --model typesafe/jev-router
  *
  * Each model sees the same questions the server would send, with the
  * context split as the person's past decisions (`--no-examples` without).
@@ -24,7 +24,6 @@ import * as Command from 'effect/cli/Command'
 import * as Flag from 'effect/cli/Flag'
 import * as FetchHttpClient from 'effect/http/FetchHttpClient'
 
-import { Classifier } from '../categories/Classifier.ts'
 import type { Classification, Usage } from '../categories/Classifier.ts'
 import { categoryDescriptions } from '../categories/Descriptions.ts'
 import { MODEL_SUGGEST_FLOOR } from '../categories/Policy.ts'
@@ -40,14 +39,12 @@ import {
 } from './Scoreboard.ts'
 import type { ModelAnswer } from './Scoreboard.ts'
 
-const typesafePrefix = 'typesafe:'
-
 /** What one model answered, and what that took. */
 interface Run {
   readonly model: string
   readonly answers: ReadonlyArray<Classification | null>
   readonly seconds: number
-  /** `null` where the provider does not report it (TypeSafe). */
+  /** `null` when OpenRouter refused the whole run. */
   readonly usage: Usage | null
   readonly failures: ReadonlyArray<string>
 }
@@ -61,7 +58,7 @@ const command = Command.make(
     models: Flag.String('model').pipe(
       Flag.atLeast(1),
       Flag.withDescription(
-        'typesafe:<Jev version> or an OpenRouter model id (anthropic/claude-haiku-5.5); repeat to compare',
+        'An OpenRouter model id (anthropic/claude-haiku-5.5, typesafe/jev-router); repeat to compare',
       ),
     ),
     target: Flag.Finite('target').pipe(
@@ -91,63 +88,26 @@ const command = Command.make(
       description: categoryDescriptions[category.id],
     }))
 
-    const typesafeKey = yield* Config.option(
-      Config.Redacted('TYPESAFE_API_KEY'),
-    )
-    const openRouterKey = yield* Config.option(
-      Config.Redacted('OPENROUTER_API_KEY'),
-    )
-    const missing = models.flatMap((model) =>
-      model.startsWith(typesafePrefix)
-        ? Option.isNone(typesafeKey)
-          ? [`${model} needs TYPESAFE_API_KEY`]
-          : []
-        : Option.isNone(openRouterKey)
-          ? [`${model} needs OPENROUTER_API_KEY`]
-          : [],
-    )
-    if (missing.length > 0) {
-      for (const problem of missing) yield* Console.error(problem)
+    const apiKey = yield* Config.option(Config.Redacted('OPENROUTER_API_KEY'))
+    if (Option.isNone(apiKey)) {
       yield* Console.error(
-        'Set the keys in the environment or the repository .env.local and run again.',
+        'OPENROUTER_API_KEY is not set. Set it in the environment or the repository .env.local and run again.',
       )
       process.exitCode = 1
       return
     }
+    const baseUrl = yield* Config.String('OPENROUTER_API_URL').pipe(
+      Config.withDefault('https://openrouter.ai/api/v1'),
+    )
 
     const askModel = Effect.fnUntraced(function* (model: string) {
-      if (model.startsWith(typesafePrefix)) {
-        const classifier = yield* Classifier.makeTypeSafe({
-          apiKey: Option.getOrThrow(typesafeKey),
-          model: model.slice(typesafePrefix.length),
-          baseUrl: yield* Config.String('TYPESAFE_API_URL').pipe(
-            Config.withDefault('https://api.typesafe.ai'),
-          ),
-        })
-        return yield* classifier.classify(asked, offered).pipe(
-          Effect.map((answers) => ({
-            answers,
-            usage: null,
-            failures: [],
-          })),
-          // TypeSafe fails a whole run at once; it scores as unanswered.
-          Effect.catch((error) =>
-            Effect.succeed({
-              answers: asked.map(() => null),
-              usage: null,
-              failures: [error.message],
-            }),
-          ),
-        )
-      }
       const classifier = yield* makeOpenRouterClassifier({
-        apiKey: Option.getOrThrow(openRouterKey),
+        apiKey: apiKey.value,
         model,
-        baseUrl: yield* Config.String('OPENROUTER_API_URL').pipe(
-          Config.withDefault('https://openrouter.ai/api/v1'),
-        ),
+        baseUrl,
       })
       return yield* classifier.classify(asked, offered).pipe(
+        // A refused request (a wrong model id) scores as unanswered.
         Effect.catch((error) =>
           Effect.succeed({
             answers: asked.map(() => null),
