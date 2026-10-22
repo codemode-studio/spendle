@@ -1,6 +1,7 @@
 import { assert, describe, it } from '@effect/vitest'
 import * as ConfigProvider from 'effect/ConfigProvider'
 import * as Effect from 'effect/Effect'
+import * as Fiber from 'effect/Fiber'
 import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
 import * as Redacted from 'effect/Redacted'
@@ -9,6 +10,7 @@ import * as Schema from 'effect/Schema'
 import * as SqlClient from 'effect/sql/SqlClient'
 import * as HttpClient from 'effect/http/HttpClient'
 import * as HttpClientResponse from 'effect/http/HttpClientResponse'
+import * as TestClock from 'effect/testing/TestClock'
 
 import { Imports } from '../imports/Imports.ts'
 import { Accounts } from '../ledger/Accounts.ts'
@@ -447,6 +449,168 @@ describe('Classifier', () => {
     }),
   )
 
+  /** OpenRouter answering each request with `answer`, recording what was sent. */
+  const openRouter = (
+    answer: (
+      sent: typeof SentChat.Type,
+      state: typeof SentState.Type,
+    ) => ReadonlyArray<unknown>,
+  ) =>
+    Effect.gen(function* () {
+      const requests = yield* Ref.make<ReadonlyArray<typeof SentState.Type>>([])
+      const client = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          assert.strictEqual(
+            request.headers['authorization'],
+            'Bearer test-key',
+          )
+          const sent = yield* Schema.decodeUnknownEffect(SentChat)(
+            request.body._tag === 'Uint8Array'
+              ? new TextDecoder().decode(request.body.body)
+              : '',
+          )
+          const state = yield* Schema.decodeUnknownEffect(SentState)(
+            sent.messages[1]!.content,
+          )
+          yield* Ref.update(requests, (all) => [...all, state])
+          const content = yield* Schema.encodeEffect(
+            Schema.fromJsonString(Schema.Unknown),
+          )({ answers: answer(sent, state) })
+          const json = yield* Schema.encodeEffect(
+            Schema.fromJsonString(Schema.Unknown),
+          )({
+            choices: [{ message: { content } }],
+            usage: { prompt_tokens: 100, completion_tokens: 20, cost: 0.001 },
+          })
+          return HttpClientResponse.fromWeb(
+            request,
+            new Response(json, { status: 200 }),
+          )
+        }).pipe(Effect.orDie),
+      )
+      const classifier = yield* Classifier.makeOpenRouter({
+        apiKey: Redacted.make('test-key'),
+        model: 'openai/gpt-6-luna',
+        baseUrl: 'https://openrouter.test',
+      }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient, client)))
+      return { classifier, requests }
+    })
+
+  it.effect(
+    'asks the language model about each direction apart and maps its answers back by index',
+    () =>
+      Effect.gen(function* () {
+        const { classifier, requests } = yield* openRouter((sent, state) => {
+          assert.strictEqual(sent.model, 'openai/gpt-6-luna')
+          // Answered out of order, so only the index ties answers to items.
+          return [...state.transactions].reverse().map((transaction) => ({
+            index: transaction.index,
+            categoryId:
+              transaction.direction === 'money received'
+                ? 'salary'
+                : transaction.description === 'Padaria Real'
+                  ? 'groceries'
+                  : 'none',
+            confidence: transaction.description === 'Loja' ? 0.6 : 0.9,
+          }))
+        })
+        const answers = yield* classifier.classify(
+          [
+            {
+              pattern: 'loja',
+              direction: 'expense',
+              description: 'Loja',
+              amountCents: -1000,
+            },
+            {
+              pattern: 'empresa',
+              direction: 'income',
+              description: 'Empresa',
+              amountCents: 500000,
+            },
+            {
+              pattern: 'padaria real',
+              direction: 'expense',
+              description: 'Padaria Real',
+              amountCents: -1200,
+              examples: [
+                { description: 'Padaria Central', categoryId: 'groceries' },
+              ],
+            },
+          ],
+          [
+            {
+              id: 'groceries',
+              name: 'Mercado',
+              bucket: 'essential',
+              description: 'Supermercado e padaria.',
+            },
+            { id: 'salary', name: 'Renda familiar', bucket: 'income' },
+          ],
+        )
+        assert.deepStrictEqual(answers, [
+          { categoryId: null, probability: 0.6 },
+          { categoryId: 'salary', probability: 0.9 },
+          { categoryId: 'groceries', probability: 0.9 },
+        ])
+        assert.deepStrictEqual(
+          classifier.modelVersion,
+          Option.some('openrouter:openai/gpt-6-luna'),
+        )
+        assert.sameDeepMembers(
+          (yield* Ref.get(requests)).map((state) => ({
+            offered: state.categories.map((category) => category.id),
+            asked: state.transactions.map((transaction) => [
+              transaction.description,
+              transaction.pastDecisions ?? [],
+            ]),
+          })),
+          [
+            {
+              offered: ['groceries'],
+              asked: [
+                ['Loja', []],
+                [
+                  'Padaria Real',
+                  [{ description: 'Padaria Central', categoryId: 'groceries' }],
+                ],
+              ],
+            },
+            { offered: ['salary'], asked: [['Empresa', []]] },
+          ],
+        )
+      }),
+  )
+
+  it.effect(
+    'asks again when an answer skips a transaction, and fails rather than guess',
+    () =>
+      Effect.gen(function* () {
+        // One answer for two transactions, every time.
+        const { classifier, requests } = yield* openRouter(() => [
+          { index: 0, categoryId: 'groceries', confidence: 0.9 },
+        ])
+        const fiber = yield* Effect.forkChild(
+          Effect.flip(
+            classifier.classify(
+              ['Loja', 'Padaria'].map((description) => ({
+                pattern: description.toLowerCase(),
+                direction: 'expense' as const,
+                description,
+                amountCents: -1000,
+              })),
+              [{ id: 'groceries', name: 'Mercado', bucket: 'essential' }],
+            ),
+          ),
+        )
+        // Let the retry backoff elapse.
+        yield* TestClock.adjust('1 minute')
+        const error = yield* Fiber.join(fiber)
+        assert.strictEqual(error.reason, 'invalid_response')
+        assert.lengthOf(yield* Ref.get(requests), 3)
+      }),
+  )
+
   const configured = (env: Record<string, string>) =>
     Effect.gen(function* () {
       const classifier = yield* Classifier
@@ -464,30 +628,39 @@ describe('Classifier', () => {
     )
 
   it.effect(
-    'pins a Jev version and reviews every answer until a threshold is set',
+    'pins GPT-6 Luna and reviews every answer until a threshold is set',
     () =>
       Effect.gen(function* () {
-        assert.deepStrictEqual(yield* configured({ TYPESAFE_API_KEY: 'key' }), {
-          modelVersion: Option.some('typesafe:jev-1.13.0'),
-          applyThreshold: Number.POSITIVE_INFINITY,
-        })
+        assert.deepStrictEqual(
+          yield* configured({ OPENROUTER_API_KEY: 'key' }),
+          {
+            modelVersion: Option.some('openrouter:openai/gpt-6-luna'),
+            applyThreshold: Number.POSITIVE_INFINITY,
+          },
+        )
         assert.deepStrictEqual(
           yield* configured({
-            TYPESAFE_API_KEY: 'key',
-            TYPESAFE_MODEL: 'jev-latest',
-            TYPESAFE_APPLY_THRESHOLD: '0.97',
+            OPENROUTER_API_KEY: 'key',
+            CLASSIFIER_MODEL: 'anthropic/claude-haiku-5.5',
+            CLASSIFIER_APPLY_THRESHOLD: '0.97',
           }),
           {
-            modelVersion: Option.some('typesafe:jev-latest'),
+            modelVersion: Option.some('openrouter:anthropic/claude-haiku-5.5'),
             applyThreshold: 0.97,
           },
+        )
+        // An empty key, as a blank line in an env file leaves it, is no key.
+        assert.isTrue(
+          Option.isNone(
+            (yield* configured({ OPENROUTER_API_KEY: '' })).modelVersion,
+          ),
         )
         // Below the suggest floor a threshold would apply answers the
         // policy drops; refusing to start beats guessing.
         const refused = yield* Effect.exit(
           configured({
-            TYPESAFE_API_KEY: 'key',
-            TYPESAFE_APPLY_THRESHOLD: '0.3',
+            OPENROUTER_API_KEY: 'key',
+            CLASSIFIER_APPLY_THRESHOLD: '0.3',
           }),
         )
         assert.isTrue(refused._tag === 'Failure')
@@ -530,6 +703,37 @@ describe('Classifier', () => {
       ),
   )
 })
+
+const SentChat = Schema.fromJsonString(
+  Schema.Struct({
+    model: Schema.String,
+    messages: Schema.Tuple([
+      Schema.Struct({ role: Schema.Literal('system'), content: Schema.String }),
+      Schema.Struct({ role: Schema.Literal('user'), content: Schema.String }),
+    ]),
+  }),
+)
+
+const SentState = Schema.fromJsonString(
+  Schema.Struct({
+    categories: Schema.Array(Schema.Struct({ id: Schema.String })),
+    transactions: Schema.Array(
+      Schema.Struct({
+        index: Schema.Int,
+        description: Schema.String,
+        direction: Schema.String,
+        pastDecisions: Schema.optional(
+          Schema.Array(
+            Schema.Struct({
+              description: Schema.String,
+              categoryId: Schema.String,
+            }),
+          ),
+        ),
+      }),
+    ),
+  }),
+)
 
 const SentRequest = Schema.fromJsonString(
   Schema.Struct({

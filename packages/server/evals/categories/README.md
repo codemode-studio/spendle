@@ -1,6 +1,6 @@
 # Avaliação das categorias
 
-`vp run --filter @spendle/server eval:categories` reproduz decisões humanas congeladas pelo classificador do Spendle (`src/categories/Classifier.ts`, o Jev da TypeSafe) e imprime o placar usado para escolher `TYPESAFE_APPLY_THRESHOLD`. Faz chamadas pagas e fica fora de `vp run verify`.
+`vp run --filter @spendle/server eval:categories` reproduz decisões humanas congeladas pelo classificador do Spendle (`src/categories/Classifier.ts`, GPT-6 Luna pelo OpenRouter) e imprime o placar usado para escolher `CLASSIFIER_APPLY_THRESHOLD`. Faz chamadas pagas e fica fora de `vp run verify`.
 
 ```bash
 # Da raiz; a chave vem do ambiente ou de .env.local na raiz
@@ -11,7 +11,25 @@ vp run --filter @spendle/server eval:categories --no-examples    # modelo sem de
 vp run --filter @spendle/server eval:categories --target 0.98 --min-applied 40 --threshold 0.95
 ```
 
-Sem `TYPESAFE_API_KEY`, o modo `model` sai com código 1 e explica o que fazer. O modelo avaliado é o de `TYPESAFE_MODEL` (padrão `jev-1.13.0`), com as mesmas descrições de categoria (`src/categories/Descriptions.ts`) e o mesmo pedido que o servidor envia.
+Sem `OPENROUTER_API_KEY`, o modo `model` sai com código 1 e explica o que fazer. O modelo avaliado é o de `CLASSIFIER_MODEL` (padrão `openai/gpt-6-luna`), com as mesmas descrições de categoria (`src/categories/Descriptions.ts`) e o mesmo pedido que o servidor envia.
+
+## Comparar modelos
+
+`eval:models` faz a mesma prova a vários modelos e os põe lado a lado. Qualquer id do OpenRouter (`OPENROUTER_API_KEY`) recebe o mesmo pedido que o classificador de produção envia (`makeOpenRouterRequest`), em lotes de 25, e devolve uma confiança declarada para cada resposta. `typesafe:<versão>` pergunta ao Jev pela TypeSafe (`TYPESAFE_API_KEY`), que a produção usava até a versão 1.13.0, para comparar versões novas.
+
+```bash
+vp run --filter @spendle/server eval:models \
+  --model typesafe:jev-1.13.0 --model anthropic/claude-haiku-5.5 --model openai/gpt-6-luna
+vp run --filter @spendle/server eval:models --model anthropic/claude-haiku-5.5 --no-examples
+```
+
+- `right (guessable)` e `right (all purchases)`: acerto de qualquer resposta com confiança de pelo menos 0,5, sem limiar. Mede o modelo, não a política de aplicar.
+- `calibration error`: a distância média entre a confiança declarada e o acerto real, em faixas de 0,1 (ECE). Com erro alto, nenhum limiar é confiável, por melhor que seja o acerto.
+- `threshold for 97%` e `right without review`: o limiar que `recommendThreshold` escolheria para esse modelo e quantas compras ele resolveria certo sem revisão. É o ganho real; um modelo mais certeiro mas mal calibrado pode ganhar menos.
+- `unanswered`: lançamentos de lotes que falharam depois das novas tentativas; contam como sem categoria.
+- `cost USD` vem do OpenRouter; a TypeSafe não informa custo.
+
+Modelos de linguagem não são determinísticos: rode duas vezes antes de concluir algo de uma diferença pequena.
 
 ## Arquivos
 
@@ -22,7 +40,7 @@ Sem `TYPESAFE_API_KEY`, o modo `model` sai com código 1 e explica o que fazer. 
 
 ## Como ler o conjunto
 
-- `split: context` são decisões tratadas como já tomadas pela pessoa: no modo `policy` elas ensinam a base de padrões; no modo `model` viram os exemplos (decisões anteriores) que o servidor mostra ao modelo, escolhidos por `src/categories/Examples.ts` como no app: até 8 por lançamento, da mesma direção, que compartilham uma palavra do estabelecimento, as mais recentes primeiro entre iguais. Lançamentos sem nenhuma palavra em comum vão sem exemplos. `--no-examples` pergunta sem eles; compare os dois placares com o mesmo `TYPESAFE_MODEL`. `split: exam` são as perguntas. A divisão é por estabelecimento, então a política quase nunca resolve o `exam` sozinha (só por prefixo); isso é esperado e mostra o que sobra para o modelo. O conjunto não traz categoria da Pluggy, então o mapa de categorias do provedor não entra.
+- `split: context` são decisões tratadas como já tomadas pela pessoa: no modo `policy` elas ensinam a base de padrões; no modo `model` viram os exemplos (decisões anteriores) que o servidor mostra ao modelo, escolhidos por `src/categories/Examples.ts` como no app: até 8 por lançamento, da mesma direção, que compartilham uma palavra do estabelecimento, as mais recentes primeiro entre iguais. Lançamentos sem nenhuma palavra em comum vão sem exemplos. `--no-examples` pergunta sem eles; compare os dois placares com o mesmo `CLASSIFIER_MODEL`. `split: exam` são as perguntas. A divisão é por estabelecimento, então a política quase nunca resolve o `exam` sozinha (só por prefixo); isso é esperado e mostra o que sobra para o modelo. O conjunto não traz categoria da Pluggy, então o mapa de categorias do provedor não entra.
 - `guessable: false` marca convenções pessoais ou descrições opacas, como um Pix para uma pessoa classificado em Saúde. Nenhum modelo acerta isso pela descrição; o placar é separado.
 - `origin: synthetic_movement` são transferências e pagamentos de fatura que não devem receber categoria. No app a conciliação costuma resolvê-los antes; aqui, categoria aplicada num deles conta como erro.
 
@@ -33,13 +51,13 @@ Sem `TYPESAFE_API_KEY`, o modo `model` sai com código 1 e explica o que fazer. 
 - Com cerca de 80 itens adivinháveis, um item vale 1,2 ponto; diferenças abaixo de 10 pontos são empate. Leia os erros listados.
 - Não ajuste prompts ou descrições olhando os erros do `exam`. Itere com o `context` e use o `exam` só para confirmar.
 
-## Como escolher `TYPESAFE_APPLY_THRESHOLD`
+## Como escolher `CLASSIFIER_APPLY_THRESHOLD`
 
 Sem a variável, o limiar é infinito e toda resposta do modelo vai para revisão. Para aplicar respostas sem revisão:
 
-1. Rode `eval:categories` com o modelo que vai usar em produção (`TYPESAFE_MODEL`).
+1. Rode `eval:categories` com o modelo que vai usar em produção (`CLASSIFIER_MODEL`).
 2. O placar recomenda o **menor limiar a partir do qual todo limiar mais alto** com pelo menos `--min-applied` respostas aplicadas (padrão 30) acerta pelo menos `--target` (padrão 0,97) das respostas aplicadas, transferências contadas como erro. Uma faixa de sorte abaixo de uma que falha não é recomendada.
 3. Se nada atinge a meta, deixe a variável vazia. Na dúvida, prefira o limiar mais alto: uma resposta aplicada errada some da revisão, uma em revisão só custa um clique.
-4. Defina `TYPESAFE_APPLY_THRESHOLD=<valor>` (entre 0,5 e 1) junto com o `TYPESAFE_MODEL` avaliado e reinicie o servidor; com o modelo ligado ele recalcula as inferências ao iniciar. Ao trocar de versão do Jev, avalie de novo antes de manter o limiar.
+4. Defina `CLASSIFIER_APPLY_THRESHOLD=<valor>` (entre 0,5 e 1) junto com o `CLASSIFIER_MODEL` avaliado e reinicie o servidor; com o modelo ligado ele recalcula as inferências ao iniciar. Ao trocar de modelo, avalie de novo antes de manter o limiar. Modelos de linguagem variam entre execuções: confirme o limiar em mais de uma.
 
 Mesmo aplicada, uma resposta do modelo nunca ensina a base de padrões: só a confirmação ou correção da pessoa ensina.

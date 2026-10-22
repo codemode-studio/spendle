@@ -15,7 +15,9 @@
     "typecheck": "tsc-rs --noEmit",
     "test": "vp test run",
     "verify": "vp run typecheck && vp run test",
-    "eval:categories": "node --env-file-if-exists=../../.env.local src/evals/EvalCategories.ts"
+    "eval:categories": "node --env-file-if-exists=../../.env.local src/evals/EvalCategories.ts",
+    "eval:models": "node --env-file-if-exists=../../.env.local src/evals/EvalModels.ts",
+    "eval:relations": "node src/evals/EvalRelations.ts"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",

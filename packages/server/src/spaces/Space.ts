@@ -29,7 +29,7 @@ import { RateSource } from '../rates/RateSource.ts'
 import * as Reconciliation from '../reconciliation/Reconciliation.ts'
 import { Cards } from '../reconciliation/Cards.ts'
 
-// Category learning; the model is called only when `TYPESAFE_API_KEY` is set.
+// Category learning; the model is called only when `OPENROUTER_API_KEY` is set.
 const CategoriesLive = Categorizer.Categorizer.layer.pipe(
   Layer.provideMerge(KnowledgeStore.layer),
   Layer.provideMerge(Categories.layer),

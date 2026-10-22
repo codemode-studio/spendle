@@ -78,7 +78,6 @@ export default defineConfig(({ mode }) => {
         PLUGGY_CLIENT_ID: bindings.secret(),
         PLUGGY_CLIENT_SECRET: bindings.secret(),
         PLUGGY_WEBHOOK_SECRET: !qa && bindings.secret(),
-        TYPESAFE_API_KEY: bindings.secret(),
         OPENROUTER_API_KEY: bindings.secret(),
       },
     },

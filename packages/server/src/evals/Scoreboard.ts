@@ -192,7 +192,7 @@ const thresholdRow = (
   }
 }
 
-/** The scoreboard at each threshold, for choosing `TYPESAFE_APPLY_THRESHOLD`. */
+/** The scoreboard at each threshold, for choosing `CLASSIFIER_APPLY_THRESHOLD`. */
 export const sweep = (
   exam: ReadonlyArray<EvalItem>,
   answers: ReadonlyMap<string, ModelAnswer>,
@@ -279,3 +279,35 @@ export const calibration = (
       ),
     }
   })
+
+/**
+ * Expected calibration error: how far the stated probabilities are from how
+ * often those answers are right, in bands of 0.1 weighted by their answers,
+ * transfers included. A model right 9 times in 10 when it says 0.9 scores 0;
+ * one that says 0.99 and is right 7 times in 10 scores 0.29. `null` without
+ * answers.
+ */
+export const calibrationError = (
+  exam: ReadonlyArray<EvalItem>,
+  answers: ReadonlyMap<string, ModelAnswer>,
+): number | null => {
+  const bands = new Map<number, { right: number; probability: number }>()
+  let total = 0
+  for (const item of exam) {
+    const answer = answers.get(item.id)
+    if (answer === undefined || answer.categoryId === null) continue
+    const index = Math.min(9, Math.floor(answer.probability * 10))
+    const band = bands.get(index) ?? { right: 0, probability: 0 }
+    bands.set(index, {
+      right:
+        band.right + (answer.categoryId === item.expectedCategoryId ? 1 : 0),
+      probability: band.probability + answer.probability,
+    })
+    total++
+  }
+  if (total === 0) return null
+  let error = 0
+  for (const band of bands.values())
+    error += Math.abs(band.right - band.probability)
+  return error / total
+}
