@@ -44,6 +44,10 @@ export const PluggyAccount = Schema.Struct({
   name: Schema.String,
   marketingName: Schema.optional(Schema.NullOr(Schema.String)),
   number: Schema.optional(Schema.NullOr(Schema.String)),
+  /**
+   * A bank account's available balance; for a card, the limit in use (all
+   * open debt, not one bill) under Open Finance connectors.
+   */
   balance: Schema.Number,
   currencyCode: Schema.String,
   /** When Pluggy last updated this account record. */
@@ -52,6 +56,8 @@ export const PluggyAccount = Schema.Struct({
     Schema.NullOr(
       Schema.Struct({
         creditLimit: Schema.optional(Schema.NullOr(Schema.Number)),
+        /** What is left of the limit to spend. */
+        availableCreditLimit: Schema.optional(Schema.NullOr(Schema.Number)),
         balanceCloseDate: Schema.optional(Schema.NullOr(Schema.String)),
         balanceDueDate: Schema.optional(Schema.NullOr(Schema.String)),
       }),

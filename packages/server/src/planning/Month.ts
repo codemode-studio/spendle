@@ -58,7 +58,7 @@ export interface MonthCycle {
   readonly accountId: string
   readonly closingOn: string
   readonly dueOn: string
-  /** What the cycle bills; positive when owed. */
+  /** What the cycle bills, pending charges included; positive when owed. */
   readonly billedCents: number
   readonly paidCents: number
   readonly entryIds: ReadonlyArray<string>

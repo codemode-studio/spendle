@@ -1,4 +1,8 @@
-import type { CardCycle, InstallmentPlan } from '@spendle/server/api'
+import type {
+  CardCycle,
+  InstallmentPlan,
+  ProviderCredit,
+} from '@spendle/server/api'
 
 type Cycle = typeof CardCycle.Type
 type Plan = typeof InstallmentPlan.Type
@@ -14,16 +18,19 @@ export const cycleStatusCopy: Record<
   overdue: { label: 'Vencida', tone: 'warning' },
 }
 
+// Pending charges count: the bank posts them only when the bill comes due.
 const unpaid = (cycle: Cycle) =>
-  Math.max(0, cycle.billedCents - cycle.paidCents)
+  Math.max(0, cycle.projectedCents - cycle.paidCents)
 
 /**
  * What a card owes and can still spend, from its cycles: the open bill,
  * what closed bills still owe, and the limit left after unpaid bills and the
- * instalments already scheduled for later bills.
+ * instalments already scheduled for later bills. The limit the bank reports
+ * through Open Finance wins over the configured one and the estimate.
  */
 export function summarizeCard(input: {
   limitCents: number | null
+  credit: ProviderCredit | null
   cycles: ReadonlyArray<Cycle>
   unappliedCents: number
   installments: ReadonlyArray<Plan>
@@ -48,14 +55,17 @@ export function summarizeCard(input: {
       scheduledCents -
       input.unappliedCents,
   )
+  const limitCents = input.credit?.limitCents ?? input.limitCents
   return {
     open,
     dueCents,
     nextDue,
     overdue: owing.some((cycle) => cycle.status === 'overdue'),
     scheduledCents,
+    limitCents,
     availableLimitCents:
-      input.limitCents === null ? null : input.limitCents - usedCents,
+      input.credit?.availableCents ??
+      (limitCents === null ? null : limitCents - usedCents),
     /** Issued statements the entries do not add up to. */
     statementGaps: input.cycles.filter(
       (cycle) =>

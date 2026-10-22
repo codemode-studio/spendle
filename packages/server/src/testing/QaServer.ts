@@ -74,7 +74,7 @@ const card: PluggyAccount = {
   number: '5555 **** **** 4242',
   balance: 389.7,
   currencyCode: 'BRL',
-  creditData: { creditLimit: 5000 },
+  creditData: { creditLimit: 5000, availableCreditLimit: 4610.3 },
 }
 
 /** Synthetic movements dated relative to today, as Pluggy reports them. */
@@ -176,15 +176,18 @@ const movements = (today: DateTime.Utc) => {
         description: 'PAGAMENTO ON LINE',
         category: 'Shopping',
       }),
+      // Pluggy reports a card's charges as pending until the bill comes due.
       tx('qa-card-streaming', 12, {
         accountId: card.id,
         amount: 39.9,
         description: 'NETFLIX.COM',
+        status: 'PENDING',
         category: 'Video streaming',
       }),
       tx('qa-card-market', 3, {
         accountId: card.id,
         amount: 139.5,
+        status: 'PENDING',
         description: 'SUPERMERCADO PAO DOCE',
         category: 'Groceries',
         categoryId: '05080000',

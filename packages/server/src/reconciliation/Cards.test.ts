@@ -687,6 +687,59 @@ describe('Cards', () => {
   )
 
   it.effect(
+    'projects the open bill from pending charges, and bills them once they post',
+    () =>
+      Effect.gen(function* () {
+        const { cards, card } = yield* setup
+        const observations = yield* Observations
+        const source = yield* observations.registerSource({
+          kind: 'open_finance',
+          externalRef: 'card-feed',
+          label: 'card-feed',
+        })
+        const report = (status: 'pending' | 'posted') =>
+          Effect.andThen(
+            observations.recordTransactions({
+              sourceId: source.id,
+              accountId: card.id,
+              transactions: [
+                {
+                  externalId: 'dinner',
+                  bookedOn: '2026-08-15',
+                  amountCents: -12000,
+                  currency: 'BRL',
+                  description: 'Restaurante',
+                  status,
+                  raw: {},
+                },
+              ],
+            }),
+            drain,
+          )
+        const open = Effect.map(cards.cycles(card.id), ({ cycles }) => {
+          const cycle = cycles.at(-1)!
+          return [
+            cycle.closingOn,
+            cycle.billedCents,
+            cycle.pendingCents,
+            cycle.projectedCents,
+            cycle.entryIds.length,
+          ]
+        })
+        yield* report('pending')
+        const pending = yield* open
+        yield* report('posted')
+        assert.deepStrictEqual(
+          [pending, yield* open],
+          [
+            ['2026-09-03', 0, 12000, 12000, 1],
+            ['2026-09-03', 12000, 0, 12000, 1],
+          ],
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
+  it.effect(
     'projects a pending instalment purchase, and counts it once after it posts',
     () =>
       Effect.gen(function* () {

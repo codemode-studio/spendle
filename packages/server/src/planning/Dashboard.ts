@@ -51,7 +51,8 @@ const make = Effect.gen(function* () {
           accountId: account.id,
           closingOn: cycle.closingOn,
           dueOn: cycle.dueOn,
-          billedCents: cycle.billedCents,
+          // A bill still pending at the provider is what the month will owe.
+          billedCents: cycle.projectedCents,
           paidCents: cycle.paidCents,
           entryIds: cycle.entryIds,
         })

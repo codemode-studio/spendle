@@ -48,11 +48,21 @@ export const Balance = Schema.Struct({
 })
 export type Balance = typeof Balance.Type
 
+/** A card's limit and what is left of it, as the provider last reported them. */
+export const ProviderCredit = Schema.Struct({
+  limitCents: Schema.NullOr(Schema.Int),
+  availableCents: Schema.NullOr(Schema.Int),
+  asOf: Schema.String,
+})
+export type ProviderCredit = typeof ProviderCredit.Type
+
 /** The Open Finance account that feeds a ledger account. */
 export const AccountLink = Schema.Struct({
   connectionId: Schema.String,
   providerAccountId: Schema.String,
   historyFrom: Schema.NullOr(Schema.String),
+  /** A linked card's credit, once a sync has read it. */
+  credit: Schema.NullOr(ProviderCredit),
 })
 
 export const AccountView = Schema.Struct({

@@ -111,7 +111,7 @@ export function spendleMcpServer(member: string) {
     {
       title: 'List accounts',
       description:
-        'Bank accounts, cards and investment accounts with their latest balances, owner and Open Finance link.',
+        "Bank accounts, cards and investment accounts with their latest balances, owner and Open Finance link. A linked card's balance is the limit in use (negative), and its link carries the limit and available credit the bank reports.",
       annotations: read,
       input: Schema.Struct({ includeArchived }),
     },
@@ -267,7 +267,8 @@ export function spendleMcpServer(member: string) {
     'get_card',
     {
       title: 'Card statements',
-      description: "A credit card's statement cycles and its instalment plans.",
+      description:
+        "A credit card's statement cycles and its instalment plans. A cycle's billedCents counts posted charges; pendingCents are charges the bank still reports as pending until the bill comes due, and projectedCents (billed plus pending) is what the bill is expected to be.",
       annotations: read,
       input: Schema.Struct({
         accountId: id('A credit card account id from list_accounts.'),

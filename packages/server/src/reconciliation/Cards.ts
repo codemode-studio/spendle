@@ -35,6 +35,7 @@ const CardEntryRow = Schema.Struct({
   bookedOn: Schema.String,
   amountCents: Schema.Int,
   description: Schema.String,
+  pending: Schema.BooleanFromBit,
   billId: Schema.NullOr(Schema.String),
   statementClosing: Schema.NullOr(Schema.String),
 })
@@ -295,6 +296,7 @@ const make = Effect.gen(function* () {
     Result: CardEntryRow,
     execute: (accountId) => sql`
       SELECT e.id, e.booked_on AS bookedOn, e.amount_cents AS amountCents, e.description,
+        e.status = 'pending' AS pending,
         (SELECT CASE WHEN COUNT(DISTINCT json_extract(o.raw, '$.installment.billId')) = 1
             THEN MAX(json_extract(o.raw, '$.installment.billId')) END
           FROM entry_evidence v JOIN transaction_observations o
@@ -316,7 +318,7 @@ const make = Effect.gen(function* () {
                 AND b.kind = 'statement' AND b.as_of = f.period_end
             )) AS statementClosing
       FROM ledger_entries e
-      WHERE e.account_id = ${accountId} AND e.status = 'posted'
+      WHERE e.account_id = ${accountId}
     `,
   })
   // Confirmed payments into the card and the date the bank debited them.
