@@ -141,112 +141,6 @@ describe('Classifier', () => {
   )
 
   it.effect(
-    'asks TypeSafe for a choice among the categories of each direction',
-    () =>
-      Effect.gen(function* () {
-        const bodies = yield* Ref.make<ReadonlyArray<string>>([])
-        const client = HttpClient.make((request) =>
-          Effect.gen(function* () {
-            const body =
-              request.body._tag === 'Uint8Array'
-                ? new TextDecoder().decode(request.body.body)
-                : ''
-            yield* Ref.update(bodies, (all) => [...all, body])
-            assert.strictEqual(
-              request.headers['authorization'],
-              'Bearer test-key',
-            )
-            const sent = yield* Schema.decodeUnknownEffect(SentRequest)(body)
-            const answers: Record<string, unknown> = {}
-            for (const id of Object.keys(sent.questions)) {
-              const income =
-                sent.state.transactions[0]!.direction === 'money received'
-              answers[id] = income
-                ? {
-                    type: 'choice',
-                    choice: 'salary',
-                    probabilities: { salary: 0.7 },
-                    confidence: 0.6,
-                  }
-                : {
-                    type: 'choice',
-                    choice: 'none:no_category_fits',
-                    probabilities: { 'none:no_category_fits': 0.55 },
-                    confidence: 0.3,
-                  }
-            }
-            const json = yield* Schema.encodeEffect(
-              Schema.fromJsonString(Schema.Unknown),
-            )({
-              model: 'jev-1',
-              answers,
-            })
-            return HttpClientResponse.fromWeb(
-              request,
-              new Response(json, { status: 200 }),
-            )
-          }).pipe(Effect.orDie),
-        )
-        const classifier = yield* Classifier.makeTypeSafe({
-          apiKey: Redacted.make('test-key'),
-          model: 'jev-latest',
-          baseUrl: 'https://typesafe.test',
-        }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient, client)))
-        const answers = yield* classifier.classify(
-          [
-            {
-              pattern: 'loja',
-              direction: 'expense',
-              description: 'Loja',
-              amountCents: -1000,
-            },
-            {
-              pattern: 'empresa',
-              direction: 'income',
-              description: 'Empresa',
-              amountCents: 500000,
-            },
-          ],
-          [
-            {
-              id: 'groceries',
-              name: 'Mercado',
-              bucket: 'essential',
-              description: 'Supermercado e padaria.',
-            },
-            { id: 'salary', name: 'Renda familiar', bucket: 'income' },
-          ],
-        )
-        assert.deepStrictEqual(answers, [
-          { categoryId: null, probability: 0.55 },
-          { categoryId: 'salary', probability: 0.7 },
-        ])
-        assert.deepStrictEqual(
-          classifier.modelVersion,
-          Option.some('typesafe:jev-latest'),
-        )
-        const sent = yield* Effect.forEach(yield* Ref.get(bodies), (body) =>
-          Schema.decodeUnknownEffect(SentRequest)(body),
-        )
-        assert.sameDeepMembers(
-          sent.map((request) => Object.values(request.questions)[0]!.criteria),
-          [
-            {
-              'none:no_category_fits':
-                'None of the listed categories fits this transaction, or the description says too little to tell.',
-              groceries: 'Mercado: Supermercado e padaria.',
-            },
-            {
-              'none:no_category_fits':
-                'None of the listed categories fits this transaction, or the description says too little to tell.',
-              salary: 'Renda familiar',
-            },
-          ],
-        )
-      }),
-  )
-
-  it.effect(
     "shows the person's decisions about similar merchants as examples, never the model's answers",
     () =>
       Effect.gen(function* () {
@@ -341,78 +235,6 @@ describe('Classifier', () => {
       ),
   )
 
-  it.effect(
-    'sends each transaction its own past decisions, by category name',
-    () =>
-      Effect.gen(function* () {
-        const bodies = yield* Ref.make<ReadonlyArray<string>>([])
-        const client = HttpClient.make((request) =>
-          Effect.gen(function* () {
-            const body =
-              request.body._tag === 'Uint8Array'
-                ? new TextDecoder().decode(request.body.body)
-                : ''
-            yield* Ref.update(bodies, (all) => [...all, body])
-            const sent = yield* Schema.decodeUnknownEffect(SentRequest)(body)
-            const answers: Record<string, unknown> = {}
-            for (const id of Object.keys(sent.questions))
-              answers[id] = {
-                type: 'choice',
-                choice: 'groceries',
-                probabilities: { groceries: 0.8 },
-              }
-            const json = yield* Schema.encodeEffect(
-              Schema.fromJsonString(Schema.Unknown),
-            )({ answers })
-            return HttpClientResponse.fromWeb(
-              request,
-              new Response(json, { status: 200 }),
-            )
-          }).pipe(Effect.orDie),
-        )
-        const classifier = yield* Classifier.makeTypeSafe({
-          apiKey: Redacted.make('test-key'),
-          model: 'jev-latest',
-          baseUrl: 'https://typesafe.test',
-        }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient, client)))
-        yield* classifier.classify(
-          [
-            {
-              pattern: 'padaria central',
-              direction: 'expense',
-              description: 'Padaria Central',
-              amountCents: -1000,
-              examples: [
-                { description: 'Padaria Real', categoryId: 'groceries' },
-                // Not offered for this direction: left out.
-                { description: 'Padaria Salario', categoryId: 'salary' },
-              ],
-            },
-            {
-              pattern: 'loja',
-              direction: 'expense',
-              description: 'Loja',
-              amountCents: -2000,
-            },
-          ],
-          [
-            { id: 'groceries', name: 'Mercado', bucket: 'essential' },
-            { id: 'salary', name: 'Renda familiar', bucket: 'income' },
-          ],
-        )
-        const [sent] = yield* Effect.forEach(yield* Ref.get(bodies), (body) =>
-          Schema.decodeUnknownEffect(SentRequest)(body),
-        )
-        assert.deepStrictEqual(
-          sent!.state.transactions.map((t) => t.pastDecisions),
-          [[{ description: 'Padaria Real', category: 'Mercado' }], undefined],
-        )
-        const [first, second] = Object.values(sent!.questions)
-        assert.include(first!.instructions, '`transactions[0].pastDecisions`')
-        assert.notInclude(second!.instructions, 'pastDecisions')
-      }),
-  )
-
   it.effect('reports a refused key as rejected without retrying', () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0)
@@ -421,15 +243,20 @@ describe('Classifier', () => {
           Effect.as(
             HttpClientResponse.fromWeb(
               request,
-              new Response('{"detail":"invalid key"}', { status: 401 }),
+              new Response(
+                '{"error":{"message":"No auth credentials found"}}',
+                {
+                  status: 401,
+                },
+              ),
             ),
           ),
         ),
       )
-      const classifier = yield* Classifier.makeTypeSafe({
+      const classifier = yield* Classifier.makeOpenRouter({
         apiKey: Redacted.make('bad-key'),
-        model: 'jev-latest',
-        baseUrl: 'https://typesafe.test',
+        model: 'openai/gpt-6-luna',
+        baseUrl: 'https://openrouter.test',
       }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient, client)))
       const error = yield* Effect.flip(
         classifier.classify(
@@ -730,37 +557,6 @@ const SentState = Schema.fromJsonString(
             }),
           ),
         ),
-      }),
-    ),
-  }),
-)
-
-const SentRequest = Schema.fromJsonString(
-  Schema.Struct({
-    model: Schema.Literal('jev-latest'),
-    state: Schema.Struct({
-      transactions: Schema.Array(
-        Schema.Struct({
-          description: Schema.String,
-          amount: Schema.String,
-          direction: Schema.String,
-          pastDecisions: Schema.optional(
-            Schema.Array(
-              Schema.Struct({
-                description: Schema.String,
-                category: Schema.String,
-              }),
-            ),
-          ),
-        }),
-      ),
-    }),
-    questions: Schema.Record(
-      Schema.String,
-      Schema.Struct({
-        type: Schema.Literal('choice'),
-        instructions: Schema.String,
-        criteria: Schema.Record(Schema.String, Schema.String),
       }),
     ),
   }),

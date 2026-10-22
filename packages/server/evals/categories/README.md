@@ -15,11 +15,11 @@ Sem `OPENROUTER_API_KEY`, o modo `model` sai com código 1 e explica o que fazer
 
 ## Comparar modelos
 
-`eval:models` faz a mesma prova a vários modelos e os põe lado a lado. Qualquer id do OpenRouter (`OPENROUTER_API_KEY`) recebe o mesmo pedido que o classificador de produção envia (`makeOpenRouterRequest`), em lotes de 25, e devolve uma confiança declarada para cada resposta. `typesafe:<versão>` pergunta ao Jev pela TypeSafe (`TYPESAFE_API_KEY`), que a produção usava até a versão 1.13.0, para comparar versões novas.
+`eval:models` faz a mesma prova a vários modelos e os põe lado a lado. Qualquer id do OpenRouter (`OPENROUTER_API_KEY`) recebe o mesmo pedido que o classificador de produção envia (`makeOpenRouterRequest`), em lotes de 25, e devolve uma confiança declarada para cada resposta. O Jev, que a produção usava até a versão 1.13.0, está no OpenRouter como `typesafe/jev-router`.
 
 ```bash
 vp run --filter @spendle/server eval:models \
-  --model typesafe:jev-1.13.0 --model anthropic/claude-haiku-5.5 --model openai/gpt-6-luna
+  --model openai/gpt-6-luna --model typesafe/jev-router --model anthropic/claude-haiku-5.5
 vp run --filter @spendle/server eval:models --model anthropic/claude-haiku-5.5 --no-examples
 ```
 
@@ -27,7 +27,7 @@ vp run --filter @spendle/server eval:models --model anthropic/claude-haiku-5.5 -
 - `calibration error`: a distância média entre a confiança declarada e o acerto real, em faixas de 0,1 (ECE). Com erro alto, nenhum limiar é confiável, por melhor que seja o acerto.
 - `threshold for 97%` e `right without review`: o limiar que `recommendThreshold` escolheria para esse modelo e quantas compras ele resolveria certo sem revisão. É o ganho real; um modelo mais certeiro mas mal calibrado pode ganhar menos.
 - `unanswered`: lançamentos de lotes que falharam depois das novas tentativas; contam como sem categoria.
-- `cost USD` vem do OpenRouter; a TypeSafe não informa custo.
+- `cost USD` é o que o OpenRouter cobrou.
 
 Modelos de linguagem não são determinísticos: rode duas vezes antes de concluir algo de uma diferença pequena.
 
