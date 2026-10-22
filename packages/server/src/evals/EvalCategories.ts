@@ -1,8 +1,9 @@
 /**
  * Replays the frozen category evaluation (`evals/categories`) through the
- * Spendle classifier and the deterministic policy, and prints the scoreboard
- * used to choose `TYPESAFE_APPLY_THRESHOLD`. The model mode makes paid
- * TypeSafe calls, so it stays out of `vp run verify`.
+ * Spendle classifier (`Classifier.layer`, as the server builds it) and the
+ * deterministic policy, and prints the scoreboard used to choose
+ * `CLASSIFIER_APPLY_THRESHOLD`. The model mode makes paid OpenRouter calls,
+ * so it stays out of `vp run verify`.
  *
  *   vp run --filter @spendle/server eval:categories                 model
  *   vp run --filter @spendle/server eval:categories --mode policy   patterns only, free
@@ -94,7 +95,7 @@ const command = Command.make(
   {
     mode: Flag.Literals('mode', ['model', 'policy', 'all']).pipe(
       Flag.withDescription(
-        'model: TypeSafe answers (paid); policy: store patterns only; all: both and combined',
+        "model: the classifier's answers (paid); policy: store patterns only; all: both and combined",
       ),
       Flag.withDefault('model' as const),
     ),
@@ -156,7 +157,7 @@ const command = Command.make(
     const classifier = yield* Classifier
     if (Option.isNone(classifier.modelVersion)) {
       yield* Console.error(
-        'TYPESAFE_API_KEY is not set, so the model cannot be evaluated. Set it (in the environment or the repository .env.local) and run again, or use --mode policy to score the patterns alone.',
+        'OPENROUTER_API_KEY is not set, so the model cannot be evaluated. Set it (in the environment or the repository .env.local) and run again, or use --mode policy to score the patterns alone.',
       )
       process.exitCode = 1
       return
@@ -220,8 +221,8 @@ const command = Command.make(
     )
     yield* Console.log(
       recommended
-        ? `\nRecommended: TYPESAFE_APPLY_THRESHOLD=${recommended.threshold} for TYPESAFE_MODEL=${version.replace(/^typesafe:/, '')} (${recommended.applied} applied, ${percent(recommended.accuracyWhenConfident)} right; every higher threshold also reaches ${percent(target)}).`
-        : `\nNo threshold reaches ${percent(target)} accuracyWhenConfident on ${minApplied}+ applied answers: leave TYPESAFE_APPLY_THRESHOLD unset, every answer goes to review.`,
+        ? `\nRecommended: CLASSIFIER_APPLY_THRESHOLD=${recommended.threshold} for CLASSIFIER_MODEL=${version.replace(/^openrouter:/, '')} (${recommended.applied} applied, ${percent(recommended.accuracyWhenConfident)} right; every higher threshold also reaches ${percent(target)}).`
+        : `\nNo threshold reaches ${percent(target)} accuracyWhenConfident on ${minApplied}+ applied answers: leave CLASSIFIER_APPLY_THRESHOLD unset, every answer goes to review.`,
     )
     const model = modelOutcomes(answers, scoredAt, MODEL_SUGGEST_FLOOR)
     const modelBoard = scoreboard(exam, model)

@@ -29,7 +29,7 @@ export const confidence = {
 
 /**
  * The default probability from which a model answer is applied: infinite,
- * so every answer goes to review. `TYPESAFE_APPLY_THRESHOLD` raises it for
+ * so every answer goes to review. `CLASSIFIER_APPLY_THRESHOLD` raises it for
  * one model version once `eval:categories` shows its confident answers are
  * right often enough (see `evals/categories/README.md`).
  */

@@ -192,7 +192,7 @@ const thresholdRow = (
   }
 }
 
-/** The scoreboard at each threshold, for choosing `TYPESAFE_APPLY_THRESHOLD`. */
+/** The scoreboard at each threshold, for choosing `CLASSIFIER_APPLY_THRESHOLD`. */
 export const sweep = (
   exam: ReadonlyArray<EvalItem>,
   answers: ReadonlyMap<string, ModelAnswer>,

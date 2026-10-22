@@ -1,12 +1,13 @@
 /**
  * Asks several models the category exam (`evals/categories`) and prints them
  * side by side: how often each is right, how honest its confidence is, how
- * much it could apply without review, and what it costs. Jev answers through
- * TypeSafe as in production; any other model through OpenRouter. Every
- * model makes paid calls, so this stays out of `vp run verify`.
+ * much it could apply without review, and what it costs. Any OpenRouter
+ * model is asked exactly as the production classifier asks GPT-6 Luna; Jev
+ * answers through TypeSafe, which production used before. Every model makes
+ * paid calls, so this stays out of `vp run verify`.
  *
  *   vp run --filter @spendle/server eval:models \
- *     --model typesafe:jev-1.13.0 --model anthropic/claude-haiku-5.5
+ *     --model openai/gpt-6-luna --model typesafe:jev-1.13.0
  *
  * Each model sees the same questions the server would send, with the
  * context split as the person's past decisions (`--no-examples` without).
@@ -24,13 +25,12 @@ import * as Flag from 'effect/cli/Flag'
 import * as FetchHttpClient from 'effect/http/FetchHttpClient'
 
 import { Classifier } from '../categories/Classifier.ts'
-import type { Classification } from '../categories/Classifier.ts'
+import type { Classification, Usage } from '../categories/Classifier.ts'
 import { categoryDescriptions } from '../categories/Descriptions.ts'
 import { MODEL_SUGGEST_FLOOR } from '../categories/Policy.ts'
 import { loadCategoryDataset, saveCategoryResults } from './CategoryDataset.ts'
 import { modelQuestions } from './ModelReplay.ts'
 import { makeOpenRouterClassifier } from './OpenRouterClassifier.ts'
-import type { Usage } from './OpenRouterClassifier.ts'
 import {
   calibration,
   calibrationError,
