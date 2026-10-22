@@ -108,6 +108,21 @@ export const PluggyTransaction = Schema.Struct({
 })
 export type PluggyTransaction = typeof PluggyTransaction.Type
 
+/** A card bill the bank closed: its dates and what it asked. */
+export const PluggyBill = Schema.Struct({
+  id: Schema.String,
+  dueDate: Schema.String,
+  billClosingDate: Schema.optional(Schema.NullOr(Schema.String)),
+  /**
+   * What the bill asks, positive when owed: the previous balance plus the
+   * period's charges, less the payments and credits of the period. Negative
+   * when it closed in the holder's favour.
+   */
+  totalAmount: Schema.Number,
+  totalAmountCurrencyCode: Schema.optional(Schema.NullOr(Schema.String)),
+})
+export type PluggyBill = typeof PluggyBill.Type
+
 export const PluggyPage = <S extends Schema.Constraint>(item: S) =>
   Schema.Struct({ results: Schema.Array(item) })
 

@@ -66,7 +66,7 @@ export interface CycleEntry {
   /** The provider's bill this movement was charged on, when it says. */
   readonly billId: string | null
   /**
-   * The closing of the imported statement that prints this movement, when
+   * The closing of the issued statement that prints this movement, when
    * one does. The statement decides its cycle over the purchase date, which
    * may fall before the cut when the purchase was captured after it.
    */
@@ -103,7 +103,7 @@ export interface CyclePayment {
   /** The closing of the bill it was identified as paying; others pay the oldest bill first. */
   readonly settles?: string
   /**
-   * The closing of the imported statement that prints this payment, when
+   * The closing of the issued statement that prints this payment, when
    * one does. A statement prints the payments of earlier bills made in its
    * period, so the payment pays those first: all of it when the statement
    * counts only its period's charges, and what its balance does not show as
@@ -112,7 +112,10 @@ export interface CyclePayment {
   readonly statementClosing?: string | null
 }
 
-/** An issued statement: the period it covers and what it says is owed. */
+/**
+ * An issued statement, imported or a bill the provider reports: the period
+ * it covers and what it says is owed.
+ */
 export interface IssuedStatement {
   readonly startsOn: string
   readonly closingOn: string
@@ -189,8 +192,8 @@ export interface CardCycles {
   /** Payments and closed cycles' net credit beyond everything billed so far: credit on the card. */
   readonly unappliedCents: number
   /**
-   * Payments a statement prints for earlier bills when no earlier bill is
-   * imported: they paid debt from before the history, so they are neither
+   * Payments a statement prints for earlier bills when the history shows no
+   * earlier bill: they paid debt from before the history, so they are neither
    * applied to a cycle nor credit on the card.
    */
   readonly beforeHistoryCents: number
@@ -606,7 +609,7 @@ const allocate = (
  *
  * Cycle bounds come from issued statements when there are any; configured
  * closing and due days are a forecast for the rest. An entry belongs to the
- * cycle of the imported statement that prints it; else, when the provider
+ * cycle of the issued statement that prints it; else, when the provider
  * assigns it to a bill, to the statement that prints any movement of that
  * bill, or the cycle of the latest of them; else to the cycle containing its
  * date. Its date is kept as reported: a purchase captured after the cut is
@@ -628,8 +631,8 @@ const allocate = (
  * (and the open one in advance), so a payment can settle several bills.
  * What exceeds everything billed is unapplied credit. A payment a
  * statement prints pays the bills before it, except what a balance
- * statement shows as paid in advance; with none imported, that debt is
- * from before the history and the payment is kept apart.
+ * statement shows as paid in advance; when the history shows none, that
+ * debt is from before the history and the payment is kept apart.
  *
  * A cycle is overdue only after `payableUntil`: a due date on a weekend or
  * national bank holiday, printed or forecast, moves to the next business day.

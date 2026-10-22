@@ -325,12 +325,16 @@ function CycleSummary({ cycle, currency }: { cycle: Cycle; currency: string }) {
         {cycle.statement && cycle.statement.differenceCents !== 0 ? (
           <p className="text-xs text-warning-foreground">
             A fatura emitida diz{' '}
-            {formatCurrency(cycle.statement.observedCents, currency)}: faltam{' '}
+            {formatCurrency(-cycle.statement.observedCents, currency)}
+            {cycle.statement.differenceCents < 0 ? ': faltam ' : ': sobram '}
             {formatCurrency(
               Math.abs(cycle.statement.differenceCents),
               currency,
             )}{' '}
-            nos lançamentos. Importe a fatura ou sincronize o cartão.
+            nos lançamentos.{' '}
+            {cycle.statement.differenceCents < 0
+              ? 'Importe a fatura ou sincronize o cartão.'
+              : 'Confira a fatura no app do banco.'}
           </p>
         ) : null}
       </div>

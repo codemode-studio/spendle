@@ -27,6 +27,7 @@ import { Accounts } from '../ledger/Accounts.ts'
 import { OpenFinance } from '../openfinance/OpenFinance.ts'
 import type {
   PluggyAccount,
+  PluggyBill,
   PluggyItem,
   PluggyTransaction,
 } from '../openfinance/PluggyApi.ts'
@@ -43,6 +44,8 @@ export interface FakePluggyData {
   readonly transactions: Readonly<
     Record<string, ReadonlyArray<PluggyTransaction>>
   >
+  /** Closed bills by card account. */
+  readonly bills?: Readonly<Record<string, ReadonlyArray<PluggyBill>>>
   /** Calls the code made, for assertions. */
   readonly deleted: ReadonlyArray<string>
   readonly webhooks: ReadonlyArray<string>
@@ -206,6 +209,8 @@ export const makeFake = (state: Ref.Ref<FakePluggyData>) =>
         }
         return result
       }),
+    listBills: (accountId) =>
+      Effect.map(Ref.get(state), (current) => current.bills?.[accountId] ?? []),
   })
 
 /** Open Finance over the in-memory ledger and a fake Pluggy, without reactors: tests drive the work. */
@@ -315,6 +320,7 @@ export const connect = (
     FakePluggyData,
     | 'accounts'
     | 'transactions'
+    | 'bills'
     | 'statusDetail'
     | 'itemAccounts'
     | 'itemLastUpdatedAt'

@@ -45,11 +45,19 @@ export const CardCycle = Schema.Struct({
   /** Posted and pending entries placed in the cycle. */
   entryIds: Schema.Array(Schema.String),
   payments: Schema.Array(CyclePayment),
-  /** The issued statement's total and how far the entries are from it. */
+  /**
+   * The issued statement (an imported file or the bill the provider
+   * reports) and how far the entries are from it.
+   */
   statement: Schema.NullOr(
     Schema.Struct({
       observedCents: Schema.Int,
       deductedCents: Schema.Int,
+      /**
+       * Negative when the entries miss charges the statement bills, positive
+       * when they count more. Zero for the first bill of a linked card's
+       * history: the charges it bills from before the history were not copied.
+       */
       differenceCents: Schema.Int,
     }),
   ),
@@ -59,7 +67,7 @@ export const CardCycles = Schema.Struct({
   cycles: Schema.Array(CardCycle),
   /** Credit on the card beyond everything billed so far. */
   unappliedCents: Schema.Int,
-  /** Payments a statement prints for bills from before the history. */
+  /** Payments a statement or bill prints for bills from before the history. */
   beforeHistoryCents: Schema.Int,
 })
 

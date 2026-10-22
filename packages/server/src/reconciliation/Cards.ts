@@ -6,7 +6,13 @@ import * as Schema from 'effect/Schema'
 import * as SqlClient from 'effect/sql/SqlClient'
 import * as SqlSchema from 'effect/sql/SqlSchema'
 
-import { addDays, daysBetween, today } from '../domain/LocalDate.ts'
+import {
+  addDays,
+  dayOfMonth,
+  daysBetween,
+  monthStart,
+  today,
+} from '../domain/LocalDate.ts'
 import { foldDescription } from '../imports/Statement.ts'
 import { Accounts } from '../ledger/Accounts.ts'
 import { toMinorUnits } from '../openfinance/Normalize.ts'
@@ -19,7 +25,12 @@ import {
 import { installmentPlans } from './Installments.ts'
 import type { InstallmentLine } from './Installments.ts'
 import { cardPaymentWindowDays } from './Matching.ts'
-import type { CardCycle, CardCycles, CyclePayment } from './Cycles.ts'
+import type {
+  CardCycle,
+  CardCycles,
+  CyclePayment,
+  IssuedStatement,
+} from './Cycles.ts'
 
 export class CardsError extends Schema.TaggedError<CardsError>()('CardsError', {
   reason: Schema.Literals(['not_a_card']),
@@ -39,6 +50,50 @@ const CardEntryRow = Schema.Struct({
   billId: Schema.NullOr(Schema.String),
   statementClosing: Schema.NullOr(Schema.String),
 })
+
+const BillRow = Schema.Struct({
+  billId: Schema.String,
+  closingOn: Schema.String,
+  dueOn: Schema.String,
+  totalCents: Schema.Int,
+})
+type BillRow = typeof BillRow.Type
+
+/**
+ * The bills a provider reports as issued statements, from the first that
+ * closed within the history: one closed before it bills nothing the history
+ * shows. Each is a balance, as the bank prints it: the previous bill's,
+ * plus the period's charges, less the period's payments and credits. Its
+ * period starts the day after the previous bill's closing, or a month
+ * before its own closing for the earliest bill reported.
+ */
+const billStatements = (
+  bills: ReadonlyArray<BillRow>,
+  historyFrom: string,
+): ReadonlyArray<IssuedStatement & { readonly billId: string }> =>
+  bills.flatMap((bill, index) => {
+    if (bill.closingOn < historyFrom) return []
+    const previous = bills[index - 1]?.closingOn
+    return [
+      {
+        billId: bill.billId,
+        startsOn: addDays(
+          previous ??
+            dayOfMonth(
+              monthStart(bill.closingOn, -1),
+              Number(bill.closingOn.slice(8)),
+            ),
+          1,
+        ),
+        closingOn: bill.closingOn,
+        cents: -bill.totalCents,
+        dueOn: bill.dueOn,
+        netOfPayments: true,
+        floorsAtZero: false,
+        advanceCents: null,
+      },
+    ]
+  })
 
 const DebitRow = Schema.Struct({
   id: Schema.String,
@@ -364,6 +419,21 @@ const make = Effect.gen(function* () {
       ORDER BY e.booked_on, e.id
     `,
   })
+  // The latest report of each bill a provider closed for the card.
+  const findBills = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: BillRow,
+    execute: (accountId) => sql`
+      SELECT b.bill_id AS billId, b.closing_on AS closingOn, b.due_on AS dueOn,
+        b.total_cents AS totalCents
+      FROM card_bill_observations b
+      WHERE b.account_id = ${accountId} AND b.rowid = (
+        SELECT max(l.rowid) FROM card_bill_observations l
+        WHERE l.account_id = b.account_id AND l.bill_id = b.bill_id
+      )
+      ORDER BY b.closing_on
+    `,
+  })
   // Statement totals from files that state their period: the period's end is
   // the actual closing. Balances without a stated period are not statements.
   const findStatements = SqlSchema.findAll({
@@ -393,6 +463,12 @@ const make = Effect.gen(function* () {
    * The card's statement cycles with what each one owes, what paid it, and
    * how its entries compare with the issued statement.
    *
+   * Issued statements are imported files and the bills the provider
+   * reports (see `billStatements`); a file speaks for its closing over a
+   * bill. A bill also places the movements the provider assigns to it, so
+   * a charge the bank moved to a later bill, or a payment printed on the
+   * bill after the one it paid, counts where the bank put it.
+   *
    * Payments come from three places, most certain first:
    * 1. a confirmed card payment relation, made on the bank debit's date and
    *    credited on the card's;
@@ -410,14 +486,57 @@ const make = Effect.gen(function* () {
     if (card.card === null)
       return yield* new CardsError({ reason: 'not_a_card', accountId })
     const terms = card.card
-    const [entries, paymentRelations, statements, all, date] =
+    const [rows, paymentRelations, imported, bills, all, date] =
       yield* Effect.all([
         findCardEntries(accountId),
         findPaymentRelations(accountId),
         findStatements(accountId),
+        findBills(accountId),
         accounts.list,
         today,
       ])
+    // The history starts with the earliest movement copied.
+    const historyFrom = rows.reduce(
+      (earliest, entry) =>
+        entry.bookedOn < earliest ? entry.bookedOn : earliest,
+      date,
+    )
+    // An imported statement speaks for its closing over the provider's bill.
+    const provided = billStatements(bills, historyFrom).filter(
+      (bill) => !imported.some((file) => file.closingOn === bill.closingOn),
+    )
+    const statements = [...provided, ...imported]
+    // A movement the provider assigns to a bill is printed on it, unless
+    // dated after its closing: a payment may name the bill it paid.
+    const closingOf = new Map(
+      provided.map((bill) => [bill.billId, bill.closingOn]),
+    )
+    const entries = rows.map((entry) => {
+      const closing =
+        entry.billId === null ? undefined : closingOf.get(entry.billId)
+      return entry.statementClosing === null &&
+        closing !== undefined &&
+        entry.bookedOn <= closing
+        ? { ...entry, statementClosing: closing }
+        : entry
+    })
+    // The first bill also bills charges dated before the history, which
+    // were not copied: its difference from the entries is no gap.
+    const first = provided[0]
+    const explained = (result: CardCycles): CardCycles =>
+      first === undefined || first.startsOn > historyFrom
+        ? result
+        : {
+            ...result,
+            cycles: result.cycles.map((cycle) =>
+              cycle.closingOn === first.closingOn && cycle.statement !== null
+                ? {
+                    ...cycle,
+                    statement: { ...cycle.statement, differenceCents: 0 },
+                  }
+                : cycle,
+            ),
+          }
 
     const payments: Array<CyclePayment> = []
     const paymentIds = new Set<string>()
@@ -466,7 +585,8 @@ const make = Effect.gen(function* () {
     const known = cardCycles({ ...history, payments })
     const firstCycle = known.cycles[0]
     const lastCycle = known.cycles.at(-1)
-    if (firstCycle === undefined || lastCycle === undefined) return known
+    if (firstCycle === undefined || lastCycle === undefined)
+      return explained(known)
 
     const cards = all
       .filter(
@@ -519,11 +639,13 @@ const make = Effect.gen(function* () {
         },
       ]
     })
-    if (billDebits.length === 0) return known
+    if (billDebits.length === 0) return explained(known)
     const inferred = billPayments({ ...history, payments, debits: billDebits })
-    return inferred.length === 0
-      ? known
-      : cardCycles({ ...history, payments: [...payments, ...inferred] })
+    return explained(
+      inferred.length === 0
+        ? known
+        : cardCycles({ ...history, payments: [...payments, ...inferred] }),
+    )
   })
 
   const findLines = SqlSchema.findAll({

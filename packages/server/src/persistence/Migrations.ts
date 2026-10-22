@@ -20,6 +20,7 @@ import RelationOrphans from './Migrations/0017_relation_orphans.ts'
 import GhostConnections from './Migrations/0018_ghost_connections.ts'
 import BillPaymentName from './Migrations/0019_bill_payment_name.ts'
 import CardCredit from './Migrations/0020_card_credit.ts'
+import CardBills from './Migrations/0021_card_bills.ts'
 
 // Keys are `<id>_<name>`; each migration runs once, in id order. Import every
 // migration statically so the server never depends on files beside the bundle.
@@ -45,6 +46,7 @@ export const migrations = {
   '0018_ghost_connections': GhostConnections,
   '0019_bill_payment_name': BillPaymentName,
   '0020_card_credit': CardCredit,
+  '0021_card_bills': CardBills,
 }
 
 // The generic migrator, so the same migrations run on any SQLite client.

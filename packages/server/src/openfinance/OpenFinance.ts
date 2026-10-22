@@ -861,6 +861,12 @@ const make = Effect.gen(function* () {
           })).filter((transaction) => !inRangeIds.has(transaction.id))
         : []
     const fetched = [...inRange, ...strays]
+    // A card's closed bills say what the bank billed and when, which the
+    // transactions alone do not: it may bill a charge on a later bill than
+    // its date suggests, and the history leaves out the first bill's
+    // earlier charges.
+    const bills =
+      item.type === 'CREDIT' ? yield* pluggy.listBills(providerAccountId) : []
     // Known means ever observed, removed or not: one inferred removed and
     // returned on another day is restored wherever Pluggy moved it.
     const known = yield* observations.observedIds({ sourceId, accountId })
@@ -1024,6 +1030,21 @@ const make = Effect.gen(function* () {
               WHERE provider_account_id = ${providerAccountId}
             `
           }
+        }
+        const observedAt = yield* now
+        for (const bill of bills) {
+          // Without its closing a bill cannot be told from the cycles.
+          if (!bill.billClosingDate) continue
+          const currency = bill.totalAmountCurrencyCode ?? item.currencyCode
+          // Bill dates are calendar days written as UTC midnight, not
+          // instants: São Paulo time would move them to the day before.
+          yield* sql`
+            INSERT OR IGNORE INTO card_bill_observations (source_id, account_id,
+              bill_id, closing_on, due_on, total_cents, currency, observed_at)
+            VALUES (${sourceId}, ${accountId}, ${bill.id}, ${bill.billClosingDate.slice(0, 10)},
+              ${bill.dueDate.slice(0, 10)}, ${toMinorUnits(bill.totalAmount, currency)},
+              ${currency}, ${observedAt})
+          `
         }
         if (item.type === 'BANK') {
           yield* reconcileCheckpoints({

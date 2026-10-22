@@ -15,6 +15,7 @@ import * as HttpClientResponse from 'effect/http/HttpClientResponse'
 
 import {
   PluggyAccount,
+  PluggyBill,
   PluggyCursorPage,
   PluggyItem,
   PluggyPage,
@@ -70,6 +71,10 @@ export interface PluggyClientShape {
   readonly listTransactions: (
     input: TransactionQuery,
   ) => Effect.Effect<ReadonlyArray<PluggyTransaction>, PluggyError>
+  /** The closed bills of a card account. */
+  readonly listBills: (
+    accountId: string,
+  ) => Effect.Effect<ReadonlyArray<PluggyBill>, PluggyError>
 }
 
 /**
@@ -272,6 +277,16 @@ export class PluggyClient extends Context.Service<
           PluggyPage(PluggyAccount),
         ).pipe(Effect.map((page) => page.results))
 
+      // A page holds 500 bills, more than forty years of monthly bills.
+      const listBills: PluggyClientShape['listBills'] = (accountId) =>
+        send(
+          'listBills',
+          HttpClientRequest.get('/bills').pipe(
+            HttpClientRequest.setUrlParams({ accountId }),
+          ),
+          PluggyPage(PluggyBill),
+        ).pipe(Effect.map((page) => page.results))
+
       const listPages = (params: Record<string, string>) =>
         Effect.gen(function* () {
           const all: Array<PluggyTransaction> = []
@@ -368,6 +383,7 @@ export class PluggyClient extends Context.Service<
         deleteItem,
         listAccounts,
         listTransactions,
+        listBills,
       })
     })
 

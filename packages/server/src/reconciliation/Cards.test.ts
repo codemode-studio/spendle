@@ -526,6 +526,114 @@ describe('Cards', () => {
       }).pipe(Effect.provide(openFinanceTest())),
   )
 
+  it.effect(
+    "bills each cycle as the provider's bills say, and keeps a payment of a bill before the history apart",
+    () =>
+      Effect.gen(function* () {
+        const bill = (
+          id: string,
+          closing: string,
+          due: string,
+          total: number,
+        ) => ({
+          id,
+          billClosingDate: `${closing}T00:00:00.000Z`,
+          dueDate: `${due}T00:00:00.000Z`,
+          totalAmount: total,
+        })
+        const line = (
+          id: string,
+          date: string,
+          amount: number,
+          billId: string | null,
+          fields: Parameters<typeof tx>[2] = {},
+        ) =>
+          tx(id, date, {
+            accountId: 'provider-card',
+            amount,
+            description: id,
+            creditCardMetadata: { billId },
+            ...fields,
+          })
+        const payment = (
+          id: string,
+          date: string,
+          amount: number,
+          billId: string | null,
+        ) =>
+          line(id, date, -amount, billId, {
+            type: 'CREDIT',
+            description: 'PAGAMENTO RECEBIDO',
+          })
+        const { openFinance } = yield* connect({
+          accounts: [pluggyCard],
+          // The history starts on 26 June. June's bill was paid in it, on
+          // 2 July; July's also bills fuel bought on 24 June.
+          bills: {
+            'provider-card': [
+              bill('june', '2026-06-25', '2026-07-02', 400),
+              bill('july', '2026-07-25', '2026-08-03', 250),
+              bill('august', '2026-08-25', '2026-09-02', 300),
+              bill('september', '2026-09-25', '2026-10-02', 200),
+            ],
+          },
+          transactions: {
+            'provider-card': [
+              line('fuel', '2026-06-24', 150, 'july'),
+              payment('pay-june', '2026-07-02', 400, 'july'),
+              line('market', '2026-07-10', 100, 'july'),
+              payment('pay-july', '2026-08-03', 250, 'august'),
+              line('hotel', '2026-08-05', 300, 'august'),
+              payment('pay-august', '2026-09-02', 300, 'september'),
+              line('books', '2026-09-10', 200, 'september'),
+              payment('pay-september', '2026-10-02', 200, null),
+              line('dinner', '2026-10-03', 80, null, { status: 'PENDING' }),
+            ],
+          },
+        })
+        const account = yield* openFinance.linkAccount({
+          providerAccountId: 'provider-card',
+          target: {
+            kind: 'credit_card',
+            purpose: 'operating',
+            card: new CardTerms({
+              closingDay: 25,
+              dueDay: 2,
+              limitCents: null,
+              lastFour: '1889',
+            }),
+          },
+          historyMonths: 3,
+        })
+        yield* drain
+        const result = yield* (yield* Cards).cycles(account.id)
+        assert.deepStrictEqual(
+          {
+            cycles: result.cycles.map((cycle) => [
+              cycle.closingOn,
+              cycle.projectedCents,
+              cycle.paidCents,
+              cycle.status,
+              cycle.statement?.differenceCents ?? null,
+            ]),
+            unapplied: result.unappliedCents,
+            beforeHistory: result.beforeHistoryCents,
+          },
+          {
+            cycles: [
+              // The fuel was not copied, which is no gap.
+              ['2026-07-25', 25000, 25000, 'paid', 0],
+              ['2026-08-25', 30000, 30000, 'paid', 0],
+              ['2026-09-25', 20000, 20000, 'paid', 0],
+              ['2026-10-25', 8000, 0, 'open', null],
+            ],
+            unapplied: 0,
+            beforeHistory: 40000,
+          },
+        )
+      }).pipe(Effect.provide(openFinanceTest())),
+  )
+
   it.effect('combines instalment details different sources report', () =>
     Effect.gen(function* () {
       const { cards, card } = yield* setup

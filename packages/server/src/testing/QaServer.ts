@@ -77,6 +77,24 @@ const card: PluggyAccount = {
   creditData: { creditLimit: 5000, availableCreditLimit: 4610.3 },
 }
 
+const qaBill = 'qa-bill'
+
+/** The card's bill for the restaurant and the store, which the payment paid. */
+const bills = (today: DateTime.Utc) => {
+  const day = (offset: number) =>
+    `${DateTime.formatIsoDate(DateTime.subtract(today, { days: offset }))}T00:00:00.000Z`
+  return {
+    [card.id]: [
+      {
+        id: qaBill,
+        billClosingDate: day(33),
+        dueDate: day(26),
+        totalAmount: 210.3,
+      },
+    ],
+  }
+}
+
 /** Synthetic movements dated relative to today, as Pluggy reports them. */
 const movements = (today: DateTime.Utc) => {
   const day = (offset: number) =>
@@ -149,6 +167,7 @@ const movements = (today: DateTime.Utc) => {
         description: 'RESTAURANTE SABOR',
         category: 'Restaurants',
         categoryId: '05070000',
+        creditCardMetadata: { billId: qaBill },
       }),
       tx('qa-card-store', 38, {
         accountId: card.id,
@@ -159,6 +178,7 @@ const movements = (today: DateTime.Utc) => {
           installmentNumber: 2,
           totalInstallments: 6,
           totalAmount: 722.4,
+          billId: qaBill,
         },
       }),
       tx('qa-card-payment', 27, {
@@ -204,6 +224,7 @@ const QaPluggy = Layer.unwrap(
       clientUserId: '',
       accounts: [bank, card],
       transactions: movements(today),
+      bills: bills(today),
       deleted: [],
       webhooks: [],
       connectTokens: [],
