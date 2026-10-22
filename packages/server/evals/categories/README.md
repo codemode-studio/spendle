@@ -13,6 +13,24 @@ vp run --filter @spendle/server eval:categories --target 0.98 --min-applied 40 -
 
 Sem `TYPESAFE_API_KEY`, o modo `model` sai com código 1 e explica o que fazer. O modelo avaliado é o de `TYPESAFE_MODEL` (padrão `jev-1.13.0`), com as mesmas descrições de categoria (`src/categories/Descriptions.ts`) e o mesmo pedido que o servidor envia.
 
+## Comparar modelos
+
+`eval:models` faz a mesma prova a vários modelos e os põe lado a lado. `typesafe:<versão>` pergunta ao Jev pela TypeSafe; qualquer outro id vai pelo OpenRouter (`OPENROUTER_API_KEY`), que recebe as mesmas informações que o Jev, nos mesmos lotes de 25, e devolve uma confiança declarada para cada resposta (`src/evals/OpenRouterClassifier.ts`).
+
+```bash
+vp run --filter @spendle/server eval:models \
+  --model typesafe:jev-1.13.0 --model anthropic/claude-haiku-5.5 --model openai/gpt-6-luna
+vp run --filter @spendle/server eval:models --model anthropic/claude-haiku-5.5 --no-examples
+```
+
+- `right (guessable)` e `right (all purchases)`: acerto de qualquer resposta com confiança de pelo menos 0,5, sem limiar. Mede o modelo, não a política de aplicar.
+- `calibration error`: a distância média entre a confiança declarada e o acerto real, em faixas de 0,1 (ECE). Com erro alto, nenhum limiar é confiável, por melhor que seja o acerto.
+- `threshold for 97%` e `right without review`: o limiar que `recommendThreshold` escolheria para esse modelo e quantas compras ele resolveria certo sem revisão. É o ganho real; um modelo mais certeiro mas mal calibrado pode ganhar menos.
+- `unanswered`: lançamentos de lotes que falharam depois das novas tentativas; contam como sem categoria.
+- `cost USD` vem do OpenRouter; a TypeSafe não informa custo.
+
+Modelos de linguagem não são determinísticos: rode duas vezes antes de concluir algo de uma diferença pequena.
+
 ## Arquivos
 
 - `dataset.json`: conjunto congelado, trazido da PR #2. Nomes de pessoas, documentos, contas e valores são falsos; nomes de empresas são reais. Não regenere: acrescente itens com novos `id` para que execuções de datas diferentes sejam comparáveis.

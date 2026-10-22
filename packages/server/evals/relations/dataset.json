@@ -1,0 +1,957 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "id": "nubank",
+      "kind": "checking",
+      "institution": "Nubank",
+      "ownerName": "Ana Ribeiro"
+    },
+    {
+      "id": "inter",
+      "kind": "checking",
+      "institution": "Banco Inter",
+      "ownerName": "Ana Ribeiro"
+    },
+    {
+      "id": "mercadopago",
+      "kind": "checking",
+      "institution": "Mercado Pago",
+      "ownerName": "Ana Ribeiro"
+    },
+    {
+      "id": "btg",
+      "kind": "investment",
+      "institution": "BTG Pactual",
+      "ownerName": "Ana Ribeiro"
+    },
+    {
+      "id": "itau",
+      "kind": "checking",
+      "institution": "Itaú",
+      "ownerName": "Bruno Ribeiro"
+    },
+    {
+      "id": "nubank-card",
+      "kind": "credit_card",
+      "institution": "Nubank",
+      "ownerName": "Ana Ribeiro"
+    },
+    {
+      "id": "inter-card",
+      "kind": "credit_card",
+      "institution": "Banco Inter",
+      "ownerName": "Ana Ribeiro"
+    }
+  ],
+  "cases": [
+    {
+      "id": "pix-names-owner-both-sides",
+      "tags": ["clear"],
+      "note": "Ana moves money from Nubank to Inter; both banks print her name.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "nubank",
+          "bookedOn": "2026-03-10",
+          "amountCents": -150000,
+          "description": "Transferência enviada pelo Pix - ANA RIBEIRO - •••.456.789-•• - BCO INTER (0077) Agência: 1 Conta: 12345678-9"
+        },
+        {
+          "id": "in",
+          "account": "inter",
+          "bookedOn": "2026-03-10",
+          "amountCents": 150000,
+          "description": "Pix recebido: \"Cp :18236120-ANA RIBEIRO\""
+        }
+      ],
+      "relations": [
+        { "kind": "internal_transfer", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "pix-inter-to-nubank",
+      "tags": ["clear"],
+      "note": "The same move the other way, in each bank's own wording.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "inter",
+          "bookedOn": "2026-03-12",
+          "amountCents": -80000,
+          "description": "Pix enviado: \"Cp :00360305-Ana Ribeiro\""
+        },
+        {
+          "id": "in",
+          "account": "nubank",
+          "bookedOn": "2026-03-12",
+          "amountCents": 80000,
+          "description": "Transferência recebida pelo Pix - ANA RIBEIRO - •••.456.789-•• - BCO INTER (0077) Agência: 1 Conta: 12345678-9"
+        }
+      ],
+      "relations": [
+        { "kind": "internal_transfer", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "same-ownership-wording",
+      "tags": ["clear"],
+      "note": "Mercado Pago says the transfer stays with the same holder.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "mercadopago",
+          "bookedOn": "2026-03-20",
+          "amountCents": -30000,
+          "description": "Transferência enviada - mesma titularidade"
+        },
+        {
+          "id": "in",
+          "account": "nubank",
+          "bookedOn": "2026-03-20",
+          "amountCents": 30000,
+          "description": "Transferência recebida pelo Pix - ANA RIBEIRO - •••.456.789-•• - MERCADO PAGO IP LTDA. (0323) Agência: 1 Conta: 98765432-1"
+        }
+      ],
+      "relations": [
+        { "kind": "internal_transfer", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "generic-pix-own-accounts",
+      "tags": ["generic_wording", "indistinguishable"],
+      "note": "Ana moved the money, but neither bank says who. Looks exactly like generic-pix-two-strangers, which is not a pair: only a suggestion is safe.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "nubank",
+          "bookedOn": "2026-03-25",
+          "amountCents": -20000,
+          "description": "Pix enviado"
+        },
+        {
+          "id": "in",
+          "account": "inter",
+          "bookedOn": "2026-03-25",
+          "amountCents": 20000,
+          "description": "Pix recebido"
+        }
+      ],
+      "relations": [
+        { "kind": "internal_transfer", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "generic-pix-two-strangers",
+      "tags": ["generic_wording", "indistinguishable", "coincidence"],
+      "note": "Ana paid a babysitter from Nubank; a friend paid her back the same amount on Inter. Same observable facts as generic-pix-own-accounts.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "nubank",
+          "bookedOn": "2026-03-26",
+          "amountCents": -15000,
+          "description": "Pix enviado"
+        },
+        {
+          "id": "in",
+          "account": "inter",
+          "bookedOn": "2026-03-26",
+          "amountCents": 15000,
+          "description": "Pix recebido"
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "ted-over-weekend",
+      "tags": ["slow_rail"],
+      "note": "A TED sent on Friday lands on Monday, three days later.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "inter",
+          "bookedOn": "2026-04-10",
+          "amountCents": -500000,
+          "description": "TED enviada: Nu Pagamentos - Ana Ribeiro"
+        },
+        {
+          "id": "in",
+          "account": "nubank",
+          "bookedOn": "2026-04-13",
+          "amountCents": 500000,
+          "description": "Transferência recebida - ANA RIBEIRO - BCO INTER (0077)"
+        }
+      ],
+      "relations": [
+        { "kind": "internal_transfer", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "investment-application",
+      "tags": ["investment", "slow_rail"],
+      "note": "Money sent to the BTG investment account arrives the next day.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "inter",
+          "bookedOn": "2026-04-02",
+          "amountCents": -1000000,
+          "description": "TED enviada: BTG Pactual - Ana Ribeiro"
+        },
+        {
+          "id": "in",
+          "account": "btg",
+          "bookedOn": "2026-04-03",
+          "amountCents": 1000000,
+          "description": "TED recebida Ana Ribeiro"
+        }
+      ],
+      "relations": [
+        { "kind": "internal_transfer", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "investment-redemption",
+      "tags": ["investment", "slow_rail"],
+      "note": "A redemption leaves BTG and reaches Inter the next day.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "btg",
+          "bookedOn": "2026-05-05",
+          "amountCents": -250000,
+          "description": "Transferência enviada - Ana Ribeiro - Banco Inter"
+        },
+        {
+          "id": "in",
+          "account": "inter",
+          "bookedOn": "2026-05-06",
+          "amountCents": 250000,
+          "description": "TED recebida: BTG Pactual S.A. - Ana Ribeiro"
+        }
+      ],
+      "relations": [
+        { "kind": "internal_transfer", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "pending-outflow",
+      "tags": ["pending"],
+      "note": "Nubank still shows the Pix as pending while Inter already booked it.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "nubank",
+          "bookedOn": "2026-05-20",
+          "amountCents": -45000,
+          "status": "pending",
+          "description": "Transferência enviada pelo Pix - ANA RIBEIRO - •••.456.789-•• - BCO INTER (0077) Agência: 1 Conta: 12345678-9"
+        },
+        {
+          "id": "in",
+          "account": "inter",
+          "bookedOn": "2026-05-20",
+          "amountCents": 45000,
+          "description": "Pix recebido: \"Cp :18236120-ANA RIBEIRO\""
+        }
+      ],
+      "relations": [
+        { "kind": "internal_transfer", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "two-destinations-same-amount",
+      "tags": ["ambiguous"],
+      "note": "Two equal transfers leave Nubank on the same day; only the destination bank in each description tells them apart.",
+      "entries": [
+        {
+          "id": "out-inter",
+          "account": "nubank",
+          "bookedOn": "2026-05-28",
+          "amountCents": -100000,
+          "description": "Transferência enviada pelo Pix - ANA RIBEIRO - •••.456.789-•• - BCO INTER (0077) Agência: 1 Conta: 12345678-9"
+        },
+        {
+          "id": "out-mp",
+          "account": "nubank",
+          "bookedOn": "2026-05-28",
+          "amountCents": -100000,
+          "description": "Transferência enviada pelo Pix - ANA RIBEIRO - •••.456.789-•• - MERCADO PAGO IP LTDA. (0323) Agência: 1 Conta: 98765432-1"
+        },
+        {
+          "id": "in-inter",
+          "account": "inter",
+          "bookedOn": "2026-05-28",
+          "amountCents": 100000,
+          "description": "Pix recebido: \"Cp :18236120-ANA RIBEIRO\""
+        },
+        {
+          "id": "in-mp",
+          "account": "mercadopago",
+          "bookedOn": "2026-05-28",
+          "amountCents": 100000,
+          "description": "Transferência recebida - Ana Ribeiro - Nu Pagamentos"
+        }
+      ],
+      "relations": [
+        {
+          "kind": "internal_transfer",
+          "outflow": "out-inter",
+          "inflow": "in-inter"
+        },
+        { "kind": "internal_transfer", "outflow": "out-mp", "inflow": "in-mp" }
+      ]
+    },
+    {
+      "id": "chain-through-inter",
+      "tags": ["chain", "investment"],
+      "note": "Nubank to Inter, then Inter to BTG, same amount and day. Nubank to BTG is also the same amount, but never happened.",
+      "entries": [
+        {
+          "id": "nubank-out",
+          "account": "nubank",
+          "bookedOn": "2026-06-01",
+          "amountCents": -300000,
+          "description": "Transferência enviada pelo Pix - ANA RIBEIRO - •••.456.789-•• - BCO INTER (0077) Agência: 1 Conta: 12345678-9"
+        },
+        {
+          "id": "inter-in",
+          "account": "inter",
+          "bookedOn": "2026-06-01",
+          "amountCents": 300000,
+          "description": "Pix recebido: \"Cp :18236120-ANA RIBEIRO\""
+        },
+        {
+          "id": "inter-out",
+          "account": "inter",
+          "bookedOn": "2026-06-01",
+          "amountCents": -300000,
+          "description": "TED enviada: BTG Pactual - Ana Ribeiro"
+        },
+        {
+          "id": "btg-in",
+          "account": "btg",
+          "bookedOn": "2026-06-01",
+          "amountCents": 300000,
+          "description": "TED recebida Ana Ribeiro"
+        }
+      ],
+      "relations": [
+        {
+          "kind": "internal_transfer",
+          "outflow": "nubank-out",
+          "inflow": "inter-in"
+        },
+        {
+          "kind": "internal_transfer",
+          "outflow": "inter-out",
+          "inflow": "btg-in"
+        }
+      ]
+    },
+    {
+      "id": "round-trip",
+      "tags": ["chain"],
+      "note": "Ana sends money to Inter by mistake and sends it back the same day.",
+      "entries": [
+        {
+          "id": "nubank-out",
+          "account": "nubank",
+          "bookedOn": "2026-06-05",
+          "amountCents": -70000,
+          "description": "Transferência enviada pelo Pix - ANA RIBEIRO - •••.456.789-•• - BCO INTER (0077) Agência: 1 Conta: 12345678-9"
+        },
+        {
+          "id": "inter-in",
+          "account": "inter",
+          "bookedOn": "2026-06-05",
+          "amountCents": 70000,
+          "description": "Pix recebido: \"Cp :18236120-ANA RIBEIRO\""
+        },
+        {
+          "id": "inter-out",
+          "account": "inter",
+          "bookedOn": "2026-06-05",
+          "amountCents": -70000,
+          "description": "Pix enviado: \"Cp :18236120-Ana Ribeiro\""
+        },
+        {
+          "id": "nubank-in",
+          "account": "nubank",
+          "bookedOn": "2026-06-05",
+          "amountCents": 70000,
+          "description": "Transferência recebida pelo Pix - ANA RIBEIRO - •••.456.789-•• - BCO INTER (0077) Agência: 1 Conta: 12345678-9"
+        }
+      ],
+      "relations": [
+        {
+          "kind": "internal_transfer",
+          "outflow": "nubank-out",
+          "inflow": "inter-in"
+        },
+        {
+          "kind": "internal_transfer",
+          "outflow": "inter-out",
+          "inflow": "nubank-in"
+        }
+      ]
+    },
+    {
+      "id": "weekly-same-amount",
+      "tags": ["repeated_amount"],
+      "note": "The same R$ 200 moves every Monday and lands the next day; each week pairs with its own.",
+      "entries": [
+        {
+          "id": "out-1",
+          "account": "nubank",
+          "bookedOn": "2026-06-08",
+          "amountCents": -20000,
+          "description": "Transferência enviada pelo Pix - ANA RIBEIRO - •••.456.789-•• - BCO INTER (0077) Agência: 1 Conta: 12345678-9"
+        },
+        {
+          "id": "in-1",
+          "account": "inter",
+          "bookedOn": "2026-06-09",
+          "amountCents": 20000,
+          "description": "Pix recebido: \"Cp :18236120-ANA RIBEIRO\""
+        },
+        {
+          "id": "out-2",
+          "account": "nubank",
+          "bookedOn": "2026-06-15",
+          "amountCents": -20000,
+          "description": "Transferência enviada pelo Pix - ANA RIBEIRO - •••.456.789-•• - BCO INTER (0077) Agência: 1 Conta: 12345678-9"
+        },
+        {
+          "id": "in-2",
+          "account": "inter",
+          "bookedOn": "2026-06-16",
+          "amountCents": 20000,
+          "description": "Pix recebido: \"Cp :18236120-ANA RIBEIRO\""
+        },
+        {
+          "id": "out-3",
+          "account": "nubank",
+          "bookedOn": "2026-06-22",
+          "amountCents": -20000,
+          "description": "Transferência enviada pelo Pix - ANA RIBEIRO - •••.456.789-•• - BCO INTER (0077) Agência: 1 Conta: 12345678-9"
+        },
+        {
+          "id": "in-3",
+          "account": "inter",
+          "bookedOn": "2026-06-23",
+          "amountCents": 20000,
+          "description": "Pix recebido: \"Cp :18236120-ANA RIBEIRO\""
+        }
+      ],
+      "relations": [
+        { "kind": "internal_transfer", "outflow": "out-1", "inflow": "in-1" },
+        { "kind": "internal_transfer", "outflow": "out-2", "inflow": "in-2" },
+        { "kind": "internal_transfer", "outflow": "out-3", "inflow": "in-3" }
+      ]
+    },
+    {
+      "id": "spouse-to-ana",
+      "tags": ["family_member", "bank_format"],
+      "note": "Bruno sends household money from his Itaú to Ana's Nubank. Both accounts are the family's, so it is a transfer. Itaú truncates the name.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "itau",
+          "bookedOn": "2026-06-15",
+          "amountCents": -200000,
+          "description": "PIX TRANSF ANA RIB15/06"
+        },
+        {
+          "id": "in",
+          "account": "nubank",
+          "bookedOn": "2026-06-15",
+          "amountCents": 200000,
+          "description": "Transferência recebida pelo Pix - BRUNO RIBEIRO - •••.321.654-•• - ITAÚ UNIBANCO S.A. (0341) Agência: 1234 Conta: 56789-0"
+        }
+      ],
+      "relations": [
+        { "kind": "internal_transfer", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "ana-to-spouse",
+      "tags": ["family_member", "bank_format"],
+      "note": "Ana sends her share of the rent to Bruno's Itaú.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "inter",
+          "bookedOn": "2026-07-01",
+          "amountCents": -120000,
+          "description": "Pix enviado: \"Cp :60701190-BRUNO RIBEIRO\""
+        },
+        {
+          "id": "in",
+          "account": "itau",
+          "bookedOn": "2026-07-01",
+          "amountCents": 120000,
+          "description": "PIX TRANSF ANA RIB01/07"
+        }
+      ],
+      "relations": [
+        { "kind": "internal_transfer", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "pix-different-people-same-amount",
+      "tags": ["coincidence", "third_party"],
+      "note": "Ana pays Carlos and, the same day, Juliana pays Ana the same amount.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "nubank",
+          "bookedOn": "2026-07-03",
+          "amountCents": -50000,
+          "description": "Transferência enviada pelo Pix - CARLOS MENDES - •••.555.666-•• - BCO DO BRASIL S.A. (0001) Agência: 3456 Conta: 11223-4"
+        },
+        {
+          "id": "in",
+          "account": "inter",
+          "bookedOn": "2026-07-03",
+          "amountCents": 50000,
+          "description": "Pix recebido: \"Cp :00000000-JULIANA COSTA\""
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "salary-equals-rent",
+      "tags": ["coincidence"],
+      "note": "Rent leaves Nubank the day salary lands on Inter, for the same amount.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "nubank",
+          "bookedOn": "2026-07-05",
+          "amountCents": -650000,
+          "description": "Transferência enviada pelo Pix - IMOBILIARIA LAR FELIZ LTDA - 12.345.678/0001-90 - BCO SANTANDER (BRASIL) S.A. (0033) Agência: 1 Conta: 13000123-4"
+        },
+        {
+          "id": "in",
+          "account": "inter",
+          "bookedOn": "2026-07-05",
+          "amountCents": 650000,
+          "description": "Crédito salário ACME TECNOLOGIA LTDA"
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "loan-to-mother-and-back",
+      "tags": ["third_party"],
+      "note": "Ana lends R$ 300 to her mother, who shares her surname and pays it back two days later to another of Ana's accounts. Two payments, not a transfer.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "nubank",
+          "bookedOn": "2026-05-02",
+          "amountCents": -30000,
+          "description": "Transferência enviada pelo Pix - MARIA RIBEIRO - •••.987.654-•• - CAIXA ECONOMICA FEDERAL (0104) Agência: 4321 Conta: 87654-3"
+        },
+        {
+          "id": "in",
+          "account": "inter",
+          "bookedOn": "2026-05-04",
+          "amountCents": 30000,
+          "description": "Pix recebido: \"Cp :00360305-MARIA RIBEIRO\""
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "through-unconnected-account",
+      "tags": ["unconnected_account"],
+      "note": "Ana sends money to her C6 account, which Spendle does not follow, and from there to Inter. Two transfers through an account Spendle never sees: neither entry pairs with the other.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "nubank",
+          "bookedOn": "2026-07-08",
+          "amountCents": -90000,
+          "description": "Transferência enviada pelo Pix - ANA RIBEIRO - •••.456.789-•• - BCO C6 S.A. (0336) Agência: 1 Conta: 3344556-7"
+        },
+        {
+          "id": "in",
+          "account": "inter",
+          "bookedOn": "2026-07-08",
+          "amountCents": 90000,
+          "description": "Pix recebido: \"Cp :31872495-ANA RIBEIRO\""
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "nubank-bill-from-nubank",
+      "tags": ["clear"],
+      "note": "The Nubank account pays the Nubank card bill.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "nubank",
+          "bookedOn": "2026-03-15",
+          "amountCents": -235090,
+          "description": "Pagamento de fatura"
+        },
+        {
+          "id": "in",
+          "account": "nubank-card",
+          "bookedOn": "2026-03-15",
+          "amountCents": 235090,
+          "description": "Pagamento recebido"
+        }
+      ],
+      "relations": [
+        { "kind": "card_payment", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "nubank-bill-from-inter",
+      "tags": ["clear"],
+      "note": "Inter pays the Nubank bill; the card books it the next day.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "inter",
+          "bookedOn": "2026-04-15",
+          "amountCents": -120000,
+          "description": "Pagamento fatura Nubank"
+        },
+        {
+          "id": "in",
+          "account": "nubank-card",
+          "bookedOn": "2026-04-16",
+          "amountCents": 120000,
+          "description": "Pagamento recebido"
+        }
+      ],
+      "relations": [
+        { "kind": "card_payment", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "bill-paid-by-boleto",
+      "tags": ["boleto"],
+      "note": "Inter pays the Nubank bill's boleto; the description names the issuer but never says bill.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "inter",
+          "bookedOn": "2026-05-15",
+          "amountCents": -98000,
+          "description": "Pagamento efetuado: Boleto - NU PAGAMENTOS S.A."
+        },
+        {
+          "id": "in",
+          "account": "nubank-card",
+          "bookedOn": "2026-05-17",
+          "amountCents": 98000,
+          "description": "Pagamento recebido"
+        }
+      ],
+      "relations": [
+        { "kind": "card_payment", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "inter-bill-from-inter",
+      "tags": ["clear"],
+      "note": "The Inter account pays the Inter card.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "inter",
+          "bookedOn": "2026-06-10",
+          "amountCents": -45000,
+          "description": "Pagamento fatura cartão Inter"
+        },
+        {
+          "id": "in",
+          "account": "inter-card",
+          "bookedOn": "2026-06-10",
+          "amountCents": 45000,
+          "description": "Pagamento recebido"
+        }
+      ],
+      "relations": [
+        { "kind": "card_payment", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "spouse-pays-card",
+      "tags": ["family_member", "bank_format"],
+      "note": "Bruno's Itaú pays Ana's Nubank card.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "itau",
+          "bookedOn": "2026-06-14",
+          "amountCents": -310000,
+          "description": "PAGTO FATURA CARTAO NUBANK"
+        },
+        {
+          "id": "in",
+          "account": "nubank-card",
+          "bookedOn": "2026-06-15",
+          "amountCents": 310000,
+          "description": "Pagamento recebido"
+        }
+      ],
+      "relations": [
+        { "kind": "card_payment", "outflow": "out", "inflow": "in" }
+      ]
+    },
+    {
+      "id": "named-card-among-two",
+      "tags": ["ambiguous"],
+      "note": "Inter pays the Nubank bill; the Inter card receives the same amount that day from a payment Spendle cannot see.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "inter",
+          "bookedOn": "2026-07-10",
+          "amountCents": -60000,
+          "description": "Pagamento fatura Nubank"
+        },
+        {
+          "id": "nubank-in",
+          "account": "nubank-card",
+          "bookedOn": "2026-07-10",
+          "amountCents": 60000,
+          "description": "Pagamento recebido"
+        },
+        {
+          "id": "inter-in",
+          "account": "inter-card",
+          "bookedOn": "2026-07-10",
+          "amountCents": 60000,
+          "description": "Pagamento recebido"
+        }
+      ],
+      "relations": [
+        { "kind": "card_payment", "outflow": "out", "inflow": "nubank-in" }
+      ]
+    },
+    {
+      "id": "card-paid-by-friend",
+      "tags": ["third_party", "coincidence"],
+      "note": "A friend pays part of Ana's card bill; the same day Ana pays the school the same amount.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "inter",
+          "bookedOn": "2026-08-05",
+          "amountCents": -50000,
+          "description": "Pagamento efetuado: Boleto - ESCOLA PEQUENO PRINCIPE LTDA"
+        },
+        {
+          "id": "in",
+          "account": "nubank-card",
+          "bookedOn": "2026-08-05",
+          "amountCents": 50000,
+          "description": "Pagamento recebido de Maria Souza"
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "school-boleto-vs-card-credit",
+      "tags": ["coincidence"],
+      "note": "The Inter card is paid from an account Spendle does not follow, a day after Ana pays the school the same amount.",
+      "entries": [
+        {
+          "id": "out",
+          "account": "inter",
+          "bookedOn": "2026-08-10",
+          "amountCents": -120000,
+          "description": "Pagamento efetuado: Boleto - COLEGIO SANTA MARIA"
+        },
+        {
+          "id": "in",
+          "account": "inter-card",
+          "bookedOn": "2026-08-11",
+          "amountCents": 120000,
+          "description": "Pagamento recebido"
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "card-refund-same-merchant",
+      "tags": ["clear"],
+      "note": "Amazon refunds a returned order ten days later.",
+      "entries": [
+        {
+          "id": "purchase",
+          "account": "nubank-card",
+          "bookedOn": "2026-03-02",
+          "amountCents": -19990,
+          "description": "Amazon Marketplace"
+        },
+        {
+          "id": "refund",
+          "account": "nubank-card",
+          "bookedOn": "2026-03-12",
+          "amountCents": 19990,
+          "description": "Estorno - Amazon Marketplace"
+        }
+      ],
+      "relations": [
+        { "kind": "refund", "outflow": "purchase", "inflow": "refund" }
+      ]
+    },
+    {
+      "id": "partial-refund",
+      "tags": ["partial_refund"],
+      "note": "Magazine Luiza gives back one item of a larger order.",
+      "entries": [
+        {
+          "id": "purchase",
+          "account": "nubank-card",
+          "bookedOn": "2026-04-01",
+          "amountCents": -30000,
+          "description": "Magazine Luiza"
+        },
+        {
+          "id": "refund",
+          "account": "nubank-card",
+          "bookedOn": "2026-04-20",
+          "amountCents": 5000,
+          "description": "Estorno parcial Magazine Luiza"
+        }
+      ],
+      "relations": [
+        { "kind": "refund", "outflow": "purchase", "inflow": "refund" }
+      ]
+    },
+    {
+      "id": "debit-purchase-refund",
+      "tags": ["clear"],
+      "note": "A debit purchase on Inter comes back a week later.",
+      "entries": [
+        {
+          "id": "purchase",
+          "account": "inter",
+          "bookedOn": "2026-05-03",
+          "amountCents": -25990,
+          "description": "Compra no débito: NETSHOES"
+        },
+        {
+          "id": "refund",
+          "account": "inter",
+          "bookedOn": "2026-05-10",
+          "amountCents": 25990,
+          "description": "Estorno: NETSHOES"
+        }
+      ],
+      "relations": [
+        { "kind": "refund", "outflow": "purchase", "inflow": "refund" }
+      ]
+    },
+    {
+      "id": "generic-refund-two-purchases",
+      "tags": ["ambiguous"],
+      "note": "An iFood order was cancelled; the credit names no merchant and an Uber ride cost the same.",
+      "entries": [
+        {
+          "id": "ifood",
+          "account": "inter-card",
+          "bookedOn": "2026-06-02",
+          "amountCents": -8990,
+          "description": "IFOOD *RESTAURANTE SABOR"
+        },
+        {
+          "id": "uber",
+          "account": "inter-card",
+          "bookedOn": "2026-06-03",
+          "amountCents": -8990,
+          "description": "UBER *TRIP"
+        },
+        {
+          "id": "refund",
+          "account": "inter-card",
+          "bookedOn": "2026-06-05",
+          "amountCents": 8990,
+          "description": "Estorno de compra"
+        }
+      ],
+      "relations": [
+        { "kind": "refund", "outflow": "ifood", "inflow": "refund" }
+      ]
+    },
+    {
+      "id": "late-chargeback",
+      "tags": ["window"],
+      "note": "A disputed Mercado Livre purchase is charged back almost six months later.",
+      "entries": [
+        {
+          "id": "purchase",
+          "account": "nubank-card",
+          "bookedOn": "2026-01-05",
+          "amountCents": -59900,
+          "description": "MERCADOLIVRE*VENDEDOR"
+        },
+        {
+          "id": "refund",
+          "account": "nubank-card",
+          "bookedOn": "2026-06-20",
+          "amountCents": 59900,
+          "description": "Estorno - MERCADOLIVRE*VENDEDOR"
+        }
+      ],
+      "relations": [
+        { "kind": "refund", "outflow": "purchase", "inflow": "refund" }
+      ]
+    },
+    {
+      "id": "cashback-equals-purchase",
+      "tags": ["not_a_refund", "coincidence"],
+      "note": "Inter's cashback happens to equal a bakery purchase.",
+      "entries": [
+        {
+          "id": "purchase",
+          "account": "inter-card",
+          "bookedOn": "2026-07-12",
+          "amountCents": -1250,
+          "description": "PADARIA DOCE PAO"
+        },
+        {
+          "id": "credit",
+          "account": "inter-card",
+          "bookedOn": "2026-07-15",
+          "amountCents": 1250,
+          "description": "Cashback Inter"
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "refund-from-other-pharmacy",
+      "tags": ["not_a_refund"],
+      "note": "Drogasil refunds an order older than this case; the same-amount purchase is from another pharmacy.",
+      "entries": [
+        {
+          "id": "purchase",
+          "account": "nubank-card",
+          "bookedOn": "2026-07-01",
+          "amountCents": -4500,
+          "description": "DROGARIA SAO PAULO"
+        },
+        {
+          "id": "credit",
+          "account": "nubank-card",
+          "bookedOn": "2026-07-03",
+          "amountCents": 4500,
+          "description": "Estorno - DROGASIL"
+        }
+      ],
+      "relations": []
+    }
+  ]
+}

@@ -28,8 +28,9 @@ todos.json
 
 .repos/
 
-# Local outputs of the category evaluation
+# Local outputs of the evaluations
 packages/server/evals/categories/results/
+packages/server/evals/relations/results/
 .claude/worktrees/
 .vitest/
 

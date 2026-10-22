@@ -18,11 +18,8 @@ import * as Console from 'effect/Console'
 import * as DateTime from 'effect/DateTime'
 import * as Duration from 'effect/Duration'
 import * as Effect from 'effect/Effect'
-import * as FileSystem from 'effect/FileSystem'
 import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
-import * as Path from 'effect/Path'
-import * as Schema from 'effect/Schema'
 import * as Command from 'effect/cli/Command'
 import * as Flag from 'effect/cli/Flag'
 import * as FetchHttpClient from 'effect/http/FetchHttpClient'
@@ -30,6 +27,7 @@ import * as FetchHttpClient from 'effect/http/FetchHttpClient'
 import { Classifier } from '../categories/Classifier.ts'
 import { categoryDescriptions } from '../categories/Descriptions.ts'
 import { MODEL_SUGGEST_FLOOR } from '../categories/Policy.ts'
+import { loadCategoryDataset, saveCategoryResults } from './CategoryDataset.ts'
 import { modelQuestions } from './ModelReplay.ts'
 import { policyOutcomes } from './PolicyReplay.ts'
 import {
@@ -47,35 +45,6 @@ import type {
   SubsetScore,
   ThresholdRow,
 } from './Scoreboard.ts'
-
-const DatasetItem = Schema.Struct({
-  id: Schema.String,
-  description: Schema.String,
-  amountCents: Schema.Int,
-  currency: Schema.String,
-  targetType: Schema.Literals(['account', 'card']),
-  expectedCategoryId: Schema.NullOr(Schema.String),
-  guessable: Schema.Boolean,
-  origin: Schema.Literals(['decision', 'synthetic', 'synthetic_movement']),
-  split: Schema.Literals(['context', 'exam']),
-})
-const Dataset = Schema.fromJsonString(
-  Schema.Struct({ items: Schema.Array(DatasetItem) }),
-)
-const Categories = Schema.fromJsonString(
-  Schema.Struct({
-    categories: Schema.Array(
-      Schema.Struct({
-        id: Schema.String,
-        name: Schema.String,
-        bucket: Schema.String,
-      }),
-    ),
-  }),
-)
-const Json = Schema.fromJsonString(Schema.Unknown)
-
-const directoryUrl = new URL('../../evals/categories/', import.meta.url)
 
 /** Thresholds always shown, besides the recommended one. */
 const thresholds = [0.5, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99]
@@ -151,23 +120,11 @@ const command = Command.make(
       Flag.withDescription(
         'Ask the model without the context split as past decisions, to compare',
       ),
+      Flag.withDefault(false),
     ),
   },
   Effect.fn(function* ({ mode, target, minApplied, threshold, noExamples }) {
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const directory = yield* path.fromFileUrl(directoryUrl)
-    const { items } = yield* Schema.decodeEffect(Dataset)(
-      yield* fs.readFileString(path.join(directory, 'dataset.json')),
-    )
-    const { categories } = yield* Schema.decodeEffect(Categories)(
-      yield* fs.readFileString(path.join(directory, 'categories.json')),
-    )
-    const exam = items.filter((item) => item.split === 'exam')
-    const context = items.filter((item) => item.split === 'context')
-    const names = new Map(
-      categories.map((category) => [category.id, category.name]),
-    )
+    const { exam, context, categories, names } = yield* loadCategoryDataset()
     const report: Record<string, unknown> = {
       examItems: exam.length,
       contextItems: context.length,
@@ -194,7 +151,7 @@ const command = Command.make(
       )
       report['policy'] = board
     }
-    if (mode === 'policy') return yield* save(report)
+    if (mode === 'policy') return yield* saveCategoryResults(report)
 
     const classifier = yield* Classifier
     if (Option.isNone(classifier.modelVersion)) {
@@ -291,7 +248,7 @@ const command = Command.make(
       )
       report['combined'] = board
     }
-    yield* save(report)
+    yield* saveCategoryResults(report)
   }),
 ).pipe(
   Command.withDescription(
@@ -299,21 +256,6 @@ const command = Command.make(
   ),
   Command.provide(Classifier.layer.pipe(Layer.provide(FetchHttpClient.layer))),
 )
-
-/** Writes the full report under `evals/categories/results/`, outside Git. */
-const save = Effect.fnUntraced(function* (report: Record<string, unknown>) {
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  const now = DateTime.formatIso(yield* DateTime.now)
-  const directory = path.join(yield* path.fromFileUrl(directoryUrl), 'results')
-  yield* fs.makeDirectory(directory, { recursive: true })
-  const file = path.join(directory, `${now.replace(/[:.]/g, '-')}.json`)
-  yield* fs.writeFileString(
-    file,
-    yield* Schema.encodeEffect(Json)({ ranAt: now, ...report }),
-  )
-  yield* Console.log(`\nFull results: ${file}`)
-})
 
 command.pipe(
   Command.run({ version: '1.0.0' }),

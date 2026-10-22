@@ -2,6 +2,7 @@ import { assert, describe, it } from '@effect/vitest'
 
 import { policyOutcomes } from './PolicyReplay.ts'
 import {
+  calibrationError,
   combineOutcomes,
   modelOutcomes,
   recommendThreshold,
@@ -135,5 +136,28 @@ describe('Scoreboard', () => {
       'Loja Nova': { categoryId: null, applied: false },
       'Pix enviado MESMA': { categoryId: null, applied: false },
     })
+  })
+
+  it('measures calibration error as the gap between stated probability and how often answers are right', () => {
+    const exam = [
+      item('a', 'groceries'),
+      item('b', 'groceries'),
+      item('c', 'groceries'),
+      item('d', 'groceries'),
+      item('t', null),
+    ]
+    // Four answers at 0.9, three right: off by 0.15 each on average. A
+    // transfer given a category at 0.6 is off by 0.6.
+    const error = calibrationError(
+      exam,
+      answers([
+        ['a', 'groceries', 0.9],
+        ['b', 'groceries', 0.9],
+        ['c', 'groceries', 0.9],
+        ['d', 'health', 0.9],
+        ['t', 'groceries', 0.6],
+      ]),
+    )
+    assert.closeTo(error ?? -1, (4 * 0.15 + 0.6) / 5, 1e-9)
   })
 })
