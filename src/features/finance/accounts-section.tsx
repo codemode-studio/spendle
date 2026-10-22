@@ -227,6 +227,7 @@ export function AccountsSection() {
                             : 'Importe um extrato, conecte o banco ou informe o saldo',
                         },
                       ]}
+                      linked={account.link !== null}
                       actions={<BalanceCheckpointDialog account={account} />}
                       status={<AccountStatus account={account} />}
                     />
@@ -387,12 +388,6 @@ function AccountStatus({ account }: { account: AccountView }) {
   const provedUntil = intervals.at(-1)?.to
   return (
     <>
-      {account.link ? (
-        <StatusBadge tone="info">
-          <Plug />
-          Open Finance
-        </StatusBadge>
-      ) : null}
       {gaps.map((gap) => (
         <StatusBadge
           key={`${gap.from}-${gap.to}`}

@@ -1,5 +1,6 @@
 import { Pencil } from 'lucide-react'
 
+import { OpenFinanceLogo } from '#/components/open-finance-logo'
 import { Button } from '#/components/ui/button'
 import {
   Card,
@@ -24,7 +25,8 @@ export interface InstrumentMetric {
 
 /**
  * Card padrão de conta ou cartão: cabeçalho com as ações em ícones,
- * até três métricas e uma linha de status em badges.
+ * até três métricas e uma linha de status em badges. Uma conta que vem do
+ * Open Finance leva o símbolo dele antes do título.
  */
 export function InstrumentCard({
   title,
@@ -34,6 +36,7 @@ export function InstrumentCard({
   metrics,
   status,
   actions,
+  linked = false,
 }: {
   title: string
   subtitle: string
@@ -43,6 +46,8 @@ export function InstrumentCard({
   status?: React.ReactNode
   /** Ações extras em ícone, exibidas antes do botão de editar. */
   actions?: React.ReactNode
+  /** Sincronizada pelo Open Finance. */
+  linked?: boolean
 }) {
   const columns =
     metrics.length === 2
@@ -60,7 +65,22 @@ export function InstrumentCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          {linked ? (
+            <span
+              title="Sincronizada pelo Open Finance"
+              className="flex shrink-0"
+            >
+              <OpenFinanceLogo
+                role="img"
+                aria-hidden={false}
+                aria-label="Sincronizada pelo Open Finance"
+                className="size-4"
+              />
+            </span>
+          ) : null}
+          {title}
+        </CardTitle>
         <CardDescription>{subtitle}</CardDescription>
         <CardAction className="flex items-center gap-0.5">
           {actions}
