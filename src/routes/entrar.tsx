@@ -18,7 +18,7 @@ const signInSearchSchema = z.looseObject({
   sig: z.string().optional().catch(undefined),
 })
 
-/** Codes Better Auth appends to the error URL after Google's callback. */
+/** Codes Better Auth appends to the error URL when a sign-in or authorization fails. */
 const errorMessages: Record<string, string> = {
   EMAIL_NOT_ALLOWED:
     'Este e-mail não tem acesso ao Spendle. Entre com uma conta autorizada.',
@@ -47,7 +47,7 @@ function SignInPage() {
     ? 'Não foi possível abrir o Google. Tente novamente.'
     : search.error
       ? (errorMessages[search.error] ??
-        'Não foi possível entrar com o Google. Tente novamente.')
+        'Não foi possível entrar. Tente novamente.')
       : null
 
   async function signIn() {

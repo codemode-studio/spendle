@@ -38,6 +38,7 @@ function createAuth() {
   // Set only by `vp run qa:start`, whose API holds synthetic data.
   const qaToken = process.env.SPENDLE_QA_SIGN_IN_TOKEN
   return betterAuth({
+    appName: 'Spendle',
     secret: requiredEnv('BETTER_AUTH_SECRET'),
     baseURL: requiredEnv('BETTER_AUTH_URL'),
     // People, sessions and the OAuth clients, consents and signing keys
@@ -47,8 +48,15 @@ function createAuth() {
     // Every server function reads the session. A signed cookie answers for
     // five minutes before the database is asked again, so a session ended
     // elsewhere can last that long on this browser. The allowlist is still
-    // checked on every call (`readViewer`).
-    session: { cookieCache: { enabled: true, maxAge: 5 * 60 } },
+    // checked on every call (`readViewer`). JWE encrypts the cookie, so the
+    // person's name and email are not readable from it.
+    session: {
+      cookieCache: { enabled: true, maxAge: 5 * 60, strategy: 'jwe' },
+    },
+    // OAuth failures without their own error URL (a lost sign-in state, a
+    // rejected MCP authorization request) land on the sign-in page with
+    // `?error=<code>` instead of Better Auth's development error page.
+    onAPIError: { errorURL: '/entrar' },
     // The JWT plugin's `/token` hands a session's JWT to the browser; the MCP
     // only accepts access tokens from the OAuth flow, so nothing needs it.
     disabledPaths: ['/token'],
