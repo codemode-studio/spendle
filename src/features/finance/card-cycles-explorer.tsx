@@ -95,7 +95,7 @@ function CycleExplorer({ card }: { card: AccountView }) {
   const cycles = (overview.data?.cycles.cycles ?? []).filter(
     (cycle) =>
       cycle.entryIds.length > 0 ||
-      cycle.billedCents !== 0 ||
+      cycle.projectedCents !== 0 ||
       cycle.status === 'open',
   )
   const [selectedClosing, setSelectedClosing] = useState<string | null>(null)
@@ -216,7 +216,7 @@ function CycleChart({
   selected: string
   onSelect: (closingOn: string) => void
 }) {
-  const max = Math.max(1, ...cycles.map((cycle) => cycle.billedCents))
+  const max = Math.max(1, ...cycles.map((cycle) => cycle.projectedCents))
   const selectedRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     selectedRef.current?.scrollIntoView({
@@ -233,7 +233,10 @@ function CycleChart({
     >
       {cycles.map((cycle) => {
         const active = cycle.closingOn === selected
-        const height = Math.max(6, (Math.max(0, cycle.billedCents) / max) * 88)
+        const height = Math.max(
+          6,
+          (Math.max(0, cycle.projectedCents) / max) * 88,
+        )
         return (
           <button
             key={cycle.closingOn}
@@ -241,7 +244,7 @@ function CycleChart({
             type="button"
             role="option"
             aria-selected={active}
-            aria-label={`${formatMonthLong(cycle.dueOn, { capitalize: true })}: ${formatCurrency(cycle.billedCents, currency)}, ${cycleStatusCopy[cycle.status].label}`}
+            aria-label={`${formatMonthLong(cycle.dueOn, { capitalize: true })}: ${formatCurrency(cycle.projectedCents, currency)}, ${cycleStatusCopy[cycle.status].label}`}
             onClick={() => onSelect(cycle.closingOn)}
             className={cn(
               'flex min-w-[4.5rem] flex-1 snap-center flex-col items-center gap-1.5 rounded-lg px-1 pt-2 pb-1.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
@@ -256,7 +259,7 @@ function CycleChart({
                   : 'text-muted-foreground',
               )}
             >
-              {compactAmount(cycle.billedCents, currency)}
+              {compactAmount(cycle.projectedCents, currency)}
             </span>
             <span className="flex h-[88px] items-end">
               <span
@@ -288,7 +291,7 @@ function CycleChart({
 
 function CycleSummary({ cycle, currency }: { cycle: Cycle; currency: string }) {
   const status = cycleStatusCopy[cycle.status]
-  const remaining = Math.max(0, cycle.billedCents - cycle.paidCents)
+  const remaining = Math.max(0, cycle.projectedCents - cycle.paidCents)
   return (
     <div className="grid flex-1 gap-3 rounded-lg border p-4 sm:grid-cols-[1fr_auto] sm:items-center">
       <div>
@@ -299,8 +302,14 @@ function CycleSummary({ cycle, currency }: { cycle: Cycle; currency: string }) {
           <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
         </div>
         <p className="mt-1 font-heading text-2xl font-semibold tabular-nums">
-          {formatCurrency(cycle.billedCents, currency)}
+          {formatCurrency(cycle.projectedCents, currency)}
         </p>
+        {cycle.pendingCents !== 0 ? (
+          <p className="text-xs text-muted-foreground">
+            Inclui {formatCurrency(cycle.pendingCents, currency)} ainda
+            provisório no banco
+          </p>
+        ) : null}
         {cycle.paidCents > 0 && remaining > 0 ? (
           <p className="text-xs text-muted-foreground">
             Pago {formatCurrency(cycle.paidCents, currency)} · faltam{' '}
@@ -364,11 +373,16 @@ function CycleEntries({ card, cycle }: { card: AccountView; cycle: Cycle }) {
               key={entry.id}
               className="flex items-center justify-between gap-3 px-3 py-2"
             >
-              <span className="min-w-0 truncate">
-                <span className="text-muted-foreground tabular-nums">
-                  {formatDate(entry.bookedOn)}
-                </span>{' '}
-                {entry.description}
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="truncate">
+                  <span className="text-muted-foreground tabular-nums">
+                    {formatDate(entry.bookedOn)}
+                  </span>{' '}
+                  {entry.description}
+                </span>
+                {entry.status === 'pending' ? (
+                  <StatusBadge tone="warning">Provisória</StatusBadge>
+                ) : null}
               </span>
               <span
                 className={cn(

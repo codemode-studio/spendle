@@ -984,31 +984,48 @@ const make = Effect.gen(function* () {
             DO UPDATE SET booked_on = excluded.booked_on, removed_on = excluded.removed_on
           `
         }
-        if (item.type === 'BANK') {
-          // Pluggy's account balance is the available balance when accounts were
-          // last collected: the account's actual balance for cash and
-          // forecasts, never a booked checkpoint for balance proofs. An
-          // execution that did not refresh accounts reports an old balance,
-          // which must not be dated today.
-          // A fully successful execution has no `statusDetail`; its collection
-          // time is then the item's `lastUpdatedAt`, or the account's.
-          const accountsStatus = pluggyItem.statusDetail?.accounts
-          if (accountsStatus?.isUpdated !== false) {
-            const collectedAt =
-              accountsStatus?.lastUpdatedAt ??
-              pluggyItem.lastUpdatedAt ??
-              item.updatedAt
-            yield* observations.recordBalance({
-              sourceId,
-              accountId,
-              balance: {
-                kind: 'available',
-                asOf: collectedAt ? bookedOn(collectedAt) : dateTo,
-                balanceCents: toMinorUnits(item.balance, item.currencyCode),
-                currency: item.currencyCode,
-              },
-            })
+        // Pluggy's account balance is the balance when accounts were last
+        // collected: a bank account's available balance, or the limit a
+        // card has in use, which the ledger signs as debt. It is the
+        // account's actual balance for cash and forecasts, never a booked
+        // checkpoint for balance proofs. An execution that did not refresh
+        // accounts reports an old balance, which must not be dated today.
+        // A fully successful execution has no `statusDetail`; its collection
+        // time is then the item's `lastUpdatedAt`, or the account's.
+        const accountsStatus = pluggyItem.statusDetail?.accounts
+        if (accountsStatus?.isUpdated !== false) {
+          const collectedAt =
+            accountsStatus?.lastUpdatedAt ??
+            pluggyItem.lastUpdatedAt ??
+            item.updatedAt
+          const asOf = collectedAt ? bookedOn(collectedAt) : dateTo
+          const balanceCents = toMinorUnits(item.balance, item.currencyCode)
+          yield* observations.recordBalance({
+            sourceId,
+            accountId,
+            balance: {
+              kind: 'available',
+              asOf,
+              balanceCents:
+                item.type === 'CREDIT' ? 0 - balanceCents : balanceCents,
+              currency: item.currencyCode,
+            },
+          })
+          if (item.type === 'CREDIT') {
+            const cents = (amount: number | null | undefined) =>
+              typeof amount === 'number'
+                ? toMinorUnits(amount, item.currencyCode)
+                : null
+            yield* sql`
+              UPDATE open_finance_accounts
+              SET credit_limit_cents = ${cents(item.creditData?.creditLimit)},
+                available_credit_cents = ${cents(item.creditData?.availableCreditLimit)},
+                credit_as_of = ${asOf}
+              WHERE provider_account_id = ${providerAccountId}
+            `
           }
+        }
+        if (item.type === 'BANK') {
           yield* reconcileCheckpoints({
             accountId,
             sourceId,

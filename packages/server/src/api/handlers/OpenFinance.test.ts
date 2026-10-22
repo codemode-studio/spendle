@@ -132,6 +132,67 @@ describe('Open Finance API', () => {
       }).pipe(Effect.provide(apiTest())),
   )
 
+  it.effect(
+    "reports a card's limit in use as debt and its credit, outside cash",
+    () =>
+      Effect.gen(function* () {
+        const { client } = yield* connectThroughApi
+        yield* Ref.update(yield* FakePluggyState, (current) => ({
+          ...current,
+          accounts: [
+            bank,
+            {
+              ...card,
+              creditData: { creditLimit: 5000, availableCreditLimit: 4750 },
+            },
+          ],
+        }))
+        const linked = yield* client.openFinance.link({
+          params: { providerAccountId: 'provider-card' },
+          payload: {
+            target: {
+              kind: 'credit_card',
+              purpose: 'operating',
+              card: {
+                closingDay: 3,
+                dueDay: 10,
+                limitCents: null,
+                lastFour: '1889',
+              },
+            },
+            historyMonths: 3,
+          },
+        })
+        yield* drain
+        const account = yield* client.accounts.get({
+          params: { accountId: linked.id },
+        })
+        const month = yield* client.dashboard.month({ query: {} })
+
+        assert.deepStrictEqual(
+          {
+            balances: account.balances.map((balance) => [
+              balance.kind,
+              balance.asOf,
+              balance.balanceCents,
+            ]),
+            credit: account.link?.credit,
+            cash: month.cashFlow.cashCents,
+          },
+          {
+            // Pluggy's R$ 250 in use is owed.
+            balances: [['available', '2026-10-04', -25_000]],
+            credit: {
+              limitCents: 500_000,
+              availableCents: 475_000,
+              asOf: '2026-10-04',
+            },
+            cash: null,
+          },
+        )
+      }).pipe(Effect.provide(apiTest())),
+  )
+
   it.effect('unlinks a provider account and links it again', () =>
     Effect.gen(function* () {
       const { client, connectionId } = yield* connectThroughApi

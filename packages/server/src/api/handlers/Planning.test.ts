@@ -3,6 +3,7 @@ import * as DateTime from 'effect/DateTime'
 import * as Effect from 'effect/Effect'
 import * as TestClock from 'effect/testing/TestClock'
 
+import { Observations } from '../../ledger/Observations.ts'
 import { apiClient, apiTest } from '../../testing/ApiTest.ts'
 import { fakeAssistantModel } from '../../testing/FakeAssistantModel.ts'
 import { drain } from '../../testing/FakePluggy.ts'
@@ -74,6 +75,74 @@ const september = Effect.gen(function* () {
 })
 
 describe('planning API', () => {
+  it.effect(
+    'owes a card bill whose charges are still pending in the month it is due',
+    () =>
+      Effect.gen(function* () {
+        const { client } = yield* september
+        const owner = (yield* client.owners.list())[0]!
+        const card = yield* client.accounts.open({
+          payload: {
+            ownerId: owner.id,
+            institutionName: 'Banco',
+            name: 'Cartão',
+            kind: 'credit_card',
+            purpose: 'operating',
+            currency: 'BRL',
+            card: {
+              closingDay: 5,
+              dueDay: 12,
+              limitCents: null,
+              lastFour: null,
+            },
+          },
+        })
+        // Pluggy reports a card's charges as pending until the bill comes due.
+        const observations = yield* Observations
+        const source = yield* observations.registerSource({
+          kind: 'open_finance',
+          externalRef: 'card-feed',
+          label: 'card-feed',
+        })
+        yield* observations.recordTransactions({
+          sourceId: source.id,
+          accountId: card.id,
+          transactions: [
+            {
+              externalId: 'dinner',
+              bookedOn: '2026-09-15',
+              amountCents: -30_000,
+              currency: 'BRL',
+              description: 'Restaurante',
+              status: 'pending',
+              raw: {},
+            },
+          ],
+        })
+        yield* drain
+        const october = yield* client.dashboard.month({
+          query: { month: '2026-10' },
+        })
+        const forecast = yield* client.dashboard.forecast({ query: {} })
+
+        assert.deepStrictEqual(
+          {
+            lines: october.family.lines
+              .filter((line) => line.origin === 'card')
+              .map((line) => [line.description, line.date, line.cents]),
+            bill: forecast.scheduled
+              .filter((item) => item.kind === 'statement')
+              .map((item) => [item.date, item.amountCents, item.certainty]),
+          },
+          {
+            lines: [['Restaurante', '2026-10-13', 30_000]],
+            // 12 October is a national holiday: the forecast bill is due on the 13th.
+            bill: [['2026-10-13', -30_000, 'open']],
+          },
+        )
+      }).pipe(Effect.provide(apiTest())),
+  )
+
   it.effect(
     'closes a month only once nothing blocks it, and keeps its plan frozen',
     () =>

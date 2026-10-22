@@ -71,6 +71,12 @@ export interface CycleEntry {
    * may fall before the cut when the purchase was captured after it.
    */
   readonly statementClosing?: string | null
+  /**
+   * Still pending at the provider: not billed yet. Pluggy reports a card
+   * charge as pending until its bill comes due, then posts it with the
+   * bill's id.
+   */
+  readonly pending?: boolean
 }
 
 export interface CyclePayment {
@@ -139,14 +145,26 @@ export interface CardCycle extends CycleBounds {
   /** The last day to pay without being late: the due date, or the business day it moves to. */
   readonly payableUntil: string
   readonly status: CycleStatus
-  /** Purchases and credits of the cycle; negative when something is owed. */
+  /** Posted purchases and credits of the cycle; negative when something is owed. */
   readonly totalCents: number
   /**
-   * What the cycle bills: the issued statement's total, else the entries'
-   * total. Positive when owed. When the statement prints nothing due but
-   * the entries prove credit beyond it, that credit, negative.
+   * What the cycle bills: the issued statement's total, else the posted
+   * entries' total. Positive when owed. When the statement prints nothing
+   * due but the entries prove credit beyond it, that credit, negative.
    */
   readonly billedCents: number
+  /**
+   * Pending purchases less pending credits placed in the cycle, positive
+   * when owed: charges the bill will carry once the provider posts them.
+   * Zero when an issued statement sets the bill.
+   */
+  readonly pendingCents: number
+  /**
+   * What the cycle is expected to bill: `billedCents` plus `pendingCents`.
+   * Payments and the status count against it, so a bill whose charges are
+   * still pending is not taken for paid.
+   */
+  readonly projectedCents: number
   /**
    * Debt of earlier cycles a balance statement carries in `billedCents`.
    * Those cycles still owe it, so this cycle owes `billedCents` less this.
@@ -237,9 +255,12 @@ interface Schedule {
   readonly bounds: ReadonlyArray<CycleBounds>
   readonly statements: ReadonlyArray<IssuedStatement | undefined>
   readonly entries: ReadonlyArray<ReadonlyArray<CycleEntry>>
+  /** Posted entries only. */
   readonly totals: ReadonlyArray<number>
-  /** Positive when owed. */
-  readonly billed: ReadonlyArray<number>
+  /** Pending entries, positive when owed; zero under an issued statement. */
+  readonly pending: ReadonlyArray<number>
+  /** What each cycle is expected to bill, pending charges included; positive when owed. */
+  readonly projected: ReadonlyArray<number>
 }
 
 const schedule = (input: {
@@ -288,7 +309,10 @@ const schedule = (input: {
   )
 
   const dates = [
-    ...placements,
+    // A pending charge dated after today is a later bill's instalment.
+    ...placements.filter(
+      (date, index) => !input.entries[index]!.pending || date <= input.today,
+    ),
     ...input.payments.map((payment) => payment.paidOn),
     ...input.statements.map((statement) => statement.startsOn),
   ]
@@ -333,19 +357,39 @@ const schedule = (input: {
     return index === -1 ? bounds.length - 1 : index
   }
 
+  const lastClosing = bounds.at(-1)!.closingOn
   const entries = bounds.map((): Array<CycleEntry> => [])
-  input.entries.forEach((entry, index) =>
-    entries[cycleOf(placements[index]!)]!.push(entry),
-  )
+  input.entries.forEach((entry, index) => {
+    const placed = cycleOf(placements[index]!)
+    if (!entry.pending) return entries[placed]!.push(entry)
+    // Past the open bill's closing: a later bill's instalment, not a cycle's yet.
+    if (placements[index]! > lastClosing) return
+    // The provider posts a bill's charges once it comes due, so one still
+    // pending in a cycle already due was captured after that cut: it is on
+    // the next bill not yet due.
+    const notDue = bounds.findIndex(
+      (cycle, at) => at >= placed && cycle.dueOn >= input.today,
+    )
+    entries[notDue === -1 ? placed : notDue]!.push(entry)
+  })
 
   const statements = bounds.map((cycle) => statementOf.get(cycle.closingOn))
+  const sum = (items: ReadonlyArray<CycleEntry>) =>
+    items.reduce((total, entry) => total + entry.amountCents, 0)
   const totals = entries.map((items) =>
-    items.reduce((sum, entry) => sum + entry.amountCents, 0),
+    sum(items.filter((entry) => !entry.pending)),
   )
-  const billed = bounds.map(
-    (_, index) => 0 - (statements[index]?.cents ?? totals[index]!),
+  // An issued statement already counts what it bills.
+  const pending = entries.map((items, index) =>
+    statements[index] === undefined
+      ? 0 - sum(items.filter((entry) => entry.pending))
+      : 0,
   )
-  return { bounds, statements, entries, totals, billed }
+  const projected = bounds.map(
+    (_, index) =>
+      pending[index]! - (statements[index]?.cents ?? totals[index]!),
+  )
+  return { bounds, statements, entries, totals, pending, projected }
 }
 
 /**
@@ -388,7 +432,7 @@ const schedule = (input: {
  * are settled, so credit that reached the card later is not spent.
  */
 const allocate = (
-  { bounds, statements, entries, totals, billed: scheduled }: Schedule,
+  { bounds, statements, entries, totals, projected: scheduled }: Schedule,
   payments: ReadonlyArray<CyclePayment>,
   asOf?: string,
 ) => {
@@ -568,6 +612,12 @@ const allocate = (
  * date. Its date is kept as reported: a purchase captured after the cut is
  * dated before the statement that bills it.
  *
+ * A pending charge is not billed yet but counts towards what its cycle is
+ * expected to bill. It belongs to the cycle containing its date while that
+ * bill is not due; one dated in a bill already due is on the next bill not
+ * yet due, and one dated after the open bill's closing is left to the
+ * instalment plans.
+ *
  * What a cycle owes is its issued statement's total when there is one, since
  * imported entries may be incomplete; the difference from the entries is
  * reported as the statement proof, apart from payment status.
@@ -598,7 +648,7 @@ export const cardCycles = (input: {
     applied,
     paid,
     deducted,
-    billed,
+    billed: projected,
     carried,
     owes,
     unappliedCents,
@@ -624,7 +674,9 @@ export const cardCycles = (input: {
       payableUntil,
       status,
       totalCents: plan.totals[index]!,
-      billedCents: billed[index]!,
+      billedCents: projected[index]! - plan.pending[index]!,
+      pendingCents: plan.pending[index]!,
+      projectedCents: projected[index]!,
       carriedCents: carried[index]!,
       paidCents: paid[index]!,
       entryIds: plan.entries[index]!.map((entry) => entry.id),
@@ -634,7 +686,7 @@ export const cardCycles = (input: {
             observedCents: statement.cents,
             deductedCents: deducted[index]!,
             differenceCents:
-              -billed[index]! -
+              -projected[index]! -
               plan.totals[index]! +
               carried[index]! -
               deducted[index]!,

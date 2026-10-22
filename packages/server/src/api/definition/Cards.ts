@@ -27,13 +27,22 @@ export const CardCycle = Schema.Struct({
   due: Schema.Literals(['statement', 'forecast']),
   payableUntil: Schema.String,
   status: Schema.Literals(['open', 'due', 'paid', 'partially_paid', 'overdue']),
-  /** Purchases and credits of the cycle; negative when something is owed. */
+  /** Posted purchases and credits of the cycle; negative when something is owed. */
   totalCents: Schema.Int,
-  /** What the cycle bills; positive when owed. */
+  /** What the cycle bills from posted entries or its issued statement; positive when owed. */
   billedCents: Schema.Int,
+  /**
+   * Pending charges less pending credits, positive when owed: on the bill
+   * but not posted yet (Pluggy posts a card's charges when the bill comes
+   * due). Zero when an issued statement sets the bill.
+   */
+  pendingCents: Schema.Int,
+  /** What the cycle is expected to bill: `billedCents` plus `pendingCents`. Payments and status count against it. */
+  projectedCents: Schema.Int,
   /** Earlier cycles' debt a balance statement carries in `billedCents`. */
   carriedCents: Schema.Int,
   paidCents: Schema.Int,
+  /** Posted and pending entries placed in the cycle. */
   entryIds: Schema.Array(Schema.String),
   payments: Schema.Array(CyclePayment),
   /** The issued statement's total and how far the entries are from it. */

@@ -12,8 +12,8 @@ import { inChunks } from '../persistence/Chunks.ts'
 import { baseCurrency, convert } from '../rates/Conversion.ts'
 import type { RateTable } from '../rates/Conversion.ts'
 import { ExchangeRates } from '../rates/ExchangeRates.ts'
-import { AccountLink, Balance } from './definition/Accounts.ts'
-import type { AccountView } from './definition/Accounts.ts'
+import { Balance } from './definition/Accounts.ts'
+import type { AccountView, AccountLink } from './definition/Accounts.ts'
 import {
   CategoryExplanation,
   Evidence,
@@ -29,7 +29,12 @@ const BalanceRow = Schema.Struct({
 
 const LinkRow = Schema.Struct({
   accountId: Schema.String,
-  ...AccountLink.fields,
+  connectionId: Schema.String,
+  providerAccountId: Schema.String,
+  historyFrom: Schema.NullOr(Schema.String),
+  creditLimitCents: Schema.NullOr(Schema.Int),
+  availableCreditCents: Schema.NullOr(Schema.Int),
+  creditAsOf: Schema.NullOr(Schema.String),
 })
 
 const EntryRow = Schema.Struct({
@@ -162,7 +167,9 @@ const make = Effect.gen(function* () {
     Result: LinkRow,
     execute: () => sql`
       SELECT account_id AS accountId, connection_id AS connectionId,
-        provider_account_id AS providerAccountId, history_from AS historyFrom
+        provider_account_id AS providerAccountId, history_from AS historyFrom,
+        credit_limit_cents AS creditLimitCents, available_credit_cents AS availableCreditCents,
+        credit_as_of AS creditAsOf
       FROM open_finance_accounts
       WHERE account_id IS NOT NULL AND unlinked_at IS NULL
     `,
@@ -181,7 +188,28 @@ const make = Effect.gen(function* () {
       balancesOf.set(accountId, list)
     }
     const linkOf = new Map(
-      links.map(({ accountId, ...link }) => [accountId, link]),
+      links.map(
+        ({
+          accountId,
+          creditLimitCents,
+          availableCreditCents,
+          creditAsOf,
+          ...link
+        }): [string, typeof AccountLink.Type] => [
+          accountId,
+          {
+            ...link,
+            credit:
+              creditAsOf === null
+                ? null
+                : {
+                    limitCents: creditLimitCents,
+                    availableCents: availableCreditCents,
+                    asOf: creditAsOf,
+                  },
+          },
+        ],
+      ),
     )
     return {
       balances: (accountId: string) => balancesOf.get(accountId) ?? [],

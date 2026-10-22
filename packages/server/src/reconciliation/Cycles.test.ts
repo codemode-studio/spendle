@@ -135,6 +135,91 @@ describe('cardCycles', () => {
     ])
   })
 
+  describe('with charges still pending at the provider', () => {
+    const pending = (id: string, bookedOn: string, amountCents: number) => ({
+      ...entry(id, bookedOn, amountCents),
+      pending: true,
+    })
+    const items = [
+      entry('market', '2026-06-10', -10000),
+      pending('hotel', '2026-07-15', -20000),
+      // Dated before the 3 July cut, but still pending after that bill came due.
+      pending('captured-late', '2026-07-02', -3000),
+      pending('refund', '2026-07-20', 500),
+      // A later bill's instalment.
+      pending('instalment', '2026-09-20', -4000),
+    ]
+    const view = (today: string, payments: ReadonlyArray<CyclePayment> = []) =>
+      build(
+        [payment('pay-june', '2026-07-08', 10000), ...payments],
+        today,
+        [],
+        items,
+      ).cycles.map((cycle) => [
+        cycle.closingOn,
+        cycle.billedCents,
+        cycle.pendingCents,
+        cycle.projectedCents,
+        cycle.status,
+        cycle.entryIds,
+      ])
+
+    it('projects the bill from them, apart from what is billed', () => {
+      assert.deepStrictEqual(view('2026-08-05'), [
+        ['2026-07-03', 10000, 0, 10000, 'paid', ['market']],
+        [
+          '2026-08-03',
+          0,
+          22500,
+          22500,
+          'due',
+          ['hotel', 'captured-late', 'refund'],
+        ],
+        ['2026-09-03', 0, 0, 0, 'open', []],
+      ])
+    })
+
+    it('moves those a bill already due still has to the next bill', () => {
+      assert.deepStrictEqual(view('2026-08-15').slice(1), [
+        ['2026-08-03', 0, 0, 0, 'paid', []],
+        [
+          '2026-09-03',
+          0,
+          22500,
+          22500,
+          'open',
+          ['hotel', 'captured-late', 'refund'],
+        ],
+      ])
+    })
+
+    it('lets a payment settle them before they post', () => {
+      const paid = build(
+        [
+          payment('pay-june', '2026-07-08', 10000),
+          payment('pay-july', '2026-08-07', 22500),
+        ],
+        '2026-08-08',
+        [],
+        items,
+      )
+      assert.deepStrictEqual(
+        [
+          paid.cycles.map((cycle) => [cycle.paidCents, cycle.status]),
+          paid.unappliedCents,
+        ],
+        [
+          [
+            [10000, 'paid'],
+            [22500, 'paid'],
+            [0, 'open'],
+          ],
+          0,
+        ],
+      )
+    })
+  })
+
   it('shows a partial payment within the due date, and overdue after it', () => {
     const partial = payment('pay-july', '2026-08-05', 5000)
     assert.deepStrictEqual(statuses([june, partial], '2026-08-08')[1], [

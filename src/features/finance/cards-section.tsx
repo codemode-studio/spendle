@@ -293,6 +293,7 @@ function CardInstrument({
   const summary = overview.data
     ? summarizeCard({
         limitCents: card.card?.limitCents ?? null,
+        credit: card.link?.credit ?? null,
         cycles: overview.data.cycles.cycles,
         unappliedCents: overview.data.cycles.unappliedCents,
         installments: overview.data.installments,
@@ -302,7 +303,10 @@ function CardInstrument({
     ? [
         {
           label: 'Fatura aberta',
-          value: formatCurrency(summary.open?.billedCents ?? 0, card.currency),
+          value: formatCurrency(
+            summary.open?.projectedCents ?? 0,
+            card.currency,
+          ),
           caption: summary.open
             ? `Fecha ${formatDate(summary.open.closingOn)}${summary.open.closing === 'forecast' ? ' (previsto)' : ''}`
             : 'Sem fatura aberta',
@@ -314,7 +318,7 @@ function CardInstrument({
             ? `Vence ${formatDate(summary.nextDue)}`
             : 'Nada pendente',
         },
-        ...(summary.availableLimitCents !== null && card.card?.limitCents
+        ...(summary.availableLimitCents !== null
           ? [
               {
                 label: 'Limite livre',
@@ -322,7 +326,9 @@ function CardInstrument({
                   summary.availableLimitCents,
                   card.currency,
                 ),
-                caption: `de ${formatCurrency(card.card.limitCents, card.currency)}`,
+                caption: summary.limitCents
+                  ? `de ${formatCurrency(summary.limitCents, card.currency)}`
+                  : 'Informado pelo banco',
               },
             ]
           : []),
