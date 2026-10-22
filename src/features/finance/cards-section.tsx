@@ -349,27 +349,25 @@ function CardInstrument({
       editLabel={`Editar ${formatInstrumentName(card.name)}`}
       onEdit={onEdit}
       metrics={metrics}
+      linked={card.link !== null}
+      // Only warnings get a status row; an empty one would still take space.
       status={
-        <>
-          {card.link ? (
-            <StatusBadge tone="info">
-              <Plug />
-              Open Finance
-            </StatusBadge>
-          ) : null}
-          {summary?.overdue ? (
-            <StatusBadge tone="warning">Fatura vencida</StatusBadge>
-          ) : null}
-          {summary?.statementGaps.map((cycle) => (
-            <StatusBadge key={cycle.closingOn} tone="warning">
-              Fatura de {formatMonthLong(cycle.dueOn)} difere em{' '}
-              {formatCurrency(
-                Math.abs(cycle.statement?.differenceCents ?? 0),
-                card.currency,
-              )}
-            </StatusBadge>
-          ))}
-        </>
+        summary?.overdue || summary?.statementGaps.length ? (
+          <>
+            {summary.overdue ? (
+              <StatusBadge tone="warning">Fatura vencida</StatusBadge>
+            ) : null}
+            {summary.statementGaps.map((cycle) => (
+              <StatusBadge key={cycle.closingOn} tone="warning">
+                Fatura de {formatMonthLong(cycle.dueOn)} difere em{' '}
+                {formatCurrency(
+                  Math.abs(cycle.statement?.differenceCents ?? 0),
+                  card.currency,
+                )}
+              </StatusBadge>
+            ))}
+          </>
+        ) : undefined
       }
     />
   )
