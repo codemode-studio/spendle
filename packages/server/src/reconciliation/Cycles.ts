@@ -151,8 +151,9 @@ export interface CardCycle extends CycleBounds {
   /** Posted purchases and credits of the cycle; negative when something is owed. */
   readonly totalCents: number
   /**
-   * What the cycle bills: the issued statement's total, else the posted
-   * entries' total. Positive when owed. When the statement prints nothing
+   * What the cycle bills: the issued statement's total, plus the payments it
+   * already deducts, else the posted entries' total. Positive when owed.
+   * When the statement prints nothing
    * due but the entries prove credit beyond it, that credit, negative.
    */
   readonly billedCents: number
@@ -400,8 +401,10 @@ const schedule = (input: {
  * as paying one bill goes to it first, then to the bills closed before it
  * reached the card, oldest first. What is left is credit, spent oldest first
  * as each later cycle closes. A statement net of payments already deducts
- * the credit it can reflect, so that part is not applied to it again; the
- * credit it shows as a balance in the holder's favour stays credit.
+ * the credit it can reflect: the cycle bills its balance plus that credit,
+ * which pays it, so a payment made before the cut pays the bill it was
+ * made for. The credit the statement shows as a balance in the holder's
+ * favour stays credit.
  *
  * A balance statement also counts the debt carried into it from earlier
  * unpaid cycles, as far as its total exceeds its own entries. That debt
@@ -503,14 +506,21 @@ const allocate = (
     carried[index] = Math.min(unpaid, Math.max(0, billed[index]! + own))
     const reflects = Math.max(0, carried[index]! - own - billed[index]!)
     deducted[index] = Math.min(creditCents(), reflects)
-    let consumed = deducted[index]! - Math.max(0, -owes(index))
+    // The payments the balance deducts paid the cycle before it closed: it
+    // billed that much more, and they paid it. What the balance still shows
+    // in the holder's favour stays credit.
+    const favour = Math.max(0, -owes(index))
+    billed[index]! += deducted[index]!
+    let consumed = deducted[index]! - favour
     for (const held of credit) {
       if (consumed <= 0) break
       const part = Math.min(held.cents, consumed)
       held.cents -= part
       consumed -= part
+      paid[index]! += part
+      applied[index]!.push({ ...held.payment, amountCents: part })
     }
-    leaveSurplus(index, -owes(index) - deducted[index]!)
+    leaveSurplus(index, favour - deducted[index]!)
   }
   let closed = 0
   const closeBefore = (date: string) => {
@@ -688,11 +698,9 @@ export const cardCycles = (input: {
         ? {
             observedCents: statement.cents,
             deductedCents: deducted[index]!,
+            // The projection already adds back what the statement deducts.
             differenceCents:
-              -projected[index]! -
-              plan.totals[index]! +
-              carried[index]! -
-              deducted[index]!,
+              -projected[index]! - plan.totals[index]! + carried[index]!,
           }
         : null,
     }

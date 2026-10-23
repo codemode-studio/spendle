@@ -452,7 +452,7 @@ describe('cardCycles', () => {
       [0, -1000, null],
     )
   })
-  it('does not apply again a payment the statement already deducts', () => {
+  it('lets a payment the statement already deducts pay its cycle, once', () => {
     // Inter: R$ 150,00 of purchases, R$ 100,00 paid before the cut, R$ 50,00 due.
     const result = build(
       [payment('early', '2026-07-20', 10000)],
@@ -465,15 +465,17 @@ describe('cardCycles', () => {
         result.cycles[0]?.closingOn,
         result.cycles[0]?.billedCents,
         result.cycles[0]?.paidCents,
+        result.cycles[0]?.payments.map((paid) => paid.entryId),
         result.cycles[0]?.status,
         result.cycles[0]?.statement,
         result.unappliedCents,
       ],
       [
         '2026-08-03',
-        5000,
-        0,
-        'due',
+        15000,
+        10000,
+        ['early'],
+        'partially_paid',
         { observedCents: -5000, deductedCents: 10000, differenceCents: 0 },
         0,
       ],
@@ -703,9 +705,9 @@ describe('cardCycles', () => {
       august([issued('2026-06-04', '2026-07-03', 10000)]),
       [10000, 'paid', null, 0],
     )
-    // A balance statement already shows the credit: nothing left to pay.
+    // A balance statement deducts the credit, which pays it once.
     assert.deepStrictEqual(august([issued('2026-07-04', '2026-08-03', 0)]), [
-      0,
+      10000,
       'paid',
       0,
       0,
@@ -744,13 +746,13 @@ describe('cardCycles', () => {
       ]),
       [10000, 'paid', [['credit', 'refund']], 0, 0],
     )
-    // July's balance already deducts it: nothing is paid twice.
+    // July's balance deducts it: it pays July once.
     assert.deepStrictEqual(
       august([
         issued('2026-06-04', '2026-07-03', 10000),
         issued('2026-07-04', '2026-08-03', 0),
       ]),
-      [0, 'paid', [], 0, 0],
+      [10000, 'paid', [['credit', 'refund']], 0, 0],
     )
   })
 
@@ -903,7 +905,7 @@ describe('cardCycles', () => {
         [
           ['2026-07-03', 10000, 'paid', null],
           ['2026-08-03', 0, 'paid', 0],
-          ['2026-09-03', 0, 'paid', 0],
+          ['2026-09-03', 15000, 'paid', 0],
           ['2026-10-03', 5000, 'overdue', null],
           ['2026-11-03', 0, 'open', null],
         ],
@@ -1060,7 +1062,7 @@ describe('cardCycles', () => {
     const balance = issued('2026-07-04', '2026-08-03', -15000)
     assert.deepStrictEqual(outcome(25000, balance), [
       [
-        ['2026-08-03', 0, 'overdue', 0],
+        ['2026-08-03', 5000, 'overdue', 0],
         ['2026-09-03', 0, 'open', null],
       ],
       0,
@@ -1071,7 +1073,7 @@ describe('cardCycles', () => {
       [
         [
           ['2026-07-03', 20000, 'paid', 0],
-          ['2026-08-03', 0, 'overdue', 0],
+          ['2026-08-03', 5000, 'overdue', 0],
           ['2026-09-03', 0, 'open', null],
         ],
         0,
@@ -1086,7 +1088,7 @@ describe('cardCycles', () => {
     })
     assert.deepStrictEqual(outcome(45000, floored), [
       [
-        ['2026-08-03', 0, 'paid', 0],
+        ['2026-08-03', 20000, 'paid', 0],
         ['2026-09-03', 0, 'open', null],
       ],
       5000,
@@ -1097,7 +1099,7 @@ describe('cardCycles', () => {
       [
         [
           ['2026-07-03', 20000, 'paid', 0],
-          ['2026-08-03', 0, 'paid', 0],
+          ['2026-08-03', 20000, 'paid', 0],
           ['2026-09-03', 0, 'open', null],
         ],
         5000,

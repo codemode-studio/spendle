@@ -15,6 +15,11 @@ export const CyclePayment = Schema.Struct({
   via: Schema.Literals(['card', 'bank', 'credit']),
   /** The closing of the bill it was identified as paying. */
   settles: Schema.NullOr(Schema.String),
+  /**
+   * The closing of the issued statement or bill that prints the payment.
+   * Banks print a payment on the bill open when it was made, usually the one
+   * after the bill it paid.
+   */
   statementClosing: Schema.NullOr(Schema.String),
 })
 
@@ -29,7 +34,11 @@ export const CardCycle = Schema.Struct({
   status: Schema.Literals(['open', 'due', 'paid', 'partially_paid', 'overdue']),
   /** Posted purchases and credits of the cycle; negative when something is owed. */
   totalCents: Schema.Int,
-  /** What the cycle bills from posted entries or its issued statement; positive when owed. */
+  /**
+   * What the cycle bills from posted entries or its issued statement; positive
+   * when owed. A balance statement's total counts the payments it already
+   * deducts, which the cycle shows as paying it.
+   */
   billedCents: Schema.Int,
   /**
    * Pending charges less pending credits, positive when owed: on the bill
