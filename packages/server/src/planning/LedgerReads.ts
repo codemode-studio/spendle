@@ -5,6 +5,8 @@ import * as Schema from 'effect/Schema'
 import * as SqlClient from 'effect/sql/SqlClient'
 import * as SqlSchema from 'effect/sql/SqlSchema'
 
+import { entryOneOffs } from '../ledger/Notes.ts'
+
 import type {
   Checkpoint,
   MonthAccount,
@@ -25,6 +27,7 @@ const EntryRow = Schema.Struct({
   bucket: Schema.NullOr(Schema.String),
   categoryStatus: Schema.Literals(['applied', 'review', 'none']),
   excludedFromSpending: Schema.BooleanFromBit,
+  oneOff: Schema.BooleanFromBit,
   company: Schema.BooleanFromBit,
 })
 
@@ -90,12 +93,14 @@ const make = Effect.gen(function* () {
         CASE WHEN c.status = 'applied' THEN k.bucket END AS bucket,
         coalesce(c.status, 'none') AS categoryStatus,
         coalesce(c.excluded_from_spending, 0) AS excludedFromSpending,
+        x.entry_id IS NOT NULL AS oneOff,
         CASE WHEN o.kind = 'company' THEN 1 ELSE 0 END AS company
       FROM ledger_entries e
       JOIN accounts a ON a.id = e.account_id
       JOIN owners o ON o.id = a.owner_id
       LEFT JOIN category_inferences c ON c.entry_id = e.id
       LEFT JOIN categories k ON k.id = c.category_id
+      LEFT JOIN (${entryOneOffs(sql)}) x ON x.entry_id = e.id
       ORDER BY e.booked_on, e.id
     `,
   })

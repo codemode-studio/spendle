@@ -166,7 +166,9 @@ const make = Effect.gen(function* () {
   })
 
   const editCategory = (edit: StoreEdit) =>
-    edit._tag === 'Recategorize' || edit._tag === 'SetProviderMapping'
+    edit._tag === 'Recategorize' ||
+    edit._tag === 'SetProviderMapping' ||
+    edit._tag === 'AddPattern'
       ? edit.categoryId
       : null
 

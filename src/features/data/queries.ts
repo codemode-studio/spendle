@@ -41,6 +41,7 @@ import {
   monthHistoryFn,
   planningStateFn,
   recurrenceBookFn,
+  spendingFn,
 } from './planning.functions'
 import { assistantQueryKeys } from '#/features/home/query-keys'
 import {
@@ -134,6 +135,9 @@ export const queryKeys = {
   month: (month?: string) => financeQueryKeys.snapshot(month),
   monthHistory: (months: number) => financeQueryKeys.strategyHistory(months),
   forecast: () => [...financeQueryKeys.all, 'read', 'forecast'] as const,
+  /** Under `read`, so ledger and plan changes refresh it. */
+  spending: (month: string) =>
+    [...financeQueryKeys.all, 'read', 'spending', month] as const,
   recurrenceBook: () =>
     [...financeQueryKeys.all, 'read', 'recurrence-book'] as const,
 }
@@ -149,6 +153,13 @@ export const monthOptions = (month?: string) =>
   queryOptions({
     queryKey: queryKeys.month(month),
     queryFn: () => monthFn({ data: { month } }),
+    staleTime: 15_000,
+  })
+
+export const spendingOptions = (month: string) =>
+  queryOptions({
+    queryKey: queryKeys.spending(month),
+    queryFn: () => spendingFn({ data: { month } }),
     staleTime: 15_000,
   })
 
@@ -454,12 +465,15 @@ export async function patchRelationDecision(
 }
 
 /**
- * Shows the person's note on every cached transaction page at once;
- * returns the rollback for a failed save.
+ * Shows the person's note or one-off mark on every cached transaction page
+ * at once; returns the rollback for a failed save.
  */
-export async function patchEntryNote(
+export async function patchEntry(
   queryClient: QueryClient,
-  input: { entryId: string; note: string | null },
+  {
+    entryId,
+    ...changes
+  }: { entryId: string } & Partial<Pick<Entry, 'note' | 'oneOff'>>,
 ) {
   const filter = { queryKey: queryKeys.entriesPages() }
   await queryClient.cancelQueries(filter)
@@ -471,9 +485,7 @@ export async function patchEntryNote(
         ? {
             ...page,
             entries: page.entries.map((entry) =>
-              entry.id === input.entryId
-                ? { ...entry, note: input.note }
-                : entry,
+              entry.id === entryId ? { ...entry, ...changes } : entry,
             ),
           }
         : page,

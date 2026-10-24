@@ -98,6 +98,17 @@ export const StoreEdit = Schema.Union([
     pattern: Schema.String,
     matchMode: MatchMode,
   }),
+  /**
+   * A merchant rule the person writes: descriptions matching `pattern`
+   * (the whole merchant, or its start with `prefix`) in that direction get
+   * the category.
+   */
+  Schema.TaggedStruct('AddPattern', {
+    pattern: Schema.NonEmptyString,
+    matchMode: MatchMode,
+    direction: Schema.Literals(['income', 'expense']),
+    categoryId: Schema.String,
+  }),
   Schema.TaggedStruct('Remove', { id: Schema.String }),
   Schema.TaggedStruct('PromoteToPrefix', { id: Schema.String }),
   Schema.TaggedStruct('SetProviderMapping', {

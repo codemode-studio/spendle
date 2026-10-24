@@ -5,6 +5,7 @@ import {
   CircleAlert,
   Eye,
   Lock,
+  PencilLine,
   RefreshCw,
   ShieldCheck,
   ShieldQuestion,
@@ -15,13 +16,16 @@ import { z } from 'zod'
 import { SpendleLockup } from '#/components/spendle-logo'
 import { Button } from '#/components/ui/button'
 import { Spinner } from '#/components/ui/spinner'
+import { Switch } from '#/components/ui/switch'
 import { authClient } from '#/features/auth/auth-client'
+import { mcpWriteScope } from '#/features/mcp/scopes'
 
 // Loose: the rest of the query is the signed authorization request, which
 // the consent call sends back untouched.
 const consentSearchSchema = z.looseObject({
   client_id: z.string().optional().catch(undefined),
   redirect_uri: z.string().optional().catch(undefined),
+  scope: z.string().optional().catch(undefined),
 })
 
 const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]'])
@@ -45,7 +49,6 @@ const access = [
     label: 'Ver contas, transações, planejamento, cartões e investimentos',
   },
   { icon: RefreshCw, label: 'Atualizar e sincronizar o Open Finance' },
-  { icon: Lock, label: 'Não altera categorias, planos nem contas' },
 ]
 
 /**
@@ -88,13 +91,21 @@ function ConsentPage() {
   const client = useClient(search.client_id)
   const [pending, setPending] = useState<'accept' | 'deny' | null>(null)
   const [failed, setFailed] = useState(false)
+  // Writing is granted only when the client asks and the person allows it.
+  const requested = search.scope?.split(' ').filter(Boolean) ?? []
+  const asksToWrite = requested.includes(mcpWriteScope)
+  const [allowWrite, setAllowWrite] = useState(false)
 
   async function decide(accept: boolean) {
     setPending(accept ? 'accept' : 'deny')
     setFailed(false)
+    const scope =
+      accept && asksToWrite && !allowWrite
+        ? requested.filter((item) => item !== mcpWriteScope).join(' ')
+        : undefined
     // A dropped connection rejects instead of returning `error`.
     const url = await authClient.oauth2
-      .consent({ accept })
+      .consent({ accept, scope })
       .then(({ data }) => data?.url)
       .catch(() => undefined)
     if (!url) {
@@ -166,7 +177,29 @@ function ConsentPage() {
                   {label}
                 </li>
               ))}
+              {asksToWrite && allowWrite ? (
+                <li className="flex items-start gap-3">
+                  <PencilLine className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                  Alterar categorias, notas, regras, tetos e recorrências quando
+                  você pedir
+                </li>
+              ) : (
+                <li className="flex items-start gap-3">
+                  <Lock className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                  Não altera categorias, planos nem contas
+                </li>
+              )}
             </ul>
+            {asksToWrite && (
+              <label className="flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left text-sm">
+                Permitir alterações
+                <Switch
+                  checked={allowWrite}
+                  onCheckedChange={setAllowWrite}
+                  disabled={pending !== null}
+                />
+              </label>
+            )}
             {failed && (
               <p
                 role="alert"

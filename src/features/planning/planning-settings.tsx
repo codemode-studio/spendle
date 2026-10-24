@@ -16,6 +16,7 @@ import {
   GoalDialog,
   GoalsSection,
 } from '#/features/planning/budget-section'
+import { CapsSection } from '#/features/planning/caps-section'
 import { usePlanningController } from '#/features/planning/planning-controller'
 import { RecurrenceDialog } from '#/features/planning/recurrence-dialogs'
 import { RecurrencesSection } from '#/features/planning/recurrences-section'
@@ -59,6 +60,7 @@ export function PlanningSettings({
             savePlan={controller.savePlan}
             planPending={controller.planMutation.isPending}
           />
+          <CapsSection data={data} />
           <GoalsSection
             data={data}
             openGoal={() => controller.setGoalOpen(true)}

@@ -2,17 +2,23 @@ import * as Context from 'effect/Context'
 import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
 
-import { monthStart, today } from '../domain/LocalDate.ts'
+import { addDays, monthStart, today } from '../domain/LocalDate.ts'
 import { Investments } from '../investments/Investments.ts'
 import { baseCurrency } from '../rates/Conversion.ts'
 import { ExchangeRates } from '../rates/ExchangeRates.ts'
 import type { RateNeed } from '../rates/ExchangeRates.ts'
 import { Cards } from '../reconciliation/Cards.ts'
 import { LedgerReads } from './LedgerReads.ts'
-import { buildMonth, indexFacts, projectCash } from './Month.ts'
+import {
+  buildMonth,
+  futureInstalments,
+  indexFacts,
+  projectCash,
+} from './Month.ts'
 import type { MonthCycle, MonthFacts, MonthInstallment } from './Month.ts'
 import { Planning, PlanningError } from './Planning.ts'
 import { Recurrences } from './Recurrences.ts'
+import { spendingAgainstCaps } from './Spending.ts'
 
 /**
  * The monthly picture and the cash forecast, read from the ledger, card
@@ -171,7 +177,126 @@ const make = Effect.gen(function* () {
     return { month: current, alreadyClosed: false }
   })
 
-  return { facts, month, history, forecast, close }
+  /**
+   * Spending per category against the caps, for a month (the current one by
+   * default) or the days `from`..`to`, by purchase date. It counts the given
+   * accounts, or every account of a person or the household; company
+   * accounts only when named.
+   */
+  const spending = Effect.fn('Dashboard.spending')(function* (input: {
+    readonly month?: string | undefined
+    readonly from?: string | undefined
+    readonly to?: string | undefined
+    readonly accountIds?: ReadonlyArray<string> | undefined
+  }) {
+    const [day, accounts, entries, categories, caps] = yield* Effect.all([
+      today,
+      reads.accounts,
+      reads.entries,
+      reads.categories,
+      planning.caps,
+    ])
+    const month = input.month ?? day.slice(0, 7)
+    const from = input.from ?? `${month}-01`
+    const to = input.to ?? addDays(monthStart(`${month}-01`, 1), -1)
+    if ((input.from === undefined) !== (input.to === undefined) || from > to)
+      return yield* new PlanningError({
+        reason: 'invalid_input',
+        detail: 'from and to',
+      })
+    const known = new Set(accounts.map((account) => account.id))
+    const unknown = input.accountIds?.filter((id) => !known.has(id)) ?? []
+    if (unknown.length > 0)
+      return yield* new PlanningError({
+        reason: 'invalid_input',
+        detail: `unknown accounts: ${unknown.join(', ')}`,
+      })
+    const accountIds = new Set(
+      input.accountIds ??
+        accounts
+          .filter((account) => !account.company)
+          .map((account) => account.id),
+    )
+    const inPeriod = entries.filter(
+      (entry) => entry.bookedOn >= from && entry.bookedOn <= to,
+    )
+    const rates = yield* exchangeRates.table(
+      inPeriod
+        .filter((entry) => entry.currency !== baseCurrency)
+        .map((entry) => ({ currency: entry.currency, from: entry.bookedOn })),
+    )
+    const result = spendingAgainstCaps({
+      from,
+      to,
+      accountIds,
+      entries: inPeriod,
+      caps,
+      rates,
+    })
+    const byId = new Map(categories.map((category) => [category.id, category]))
+    return {
+      from,
+      to,
+      accountIds: [...accountIds],
+      categories: result.categories.map((category) => ({
+        ...category,
+        name: byId.get(category.categoryId)?.name ?? category.categoryId,
+        bucket: byId.get(category.categoryId)?.bucket ?? 'excluded',
+      })),
+      spentCents: result.categories.reduce(
+        (sum, category) => sum + category.spentCents,
+        0,
+      ),
+      unclassifiedCents: result.unclassifiedCents,
+      unconvertedCount: result.unconvertedCount,
+    }
+  })
+
+  /**
+   * The card instalments still to come, by card and bill: what each later
+   * bill will carry from purchases already made, with the purchases.
+   */
+  const instalments = Effect.gen(function* () {
+    const loaded = yield* facts
+    const bills = new Map<
+      string,
+      {
+        accountId: string
+        dueOn: string
+        cents: number
+        items: Array<{
+          description: string
+          number: number
+          total: number
+          cents: number
+        }>
+      }
+    >()
+    for (const instalment of futureInstalments(loaded, indexFacts(loaded))) {
+      const key = `${instalment.accountId}|${instalment.dueOn}`
+      const bill = bills.get(key) ?? {
+        accountId: instalment.accountId,
+        dueOn: instalment.dueOn,
+        cents: 0,
+        items: [],
+      }
+      bill.cents += instalment.cents
+      bill.items.push({
+        description: instalment.description,
+        number: instalment.number,
+        total: instalment.total,
+        cents: instalment.cents,
+      })
+      bills.set(key, bill)
+    }
+    return [...bills.values()].sort(
+      (a, b) =>
+        a.dueOn.localeCompare(b.dueOn) ||
+        a.accountId.localeCompare(b.accountId),
+    )
+  }).pipe(Effect.withSpan('Dashboard.instalments'))
+
+  return { facts, month, history, forecast, close, spending, instalments }
 })
 
 export class Dashboard extends Context.Service<

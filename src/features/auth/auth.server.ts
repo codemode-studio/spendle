@@ -8,6 +8,7 @@ import { getMigrations } from 'better-auth/db/migration'
 import { jwt } from 'better-auth/plugins'
 import { tanstackStartCookies } from 'better-auth/tanstack-start'
 
+import { mcpWriteScope } from '#/features/mcp/scopes'
 import { authPlatform } from '#/platform/auth.server'
 
 import { isAllowedEmail, parseAllowedEmails } from './allowlist'
@@ -107,6 +108,10 @@ function createAuth() {
         loginPage: '/entrar',
         consentPage: '/autorizar',
         resource: mcpResource(),
+        // Better Auth's defaults plus the write scope, which the protected
+        // resource metadata advertises so clients ask for it; the person
+        // still decides on `/autorizar` whether to grant it.
+        scopes: ['openid', 'profile', 'email', 'offline_access', mcpWriteScope],
         // Clients that predate Client ID Metadata Documents register
         // themselves. Registering grants nothing: a token still needs an
         // allowed person to sign in and approve the client on `/autorizar`.

@@ -25,6 +25,7 @@ const entry = (
   bucket,
   categoryStatus: categoryId === null ? 'none' : 'applied',
   excludedFromSpending: false,
+  oneOff: false,
   ...overrides,
 })
 
@@ -721,6 +722,26 @@ describe('history estimate', () => {
         .map((line) => [line.categoryId, line.cents]),
       // June R$ 600, July paid by the recurrence (0), August R$ 3 000: a
       // median of R$ 600, of which R$ 450 is already spent.
+      [['groceries', 15_000]],
+    )
+  })
+
+  it('leaves out what the person marked one-off', () => {
+    const base = history()
+    const month = buildMonth(
+      {
+        ...base,
+        entries: base.entries.map((item) =>
+          item.id === 'g7' ? { ...item, oneOff: true } : item,
+        ),
+      },
+      '2026-09',
+    )
+    assert.deepStrictEqual(
+      month.family.lines
+        .filter((line) => line.origin === 'history')
+        .map((line) => [line.categoryId, line.cents]),
+      // July's R$ 900 is one-off: the same median of R$ 600 as above.
       [['groceries', 15_000]],
     )
   })

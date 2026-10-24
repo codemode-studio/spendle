@@ -13,6 +13,7 @@ import { EventLog } from '../events/EventLog.ts'
 import { isValidAllocation, strategyTemplates } from './Budget.ts'
 import type { Allocation } from './Budget.ts'
 import type { ClosedBudget, PlanGoal, PlanStrategy } from './Month.ts'
+import { spendingBuckets } from './Spending.ts'
 
 export const planningChanged = 'PlanningChanged'
 
@@ -124,6 +125,18 @@ const GoalRow = Schema.Struct({
   targetDate: Schema.NullOr(Schema.String),
 })
 
+const CapRow = Schema.Struct({
+  categoryId: Schema.String,
+  fromMonth: Schema.String,
+  cents: Schema.NullOr(Schema.Int),
+})
+
+const CapCategoryRow = Schema.Struct({
+  bucket: Schema.String,
+  active: Schema.BooleanFromBit,
+  system: Schema.BooleanFromBit,
+})
+
 export interface Strategy extends PlanStrategy {
   readonly template: (typeof strategyTemplates)[number]
 }
@@ -133,11 +146,12 @@ export interface Budget extends ClosedBudget {
 }
 
 const isDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
+const isMonth = (value: string) => /^\d{4}-(0[1-9]|1[0-2])$/.test(value)
 
 /**
- * The person's plan: income target, reserve rule, strategy, goals and
- * closed months. Every write is a decision only the
- * person makes; closed months never change.
+ * The person's plan: income target, reserve rule, strategy, category caps,
+ * goals and closed months. Every write is a decision only the person makes;
+ * closed months never change.
  */
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -189,6 +203,24 @@ const make = Effect.gen(function* () {
       FROM goals g ORDER BY g.created_at, g.rowid
     `,
   })
+
+  const findCaps = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: CapRow,
+    execute: () => sql`
+      SELECT category_id AS categoryId, from_month AS fromMonth, cents
+      FROM category_caps ORDER BY category_id, from_month
+    `,
+  })
+  const findCapCategory = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: CapCategoryRow,
+    execute: (id) =>
+      sql`SELECT bucket, active, system FROM categories WHERE id = ${id}`,
+  })
+
+  /** Every cap the person set, by category and month. */
+  const caps = findCaps(undefined)
 
   const settings = Effect.map(
     findSettings(undefined),
@@ -320,6 +352,56 @@ const make = Effect.gen(function* () {
     },
   )
 
+  /**
+   * Caps a spending category from `month` on, until a later month's cap; a
+   * null `cents` removes it from `month` on. Refused for a closed month,
+   * whose plan is frozen.
+   */
+  const setCap = Effect.fn('Planning.setCap')(function* (input: {
+    readonly categoryId: string
+    readonly month: string
+    readonly cents: number | null
+  }) {
+    if (!isMonth(input.month))
+      return yield* new PlanningError({
+        reason: 'invalid_input',
+        detail: 'month',
+      })
+    const category = yield* findCapCategory(input.categoryId)
+    if (
+      Option.isNone(category) ||
+      !category.value.active ||
+      category.value.system ||
+      !spendingBuckets.has(category.value.bucket)
+    )
+      return yield* new PlanningError({
+        reason: 'invalid_input',
+        detail: 'category',
+      })
+    if (yield* isClosed(input.month))
+      return yield* new PlanningError({
+        reason: 'month_closed',
+        detail: input.month,
+      })
+    const setAt = yield* now
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        yield* sql`
+          INSERT INTO category_caps (category_id, from_month, cents, set_at)
+          VALUES (${input.categoryId}, ${input.month}, ${input.cents}, ${setAt})
+          ON CONFLICT (category_id, from_month) DO UPDATE SET
+            cents = excluded.cents, set_at = excluded.set_at
+        `
+        yield* changed('cap', { ...input })
+      }),
+    )
+    return {
+      categoryId: input.categoryId,
+      fromMonth: input.month,
+      cents: input.cents,
+    }
+  })
+
   const saveGoal = Effect.fn('Planning.saveGoal')(function* (input: GoalInput) {
     const name = input.name.trim()
     if (name.length < 2)
@@ -431,6 +513,8 @@ const make = Effect.gen(function* () {
     updateSettings,
     strategies,
     activateStrategy,
+    caps,
+    setCap,
     budgets,
     budget: (month: string) =>
       Effect.map(budgets, (rows) =>

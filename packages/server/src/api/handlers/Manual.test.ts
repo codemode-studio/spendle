@@ -306,6 +306,50 @@ describe('manual entries API', () => {
       }).pipe(Effect.provide(apiTest())),
   )
 
+  it.effect(
+    'keeps a one-off mark when the movement merges with its bank line, until cleared',
+    () =>
+      Effect.gen(function* () {
+        const { client, account } = yield* checking
+        const typed = yield* client.manual.createTransaction({
+          payload: {
+            accountId: account.id,
+            bookedOn: '2026-10-02',
+            amountCents: -5000,
+            description: 'Farmácia',
+          },
+        })
+        yield* client.manual.setOneOff({
+          params: { entryId: typed.entryId! },
+          payload: { oneOff: true },
+        })
+        yield* client.imports.upload({
+          payload: upload(account.id, october, 'out.ofx'),
+        })
+        yield* drain
+        const oneOffs = (oneOff: boolean) =>
+          client.entries
+            .list({ query: { accountId: account.id, oneOff } })
+            .pipe(
+              Effect.map((page) =>
+                page.entries.map((entry) => [entry.sources, entry.oneOff]),
+              ),
+            )
+        const merged = yield* oneOffs(true)
+        const [entry] = (yield* client.entries.list({
+          query: { accountId: account.id },
+        })).entries
+        yield* client.manual.setOneOff({
+          params: { entryId: entry!.id },
+          payload: { oneOff: false },
+        })
+        assert.deepStrictEqual(
+          { merged, cleared: yield* oneOffs(false) },
+          { merged: [[2, true]], cleared: [[2, false]] },
+        )
+      }).pipe(Effect.provide(apiTest())),
+  )
+
   it.effect('updates and clears a note on any entry', () =>
     Effect.gen(function* () {
       const { client, account } = yield* checking

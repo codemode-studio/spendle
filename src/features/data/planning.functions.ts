@@ -89,6 +89,35 @@ export const monthFn = createServerFn({ method: 'GET' })
     api((client) => client.dashboard.month({ query: data })),
   )
 
+/** Spending per category against the caps, for a month (the current one by default). */
+export const spendingFn = createServerFn({ method: 'GET' })
+  .validator(input(Schema.Struct({ month: Schema.optional(Month) })))
+  .handler(({ data }) =>
+    api((client) => client.dashboard.spending({ query: data })),
+  )
+
+/** A category's monthly cap from `month` on; null removes it. */
+export const setCapFn = createServerFn({ method: 'POST' })
+  .validator(
+    input(
+      Schema.Struct({
+        categoryId: Schema.String,
+        month: Month,
+        cents: Schema.NullOr(
+          Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+        ),
+      }),
+    ),
+  )
+  .handler(({ data }) =>
+    api((client) =>
+      client.planning.setCap({
+        params: { categoryId: data.categoryId },
+        payload: { month: data.month, cents: data.cents },
+      }),
+    ),
+  )
+
 export const monthHistoryFn = createServerFn({ method: 'GET' })
   .validator(input(Schema.Struct({ months: Schema.Int })))
   .handler(({ data }) =>

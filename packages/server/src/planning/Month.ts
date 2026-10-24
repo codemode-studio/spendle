@@ -45,6 +45,8 @@ export interface MonthEntry {
   readonly categoryStatus: 'applied' | 'review' | 'none'
   /** Money moving between the person's own accounts. */
   readonly excludedFromSpending: boolean
+  /** Marked one-off by the person: counted in its month, not in averages. */
+  readonly oneOff: boolean
 }
 
 export interface MonthRelation {
@@ -599,7 +601,8 @@ export const monthLines = (facts: MonthFacts, index: Index, month: string) => {
 /**
  * Documented spending per category in `month`, as the month counts it
  * (cards in their bill's month), refunds netted: essentials and lifestyle
- * only, without what recurrences or instalments already schedule.
+ * only, without what recurrences or instalments already schedule, nor what
+ * the person marked one-off.
  */
 const variableSpendingIn = (facts: MonthFacts, index: Index, month: string) => {
   const spent = new Map<string, number>()
@@ -610,6 +613,7 @@ const variableSpendingIn = (facts: MonthFacts, index: Index, month: string) => {
     if (line.categoryId === null || line.categoryId === 'uncategorized')
       continue
     if (index.scheduledEntryIds.has(line.entryId)) continue
+    if (index.entryById.get(line.entryId)?.oneOff) continue
     spent.set(line.categoryId, (spent.get(line.categoryId) ?? 0) + line.cents)
   }
   return spent

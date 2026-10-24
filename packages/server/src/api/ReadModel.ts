@@ -7,7 +7,7 @@ import * as SqlClient from 'effect/sql/SqlClient'
 import * as SqlSchema from 'effect/sql/SqlSchema'
 
 import type { Account } from '../ledger/Accounts.ts'
-import { entryNotes } from '../ledger/Notes.ts'
+import { entryNotes, entryOneOffs } from '../ledger/Notes.ts'
 import { inChunks } from '../persistence/Chunks.ts'
 import { baseCurrency, convert } from '../rates/Conversion.ts'
 import type { RateTable } from '../rates/Conversion.ts'
@@ -52,6 +52,7 @@ const EntryRow = Schema.Struct({
   confidence: Schema.NullOr(Schema.Number),
   excludedFromSpending: Schema.NullOr(Schema.BooleanFromBit),
   note: Schema.NullOr(Schema.String),
+  oneOff: Schema.BooleanFromBit,
   manualId: Schema.NullOr(Schema.String),
 })
 
@@ -75,6 +76,7 @@ const toEntry = (row: typeof EntryRow.Type, rates: RateTable): Entry => ({
           excludedFromSpending: row.excludedFromSpending ?? false,
         },
   note: row.note,
+  oneOff: row.oneOff,
   manualId: row.manualId,
   converted:
     row.currency === baseCurrency
@@ -176,10 +178,29 @@ const make = Effect.gen(function* () {
   })
 
   /** Latest balances and live Open Finance link of every account. */
+  // When each account last had a posted movement, and last got new data.
+  const findFreshness = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Schema.Struct({
+      accountId: Schema.String,
+      lastBookedOn: Schema.NullOr(Schema.String),
+      lastObservedAt: Schema.NullOr(Schema.String),
+    }),
+    execute: () => sql`
+      SELECT a.id AS accountId,
+        (SELECT max(e.booked_on) FROM ledger_entries e
+          WHERE e.account_id = a.id AND e.status = 'posted') AS lastBookedOn,
+        (SELECT max(o.observed_at) FROM transaction_observations o
+          WHERE o.account_id = a.id) AS lastObservedAt
+      FROM accounts a
+    `,
+  })
+
   const accountState = Effect.gen(function* () {
-    const [balances, links] = yield* Effect.all([
+    const [balances, links, freshness] = yield* Effect.all([
       findBalances(undefined),
       findLinks(undefined),
+      findFreshness(undefined),
     ])
     const balancesOf = new Map<string, Array<Balance>>()
     for (const { accountId, ...balance } of balances) {
@@ -211,13 +232,18 @@ const make = Effect.gen(function* () {
         ],
       ),
     )
+    const freshnessOf = new Map(freshness.map((row) => [row.accountId, row]))
     return {
       balances: (accountId: string) => balancesOf.get(accountId) ?? [],
       link: (accountId: string) => linkOf.get(accountId) ?? null,
+      freshness: (accountId: string) => ({
+        lastBookedOn: freshnessOf.get(accountId)?.lastBookedOn ?? null,
+        lastObservedAt: freshnessOf.get(accountId)?.lastObservedAt ?? null,
+      }),
     }
   }).pipe(Effect.withSpan('ReadModel.accountState'))
 
-  /** Accounts with their latest balances, last standing checkpoint and live link. */
+  /** Accounts with their latest balances, last standing checkpoint, live link and freshness. */
   const accountViews = Effect.fn('ReadModel.accountViews')(function* (
     accounts: ReadonlyArray<Account>,
   ) {
@@ -233,6 +259,7 @@ const make = Effect.gen(function* () {
             .filter((balance) => balance.kind !== 'available')
             .sort((a, b) => b.asOf.localeCompare(a.asOf))[0] ?? null,
         link: state.link(account.id),
+        ...state.freshness(account.id),
       }
     })
   })
@@ -240,11 +267,12 @@ const make = Effect.gen(function* () {
   const accountView = (account: Account) =>
     Effect.map(accountViews([account]), (views) => views[0]!)
 
-  // Entries with their category inference and the person's note.
+  // Entries with their category inference, the person's note and one-off mark.
   const entrySource = sql`
     ledger_entries e
     LEFT JOIN category_inferences c ON c.entry_id = e.id
     LEFT JOIN (${entryNotes(sql)}) n ON n.entry_id = e.id
+    LEFT JOIN (${entryOneOffs(sql)}) o ON o.entry_id = e.id
   `
   const entryColumns = sql`
     e.id, e.account_id AS accountId, e.booked_on AS bookedOn, e.amount_cents AS amountCents,
@@ -252,6 +280,7 @@ const make = Effect.gen(function* () {
     (SELECT count(DISTINCT v.source_id) FROM entry_evidence v WHERE v.entry_id = e.id) AS sources,
     c.category_id AS categoryId, c.status AS categoryStatus, c.origin,
     c.confidence, c.excluded_from_spending AS excludedFromSpending, n.note,
+    o.entry_id IS NOT NULL AS oneOff,
     (SELECT m.external_id FROM entry_evidence m JOIN sources ms ON ms.id = m.source_id
       WHERE m.entry_id = e.id AND ms.kind = 'manual' ORDER BY m.external_id LIMIT 1) AS manualId
   `
@@ -293,6 +322,13 @@ const make = Effect.gen(function* () {
         : [
             sql`(e.description LIKE ${likePattern(filters.text.trim())} ESCAPE '\\'
               OR n.note LIKE ${likePattern(filters.text.trim())} ESCAPE '\\')`,
+          ]),
+      ...(filters.oneOff === undefined
+        ? []
+        : [
+            filters.oneOff
+              ? sql`o.entry_id IS NOT NULL`
+              : sql`o.entry_id IS NULL`,
           ]),
       ...(filters.direction === undefined
         ? []
