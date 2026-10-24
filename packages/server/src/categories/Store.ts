@@ -46,6 +46,13 @@ export type StoreEdit =
       readonly pattern: string
       readonly matchMode: MatchMode
     }
+  | {
+      readonly _tag: 'AddPattern'
+      readonly pattern: string
+      readonly matchMode: MatchMode
+      readonly direction: Direction
+      readonly categoryId: string
+    }
   | { readonly _tag: 'Remove'; readonly id: string }
   | { readonly _tag: 'PromoteToPrefix'; readonly id: string }
   | {
@@ -245,6 +252,15 @@ const merchantRow = (rows: ReadonlyArray<PatternRow>, id: string) => {
   return row
 }
 
+/** A pattern the person typed, normalized; null when it cannot match safely. */
+const typedPattern = (typed: string, matchMode: MatchMode) => {
+  const pattern = normalizeKnowledgePattern(typed)
+  // A known aggregator's token is a valid prefix even when short (`mp`).
+  const aggregatorPrefix =
+    matchMode === 'prefix' && knowledgeAggregators.has(pattern)
+  return aggregatorPrefix || isValidKnowledgePattern(pattern) ? pattern : null
+}
+
 const editPattern = (
   rows: ReadonlyArray<PatternRow>,
   id: string,
@@ -254,12 +270,8 @@ const editPattern = (
 ): StoreEditResult => {
   const row = merchantRow(rows, id)
   if (typeof row === 'string') return { ok: false, reason: row }
-  const pattern = normalizeKnowledgePattern(typed)
-  // A known aggregator's token is a valid prefix even when short (`mp`).
-  const aggregatorPrefix =
-    matchMode === 'prefix' && knowledgeAggregators.has(pattern)
-  if (!aggregatorPrefix && !isValidKnowledgePattern(pattern))
-    return { ok: false, reason: 'invalid_pattern' }
+  const pattern = typedPattern(typed, matchMode)
+  if (pattern === null) return { ok: false, reason: 'invalid_pattern' }
   if (
     rows.some(
       (other) =>
@@ -308,6 +320,44 @@ export const applyEdit = (
     }
     case 'EditPattern':
       return editPattern(rows, edit.id, edit.pattern, edit.matchMode, clock.now)
+    case 'AddPattern': {
+      const pattern = typedPattern(edit.pattern, edit.matchMode)
+      if (pattern === null) return { ok: false, reason: 'invalid_pattern' }
+      const fields = { source: 'store_edit' as const, lastLearnedAt: clock.now }
+      // The same rule typed again teaches its category to the existing row.
+      const existing = rows.find((row) =>
+        sameKey(row, 'merchant', pattern, edit.matchMode, edit.direction),
+      )
+      if (existing)
+        return {
+          ok: true,
+          patternId: existing.id,
+          rows: rows.map((row) =>
+            row.id === existing.id
+              ? reaffirm(row, edit.categoryId, fields)
+              : row,
+          ),
+        }
+      const added: PatternRow = {
+        id: clock.newId,
+        kind: 'merchant',
+        pattern,
+        matchMode: edit.matchMode,
+        direction: edit.direction,
+        categoryId: edit.categoryId,
+        signature: pattern,
+        sampleDescription: edit.pattern.trim(),
+        confirmations: 1,
+        corrections: 0,
+        ...fields,
+      }
+      const next = [...rows, added]
+      return {
+        ok: true,
+        patternId: added.id,
+        rows: edit.matchMode === 'prefix' ? absorbCovered(next, added) : next,
+      }
+    }
     case 'PromoteToPrefix': {
       const row = merchantRow(rows, edit.id)
       if (typeof row === 'string') return { ok: false, reason: row }

@@ -13,6 +13,7 @@ import * as SqlSchema from 'effect/sql/SqlSchema'
  */
 export type EndpointsTable =
   | 'entry_note_endpoints'
+  | 'entry_one_off_endpoints'
   | 'investment_movement_endpoints'
 
 const Holder = Schema.Struct({ key: Schema.String, entryId: Schema.String })

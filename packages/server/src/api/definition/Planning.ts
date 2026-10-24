@@ -72,9 +72,18 @@ export const Goal = Schema.Struct({
   targetDate: Schema.NullOr(Schema.String),
 })
 
+/** A spending cap the person set for a category from `fromMonth` on; null removes it. */
+export const CategoryCap = Schema.Struct({
+  categoryId: Schema.String,
+  fromMonth: Month,
+  cents: Schema.NullOr(Schema.Int),
+})
+
 export const PlanningState = Schema.Struct({
   settings: PlanSettings,
   strategies: Schema.Array(Strategy),
+  /** Every cap set, by category and month; a month uses the latest from it or before. */
+  caps: Schema.Array(CategoryCap),
   budgets: Schema.Array(ClosedMonth),
   goals: Schema.Array(Goal),
 })
@@ -186,6 +195,47 @@ export const MonthView = Schema.Struct({
   exchange: Exchange,
 })
 export type MonthView = typeof MonthView.Type
+
+/** Spending per category over a period, against the caps. Positive centavos in reais. */
+export const SpendingView = Schema.Struct({
+  from: LocalDate,
+  to: LocalDate,
+  /** The accounts counted. */
+  accountIds: Schema.Array(Schema.String),
+  categories: Schema.Array(
+    Schema.Struct({
+      categoryId: Schema.String,
+      name: Schema.String,
+      bucket: Schema.String,
+      /** Outflows less refunds, by purchase date. */
+      spentCents: Schema.Int,
+      entryCount: Schema.Int,
+      /** Each month's cap prorated to the days of the period; null without one. */
+      capCents: Schema.NullOr(Schema.Int),
+    }),
+  ),
+  spentCents: Schema.Int,
+  /** Outflows still without a category: possibly spending. */
+  unclassifiedCents: Schema.Int,
+  /** Movements in another currency left out for want of a rate. */
+  unconvertedCount: Schema.Int,
+})
+
+/** What a later card bill will carry from instalments of purchases already made. */
+export const InstalmentBill = Schema.Struct({
+  accountId: Schema.String,
+  dueOn: LocalDate,
+  /** Positive centavos in the card's currency. */
+  cents: Schema.Int,
+  items: Schema.Array(
+    Schema.Struct({
+      description: Schema.String,
+      number: Schema.Int,
+      total: Schema.Int,
+      cents: Schema.Int,
+    }),
+  ),
+})
 
 export const CashProjection = Schema.Struct({
   today: Schema.String,
@@ -376,6 +426,18 @@ export class PlanningApi extends HttpApiGroup.make('planning')
       success: Schema.Array(Strategy),
       error: EndpointErrors,
     }),
+    HttpApiEndpoint.put('setCap', '/caps/:categoryId', {
+      params: { categoryId: Schema.String },
+      /** Caps a spending category from `month` on; null removes the cap from it. */
+      payload: Schema.Struct({
+        month: Month,
+        cents: Schema.NullOr(
+          Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+        ),
+      }),
+      success: CategoryCap,
+      error: EndpointErrors,
+    }),
     HttpApiEndpoint.post('saveGoal', '/goals', {
       payload: Schema.Struct({
         id: Schema.optional(Schema.String),
@@ -424,6 +486,27 @@ export class DashboardApi extends HttpApiGroup.make('dashboard')
         ),
       },
       success: Schema.Array(MonthView),
+      error: EndpointErrors,
+    }),
+    HttpApiEndpoint.get('spending', '/spending', {
+      query: {
+        /** The current month by default. */
+        month: Schema.optional(Month),
+        /** Instead of a month, these days, both inclusive. */
+        from: Schema.optional(LocalDate),
+        to: Schema.optional(LocalDate),
+        /**
+         * Comma-separated account ids; every account of a person or the
+         * household by default (company accounts only when named).
+         */
+        accountIds: Schema.optional(Schema.String),
+      },
+      success: SpendingView,
+      error: EndpointErrors,
+    }),
+    HttpApiEndpoint.get('instalments', '/instalments', {
+      /** Every card's later bills, by due date. */
+      success: Schema.Array(InstalmentBill),
       error: EndpointErrors,
     }),
     HttpApiEndpoint.get('forecast', '/forecast', {

@@ -81,6 +81,10 @@ export const AccountView = Schema.Struct({
   /** The latest booked or statement balance still standing: where the balance proof resumes. */
   lastCheckpoint: Schema.NullOr(Balance),
   link: Schema.NullOr(AccountLink),
+  /** The latest day with a posted movement; banks may post days late. */
+  lastBookedOn: Schema.NullOr(Schema.String),
+  /** When a sync or import last brought a new or changed movement. */
+  lastObservedAt: Schema.NullOr(Schema.String),
 })
 export type AccountView = typeof AccountView.Type
 

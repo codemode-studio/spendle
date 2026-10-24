@@ -44,7 +44,11 @@ Claude Code, Claude, Cursor e outros clientes MCP podem ler suas finanças em `<
 claude mcp add --transport http spendle http://localhost:3000/api/mcp
 ```
 
-O cliente abre o login sozinho. Você entra com Google e aprova o aplicativo em `/autorizar`. A partir daí ele lê contas, transações, planejamento, previsão de caixa, cartões, investimentos e conexões de Open Finance, e pode atualizar e sincronizar essas conexões. Ele não altera categorias, planos nem contas. Tirar um e-mail de `SPENDLE_ALLOWED_EMAILS` também corta o acesso que esse e-mail já tinha dado.
+O cliente abre o login sozinho. Você entra com Google e aprova o aplicativo em `/autorizar`. A partir daí ele lê contas, transações, planejamento, gastos contra os tetos, previsão de caixa, cartões e parcelas, investimentos e conexões de Open Finance, e pode atualizar e sincronizar essas conexões.
+
+Se o cliente pedir, `/autorizar` também oferece **Permitir alterações**, desligado por padrão. Com essa opção ligada, o cliente pode mudar a categoria, a nota e a marca de pontual de uma transação, marcar transferências, pagamentos de fatura e aportes, criar regras de categoria, definir tetos e pausar recorrências. Cada alteração passa pelas mesmas regras do app. Contas não mudam por aí. Um cliente aprovado antes só lê até você conectá-lo de novo.
+
+Tirar um e-mail de `SPENDLE_ALLOWED_EMAILS` também corta o acesso que esse e-mail já tinha dado.
 
 ## Onde ficam os dados
 

@@ -12,6 +12,7 @@ import {
   Sparkles,
   StickyNote,
   X,
+  Zap,
 } from 'lucide-react'
 import {
   useMutation,
@@ -97,7 +98,10 @@ import {
   correctCategoryFn,
   decideCategoryFn,
 } from '#/features/data/entries.functions'
-import { setEntryNoteFn } from '#/features/data/manual.functions'
+import {
+  setEntryNoteFn,
+  setEntryOneOffFn,
+} from '#/features/data/manual.functions'
 import {
   accountsOptions,
   categoriesOptions,
@@ -105,7 +109,7 @@ import {
   entryCountsOptions,
   orphanedDecisionsOptions,
   patchEntryCategory,
-  patchEntryNote,
+  patchEntry,
   relationsOptions,
 } from '#/features/data/queries'
 import { useIsMobile } from '#/hooks/use-mobile'
@@ -142,6 +146,7 @@ function TransactionsPage() {
   const correctCategory = useServerFn(correctCategoryFn)
   const confirmCategory = useServerFn(confirmCategoryFn)
   const setEntryNote = useServerFn(setEntryNoteFn)
+  const setEntryOneOff = useServerFn(setEntryOneOffFn)
   const [linking, setLinking] = useState<Entry | null>(null)
   const [newOpen, setNewOpen] = useState(false)
   const [editing, setEditing] = useState<ManualTransactionDraft | null>(null)
@@ -302,12 +307,24 @@ function TransactionsPage() {
     mutationFn: (input: { entryId: string; note: string | null }) =>
       setEntryNote({ data: input }),
     onMutate: async (variables) => ({
-      rollback: await patchEntryNote(queryClient, variables),
+      rollback: await patchEntry(queryClient, variables),
     }),
     onSuccess: () => void invalidate(),
     onError: (error, _variables, context) => {
       context?.rollback()
       toast.error(errorMessage(error, 'Não foi possível salvar a nota.'))
+    },
+  })
+  const oneOffMutation = useMutation({
+    mutationFn: (input: { entryId: string; oneOff: boolean }) =>
+      setEntryOneOff({ data: input }),
+    onMutate: async (variables) => ({
+      rollback: await patchEntry(queryClient, variables),
+    }),
+    onSuccess: () => void invalidate(),
+    onError: (error, _variables, context) => {
+      context?.rollback()
+      toast.error(errorMessage(error, 'Não foi possível marcar como pontual.'))
     },
   })
   const typable = accounts.filter((account) => !account.archived)
@@ -776,6 +793,44 @@ function TransactionsPage() {
                               })
                             }
                           />
+                          {entry.amountCents < 0 &&
+                          !entry.category?.excludedFromSpending ? (
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    className={cn(
+                                      'shrink-0 text-muted-foreground',
+                                      entry.oneOff && 'text-foreground',
+                                    )}
+                                    aria-pressed={entry.oneOff}
+                                    aria-label={`${entry.oneOff ? 'Desmarcar' : 'Marcar'} ${displayDescription(entry.description)} como gasto pontual`}
+                                    disabled={
+                                      oneOffMutation.isPending &&
+                                      oneOffMutation.variables.entryId ===
+                                        entry.id
+                                    }
+                                    onClick={() =>
+                                      oneOffMutation.mutate({
+                                        entryId: entry.id,
+                                        oneOff: !entry.oneOff,
+                                      })
+                                    }
+                                  />
+                                }
+                              >
+                                <Zap />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {entry.oneOff
+                                  ? 'Gasto pontual: fora das médias · desmarcar'
+                                  : 'Marcar como pontual: conta no mês, fica fora das médias'}
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : null}
                           {entry.manualId ? (
                             <Tooltip>
                               <TooltipTrigger
@@ -839,6 +894,9 @@ function TransactionsPage() {
                                 <StatusBadge tone="warning">
                                   Provisória
                                 </StatusBadge>
+                              ) : null}
+                              {entry.oneOff ? (
+                                <StatusBadge>Pontual</StatusBadge>
                               ) : null}
                               {entry.sources > 1 ? (
                                 <Tooltip>

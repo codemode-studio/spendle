@@ -59,6 +59,22 @@ export const setEntryNoteFn = createServerFn({ method: 'POST' })
     ),
   )
 
+/** Marks an entry one-off (counted in its month, left out of averages) or clears it. */
+export const setEntryOneOffFn = createServerFn({ method: 'POST' })
+  .validator(
+    Schema.toStandardSchemaV1(
+      Schema.Struct({ entryId: Schema.String, oneOff: Schema.Boolean }),
+    ),
+  )
+  .handler(({ data }) =>
+    api((client) =>
+      client.manual.setOneOff({
+        params: { entryId: data.entryId },
+        payload: { oneOff: data.oneOff },
+      }),
+    ),
+  )
+
 /** The balance the person sees at the bank, checked by the balance proof. */
 export const recordCheckpointFn = createServerFn({ method: 'POST' })
   .validator(

@@ -43,6 +43,21 @@ export const entryNotes = (sql: SqlClient.SqlClient) => sql`
   ) WHERE rank = 1
 `
 
+/**
+ * A derived table of the entries the person marked as one-off (`entry_id`):
+ * those holding the observations of a mark now. Join it with
+ * `LEFT JOIN (${entryOneOffs(sql)}) o ON o.entry_id = e.id`.
+ */
+export const entryOneOffs = (sql: SqlClient.SqlClient) => sql`
+  SELECT DISTINCT coalesce(v.entry_id, i.entry_id) AS entry_id
+  FROM entry_one_off_endpoints p
+  LEFT JOIN entry_evidence v ON v.source_id = p.source_id AND v.account_id = p.account_id
+    AND v.external_id = p.external_id
+  LEFT JOIN entry_identity i ON i.source_id = p.source_id AND i.account_id = p.account_id
+    AND i.external_id = p.external_id
+  WHERE coalesce(v.entry_id, i.entry_id) IS NOT NULL
+`
+
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   const crypto = yield* Crypto.Crypto
@@ -114,10 +129,47 @@ const make = Effect.gen(function* () {
     )
   })
 
-  return { set, of }
+  /**
+   * Marks an entry as one-off, or clears the mark. Like a note, the mark
+   * keeps the observations the entry has now; clearing it removes every
+   * mark on this entry alone.
+   */
+  const setOneOff = Effect.fn('Notes.setOneOff')(function* (
+    entryId: string,
+    oneOff: boolean,
+  ) {
+    if (Option.isNone(yield* entryExists(entryId)))
+      return yield* new NotesError({ reason: 'entry_not_found', entryId })
+    const markedAt = DateTime.formatIso(yield* DateTime.now)
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const keys = covering(
+          yield* holders(sql, 'entry_one_off_endpoints'),
+          entryId,
+        )
+        if (!oneOff) {
+          for (const key of keys)
+            yield* sql`DELETE FROM entry_one_offs WHERE key = ${key}`
+          return
+        }
+        if (keys.length > 0) return
+        const key = yield* crypto.randomUUIDv7.pipe(Effect.orDie)
+        yield* sql`
+          INSERT INTO entry_one_offs (key, marked_at) VALUES (${key}, ${markedAt})
+        `
+        yield* addEndpoints(sql, 'entry_one_off_endpoints', key, entryId)
+      }),
+    )
+    return { entryId, oneOff }
+  })
+
+  return { set, of, setOneOff }
 })
 
-/** Writes the person's notes on entries; reads join them in `api/ReadModel.ts`. */
+/**
+ * Writes the person's annotations on entries, notes and one-off marks;
+ * reads join them in `api/ReadModel.ts`.
+ */
 export class Notes extends Context.Service<
   Notes,
   Effect.Success<typeof make>

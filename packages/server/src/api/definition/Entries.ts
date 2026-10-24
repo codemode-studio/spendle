@@ -48,6 +48,8 @@ export const Entry = Schema.Struct({
   category: Schema.NullOr(EntryCategory),
   /** The person's note on the movement. */
   note: Schema.NullOr(Schema.String),
+  /** Marked by the person as one-off: counted in its month, left out of averages. */
+  oneOff: Schema.Boolean,
   /** Set when the person typed the movement in: the id to edit or delete it with. */
   manualId: Schema.NullOr(Schema.String),
   /** The amount in reais at the rate of its date; null in reais or without a rate. */
@@ -74,6 +76,8 @@ export const EntryFilters = Schema.Struct({
   ),
   /** Words in the description or the note, case-insensitive. */
   text: Schema.optional(Schema.String),
+  /** Only entries marked one-off, or only those not marked. */
+  oneOff: Schema.optional(Schema.Boolean),
   /** `inflow` keeps credits, `outflow` debits. */
   direction: Schema.optional(Schema.Literals(['inflow', 'outflow'])),
   /** Bounds on the absolute amount, in centavos, both inclusive. */
@@ -84,7 +88,7 @@ export const EntryFilters = Schema.Struct({
     Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   ),
   limit: Schema.optional(
-    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 })),
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 })),
   ),
   cursor: Schema.optional(Schema.String),
   /**

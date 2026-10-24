@@ -31,6 +31,7 @@ export const PlanningHandlers = HttpApiBuilder.group(
         Effect.all({
           settings: Effect.map(planning.settings, settingsOf),
           strategies: planning.strategies,
+          caps: planning.caps,
           budgets: planning.budgets,
           goals: planning.goals,
         }).pipe(respond('planning.state')),
@@ -40,6 +41,10 @@ export const PlanningHandlers = HttpApiBuilder.group(
           .pipe(Effect.map(settingsOf), respond('planning.settings')),
       strategy: ({ payload }) =>
         planning.activateStrategy(payload).pipe(respond('planning.strategy')),
+      setCap: ({ params, payload }) =>
+        planning
+          .setCap({ categoryId: params.categoryId, ...payload })
+          .pipe(respond('planning.setCap')),
       saveGoal: ({ payload }) =>
         planning.saveGoal(payload).pipe(respond('planning.saveGoal')),
       contribute: ({ params, payload }) =>
@@ -74,6 +79,20 @@ export const DashboardHandlers = HttpApiBuilder.group(
         dashboard
           .history(query.months ?? 11)
           .pipe(respond('dashboard.history')),
+      spending: ({ query }) =>
+        dashboard
+          .spending({
+            month: query.month,
+            from: query.from,
+            to: query.to,
+            accountIds: query.accountIds
+              ?.split(',')
+              .map((id) => id.trim())
+              .filter((id) => id !== ''),
+          })
+          .pipe(respond('dashboard.spending')),
+      instalments: () =>
+        dashboard.instalments.pipe(respond('dashboard.instalments')),
       forecast: ({ query }) =>
         dashboard
           .forecast(query.days ?? 90)

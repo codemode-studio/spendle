@@ -42,12 +42,17 @@ export const EntryNote = Schema.Struct({
   note: Schema.NullOr(Schema.String),
 })
 
+export const EntryOneOff = Schema.Struct({
+  entryId: Schema.String,
+  oneOff: Schema.Boolean,
+})
+
 const externalParams = { externalId: Schema.String }
 
 /**
  * What the person types in: transactions (facts from the `manual` source,
  * edited as new versions), balances they inform (checkpoints of the
- * balance proof) and notes on entries.
+ * balance proof), notes on entries and one-off marks.
  */
 export class ManualApi extends HttpApiGroup.make('manual')
   .add(
@@ -98,6 +103,16 @@ export class ManualApi extends HttpApiGroup.make('manual')
         note: Schema.NullOr(Schema.String.check(Schema.isMaxLength(500))),
       }),
       success: EntryNote,
+      error: EndpointErrors,
+    }),
+    HttpApiEndpoint.put('setOneOff', '/entries/:entryId/one-off', {
+      params: { entryId: Schema.String },
+      /**
+       * A one-off movement (a stove, a phone) still counts in its month, but
+       * not in the averages that estimate later months.
+       */
+      payload: Schema.Struct({ oneOff: Schema.Boolean }),
+      success: EntryOneOff,
       error: EndpointErrors,
     }),
   )

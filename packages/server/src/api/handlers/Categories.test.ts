@@ -195,6 +195,43 @@ describe('categories API', () => {
     }).pipe(Effect.provide(apiTest())),
   )
 
+  it.effect('applies a rule the person writes to every matching movement', () =>
+    Effect.gen(function* () {
+      const { client, later, earlier } = yield* bakery
+      const edit = {
+        _tag: 'AddPattern' as const,
+        pattern: 'Padaria',
+        matchMode: 'prefix' as const,
+        direction: 'expense' as const,
+        categoryId: 'restaurants',
+      }
+      const preview = yield* client.categoryStore.preview({
+        payload: { edit },
+      })
+      yield* client.categoryStore.edit({ payload: { edit } })
+      yield* drain
+      const categoryOf = (entryId: string) =>
+        client.categoryDecisions
+          .explain({ params: { entryId } })
+          .pipe(Effect.map((explained) => explained.categoryId))
+      const short = yield* client.categoryStore
+        .edit({ payload: { edit: { ...edit, pattern: 'pa' } } })
+        .pipe(Effect.flip)
+      assert.deepStrictEqual(
+        {
+          preview: preview.length,
+          applied: [yield* categoryOf(later.id), yield* categoryOf(earlier.id)],
+          short: reasonOf(short),
+        },
+        {
+          preview: 2,
+          applied: ['restaurants', 'restaurants'],
+          short: ['InvalidRequest', 'invalid_pattern'],
+        },
+      )
+    }).pipe(Effect.provide(apiTest())),
+  )
+
   it.effect('maps a Pluggy category to one of ours', () =>
     Effect.gen(function* () {
       const client = yield* apiClient()

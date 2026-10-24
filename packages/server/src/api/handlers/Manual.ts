@@ -15,7 +15,7 @@ export const ManualHandlers = HttpApiBuilder.group(
     const notes = yield* Notes
     // A typed-in change resolves its entry in the request; its category and
     // pairs are rebuilt in reactors, so it answers once those show it too.
-    // Notes are stored as they are.
+    // Notes and one-off marks are stored as they are.
     const settle = settled(yield* Reactors)
     return handlers.handleAll({
       createTransaction: ({ payload }) => {
@@ -42,6 +42,10 @@ export const ManualHandlers = HttpApiBuilder.group(
           .pipe(settle, respond('manual.withdrawCheckpoint')),
       setNote: ({ params, payload }) =>
         notes.set(params.entryId, payload.note).pipe(respond('manual.setNote')),
+      setOneOff: ({ params, payload }) =>
+        notes
+          .setOneOff(params.entryId, payload.oneOff)
+          .pipe(respond('manual.setOneOff')),
     })
   }),
 )

@@ -7,7 +7,7 @@ import type { TestApi } from '#/test/api'
 import { openChecking } from '#/test/fixtures'
 
 import { entriesAt } from './entries.server'
-import { patchEntryNote, queryKeys } from './queries'
+import { patchEntry, queryKeys } from './queries'
 
 let testApi: TestApi
 beforeEach(async () => {
@@ -36,7 +36,7 @@ it('shows a typed-in transaction with its manual id and note on every cached pag
   const searched = queryKeys.entriesPage({ page: 0, text: 'feira' })
   queryClient.setQueryData(all, page)
   queryClient.setQueryData(searched, page)
-  const rollback = await patchEntryNote(queryClient, {
+  const rollback = await patchEntry(queryClient, {
     entryId: entry.id,
     note: 'Em dinheiro',
   })

@@ -65,9 +65,16 @@ async function signIn(email: string) {
 /**
  * What an MCP client does: register, send the person through authorization
  * and consent, and exchange the code (with PKCE) for an access token bound
- * to the MCP endpoint.
+ * to the MCP endpoint. `granted` is what the person accepts on the consent
+ * page, all of `scope` by default.
  */
-async function connectClient(cookie: string) {
+async function connectClient(
+  cookie: string,
+  {
+    scope = 'openid offline_access',
+    granted = scope,
+  }: { scope?: string; granted?: string } = {},
+) {
   const redirectUri = 'http://127.0.0.1:9/callback'
   const registered = await auth('/api/auth/oauth2/register', {
     method: 'POST',
@@ -85,7 +92,7 @@ async function connectClient(cookie: string) {
     response_type: 'code',
     client_id: clientId,
     redirect_uri: redirectUri,
-    scope: 'openid offline_access',
+    scope,
     state: 'state',
     code_challenge: createHash('sha256').update(verifier).digest('base64url'),
     code_challenge_method: 'S256',
@@ -102,6 +109,7 @@ async function connectClient(cookie: string) {
     headers: { cookie, origin: base, 'content-type': 'application/json' },
     body: JSON.stringify({
       accept: true,
+      scope: granted,
       oauth_query: consentPage.search.slice(1),
     }),
   })
@@ -206,4 +214,49 @@ it('reports an API failure to the client as a tool error', async () => {
   })
   expect(response.status).toBe(200)
   expect(body.result).toMatchObject({ isError: true })
+})
+
+it('lists the tools that change data only for a client the person let write', async () => {
+  const account = await openChecking()
+  const { entryId } = await api((client) =>
+    client.manual.createTransaction({
+      payload: {
+        accountId: account.id,
+        bookedOn: '2026-09-20',
+        amountCents: -350_000,
+        description: 'Fogão',
+      },
+    }),
+  )
+  await testApi.drain()
+  const cookie = await signIn('ana@example.com')
+  const scope = 'openid offline_access spendle:write'
+  const reader = await connectClient(cookie, {
+    scope,
+    granted: 'openid offline_access',
+  })
+  const writer = await connectClient(cookie, { scope })
+  const toolNames = async (token: string) =>
+    (await callMcp(token, 'tools/list')).body.result.tools.map(
+      (tool: { name: string }) => tool.name,
+    )
+  const update = (token: string) =>
+    callMcp(token, 'tools/call', {
+      name: 'update_transaction',
+      arguments: { entryId, oneOff: true, note: 'Fogão novo' },
+    })
+
+  const refused = await update(reader)
+  const { body } = await update(writer)
+  expect({
+    reader: (await toolNames(reader)).includes('update_transaction'),
+    writer: (await toolNames(writer)).includes('update_transaction'),
+    refused: refused.body.result?.isError ?? refused.body.error !== undefined,
+    updated: JSON.parse(body.result.content[0].text),
+  }).toMatchObject({
+    reader: false,
+    writer: true,
+    refused: true,
+    updated: { id: entryId, oneOff: true, note: 'Fogão novo' },
+  })
 })

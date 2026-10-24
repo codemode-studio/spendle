@@ -270,6 +270,104 @@ describe('planning API', () => {
       ),
   )
 
+  it.effect(
+    'measures spending against caps carried into later months and prorated to a week',
+    () =>
+      Effect.gen(function* () {
+        const { client } = yield* september
+        const cap = (categoryId: string, month: string, cents: number | null) =>
+          client.planning.setCap({
+            params: { categoryId },
+            payload: { month, cents },
+          })
+        yield* cap('groceries', '2026-08', 60_000)
+        yield* cap('groceries', '2026-10', null)
+        const income = yield* cap('salary', '2026-09', 10_000).pipe(Effect.flip)
+        const groceries = (query: {
+          readonly month?: string
+          readonly from?: string
+          readonly to?: string
+        }) =>
+          client.dashboard
+            .spending({ query })
+            .pipe(
+              Effect.map((view) =>
+                view.categories
+                  .filter((category) => category.categoryId === 'groceries')
+                  .map((category) => [category.spentCents, category.capCents]),
+              ),
+            )
+        assert.deepStrictEqual(
+          {
+            september: yield* groceries({ month: '2026-09' }),
+            week: yield* groceries({ from: '2026-09-07', to: '2026-09-13' }),
+            october: yield* groceries({ month: '2026-10' }),
+            income: 'detail' in income ? income.detail : income._tag,
+          },
+          {
+            // August's cap still holds in September; a week is 7 of its 30 days.
+            september: [[30_000, 60_000]],
+            week: [[30_000, 14_000]],
+            october: [],
+            income: 'category',
+          },
+        )
+      }).pipe(Effect.provide(apiTest())),
+  )
+
+  it.effect("counts a company's account only when the spending names it", () =>
+    Effect.gen(function* () {
+      const { client, account } = yield* september
+      const company = yield* client.owners.create({
+        payload: { name: 'Empresa', kind: 'company' },
+      })
+      const business = yield* client.accounts.open({
+        payload: {
+          ownerId: company.id,
+          institutionName: 'Banco PJ',
+          name: 'Conta PJ',
+          kind: 'checking',
+          purpose: 'operating',
+          currency: 'BRL',
+        },
+      })
+      yield* client.manual.createTransaction({
+        payload: {
+          accountId: business.id,
+          bookedOn: '2026-09-15',
+          amountCents: -12_000,
+          description: 'Contabilidade',
+          categoryId: 'business',
+        },
+      })
+      yield* drain
+      const spent = (accountIds?: string) =>
+        client.dashboard
+          .spending({ query: { month: '2026-09', accountIds } })
+          .pipe(
+            Effect.map((view) =>
+              view.categories.map((category) => [
+                category.categoryId,
+                category.spentCents,
+              ]),
+            ),
+          )
+      assert.deepStrictEqual(
+        {
+          family: yield* spent(),
+          both: yield* spent(`${account.id},${business.id}`),
+        },
+        {
+          family: [['groceries', 30_000]],
+          both: [
+            ['groceries', 30_000],
+            ['business', 12_000],
+          ],
+        },
+      )
+    }).pipe(Effect.provide(apiTest())),
+  )
+
   it.effect('says the assistant is off when no model is configured', () =>
     Effect.gen(function* () {
       const client = yield* apiClient()

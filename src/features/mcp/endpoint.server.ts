@@ -6,6 +6,7 @@ import * as Schema from 'effect/Schema'
 
 import { getAuth, isAllowed, mcpResource } from '#/features/auth/auth.server'
 
+import { mcpWriteScope } from './scopes'
 import { spendleMcpServer } from './tools.server'
 
 /** The claims Spendle reads from a verified access token. */
@@ -26,7 +27,10 @@ const mcp = createMcpHandler(
     if (!Predicate.isString(member)) {
       throw new Error('MCP request without a verified member')
     }
-    return spendleMcpServer(member)
+    // The write tools exist only for a token the person granted writing.
+    return spendleMcpServer(member, {
+      write: authInfo?.scopes.includes(mcpWriteScope) ?? false,
+    })
   },
   { responseMode: 'json' },
 )
